@@ -285,10 +285,12 @@ __aicore__ void inline RecomputeWUFwdProcess<kType, betaType, L1TileShape, L0Til
 
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
     using ArchTag = Arch::Ascend950;
+    // 950: 对齐参考算子 arch35 的 cube 配置，L0C 双缓冲（stage=2），缓解 fused 流程下 cube 的 L0C 饥饿
+    using DispatchPolicy = Gemm::MmadPingpong<ArchTag, true, false, 2>;
 #else
     using ArchTag = Arch::AtlasA2;
-#endif
     using DispatchPolicy = Gemm::MmadPingpong<ArchTag, true>;
+#endif
 
     //计算U
     using TileCopyU =

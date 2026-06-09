@@ -50,8 +50,8 @@ __global__ __aicore__ void recompute_wu_fwd(GM_ADDR k, GM_ADDR v, GM_ADDR beta, 
         KERNEL_TASK_TYPE(2, KERNEL_TYPE_MIX_AIC_1_2);
         if ASCEND_IS_AIC {
             RecomputeWUFwdProcess<DTYPE_K, DTYPE_BETA,
-                                  GemmCubeTileShape<_128, _128, _256>,
-                                  GemmCubeTileShape<_128, _128, _128>>
+                                  GemmCubeTileShape<_128, _256, _256>,
+                                  GemmCubeTileShape<_128, _256, _64>>
                 recomputeWUFwdProcess(
                 k, v, beta, A, g, cu_seqlens, chunk_indices, w, u, workspace);
            recomputeWUFwdProcess.Init(tilingData);

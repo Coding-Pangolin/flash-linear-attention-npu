@@ -77,7 +77,7 @@ public:
         uint64_t chunkNum;
         uint64_t B = 1;
         uint64_t Hk = 1;
-        uint64_t Hv = 32;
+        uint64_t Hv = 1;
         uint64_t hvPerHk = 1;
         uint64_t T = 32768;
         uint64_t K = 128;
@@ -138,8 +138,11 @@ public:
                     // Represent the full tensors
                     auto tensorA = tla::MakeTensor(gmA, params.layoutA, Arch::PositionGM{});
                     Arch::CrossCoreWaitFlagWithReverse<0x2, PIPE_FIX>(flagAivFinishStore);
-                    for (uint32_t nOffset = 0; nOffset < params.V; nOffset += params.K) {
-                        uint32_t curN = (nOffset + params.K > params.V) ? (params.V - nOffset) : params.K;
+                    // N 维步进取自 Catlass tile 的 N 维：
+                    // key=1 tileN=128 -> V=128 单次；key=2 tileN=256 -> V=256 单次
+                    uint32_t tileN = tla::get<1>(BdkL1TileShape{});
+                    for (uint32_t nOffset = 0; nOffset < params.V; nOffset += tileN) {
+                        uint32_t curN = (nOffset + tileN > params.V) ? (params.V - nOffset) : tileN;
                         GemmCoord actualBlockShape{curChunkSize, curN, curChunkSize};
                         gmVb.SetGlobalBuffer((__gm__ ElementVb *)params.ptrVb + (h * params.T + bos) * params.V + nOffset);
                         gmU.SetGlobalBuffer((__gm__ ElementU *)params.ptrU + (h * params.T + bos) * params.V + nOffset);

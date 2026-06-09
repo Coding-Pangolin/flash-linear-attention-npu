@@ -7,7 +7,7 @@ import math
 import ct
 import random
 import fla_npu
-torch.npu.set_device(int(os.environ.get("TEST_DEVICE_ID", 3)))
+torch.npu.set_device(int(os.environ.get("TEST_DEVICE_ID", 0)))
 
 def get_bos_eos(idx, T, chunk_size, cu_seqlens, chunk_indices):
     if cu_seqlens != None:
@@ -42,17 +42,17 @@ def compute_w_golden(
     Hk: int = 0,  # GVA: key head count, 0 means Hk == H
 ) -> torch.Tensor:
     """
-    CPU golden implementation for dv computation (变长序列)
-    A的形状为 [B, T, H, chunk_size]
+    CPU golden implementation for w computation (变长序列)
+    A的形状为 [B, H, T, chunk_size]
     算法:
     1. 对于每个chunk (由chunk_indices指定)
     2. 获取对应的seq_idx, chunk_indices
-    3. 计算该chunk内的dv: dv_chunk = A_chunk @ du_chunk * beta_chunk
+    3. 计算该chunk内的w: w_chunk = A_chunk @ (k_chunk * beta_chunk)
     """
     if Hk == 0:
         Hk = H
     hvPerHk = H // Hk
-    # 初始化w，形状与k相同 [B, T, H, D]（W输出K维）
+    # 初始化w，形状为 [B, H, T, D]（W输出K维）
     w = torch.zeros(B, H, T, D, dtype=v.dtype, device=v.device)
     for i_b in range(B):
         for idx in range(NT):
@@ -102,12 +102,12 @@ def compute_u_golden(
     NT: int,  # T / chunk_size
 ) -> torch.Tensor:
     """
-    CPU golden implementation for dv computation (变长序列)
-    A的形状为 [B, T, H, chunk_size]
+    CPU golden implementation for u computation (变长序列)
+    A的形状为 [B, H, T, chunk_size]
     算法:
     1. 对于每个chunk (由chunk_indices指定)
     2. 获取对应的seq_idx, chunk_indices
-    3. 计算该chunk内的dv: dv_chunk = A_chunk @ du_chunk * beta_chunk
+    3. 计算该chunk内的u: u_chunk = A_chunk @ (v_chunk * beta_chunk)
     """
     u = torch.zeros_like(v)
     for i_b in range(B):
@@ -301,22 +301,14 @@ def test_recompute_wu_fwd(
             chunk_indices=None
         )
 
-    print(f"==================w=========================\n")
+    print("================== w ==================")
     cpu_w = compute_w_golden(k, v, beta, A, g, cu_seqlens, chunk_indices, B, Hv, T, K, chunk_size, NT, Hk=Hk)
-    print(f"==================cpu=========================\n")
     ct.isclose(w.cpu(), cpu_w.cpu(), diff_thd=0.1)
-    # ct.single(w.cpu(), cpu_w)
-    # ct.viz(w.cpu(), cpu_w.cpu())
-    print(f"==================ct=========================\n")
 
-    print(f"==================u=========================\n")
-
+    print("================== u ==================")
     cpu_u = compute_u_golden(v, beta, A, cu_seqlens, chunk_indices, B, Hv, T, chunk_size, NT)
     ct.isclose(u.cpu(), cpu_u.cpu(), diff_thd=0.1)
 
-    
-
-    
     print(f"test_recompute_wu_fwd 被调用了第 {test_recompute_wu_fwd.call_count} 次")
     return w, u
 

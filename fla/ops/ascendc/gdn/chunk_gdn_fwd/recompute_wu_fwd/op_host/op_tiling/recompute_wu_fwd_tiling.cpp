@@ -200,6 +200,10 @@ public:
         B = static_cast<int64_t>(vStorageShape.GetDim(DIM_0));
         Hk = static_cast<int64_t>(kStorageShape.GetDim(DIM_1));
         Hv = static_cast<int64_t>(vStorageShape.GetDim(DIM_1));
+        OP_CHECK_IF(Hk <= 0 || Hv <= 0,
+                    OP_LOGE(context_->GetNodeName(),
+                            "Invalid head dim: Hk and Hv must be positive, but got Hk=%ld, Hv=%ld.", Hk, Hv),
+                    return ge::GRAPH_FAILED);
         OP_CHECK_IF(Hv % Hk != 0,
                     OP_LOGE(context_->GetNodeName(),
                             "GVA check: Hv must be divisible by Hk, but got Hk=%ld, Hv=%ld.", Hk, Hv),
@@ -238,6 +242,19 @@ public:
                             "Compare T: k T=%ld vs A T=%ld mismatch.",
                             kStorageShape.GetDim(DIM_2), AStorageShape.GetDim(DIM_2)),
                     return ge::GRAPH_FAILED);
+        // A/beta/g 的 head 维必须等于 Hv（kernel 按 for h<Hv 索引这三个输入），否则会越界读
+        OP_CHECK_IF(AStorageShape.GetDim(DIM_1) != Hv,
+                    OP_LOGE(context_->GetNodeName(),
+                            "Compare head: A H=%ld must equal Hv=%ld.", AStorageShape.GetDim(DIM_1), Hv),
+                    return ge::GRAPH_FAILED);
+        OP_CHECK_IF(betaStorageShape.GetDim(DIM_1) != Hv,
+                    OP_LOGE(context_->GetNodeName(),
+                            "Compare head: beta H=%ld must equal Hv=%ld.", betaStorageShape.GetDim(DIM_1), Hv),
+                    return ge::GRAPH_FAILED);
+        OP_CHECK_IF(gStorageShape.GetDim(DIM_1) != Hv,
+                    OP_LOGE(context_->GetNodeName(),
+                            "Compare head: g H=%ld must equal Hv=%ld.", gStorageShape.GetDim(DIM_1), Hv),
+                    return ge::GRAPH_FAILED);
         T = static_cast<int64_t>(vStorageShape.GetDim(DIM_2));
         K = static_cast<int64_t>(kStorageShape.GetDim(DIM_3));
         V = static_cast<int64_t>(vStorageShape.GetDim(DIM_3));
@@ -275,9 +292,6 @@ public:
                     return ge::GRAPH_FAILED);
         OP_CHECK_IF(SetKbgExpVecRow(ubSize, kDType, betaDType) != ge::GRAPH_SUCCESS,
                     OP_LOGE(context_->GetNodeName(), "SetKBeteVecRow Failed."), return ge::GRAPH_FAILED);
-        if (V == V_DIM_256) {
-            tiling_.set_vbVecRow(chunkSize / 4);
-        }
         return ge::GRAPH_SUCCESS;
     }
 

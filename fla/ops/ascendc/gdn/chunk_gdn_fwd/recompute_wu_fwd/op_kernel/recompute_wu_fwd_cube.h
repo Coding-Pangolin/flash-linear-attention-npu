@@ -121,6 +121,9 @@ public:
         uint32_t coreLoops = params.chunkNum;
         uint32_t bos = 0;
         uint32_t eos = 0;
+        AscendC::printf("[AIC] enter coreIdx=%d blockNum=%d coreLoops=%d Hv=%d V=%d tileN=%d\n",
+                        (int)coreIdx, (int)AscendC::GetBlockNum(), (int)coreLoops, (int)params.Hv,
+                        (int)params.V, (int)tla::get<1>(BdkL1TileShape{}));
         { //处理U     V->C
             BlockMmadU BlockMmadU(resource);
             AscendC::GlobalTensor<ElementA> gmA;
@@ -137,7 +140,9 @@ public:
 
                     // Represent the full tensors
                     auto tensorA = tla::MakeTensor(gmA, params.layoutA, Arch::PositionGM{});
+                    AscendC::printf("[AIC] P1 wait loop=%d h=%d\n", (int)loopIdx, (int)h);
                     Arch::CrossCoreWaitFlagWithReverse<0x2, PIPE_FIX>(flagAivFinishStore);
+                    AscendC::printf("[AIC] P1 got  loop=%d h=%d\n", (int)loopIdx, (int)h);
                     // N 维步进取自 Catlass tile 的 N 维：
                     // key=1 tileN=128 -> V=128 单次；key=2 tileN=256 -> V=256 单次
                     uint32_t tileN = tla::get<1>(BdkL1TileShape{});
@@ -159,10 +164,13 @@ public:
                         // Compute block-scoped matrix multiply-add
                         BlockMmadU(tensorBlockA, tensorBlockVb, tensorBlockU, actualBlockShape);
                     }
+                    AscendC::printf("[AIC] P1 gemm_done loop=%d h=%d\n", (int)loopIdx, (int)h);
                 }
             }
         }
+        AscendC::printf("[AIC] P1 done -> SyncAll\n");
         AscendC::SyncAll<false>();
+        AscendC::printf("[AIC] after SyncAll -> P2\n");
         { //处理第二部分 AT@K -> DKB
             BlockMmadW BlockMmadW(resource);
             AscendC::GlobalTensor<ElementA> gmA;
@@ -186,7 +194,9 @@ public:
                     auto tensorKbgExp = tla::MakeTensor(gmKbgExp, params.layoutKbgExp, Arch::PositionGM{});
                     auto tensorW = tla::MakeTensor(gmW, params.layoutW, Arch::PositionGM{});
 
+                    AscendC::printf("[AIC] P2 wait loop=%d h=%d\n", (int)loopIdx, (int)h);
                     Arch::CrossCoreWaitFlagWithReverse<0x2, PIPE_FIX>(flagAivFinishStore);
+                    AscendC::printf("[AIC] P2 got  loop=%d h=%d\n", (int)loopIdx, (int)h);
                     // Make tiled views
                     auto tensorBlockA = GetTile(tensorA, tla::MakeCoord(0, 0),
                                                   tla::MakeShape(actualBlockShape.m(), actualBlockShape.k()));
@@ -196,10 +206,11 @@ public:
                                                   tla::MakeShape(actualBlockShape.m(), actualBlockShape.n()));
                     // Compute block-scoped matrix multiply-add
                     BlockMmadW(tensorBlockA, tensorBlockKbgExp, tensorBlockW, actualBlockShape);
+                    AscendC::printf("[AIC] P2 gemm_done loop=%d h=%d\n", (int)loopIdx, (int)h);
                 }
             }
         }
-
+        AscendC::printf("[AIC] DONE\n");
     }
 };
 } // namespace Catlass::Gemm::Kernel
@@ -285,12 +296,10 @@ __aicore__ void inline RecomputeWUFwdProcess<kType, betaType, L1TileShape, L0Til
 
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
     using ArchTag = Arch::Ascend950;
-    // 950: 对齐参考算子 arch35 的 cube 配置，L0C 双缓冲（stage=2），缓解 fused 流程下 cube 的 L0C 饥饿
-    using DispatchPolicy = Gemm::MmadPingpong<ArchTag, true, false, 2>;
 #else
     using ArchTag = Arch::AtlasA2;
-    using DispatchPolicy = Gemm::MmadPingpong<ArchTag, true>;
 #endif
+    using DispatchPolicy = Gemm::MmadPingpong<ArchTag, true>;
 
     //计算U
     using TileCopyU =

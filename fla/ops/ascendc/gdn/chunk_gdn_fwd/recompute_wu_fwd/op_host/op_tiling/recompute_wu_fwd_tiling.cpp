@@ -426,7 +426,9 @@ ge::graphStatus Tiling4RecomputeWUFwd(gert::TilingContext *context)
     tiling.SaveToBuffer(context->GetRawTilingData()->GetData(), context->GetRawTilingData()->GetCapacity());
     context->GetRawTilingData()->SetDataSize(tiling.GetDataSize());
     const auto ascendcPlatform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
-    context->SetBlockDim(ascendcPlatform.GetCoreNumAic());
+    // [DEBUG] 单核运行，便于配合 AscendC::printf 定位 950 卡死位置；定位完成后改回 GetCoreNumAic()
+    context->SetBlockDim(1);
+    // context->SetBlockDim(ascendcPlatform.GetCoreNumAic());
 
     uint32_t sysWorkspaceSize = ascendcPlatform.GetLibApiWorkSpaceSize();
     uint32_t userWorkspaceSize = 2 * tiling.get_B() * tiling.get_Hv() * tiling.get_T() * tiling.get_V();

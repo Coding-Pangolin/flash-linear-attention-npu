@@ -117,11 +117,16 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType>::Init(
 template <typename kType, typename betaType>
 __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType>::Process()
 {
+    AscendC::printf("[AIV] enter sub=%d subNum=%d blockIdx=%d blockNum=%d\n",
+                    (int)GetSubBlockIdx(), (int)GetSubBlockNum(), (int)GetBlockIdx(), (int)GetBlockNum());
     //计算K * Beta[:None]
     ProcessVb();
+    AscendC::printf("[AIV] Vb done -> SyncAll sub=%d\n", (int)GetSubBlockIdx());
     pipe->Reset();
     AscendC::SyncAll<false>();
+    AscendC::printf("[AIV] after SyncAll -> KbgExp sub=%d\n", (int)GetSubBlockIdx());
     ProcessKbgExp();
+    AscendC::printf("[AIV] DONE sub=%d\n", (int)GetSubBlockIdx());
     return;
 }
 
@@ -159,6 +164,7 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType>::ProcessVb()
         for (int h = 0; h < Hv; h++) {
             ++vecTaskIdx;
             if (vecTaskIdx % GetSubBlockNum() != GetSubBlockIdx()) {
+                AscendC::printf("[AIV] Vb skip set loop=%d h=%d sub=%d\n", (int)loopIdx, (int)h, (int)GetSubBlockIdx());
                 Arch::CrossCoreSetFlagWithReverse<0x2, PIPE_MTE3>(flagAivFinishStore);
                 continue;
             }
@@ -218,6 +224,7 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType>::ProcessVb()
                 }
             }
 
+            AscendC::printf("[AIV] Vb proc set loop=%d h=%d sub=%d\n", (int)loopIdx, (int)h, (int)GetSubBlockIdx());
             Arch::CrossCoreSetFlagWithReverse<0x2, PIPE_MTE3>(flagAivFinishStore);
         }
     }
@@ -259,6 +266,7 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType>::ProcessKbgE
             ++vecTaskIdx;
             uint64_t hk = h / hvPerHk;
             if (vecTaskIdx % GetSubBlockNum() != GetSubBlockIdx()) {
+                AscendC::printf("[AIV] Kbg skip set loop=%d h=%d sub=%d\n", (int)loopIdx, (int)h, (int)GetSubBlockIdx());
                 Arch::CrossCoreSetFlagWithReverse<0x2, PIPE_MTE3>(flagAivFinishStore);
                 continue;
             }
@@ -332,6 +340,7 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType>::ProcessKbgE
                     kBetagExpOutQue.FreeTensor(tensorOut);
                 }
             }
+            AscendC::printf("[AIV] Kbg proc set loop=%d h=%d sub=%d\n", (int)loopIdx, (int)h, (int)GetSubBlockIdx());
             Arch::CrossCoreSetFlagWithReverse<0x2, PIPE_MTE3>(flagAivFinishStore);
         }
     }

@@ -53,6 +53,7 @@ def forward_h_trans_cpu(
     save_new_value: bool = True,
     cu_seqlens: Optional[torch.LongTensor] = None,
     chunk_indices: Optional[torch.LongTensor] = None,
+    keep_fp32: bool = False,
 ):
     # 典型场景 HQ=HK=16 HV=32
     # assert HV >= HK 并且可以整除
@@ -128,6 +129,8 @@ def forward_h_trans_cpu(
 
     #S = S.to(torch.bfloat16)
     #v_new_output = v_new_output.to(torch.bfloat16)
+    if keep_fp32:
+        return S, v_new_output, None
     S = S.to(dtype_)
     v_new_output = v_new_output.to(dtype_)
     return S, v_new_output, None

@@ -16,6 +16,9 @@ fi
 
 export TEST_DEVICE_ID="$DEVICE"
 export GDN_FWD_H_DUMP_EXIT=1
+export FWD_H_TEST_ONLY=0
+export FWD_H_DUMP_ONLY=0
+export FWD_H_FORCE_DUMP=0
 export PYTHONUNBUFFERED=1
 
 # 快 → 慢（B711 在 python 侧 SKIP）
@@ -38,15 +41,15 @@ echo "GDN_FWD_H_DUMP_EXIT=1 (dump 后跳过 fwd_h/fwd_o/bwd)" | tee -a "$LOG"
 cd "$SCRIPT_DIR"
 PASS=0
 FAIL=0
-for case in "${CASES[@]}"; do
+for case_name in "${CASES[@]}"; do
   echo "" | tee -a "$LOG"
-  echo ">>> [$(date -Is)] CASE=$case" | tee -a "$LOG"
+  echo ">>> [$(date -Is)] CASE=$case_name" | tee -a "$LOG"
   t0=$(date +%s)
-  if FWD_H_CASE="$case" python3 test_npu_fwd_h_gva.py 2>&1 | tee -a "$LOG"; then
-    echo ">>> $case: PASS ($(( $(date +%s) - t0 ))s)" | tee -a "$LOG"
+  if FWD_H_CASE="$case_name" python3 test_npu_fwd_h_gva.py 2>&1 | tee -a "$LOG"; then
+    echo ">>> $case_name: PASS ($(( $(date +%s) - t0 ))s)" | tee -a "$LOG"
     PASS=$((PASS + 1))
   else
-    echo ">>> $case: FAIL ($(( $(date +%s) - t0 ))s)" | tee -a "$LOG"
+    echo ">>> $case_name: FAIL ($(( $(date +%s) - t0 ))s)" | tee -a "$LOG"
     FAIL=$((FAIL + 1))
   fi
 done

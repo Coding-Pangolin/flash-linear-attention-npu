@@ -107,16 +107,24 @@ def dump_case(case: FwdHCase, device: int, dump_dir: str) -> str:
     else:
         cmd.append("--no-varlen")
     print(f"[DUMP] {' '.join(cmd)}", flush=True)
-    subprocess.run(cmd, cwd=REPO_ROOT, env=env, check=True)
+    proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env, check=False)
     matches = sorted(glob.glob(pattern))
     if not matches:
-        raise FileNotFoundError(f"dump not found: {pattern}")
+        raise FileNotFoundError(
+            f"dump not found after example exit={proc.returncode}: {pattern}"
+        )
+    if proc.returncode != 0:
+        print(
+            f"[DUMP] example exit={proc.returncode}, reuse {matches[-1]}",
+            flush=True,
+        )
     return matches[-1]
 
 
 def _assert_close(name: str, real: torch.Tensor, expect: torch.Tensor, diff_thd: float):
     print(f"================== {name} ==================", flush=True)
-    out = ct.isclose(real.cpu(), expect, diff_thd=diff_thd, pct_thd=0.999)
+    # NPU 输出为 bf16/fp16，标杆保持 fp32 累加结果再比对
+    out = ct.isclose(real.cpu().float(), expect.float(), diff_thd=diff_thd, pct_thd=0.999)
     if out["result"] != "success":
         raise AssertionError(
             f"{name} compare failed: fulfill={out['fulfill_percent']:.4f}% "
@@ -153,6 +161,7 @@ def test_dump(dump_path: str, device: int, diff_thd: float = 0.0001):
         initial_state=initial_state,
         chunk_size=chunk_size,
         cu_seqlens=cu_tensor,
+        keep_fp32=True,
     )
 
     h, v_new, _ = torch.ops.npu.npu_chunk_gated_delta_rule_fwd_h(
@@ -182,6 +191,12 @@ def main():
     only = os.environ.get("FWD_H_CASE", "")
     dump_only = os.environ.get("FWD_H_DUMP_ONLY", "0") == "1"
     test_only = os.environ.get("FWD_H_TEST_ONLY", "0") == "1"
+    if test_only:
+        print("[MODE] FWD_H_TEST_ONLY=1 (skip dump, require existing .pt)", flush=True)
+    elif dump_only:
+        print("[MODE] FWD_H_DUMP_ONLY=1 (dump only)", flush=True)
+    else:
+        print("[MODE] dump-if-missing + NPU vs CPU compare", flush=True)
 
     torch.npu.set_device(device)
     os.makedirs(dump_dir, exist_ok=True)
@@ -209,7 +224,9 @@ def main():
                 if not alt and alias:
                     alt = sorted(glob.glob(os.path.join(dump_dir, alias)))
                 if not alt:
-                    raise FileNotFoundError(dump_path)
+                    raise FileNotFoundError(
+                        f"dump missing for {case.name} (FWD_H_TEST_ONLY=1): {dump_path}"
+                    )
                 dump_path = alt[-1]
             if dump_only:
                 results.append((case.name, "DUMP_OK", dump_path))

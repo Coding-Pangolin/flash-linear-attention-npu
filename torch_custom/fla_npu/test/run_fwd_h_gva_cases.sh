@@ -35,6 +35,9 @@ fi
 
 export TEST_DEVICE_ID="$DEVICE"
 export GDN_FWD_H_DUMP_DIR="$DUMP_DIR"
+export FWD_H_TEST_ONLY="${FWD_H_TEST_ONLY:-0}"
+export FWD_H_DUMP_ONLY="${FWD_H_DUMP_ONLY:-0}"
+export FWD_H_FORCE_DUMP="${FWD_H_FORCE_DUMP:-0}"
 export PYTHONUNBUFFERED=1
 
 echo "device=$DEVICE dump_dir=$DUMP_DIR"

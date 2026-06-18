@@ -22,6 +22,25 @@ torch.npu.set_device(int(os.environ.get("TEST_DEVICE_ID", 0)))
 
 WORKSPACE = os.path.dirname(os.path.abspath(__file__))
 from typing import Optional
+
+
+def cdiv(a, b):
+    return (a + b - 1) // b
+
+
+def prepare_lens(cu_seqlens: torch.LongTensor) -> torch.LongTensor:
+    return cu_seqlens[1:] - cu_seqlens[:-1]
+
+
+def prepare_chunk_indices(cu_seqlens: torch.LongTensor, chunk_size: int) -> torch.LongTensor:
+    indices = torch.cat([torch.arange(n) for n in cdiv(prepare_lens(cu_seqlens), chunk_size).tolist()])
+    return torch.stack([indices.eq(0).cumsum(0) - 1, indices], 1).to(cu_seqlens)
+
+
+def prepare_chunk_offsets(cu_seqlens: torch.LongTensor, chunk_size: int) -> torch.LongTensor:
+    return torch.cat([cu_seqlens.new_tensor([0]), cdiv(prepare_lens(cu_seqlens), chunk_size)]).cumsum(-1)
+
+
 def forward_h_trans_cpu(
     k: torch.Tensor,
     w: torch.Tensor,
@@ -86,7 +105,7 @@ def forward_h_trans_cpu(
 
                 if cu_seqlens is None: # 定长
                     k_sel[:actual_len, :] = k[n, h // head_ratio, bos + i * BT : bos + i * BT + actual_len, :]
-                    w_sel[:actual_len, :] = w[n, h // head_ratio, bos + i * BT : bos + i * BT + actual_len, :]
+                    w_sel[:actual_len, :] = w[n, h, bos + i * BT : bos + i * BT + actual_len, :]
                     u_sel[:actual_len, :] = u[n, h, bos + i * BT : bos + i * BT + actual_len, :]
                     g_sel[:actual_len] = g[n, h, bos + i * BT : bos + i * BT + actual_len]
                     v_new = u_sel - w_sel @ S[n, h, boh+i]
@@ -97,7 +116,7 @@ def forward_h_trans_cpu(
 
                 else:
                     k_sel[:actual_len, :] = k[0, h // head_ratio, bos + i * BT : bos + i * BT + actual_len, :]
-                    w_sel[:actual_len, :] = w[0, h // head_ratio, bos + i * BT : bos + i * BT + actual_len, :]
+                    w_sel[:actual_len, :] = w[0, h, bos + i * BT : bos + i * BT + actual_len, :]
                     u_sel[:actual_len, :] = u[0, h, bos + i * BT : bos + i * BT + actual_len, :]
                     g_sel[:actual_len] = g[0, h, bos + i * BT : bos + i * BT + actual_len]
                     v_new = u_sel - w_sel @ S[0, h, boh+i]
@@ -145,13 +164,13 @@ class GDNFwdHInput:
             sys.exit()
 
 class GDNFwdHInputTensor:
-    def __init__(self, k, w, u, g, cu_seqlens, chunk_offsets, initial_state):
+    def __init__(self, k, w, u, g, cu_seqlens, chunk_indices, initial_state):
         self.k = k
         self.w = w
         self.u = u
         self.g = g
         self.cu_seqlens = cu_seqlens
-        self.chunk_offsets = chunk_offsets
+        self.chunk_indices = chunk_indices
         self.initial_state = initial_state
 
 class GDNFwdHOutputTensor:
@@ -162,14 +181,27 @@ class GDNFwdHOutputTensor:
 
 def parse_actual_input(h_input):
     actual_data = torch.load(h_input.data_path, map_location='cpu')
+    if actual_data.get("chunk_indices") is not None:
+        k = actual_data['k'].to(h_input.dtype)
+        w = actual_data['w'].to(h_input.dtype)
+        u = actual_data['u'].to(h_input.dtype)
+        g = actual_data['g'].float()
+        cu_raw = actual_data.get('cu_seqlens')
+        cu_seqlens = None if cu_raw is None else [int(x) for x in cu_raw]
+        chunk_indices = [int(x) for x in actual_data['chunk_indices']]
+        initial_state = actual_data.get('initial_state')
+        if initial_state is not None:
+            initial_state = initial_state.to(h_input.dtype)
+        return GDNFwdHInputTensor(k, w, u, g, cu_seqlens, chunk_indices, initial_state)
+
     k = actual_data['k'][:, :, :h_input.k_num_head].to(h_input.dtype).transpose(1, 2).contiguous()
     w = actual_data['w'][:, :, :h_input.v_num_head].to(h_input.dtype).transpose(1, 2).contiguous()
     u = actual_data['u'][:, :, :h_input.v_num_head].to(h_input.dtype).transpose(1, 2).contiguous()
     g = actual_data['g'][:, :, :h_input.v_num_head].transpose(1, 2).contiguous()
-    cu_seqlens, chunk_offsets = get_cu_offsets(h_input, actual_data.get('cu_seqlens'))
+    cu_seqlens, chunk_indices = get_cu_offsets(h_input, actual_data.get('cu_seqlens'))
     initial_state = None
     h_input.num_tokens = cu_seqlens[-1] if h_input.is_varied_len else h_input.seqlen
-    return GDNFwdHInputTensor(k, w, u, g, cu_seqlens, chunk_offsets, initial_state)
+    return GDNFwdHInputTensor(k, w, u, g, cu_seqlens, chunk_indices, initial_state)
 
 def parse_actual_output(h_input):
     actual_data = torch.load(h_input.data_path, map_location='cpu')
@@ -197,12 +229,14 @@ def get_cu_offsets(h_input, cu_seqlens):
     if cu_seqlens is None:
         return None, None
     cu_seqlens = cu_seqlens.to(torch.int64)
-    num_chunks = 0
-    curr_token = 0
-    for seq in cu_seqlens:
-        num_chunks += math.ceil((seq - curr_token) / h_input.chunk_size)
-        curr_token = seq
-    return cu_seqlens.tolist(), torch.zeros([num_chunks, 2]).to(cu_seqlens.dtype).tolist()
+    cu_list = [int(x) for x in cu_seqlens.tolist()]
+    chunk_indices = []
+    for seq_id in range(len(cu_list) - 1):
+        seq_len = cu_list[seq_id + 1] - cu_list[seq_id]
+        chunk_num = (seq_len + h_input.chunk_size - 1) // h_input.chunk_size
+        for chunk_id in range(chunk_num):
+            chunk_indices.extend([seq_id, chunk_id])
+    return cu_list, chunk_indices
 
 def gen_decay_data(h_input, cu_seqlens, chunk_offsets):
     base = torch.randint(-15, -5, [h_input.v_num_head])
@@ -223,9 +257,9 @@ def gen_decay_data(h_input, cu_seqlens, chunk_offsets):
 
 def gen_input_data(h_input, rand_wu = True):
     cu_seqlens = gen_seqlen(h_input.seqlen, h_input.is_varied_len, h_input.token_batch)
-    cu_seqlens, chunk_offsets = get_cu_offsets(h_input, cu_seqlens)
+    cu_seqlens, chunk_indices = get_cu_offsets(h_input, cu_seqlens)
     if rand_wu:
-        w = torch.randn([h_input.shape_batch, h_input.k_num_head, h_input.seqlen, h_input.k_head_dim], dtype=h_input.dtype)
+        w = torch.randn([h_input.shape_batch, h_input.v_num_head, h_input.seqlen, h_input.k_head_dim], dtype=h_input.dtype)
         u = torch.randn([h_input.shape_batch, h_input.v_num_head, h_input.seqlen, h_input.v_head_dim], dtype=h_input.dtype)
     else:
         w, u = gen_wu_data()
@@ -236,7 +270,7 @@ def gen_input_data(h_input, rand_wu = True):
         initial_state = torch.randn([h_input.shape_batch, h_input.v_num_head, h_input.token_batch, h_input.k_head_dim, h_input.v_head_dim], dtype=h_input.dtype)
     else:
         initial_state = None
-    return GDNFwdHInputTensor(k, w, u, g, cu_seqlens, chunk_offsets, initial_state)
+    return GDNFwdHInputTensor(k, w, u, g, cu_seqlens, chunk_indices, initial_state)
 
 def gen_ref_data(h_input, input_tensor):
     h, v, _ = forward_h_trans_cpu(k=input_tensor.k, w=input_tensor.w, u=input_tensor.u, g=input_tensor.g)
@@ -249,7 +283,7 @@ def save_data(input_tensor, output_tensor):
     input_tensor.u.view(torch.int16).numpy().tofile(os.path.join(WORKSPACE, "data", "u.bin"))
     input_tensor.g.numpy().tofile(os.path.join(WORKSPACE, "data", "g.bin"))
     if input_tensor.cu_seqlens is not None:
-        np.array(input_tensor.cu_seqlens.cpu()).astype(np.int64).tofile(os.path.join(WORKSPACE, "data", "cu_seqlens.bin"))
+        np.array(input_tensor.cu_seqlens).astype(np.int64).tofile(os.path.join(WORKSPACE, "data", "cu_seqlens.bin"))
 
     if input_tensor.initial_state is not None:
         input_tensor.initial_state.view(torch.int16).numpy().tofile(os.path.join(WORKSPACE, "data", "initial_state.bin"))
@@ -275,14 +309,19 @@ if __name__ == "__main__":
     torch.npu.synchronize()
 
     print("before custom op")
-    print(input_tensor.chunk_offsets)
+    print(input_tensor.chunk_indices)
     print(input_tensor.cu_seqlens)
     def _as_int_list(x):
         if x is None:
             return None
         if isinstance(x, torch.Tensor):
-            return x.cpu().tolist()
-        return list(x)
+            return [int(v) for v in x.detach().cpu().flatten().tolist()]
+        if len(x) > 0 and isinstance(x[0], (list, tuple)):
+            out = []
+            for pair in x:
+                out.extend([int(pair[0]), int(pair[1])])
+            return out
+        return [int(v) for v in x]
 
     # 与 npu_custom.yaml / FLA chunk_gated_delta_rule_fwd_h 对齐：k,w,u 位置参数；g 及之后为关键字（g 当前不可为 None）
     result = torch.ops.npu.npu_chunk_gated_delta_rule_fwd_h(
@@ -298,7 +337,7 @@ if __name__ == "__main__":
         output_final_state=bool(gdn_fwd_h_input.store_final_state),
         chunk_size=gdn_fwd_h_input.chunk_size,
         cu_seqlens=_as_int_list(input_tensor.cu_seqlens),
-        chunk_indices=_as_int_list(input_tensor.chunk_offsets),
+        chunk_indices=_as_int_list(input_tensor.chunk_indices),
     )
     print("after custom op")
     torch_npu._C._npu_synchronize()

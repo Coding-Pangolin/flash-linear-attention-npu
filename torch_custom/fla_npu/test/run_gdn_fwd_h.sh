@@ -1,15 +1,15 @@
 batch=1 #309
-seqlen=256
-kNumHead=2
-vNumHead=2
+seqlen=16384
+kNumHead=16
+vNumHead=32
 kHeadDim=128
 vHeadDim=128
-isVariedLen=0 #1
+isVariedLen=1 #1
 chunkSize=64
 dtype="bf16"
 useActualInput=0
 useActualOutput=0
-device=${TEST_DEVICE_ID:-0}
+device=${TEST_DEVICE_ID:-2}
 gDType="float"
 stateDType="float"
 

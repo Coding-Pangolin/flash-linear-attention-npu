@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from typing import Optional
 
 import ct
-import fla_npu
 import torch
 import torch_npu
+import fla_npu
 
 torch.npu.config.allow_internal_format = False
 torch.npu.set_compile_mode(jit_compile=False)
@@ -28,6 +28,7 @@ DEFAULT_DUMP_DIR = os.path.join(
     REPO_ROOT,
     "examples/fast_kernel_launch_example/tests/chunk_gated_delta_rule_fwd_h/data",
 )
+DEFAULT_OUT_DIR = os.path.join(os.path.dirname(__file__), "fwd_h_out")
 
 
 def cdiv(a, b):
@@ -62,10 +63,13 @@ CASES = [
   # 原 Vdim=256 用例统一改为 Vdim=128 跑
   FwdHCase("varlen_t16384_v128_cu128", 1, 16, 32, 16384, 128, chunk_size=64, cu_seqlens_len=128),
   FwdHCase("varlen_t16384_v128_cu2", 1, 21, 63, 16384, 128, chunk_size=64, cu_seqlens_len=2),
-  FwdHCase("varlen_t65536_v128_cu172", 1, 8, 32, 65536, 128, chunk_size=128, cu_seqlens_len=172),
+  FwdHCase("varlen_t65536_v128_cu172", 1, 8, 32, 65536, 128, chunk_size=128, cu_seqlens_len=172,
+           supported=False, skip_reason="example 前置 Triton chunk_scaled_dot_kkt cs=128 UB overflow，无法 dump"),
   FwdHCase("varlen_t65536_v128_cu668", 1, 16, 32, 65536, 128, chunk_size=64, cu_seqlens_len=668),
-  FwdHCase("varlen_t65536_v128_cu17", 1, 4, 32, 65536, 128, chunk_size=128, cu_seqlens_len=17),
-  FwdHCase("varlen_t262144_v128_cu32", 1, 2, 64, 262144, 128, chunk_size=64, cu_seqlens_len=32),
+  FwdHCase("varlen_t65536_v128_cu17", 1, 4, 32, 65536, 128, chunk_size=128, cu_seqlens_len=17,
+           supported=False, skip_reason="example 前置 Triton chunk_scaled_dot_kkt cs=128 UB overflow，无法 dump"),
+  FwdHCase("varlen_t262144_v128_cu32", 1, 2, 64, 262144, 128, chunk_size=64, cu_seqlens_len=32,
+           supported=False, skip_reason="example 在 T=262144 时 aicore 507015（MTE DDR 越界），无法 dump"),
   FwdHCase("fixed_t4096_v128", 1, 16, 32, 4096, 128, chunk_size=64, varlen=False),
   FwdHCase("fixed_b16_t2048_v128", 16, 21, 63, 2048, 128, chunk_size=64, varlen=False),
   FwdHCase("fixed_b711_t196_v128", 711, 4, 32, 196, 128, chunk_size=128, varlen=False,
@@ -121,18 +125,72 @@ def dump_case(case: FwdHCase, device: int, dump_dir: str) -> str:
     return matches[-1]
 
 
-def _assert_close(name: str, real: torch.Tensor, expect: torch.Tensor, diff_thd: float):
-    print(f"================== {name} ==================", flush=True)
-    # NPU 输出为 bf16/fp16，标杆保持 fp32 累加结果再比对
-    out = ct.isclose(real.cpu().float(), expect.float(), diff_thd=diff_thd, pct_thd=0.999)
-    if out["result"] != "success":
-        raise AssertionError(
-            f"{name} compare failed: fulfill={out['fulfill_percent']:.4f}% "
-            f"max_error={out['max_error']}"
-        )
+def _dual_check(name: str, npu_out: torch.Tensor, ref_hp: torch.Tensor, ref_npu: torch.Tensor, level: str = "L1"):
+    """三档标杆：ct.dual(test, gt_fp64, bench_npu_aligned)。
+
+    bench 为 bf16 乘 + fp32 累加，与 NPU Cube MMAD 数据类型一致。
+    """
+    print(f"================== {name} (dual: fp64 gt / npu-aligned bench) ==================", flush=True)
+    result = ct.dual(npu_out.cpu(), ref_hp.cpu(), ref_npu.cpu(), level=level)
+    ok = bool(result.get("success"))
+    ratios = result.get("ratios", {})
+    checks = result.get("checks", {})
+    tag = "PASS" if ok else "FAIL"
+    print(
+        f"[{name}] dual {tag}: checks={checks} ratios={ratios}",
+        flush=True,
+    )
+    return ok, ratios, checks
 
 
-def test_dump(dump_path: str, device: int, diff_thd: float = 0.0001):
+def _save_case_outputs(case_dir: str, payload: dict):
+    os.makedirs(case_dir, exist_ok=True)
+    out_path = os.path.join(case_dir, "outputs.pt")
+    torch.save(payload, out_path)
+    print(f"[OUT] saved tensors -> {out_path}", flush=True)
+    for key, tensor in payload.items():
+        if not isinstance(tensor, torch.Tensor):
+            continue
+        one_path = os.path.join(case_dir, f"{key}.pt")
+        torch.save(tensor.cpu(), one_path)
+    return out_path
+
+
+def _viz_field(
+    case_name: str,
+    field: str,
+    npu_t: torch.Tensor,
+    ref_hp: torch.Tensor,
+    ref_npu: torch.Tensor,
+    viz_dir: str,
+    sample_count: int,
+    spatial: bool,
+):
+    """ct.viz(test, expect=fp64, bench=npu_aligned)，图片保存到 viz_dir。"""
+    os.makedirs(viz_dir, exist_ok=True)
+    name = f"{case_name}_{field}_npu_vs_fp64"
+    print(f"[VIZ] {name} (bench=npu_aligned) -> {viz_dir}", flush=True)
+    ct.viz(
+        npu_t.cpu().float(),
+        ref_hp.cpu().float(),
+        bench=ref_npu.cpu().float(),
+        out_dir=viz_dir,
+        name=name,
+        diff_thd=0.001,
+        spatial=spatial,
+        sample_count=sample_count,
+    )
+
+
+def test_dump(
+    dump_path: str,
+    device: int,
+    case_name: str,
+    out_root: str,
+    dual_level: str = "L1",
+    enable_viz: bool = True,
+    viz_sample_count: int = 200_000,
+):
     torch.npu.set_device(device)
     data = torch.load(dump_path, map_location="cpu")
     chunk_size = int(data["chunk_size"])
@@ -156,12 +214,22 @@ def test_dump(dump_path: str, device: int, diff_thd: float = 0.0001):
         print(f"[VARLEN] cu_seqlens_len={len(cu_list)} chunk_indices_len={len(chunk_indices)}", flush=True)
 
     cu_tensor = None if cu_list is None else torch.tensor(cu_list, dtype=torch.int64)
-    ref_h, ref_v, _ = forward_h_trans_cpu(
-        k, w, u, g,
+    golden_kwargs = dict(
         initial_state=initial_state,
         chunk_size=chunk_size,
         cu_seqlens=cu_tensor,
-        keep_fp32=True,
+    )
+    # 升精度标杆：fp64 累加
+    ref_h_hp, ref_v_hp, _ = forward_h_trans_cpu(
+        k, w, u, g, **golden_kwargs, golden_mode="fp64",
+    )
+    # 同精度标杆（NPU 对齐）：bf16 乘 + fp32 累加
+    ref_h_npu, ref_v_npu, _ = forward_h_trans_cpu(
+        k, w, u, g, **golden_kwargs, golden_mode="npu",
+    )
+    # 旧 fp32 全精度乘标杆（仅存档对比，不参与 dual）
+    ref_h_fp32, ref_v_fp32, _ = forward_h_trans_cpu(
+        k, w, u, g, **golden_kwargs, golden_mode="fp32",
     )
 
     h, v_new, _ = torch.ops.npu.npu_chunk_gated_delta_rule_fwd_h(
@@ -181,13 +249,58 @@ def test_dump(dump_path: str, device: int, diff_thd: float = 0.0001):
     )
     torch.npu.synchronize()
 
-    _assert_close("h", h, ref_h, diff_thd)
-    _assert_close("v_new", v_new, ref_v, diff_thd)
+    case_dir = os.path.join(out_root, case_name)
+    payload = {
+        "case_name": case_name,
+        "dump_path": dump_path,
+        "chunk_size": chunk_size,
+        "h_npu": h.cpu(),
+        "h_ref_fp64": ref_h_hp.cpu(),
+        "h_ref_npu": ref_h_npu.cpu(),
+        "h_ref_fp32": ref_h_fp32.cpu(),
+        "v_new_npu": v_new.cpu(),
+        "v_new_ref_fp64": ref_v_hp.cpu(),
+        "v_new_ref_npu": ref_v_npu.cpu(),
+        "v_new_ref_fp32": ref_v_fp32.cpu(),
+    }
+    _save_case_outputs(case_dir, payload)
+
+    dual_results = {}
+    outputs = (
+        ("h", h, ref_h_hp, ref_h_npu, False),
+        ("v_new", v_new, ref_v_hp, ref_v_npu, True),
+    )
+    for out_name, npu_t, hp_t, sp_t, use_spatial in outputs:
+        try:
+            dual_results[out_name] = _dual_check(
+                out_name, npu_t, hp_t, sp_t, level=dual_level,
+            )
+        except Exception as exc:
+            print(f"[{out_name}] dual error: {exc}", flush=True)
+            dual_results[out_name] = (False, {}, {"error": str(exc)})
+        if enable_viz:
+            try:
+                _viz_field(
+                    case_name,
+                    out_name,
+                    npu_t,
+                    hp_t,
+                    sp_t,
+                    viz_dir=os.path.join(case_dir, "viz"),
+                    sample_count=viz_sample_count,
+                    spatial=use_spatial,
+                )
+            except Exception as exc:
+                print(f"[{out_name}] viz error: {exc}", flush=True)
+    return dual_results, case_dir
 
 
 def main():
     device = int(os.environ.get("TEST_DEVICE_ID", "5"))
     dump_dir = os.environ.get("GDN_FWD_H_DUMP_DIR", DEFAULT_DUMP_DIR)
+    out_root = os.environ.get("FWD_H_OUT_DIR", DEFAULT_OUT_DIR)
+    enable_viz = os.environ.get("FWD_H_VIZ", "1") == "1"
+    viz_sample_count = int(os.environ.get("FWD_H_VIZ_SAMPLE_COUNT", "200000"))
     only = os.environ.get("FWD_H_CASE", "")
     dump_only = os.environ.get("FWD_H_DUMP_ONLY", "0") == "1"
     test_only = os.environ.get("FWD_H_TEST_ONLY", "0") == "1"
@@ -196,10 +309,15 @@ def main():
     elif dump_only:
         print("[MODE] FWD_H_DUMP_ONLY=1 (dump only)", flush=True)
     else:
-        print("[MODE] dump-if-missing + NPU vs CPU compare", flush=True)
+        print(
+            "[MODE] dump-if-missing + dual(fp64 gt / npu-aligned bench) + save outputs + ct.viz",
+            flush=True,
+        )
+    print(f"[OUT] out_root={out_root} viz={enable_viz}", flush=True)
 
     torch.npu.set_device(device)
     os.makedirs(dump_dir, exist_ok=True)
+    os.makedirs(out_root, exist_ok=True)
     results = []
     for case in CASES:
         if only and case.name != only:
@@ -231,8 +349,26 @@ def main():
             if dump_only:
                 results.append((case.name, "DUMP_OK", dump_path))
                 continue
-            test_dump(dump_path, device)
-            results.append((case.name, "PASS", dump_path))
+            dual_results, case_dir = test_dump(
+                dump_path,
+                device,
+                case.name,
+                out_root,
+                enable_viz=enable_viz,
+                viz_sample_count=viz_sample_count,
+            )
+            h_ok = dual_results.get("h", (False,))[0]
+            v_ok = dual_results.get("v_new", (False,))[0]
+            if h_ok and v_ok:
+                status = "PASS"
+                detail = f"h=PASS v_new=PASS | out={case_dir}"
+            else:
+                status = "DUAL_FAIL"
+                detail = (
+                    f"h={'PASS' if h_ok else 'FAIL'} "
+                    f"v_new={'PASS' if v_ok else 'FAIL'} | out={case_dir}"
+                )
+            results.append((case.name, status, detail))
         except Exception as exc:
             print(f"FAIL: {exc}", flush=True)
             results.append((case.name, "FAIL", str(exc)))
@@ -241,7 +377,7 @@ def main():
     for name, status, detail in results:
         print(f"{name}: {status} ({detail})", flush=True)
 
-    if any(s == "FAIL" for _, s, _ in results):
+    if any(s in ("FAIL", "DUAL_FAIL") for _, s, _ in results):
         sys.exit(1)
 
 

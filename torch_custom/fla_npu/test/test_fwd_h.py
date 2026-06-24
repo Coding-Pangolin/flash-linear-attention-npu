@@ -18,7 +18,8 @@ torch.npu.set_compile_mode(jit_compile=False)
 
 np.random.seed(1)
 torch.manual_seed(1)
-torch.npu.set_device(int(os.environ.get("TEST_DEVICE_ID", 0)))
+if __name__ == "__main__":
+    torch.npu.set_device(int(os.environ.get("TEST_DEVICE_ID", 0)))
 
 WORKSPACE = os.path.dirname(os.path.abspath(__file__))
 from typing import Optional
@@ -41,6 +42,18 @@ def prepare_chunk_offsets(cu_seqlens: torch.LongTensor, chunk_size: int) -> torc
     return torch.cat([cu_seqlens.new_tensor([0]), cdiv(prepare_lens(cu_seqlens), chunk_size)]).cumsum(-1)
 
 
+def _round_elem(x: torch.Tensor, elem_dtype: torch.dtype) -> torch.Tensor:
+    """将张量舍入到 elem_dtype（bf16/fp16）精度，仍在 fp32 容器中计算。"""
+    if elem_dtype == torch.float32:
+        return x.to(torch.float32)
+    return x.to(elem_dtype).to(torch.float32)
+
+
+def _matmul_npu_aligned(a: torch.Tensor, b: torch.Tensor, elem_dtype: torch.dtype) -> torch.Tensor:
+    """bf16/fp16 乘 + fp32 累加，与 Cube MMAD 语义对齐。"""
+    return _round_elem(a, elem_dtype) @ _round_elem(b, elem_dtype)
+
+
 def forward_h_trans_cpu(
     k: torch.Tensor,
     w: torch.Tensor,
@@ -54,17 +67,39 @@ def forward_h_trans_cpu(
     cu_seqlens: Optional[torch.LongTensor] = None,
     chunk_indices: Optional[torch.LongTensor] = None,
     keep_fp32: bool = False,
+    compute_dtype: torch.dtype = torch.float32,
+    golden_mode: str = "fp32",
 ):
     # 典型场景 HQ=HK=16 HV=32
-    # assert HV >= HK 并且可以整除
-    # assert 变长场景下，B==1
-    # assert K==V==D
+    # golden_mode:
+    #   fp32  - 输入升 fp32，fp32×fp32 矩阵乘（旧同精度标杆）
+    #   fp64  - 输入升 fp64，fp64 累加（升精度真值）
+    #   npu   - k/w/u 保持 bf16/fp16 乘，fp32 累加；g 用 fp32；状态按 elem_dtype 回写
     dtype_ = k.dtype
+    if golden_mode == "fp64":
+        compute_dtype = torch.float64
+        elem_dtype = None
+    elif golden_mode == "npu":
+        compute_dtype = torch.float32
+        elem_dtype = dtype_
+    elif golden_mode != "fp32":
+        raise ValueError(f"unsupported golden_mode={golden_mode}")
+    else:
+        elem_dtype = None
 
-    k = k.to(torch.float32)
-    w = w.to(torch.float32)
-    u = u.to(torch.float32)
-    g = g.to(torch.float32)
+    if keep_fp32 and compute_dtype != torch.float32:
+        raise ValueError("keep_fp32=True requires compute_dtype=torch.float32")
+
+    if golden_mode == "npu":
+        k = k.to(dtype_)
+        w = w.to(dtype_)
+        u = u.to(dtype_)
+        g = g.float()
+    else:
+        k = k.to(compute_dtype)
+        w = w.to(compute_dtype)
+        u = u.to(compute_dtype)
+        g = g.to(compute_dtype)
 
     B, HK, T, K = k.shape[0], k.shape[1], k.shape[2], k.shape[3]
     HV, V = u.shape[1], u.shape[3]
@@ -77,10 +112,82 @@ def forward_h_trans_cpu(
         N, NT, chunk_offsets = len(cu_seqlens) - 1, len(chunk_indices), prepare_chunk_offsets(cu_seqlens, BT)
     final_state = None
 
-    S = torch.zeros((B, HV, NT, K, V), device=k.device, dtype=torch.float32)
-    v_new_output = torch.zeros((B, HV, T, V), device=k.device, dtype=torch.float32)
+    S = torch.zeros((B, HV, NT, K, V), device=k.device, dtype=compute_dtype)
+    v_new_output = torch.zeros((B, HV, T, V), device=k.device, dtype=compute_dtype)
 
     head_ratio = HV // HK
+
+    def _chunk_matmul(a, b):
+        if elem_dtype is None:
+            return a @ b
+        return _matmul_npu_aligned(a, b, elem_dtype)
+
+    def _store_elem(x):
+        if elem_dtype is None:
+            return x
+        return _round_elem(x, elem_dtype)
+
+    def _to_compute(x):
+        if elem_dtype is None:
+            return x.to(compute_dtype)
+        return _round_elem(x, elem_dtype)
+
+    def _run_chunk(batch_idx, h_idx, bos, eos, nt_inner, boh):
+        for i in range(nt_inner):
+            k_sel = torch.zeros((BT, k.shape[-1]), device=k.device, dtype=compute_dtype)
+            w_sel = torch.zeros((BT, w.shape[-1]), device=w.device, dtype=compute_dtype)
+            u_sel = torch.zeros((BT, u.shape[-1]), device=u.device, dtype=compute_dtype)
+            g_sel = torch.zeros((BT), device=g.device, dtype=g.dtype)
+            actual_len = min(bos + (i + 1) * BT, eos) - (bos + i * BT)
+
+            if cu_seqlens is None:
+                k_sel[:actual_len, :] = _to_compute(
+                    k[batch_idx, h_idx // head_ratio, bos + i * BT : bos + i * BT + actual_len, :],
+                )
+                w_sel[:actual_len, :] = _to_compute(
+                    w[batch_idx, h_idx, bos + i * BT : bos + i * BT + actual_len, :],
+                )
+                u_sel[:actual_len, :] = _to_compute(
+                    u[batch_idx, h_idx, bos + i * BT : bos + i * BT + actual_len, :],
+                )
+                g_sel[:actual_len] = g[batch_idx, h_idx, bos + i * BT : bos + i * BT + actual_len]
+                state = S[batch_idx, h_idx, boh + i]
+            else:
+                k_sel[:actual_len, :] = _to_compute(
+                    k[0, h_idx // head_ratio, bos + i * BT : bos + i * BT + actual_len, :],
+                )
+                w_sel[:actual_len, :] = _to_compute(
+                    w[0, h_idx, bos + i * BT : bos + i * BT + actual_len, :],
+                )
+                u_sel[:actual_len, :] = _to_compute(
+                    u[0, h_idx, bos + i * BT : bos + i * BT + actual_len, :],
+                )
+                g_sel[:actual_len] = g[0, h_idx, bos + i * BT : bos + i * BT + actual_len]
+                state = S[0, h_idx, boh + i]
+
+            v_new = u_sel - _chunk_matmul(w_sel, state)
+            if i != nt_inner - 1:
+                g_last = g_sel[actual_len - 1].to(torch.float32)
+                g_chunk = g_sel[:actual_len].to(torch.float32)
+                v_decay = v_new[:actual_len, :] * torch.exp(g_last - g_chunk).unsqueeze(-1)
+                s_decayed = _round_elem(state, elem_dtype) if elem_dtype is not None else state
+                s_decayed = s_decayed * torch.exp(g_last)
+                s_update = _chunk_matmul(
+                    k_sel[:actual_len, :].transpose(-1, -2),
+                    v_decay,
+                )
+                s_next = _store_elem(s_decayed + s_update)
+                if cu_seqlens is None:
+                    S[batch_idx, h_idx, boh + i + 1] = s_next
+                else:
+                    S[0, h_idx, boh + i + 1] = s_next
+
+            v_store = _store_elem(v_new[:actual_len, :])
+            if cu_seqlens is None:
+                v_new_output[batch_idx, h_idx, bos + i * BT : bos + i * BT + actual_len, :] = v_store
+            else:
+                v_new_output[0, h_idx, bos + i * BT : bos + i * BT + actual_len, :] = v_store
+
     for n in range(N):
         if cu_seqlens is None: # 定长
             bos = 0
@@ -96,35 +203,7 @@ def forward_h_trans_cpu(
             boh = chunk_offsets[n]
 
         for h in range(HV):
-            # B H T D ->
-            for i in range(NT_inner):
-                k_sel = torch.zeros((BT, k.shape[-1]), device=k.device, dtype=k.dtype)
-                w_sel = torch.zeros((BT, w.shape[-1]), device=w.device, dtype=w.dtype)
-                u_sel = torch.zeros((BT, u.shape[-1]), device=u.device, dtype=u.dtype)
-                g_sel = torch.zeros((BT), device=g.device, dtype=g.dtype)
-                actual_len = min(bos + (i + 1) * BT, eos) - (bos + i * BT)
-
-                if cu_seqlens is None: # 定长
-                    k_sel[:actual_len, :] = k[n, h // head_ratio, bos + i * BT : bos + i * BT + actual_len, :]
-                    w_sel[:actual_len, :] = w[n, h, bos + i * BT : bos + i * BT + actual_len, :]
-                    u_sel[:actual_len, :] = u[n, h, bos + i * BT : bos + i * BT + actual_len, :]
-                    g_sel[:actual_len] = g[n, h, bos + i * BT : bos + i * BT + actual_len]
-                    v_new = u_sel - w_sel @ S[n, h, boh+i]
-                    if i != NT_inner-1:
-                        # S[n, h, boh+i+1] = S[n, h, boh+i] * g_sel[actual_len-1, None, None].exp() + (k_sel * (g_sel[actual_len-1, None] - g_sel).exp()[..., None]).transpose(-1, -2) @ v_new
-                        S[n, h, boh+i+1] = S[n, h, boh+i] * g_sel[actual_len-1, None, None].exp() + k_sel.transpose(-1, -2) @ (v_new * (g_sel[actual_len-1, None] - g_sel).exp()[..., None])
-                    v_new_output[n, h, bos + i * BT: bos + i * BT + actual_len, :] = v_new[:actual_len, :]
-
-                else:
-                    k_sel[:actual_len, :] = k[0, h // head_ratio, bos + i * BT : bos + i * BT + actual_len, :]
-                    w_sel[:actual_len, :] = w[0, h, bos + i * BT : bos + i * BT + actual_len, :]
-                    u_sel[:actual_len, :] = u[0, h, bos + i * BT : bos + i * BT + actual_len, :]
-                    g_sel[:actual_len] = g[0, h, bos + i * BT : bos + i * BT + actual_len]
-                    v_new = u_sel - w_sel @ S[0, h, boh+i]
-                    if i != NT_inner-1:
-                        # S[0, h, boh+i+1] = S[0, h, boh+i] * g_sel[actual_len-1, None, None].exp() + (k_sel * (g_sel[actual_len-1, None] - g_sel).exp()[..., None]).transpose(-1, -2) @ v_new
-                        S[0, h, boh+i+1] = S[0, h, boh+i] * g_sel[actual_len-1, None, None].exp() + k_sel.transpose(-1, -2) @ (v_new * (g_sel[actual_len-1, None] - g_sel).exp()[..., None])
-                    v_new_output[0, h ,bos + i * BT: bos + i * BT + actual_len, :] = v_new[:actual_len, :]
+            _run_chunk(n if cu_seqlens is None else 0, h, bos, eos, NT_inner, boh)
 
 
     #S = S.to(torch.bfloat16)

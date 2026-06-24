@@ -3,7 +3,7 @@
 #
 # 流程（参考 PR #69）:
 #   GDN_FWD_H_DUMP_EXIT=1 仅 dump fwd_h 入参后退出，不跑 fwd_h/fwd_o/bwd
-#   2) test_npu_fwd_h_gva.py 加载 .pt，用 test_fwd_h.forward_h_trans_cpu 作标杆，ct.isclose 比对 h/v_new
+#   2) test_npu_fwd_h_gva.py 加载 .pt，dual 比对 + dump 输出到 fwd_h_out/<case>/ + ct.viz 图片
 #
 # 用法:
 #   export TEST_DEVICE_ID=1
@@ -29,7 +29,9 @@ source /data/miniconda3/etc/profile.d/conda.sh
 conda activate wnc
 source /data/zs/run/8.5/ascend-toolkit/set_env.sh
 export ASCEND_CUSTOM_OPP_PATH="${ASCEND_CUSTOM_OPP_PATH:-}"
-if [[ -f /data/zs/run/8.5/cann-8.5.0/vendors/fla_npu_transformer/bin/set_env.bash ]]; then
+if [[ -f /data/zs/run/8.5/cann-8.5.0/vendors/fla_npu_transformer_transformer/bin/set_env.bash ]]; then
+  source /data/zs/run/8.5/cann-8.5.0/vendors/fla_npu_transformer_transformer/bin/set_env.bash
+elif [[ -f /data/zs/run/8.5/cann-8.5.0/vendors/fla_npu_transformer/bin/set_env.bash ]]; then
   source /data/zs/run/8.5/cann-8.5.0/vendors/fla_npu_transformer/bin/set_env.bash
 fi
 
@@ -38,8 +40,10 @@ export GDN_FWD_H_DUMP_DIR="$DUMP_DIR"
 export FWD_H_TEST_ONLY="${FWD_H_TEST_ONLY:-0}"
 export FWD_H_DUMP_ONLY="${FWD_H_DUMP_ONLY:-0}"
 export FWD_H_FORCE_DUMP="${FWD_H_FORCE_DUMP:-0}"
+export FWD_H_OUT_DIR="${FWD_H_OUT_DIR:-$SCRIPT_DIR/fwd_h_out}"
+export FWD_H_VIZ="${FWD_H_VIZ:-1}"
 export PYTHONUNBUFFERED=1
 
-echo "device=$DEVICE dump_dir=$DUMP_DIR"
+echo "device=$DEVICE dump_dir=$DUMP_DIR out_dir=$FWD_H_OUT_DIR"
 cd "$SCRIPT_DIR"
 python3 test_npu_fwd_h_gva.py

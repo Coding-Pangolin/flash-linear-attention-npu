@@ -248,10 +248,10 @@ ct.dual(npu_out, cpu_fp64_golden, gpu_out_from_dump, level="L1")
 通过后可选：
 
 ```python
-ct.viz(npu_out, cpu_fp64_golden, bench=gpu_out, sample_count=200000)
+ct.viz(npu_out, cpu_fp64_golden, out_dir="...", name="dh", sample_count=200000)
 ```
 
-大 tensor 用 `-sc` 控制采样点数，加快出图。
+`ct.viz` 绘制 NPU 与 fp64 真值对比图；GPU 竞品精度已由 `ct.dual` 完成比对。
 
 ### 6.2 布局转换（加载 dump 时自动完成）
 

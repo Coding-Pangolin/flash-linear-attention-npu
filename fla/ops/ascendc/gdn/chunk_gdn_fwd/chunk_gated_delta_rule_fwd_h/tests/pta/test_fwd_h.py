@@ -48,6 +48,7 @@ def forward_h_trans_cpu(
     save_new_value: bool = True,
     cu_seqlens: Optional[torch.LongTensor] = None,
     chunk_indices: Optional[torch.LongTensor] = None,
+    accum_dtype: torch.dtype = torch.float32,
 ):
     # 典型场景 HQ=HK=16 HV=32
     # assert HV >= HK 并且可以整除
@@ -56,10 +57,10 @@ def forward_h_trans_cpu(
     dtype_ = k.dtype
     state_type_ = initial_state.dtype if initial_state is not None else torch.float32
 
-    k = k.to(torch.float32)
-    w = w.to(torch.float32)
-    u = u.to(torch.float32)
-    g = g.to(torch.float32)
+    k = k.to(accum_dtype)
+    w = w.to(accum_dtype)
+    u = u.to(accum_dtype)
+    g = g.to(accum_dtype)
 
     B, HK, T, K = k.shape[0], k.shape[1], k.shape[2], k.shape[3]
     HV, V = u.shape[1], u.shape[3]
@@ -71,11 +72,11 @@ def forward_h_trans_cpu(
     else:
         N, NT, chunk_offsets = len(cu_seqlens) - 1, len(chunk_indices), prepare_chunk_offsets(cu_seqlens, BT)
     if initial_state is not None:
-        initial_state = initial_state.reshape([N, HV, K, V]).contiguous().to(torch.float32)
+        initial_state = initial_state.reshape([N, HV, K, V]).contiguous().to(accum_dtype)
 
-    S = torch.zeros((B, HV, NT, K, V), device=k.device, dtype=torch.float32)
-    v_new_output = torch.zeros((B, HV, T, V), device=k.device, dtype=torch.float32)
-    final_state = torch.zeros((N, HV, K, V), device=k.device, dtype=torch.float32)
+    S = torch.zeros((B, HV, NT, K, V), device=k.device, dtype=accum_dtype)
+    v_new_output = torch.zeros((B, HV, T, V), device=k.device, dtype=accum_dtype)
+    final_state = torch.zeros((N, HV, K, V), device=k.device, dtype=accum_dtype)
 
     head_ratio = HV // HK
     for n in range(N):

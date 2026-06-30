@@ -69,13 +69,12 @@ def dual_then_viz(
     viz_kwargs: dict = {
         "out_dir": str(out_dir),
         "name": tensor_name,
-        "bench": gpu_bench.cpu(),
     }
     if sample_count is not None and sample_count > 0:
         viz_kwargs["sample_count"] = int(sample_count)
 
     print(
-        f"  [{tensor_name}] ct.viz(npu, cpu_fp64, bench=gpu, sample_count={sample_count})",
+        f"  [{tensor_name}] ct.viz(npu, cpu_fp64, sample_count={sample_count})",
         flush=True,
     )
     ct.viz(npu_out.cpu(), fp64_golden, **viz_kwargs)

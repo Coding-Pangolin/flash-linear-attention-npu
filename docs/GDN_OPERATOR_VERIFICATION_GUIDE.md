@@ -312,24 +312,24 @@ chmod +x run_gdn_gpu_dump_dual_all.sh
 source <cann>/set_env.sh
 conda activate wnc
 export TEST_DEVICE_ID=0
-# 若 vendor 安装路径非默认，补充 LD_LIBRARY_PATH / source set_env.bash
 
 # --- 单个 .pt（推荐调试）---
 cd fla/ops/ascendc/gdn/chunk_gdn_bwd/chunk_gated_delta_rule_bwd_dhu/test
-./run_bwd_dhu_gpu_dump_dual.sh /data/GPU_DUMP/phase_1_fix_1/006_bwd_dhu.pt -sc 100000
+./run_bwd_dhu_gpu_dump_dual.sh /data/GPU_DUMP/gva_var_1/006_bwd_dhu.pt -sc 100000
 
-# --- 整个 case 目录 ---
-./run_bwd_dhu_gpu_dump_dual.sh /data/GPU_DUMP --case phase_1_fix_1
+# --- 整个 case 目录（默认跳过已通过用例）---
+./run_bwd_dhu_gpu_dump_dual.sh /data/GPU_DUMP --case gva_var_1
 
-# --- 批量 phase_1 ---
-./run_bwd_dhu_gpu_dump_dual.sh /data/GPU_DUMP --phase prefix:phase_1_
+# --- 强制重跑所有 case ---
+./run_bwd_dhu_gpu_dump_dual.sh /data/GPU_DUMP --phase prefix:phase_1_ --force
 
-# --- 仅 dual，不出图 ---
-python3 test_bwd_dhu_gpu_dump_dual.py --pt /path/to/006_bwd_dhu.pt --no-viz
-
-# --- 多个 pt ---
-python3 test_bwd_dhu_gpu_dump_dual.py --pts a.pt,b.pt,c.pt
+# --- 仅 dual，不出图（跳过判断只看 JSON pass）---
+python3 test_bwd_dhu_gpu_dump_dual.py --dump-root /data/GPU_DUMP --case gva_var_1 --no-viz
 ```
+
+**跳过已通过用例（默认开启）**：若 `<DUMP_ROOT>/<op>_gpu_dump_dual_report.json` 中该 case 为 `pass`，且 viz 目录下已有 `{tensor}_*_Standard.png`（如 `dh`、`dv2`），则跳过 NPU 执行。使用 `--force` 强制全量重跑。
+
+**日志**：单算子 shell 脚本会同时打屏并写入 `<DUMP_ROOT>/logs/<op>_gpu_dump_dual_<timestamp>.log`，并维护 `*_latest.log` 软链。
 
 **recompute_wu** 若 fwd/bwd 各有一份 dump，默认取 `meta.phase=bwd`；可用 `--dump-phase fwd`。
 
@@ -488,6 +488,7 @@ flowchart TD
 | [`ci/run_checks.sh`](../ci/run_checks.sh) | CI 调用 gdn-verify |
 | [`fla/ops/ascendc/gdn/gpu_dump_loader.py`](../fla/ops/ascendc/gdn/gpu_dump_loader.py) | dump 加载与布局转换 |
 | [`fla/ops/ascendc/gdn/gpu_dump_dual_utils.py`](../fla/ops/ascendc/gdn/gpu_dump_dual_utils.py) | `dual_then_viz`、`-sc` 参数 |
+| [`fla/ops/ascendc/gdn/gpu_dump_dual_runner.py`](../fla/ops/ascendc/gdn/gpu_dump_dual_runner.py) | 批量执行、跳过已通过用例、报告合并 |
 | [`fla/ops/ascendc/gdn/run_gdn_gpu_dump_dual_all.sh`](../fla/ops/ascendc/gdn/run_gdn_gpu_dump_dual_all.sh) | 三算子 GPU 双标杆串行入口 |
 | GPU 仓 `GDN_DUMP_GUIDE.md` | GPU 采集完整说明 |
 | GPU 仓 `cases.json` | 用例矩阵 |

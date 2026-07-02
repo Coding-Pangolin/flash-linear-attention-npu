@@ -30,6 +30,8 @@
 set -euo pipefail
 
 GDN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=gpu_dump_dual_log.sh
+source "${GDN_DIR}/gpu_dump_dual_log.sh"
 RECOMPUTE_DIR="${GDN_DIR}/chunk_gdn_fwd/recompute_wu_fwd/test"
 FWD_H_DIR="${GDN_DIR}/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/tests"
 BWD_DHU_DIR="${GDN_DIR}/chunk_gdn_bwd/chunk_gated_delta_rule_bwd_dhu/test"
@@ -37,7 +39,7 @@ BWD_DHU_DIR="${GDN_DIR}/chunk_gdn_bwd/chunk_gated_delta_rule_bwd_dhu/test"
 DUMP_ROOT=""
 OUTPUT_DIR=""
 DEVICE_ID="${TEST_DEVICE_ID:-0}"
-STOP_ON_FAIL=false
+FORCE=false
 NO_VIZ=false
 SAMPLE_COUNT=""
 RECOMPUTE_PHASE="bwd"
@@ -64,6 +66,7 @@ Options:
   --no-viz               Skip ct.viz
   --recompute-phase P    recompute_wu dump phase: fwd | bwd | any (default: bwd)
   --stop-on-fail         Stop after first operator failure
+  --force                Re-run all cases even if already passed
   -h, --help             Show this help
 
 Any unrecognized args are forwarded to all three python test scripts.
@@ -112,6 +115,10 @@ while [[ $# -gt 0 ]]; do
       STOP_ON_FAIL=true
       shift
       ;;
+    --force)
+      FORCE=true
+      shift
+      ;;
     --)
       shift
       EXTRA_ARGS+=("$@")
@@ -157,6 +164,7 @@ COMMON_ARGS=(--dump-root "$DUMP_ROOT")
 [[ -n "$PHASE_ARG" ]] && COMMON_ARGS+=(--phase "$PHASE_ARG")
 [[ -n "$SAMPLE_COUNT" ]] && COMMON_ARGS+=(-sc "$SAMPLE_COUNT")
 $NO_VIZ && COMMON_ARGS+=(--no-viz)
+$FORCE && COMMON_ARGS+=(--force)
 if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
   COMMON_ARGS+=("${EXTRA_ARGS[@]}")
 fi
@@ -171,7 +179,10 @@ run_one_op() {
   local op_out="${OUTPUT_DIR}/${op_name}"
   local log_dir="${op_out}/logs"
   local viz_dir="${op_out}/viz"
-  local log_file="${log_dir}/${op_name}.log"
+  local ts
+  ts="$(date +%Y%m%d_%H%M%S)"
+  local log_file="${log_dir}/${op_name}_gpu_dump_dual_${ts}.log"
+  local latest_link="${log_dir}/${op_name}_gpu_dump_dual_latest.log"
   local report_file="${op_out}/${op_name}_gpu_dump_dual_report.json"
 
   mkdir -p "$log_dir" "$viz_dir"
@@ -200,12 +211,15 @@ run_one_op() {
     echo "command:    python3 ${py_script} ${op_args[*]}"
     echo ""
     python3 "$py_script" "${op_args[@]}"
+    rc=$?
     echo ""
-    echo "exit_code: $?"
+    echo "exit_code: ${rc}"
     echo "finished_at: $(date -Iseconds)"
+    exit "${rc}"
   } 2>&1 | tee "$log_file"
   local rc=${PIPESTATUS[0]}
   set -e
+  ln -sfn "$(basename "$log_file")" "$latest_link" 2>/dev/null || true
 
   OP_RC["$op_name"]="$rc"
   OP_REPORT["$op_name"]="$report_file"

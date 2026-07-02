@@ -31,6 +31,7 @@ from gpu_dump_loader import (  # noqa: E402
     resolve_seq_meta,
 )
 from gpu_dump_dual_utils import add_viz_cli_args, dual_then_viz, resolve_viz_dir  # noqa: E402
+from gpu_dump_dual_runner import add_skip_cli_args, run_dual_batch  # noqa: E402
 from test_chunk_gated_delta_rule_bwd_dhu import (  # noqa: E402
     chunk_gated_delta_rule_bwd_dhu_torch,
     effective_scale,
@@ -213,7 +214,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--cases", default="")
     p.add_argument("--phase", default="all", help="all | prefix:phase_1_ | prefix:gva_")
     p.add_argument("--report", type=Path, default=None)
-    add_viz_cli_args(p)
+    add_skip_cli_args(p)
     return p.parse_args()
 
 
@@ -242,66 +243,16 @@ def _select_cases(dump_root: Path, args: argparse.Namespace) -> list[Path]:
 
 def main() -> int:
     args = _parse_args()
-    pt_paths = _collect_pt_paths(args)
-    enable_viz = not args.no_viz
-    sample_count = args.sample_count
-    results: list[dict[str, Any]] = []
-    failed = 0
-
-    if pt_paths:
-        for pt_path in pt_paths:
-            try:
-                results.append(run_one_pt(
-                    pt_path,
-                    label=pt_path.name,
-                    verbose=True,
-                    enable_viz=enable_viz,
-                    sample_count=sample_count,
-                    viz_dir=args.viz_dir,
-                ))
-            except Exception as e:
-                failed += 1
-                print(f"\n=== {pt_path.name} FAILED ===\n{e}", flush=True)
-                traceback.print_exc()
-                results.append({"case": pt_path.name, "status": "fail", "pt": str(pt_path), "error": str(e)})
-        default_report_dir = pt_paths[0].resolve().parent
-    else:
-        if args.dump_root is None:
-            print("ERROR: provide --dump-root or --pt/--pts", file=sys.stderr)
-            return 2
-        selected = _select_cases(args.dump_root, args)
-        if not selected:
-            print("No cases selected.", file=sys.stderr)
-            return 1
-        for case_dir in selected:
-            try:
-                results.append(run_one_case(
-                    case_dir,
-                    verbose=True,
-                    enable_viz=enable_viz,
-                    sample_count=sample_count,
-                    viz_dir=args.viz_dir,
-                ))
-            except Exception as e:
-                failed += 1
-                print(f"\n=== {case_dir.name} FAILED ===\n{e}", flush=True)
-                traceback.print_exc()
-                results.append({"case": case_dir.name, "status": "fail", "error": str(e)})
-        default_report_dir = args.dump_root
-
-    report = {
-        "op": OP_NAME,
-        "mode": "pt" if pt_paths else "case_dir",
-        "total": len(results),
-        "passed": len(results) - failed,
-        "failed": failed,
-        "results": results,
-    }
-    report_path = args.report or (default_report_dir / "bwd_dhu_gpu_dump_dual_report.json")
-    with Path(report_path).open("w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
-    print(f"\nDone: {report['passed']}/{report['total']} passed, report -> {report_path}", flush=True)
-    return 1 if failed else 0
+    return run_dual_batch(
+        args,
+        op_name=OP_NAME,
+        report_basename="bwd_dhu_gpu_dump_dual_report.json",
+        viz_tensor_names=("dh", "dv2"),
+        collect_pt_paths=_collect_pt_paths,
+        select_cases=_select_cases,
+        run_one_pt=run_one_pt,
+        run_one_case=run_one_case,
+    )
 
 
 if __name__ == "__main__":

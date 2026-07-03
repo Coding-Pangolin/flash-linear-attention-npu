@@ -14,6 +14,8 @@
 // limitations under the License.
 
 #include <cstdint>
+#include <string>
+#include <vector>
 #include <torch/library.h>
 #include <torch/csrc/autograd/custom_function.h>
 #include <torch/extension.h>
@@ -170,18 +172,18 @@ at::Tensor npu_prepare_wy_repr_bwd_da(const at::Tensor & k, const at::Tensor & v
 
 ::std::tuple<at::Tensor,at::Tensor,at::Tensor,at::Tensor> npu_chunk_bwd_dqkwg(const at::Tensor & q, const at::Tensor & k, const at::Tensor & v, const at::Tensor & g, const at::Tensor & h, const at::Tensor & dox, const at::Tensor & dh, const at::Tensor & dv, int64_t chunk_size, at::OptionalIntArrayRef cu_seqlens, at::OptionalIntArrayRef chunk_indices, const c10::optional<at::Tensor> & w, const c10::optional<at::Tensor> & g_gamma, c10::optional<double> scale, c10::optional<bool> use_exp2, c10::optional<bool> transpose_state_layout)
 {
-    // 获取输入 q 的维度信息
-    auto q_sizes = q.sizes();
-    auto v_sizes = v.sizes();
-    int64_t batch_size = q_sizes[0];
-    int64_t num_heads = v_sizes[1];
-    int64_t seq_len = q_sizes[2];
-    int64_t head_dim = q_sizes[3];
-    
-    // 使用具体 shape 创建，但保持相同的 dtype/device
-    at::Tensor dq = at::empty({batch_size, num_heads, seq_len, head_dim}, q.options());
-    at::Tensor dk = at::empty({batch_size, num_heads, seq_len, head_dim}, q.options());
-    at::Tensor dw = at::empty({batch_size, num_heads, seq_len, head_dim}, q.options());
+    const int64_t key_num_heads = q.size(1);
+    const int64_t value_num_heads = v.size(1);
+    TORCH_CHECK(
+        key_num_heads > 0 && value_num_heads > 0 && value_num_heads % key_num_heads == 0,
+        "npu_chunk_bwd_dqkwg: GVA requires value heads divisible by key heads; Hk=",
+        key_num_heads,
+        " Hv=",
+        value_num_heads);
+
+    at::Tensor dq = at::empty_like(q);
+    at::Tensor dk = at::empty_like(k);
+    at::Tensor dw = at::empty({q.size(0), value_num_heads, q.size(2), q.size(3)}, q.options());
     at::Tensor dg = at::empty_like(g);
 
     // scale处理
@@ -409,6 +411,122 @@ at::Tensor npu_causal_conv1d(
         y
     );
     return y;
+}
+
+::std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor> npu_causal_conv1d_bwd(
+    const at::Tensor &x,
+    const c10::optional<at::Tensor> &y,
+    const at::Tensor &weight,
+    const at::Tensor &dy,
+    const c10::optional<at::Tensor> &initial_state,
+    const c10::optional<at::Tensor> &dht,
+    at::OptionalIntArrayRef query_start_loc,
+    int64_t activation,
+    c10::string_view input_layout)
+{
+    const std::string input_layout_str(input_layout);
+    const char *input_layout_cstr = input_layout_str.c_str();
+    const int64_t width = weight.size(0);
+    const int64_t dim = weight.size(1);
+
+    std::vector<int64_t> dx_shape;
+    int64_t batch = 0;
+    if (input_layout_str == "BNSD") {
+        TORCH_CHECK(x.dim() == 3, "BNSD x must be logical [B, T, D]");
+        TORCH_CHECK(dy.dim() == 4, "BNSD dy must be [B, N, T, Dh]");
+        batch = x.size(0);
+        TORCH_CHECK(
+            dy.size(0) == x.size(0) &&
+                dy.size(2) == x.size(1) &&
+                dy.size(1) * dy.size(3) == x.size(2),
+            "BNSD dy must be [B, N, T, Dh] with D=N*Dh for x [B, T, D]");
+        dx_shape = x.sizes().vec();
+    } else if (input_layout_str == "NTD") {
+        TORCH_CHECK(x.dim() == 2, "NTD x must be logical [total_tokens, D]");
+        TORCH_CHECK(dy.dim() == 3, "NTD dy must be [N, total_tokens, Dh]");
+        TORCH_CHECK(query_start_loc.has_value(), "query_start_loc is required for NTD input");
+        TORCH_CHECK(
+            dy.size(1) == x.size(0) &&
+                dy.size(0) * dy.size(2) == x.size(1),
+            "NTD dy must be [N, total_tokens, Dh] with D=N*Dh for x [total_tokens, D]");
+        batch = static_cast<int64_t>(query_start_loc.value().size()) - 1;
+        dx_shape = x.sizes().vec();
+    } else if (input_layout_str == "TND") {
+        TORCH_CHECK(x.dim() == 2, "TND input must be [total_tokens, D]");
+        TORCH_CHECK(dy.sizes() == x.sizes(), "TND dy shape must match x");
+        TORCH_CHECK(query_start_loc.has_value(), "query_start_loc is required for TND input");
+        batch = static_cast<int64_t>(query_start_loc.value().size()) - 1;
+        dx_shape = x.sizes().vec();
+    } else {
+        TORCH_CHECK(
+            input_layout_str == "BSND" || input_layout_str == "BSH",
+            "input_layout must be one of BSND, BSH, TND, BNSD, or NTD");
+        TORCH_CHECK(x.dim() == 3, "BSND/BSH input must be [B, T, D]");
+        TORCH_CHECK(dy.sizes() == x.sizes(), "BSND/BSH dy shape must match x");
+        batch = x.size(0);
+        dx_shape = x.sizes().vec();
+    }
+    if (y.has_value()) {
+        TORCH_CHECK(y->sizes() == dy.sizes(), "y shape must match dy");
+    } else {
+        TORCH_CHECK(activation == 0, "y is required when activation is enabled");
+    }
+
+    at::Tensor dx = at::empty(dx_shape, x.options());
+    at::Tensor dw = at::empty({width, dim}, weight.options());
+    at::Tensor db = at::empty({dim}, weight.options());
+    const auto check_state_shape = [batch, width, dim](
+                                       const c10::optional<at::Tensor> &state,
+                                       const char *name) {
+        if (!state.has_value()) {
+            return;
+        }
+        TORCH_CHECK(
+            state->dim() == 3 &&
+                state->size(0) == batch &&
+                state->size(1) == width &&
+                state->size(2) == dim,
+            name, " must be [B, W, D]=[", batch, ", ", width, ", ", dim,
+            "], got ", state->sizes());
+    };
+    check_state_shape(initial_state, "initial_state");
+    check_state_shape(dht, "dht");
+
+    at::Tensor dh0 = at::empty({batch, width, dim}, x.options());
+
+    const at::Tensor &y_ = c10::value_or_else(y, [] { return at::Tensor(); });
+    const at::Tensor &initial_state_ = c10::value_or_else(initial_state, [] { return at::Tensor(); });
+    const at::Tensor &dht_ = c10::value_or_else(dht, [] { return at::Tensor(); });
+    c10::optional<at::IntArrayRef> query_start_loc_ = query_start_loc.has_value()
+        ? c10::optional<at::IntArrayRef>(query_start_loc.value()) : c10::nullopt;
+
+    EXEC_NPU_CMD_EXT(
+        aclnnCausalConv1dBwd,
+        x, y_, weight, dy, initial_state_, dht_, query_start_loc_,
+        activation, input_layout_cstr,
+        dx, dw, db, dh0
+    );
+    return std::make_tuple(std::move(dx), std::move(dw), std::move(db), std::move(dh0));
+}
+
+at::Tensor npu_solve_tri(
+    const at::Tensor &x,
+    at::OptionalIntArrayRef cu_seqlens,
+    at::OptionalIntArrayRef chunk_indices,
+    c10::string_view layout)
+{
+    at::Tensor x_contig = x.contiguous();
+    at::Tensor x_out = at::empty_like(x_contig);
+
+    std::string layout_str(layout.data(), layout.size());
+    const char *layout_cstr = layout_str.c_str();
+
+    EXEC_NPU_CMD_EXT(
+        aclnnSolveTri,
+        x_contig, cu_seqlens, chunk_indices, layout_cstr,
+        x_out
+    );
+    return x_out;
 }
 
 }  // namespace op_api

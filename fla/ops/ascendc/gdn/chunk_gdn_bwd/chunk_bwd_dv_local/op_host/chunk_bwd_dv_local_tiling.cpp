@@ -42,6 +42,7 @@ static void ChunkBwdDvLocalTilingDataPrint(gert::TilingContext *context, const C
 ge::graphStatus Tiling4ChunkBwdDvLocal(gert::TilingContext *context)
 {
     OP_LOGD(context->GetNodeName(), "Tiling4ChunkBwdDvLocal start.");
+    const auto ascendcPlatform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
     ChunkBwdDvLocalTilingData *tiling = context->GetTilingData<ChunkBwdDvLocalTilingData>();
 
     auto attrPtr = context->GetAttrs();
@@ -83,7 +84,6 @@ ge::graphStatus Tiling4ChunkBwdDvLocal(gert::TilingContext *context)
     OP_LOGD(context->GetNodeName(), "tilingKey: %d", context->GetTilingKey());
     ChunkBwdDvLocalTilingDataPrint(context, *tiling);
 
-    const auto ascendcPlatform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
     int64_t coreNum = static_cast<int64_t>(ascendcPlatform.GetCoreNumAic());
     int64_t usedCoreNum = std::min(tiling->chunkNumForT * tiling->b, coreNum);
     context->SetBlockDim(usedCoreNum);

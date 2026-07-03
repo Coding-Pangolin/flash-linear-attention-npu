@@ -7,8 +7,6 @@ import random
 import fla_npu
 import os
 
-torch.npu.utils.set_device(4)
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.join(current_dir, "output")
 os.makedirs(output_dir, exist_ok=True)
@@ -437,48 +435,92 @@ def test_prepare_wy_repr_bwd_da_fix(
     print(f"test_prepare_wy_repr_bwd_da_fix 被调用了第 {test_prepare_wy_repr_bwd_da_fix.call_count} 次")
 
 
+DTYPE_MAP = {
+    "fp16": torch.float16,
+    "float16": torch.float16,
+    "bf16": torch.bfloat16,
+    "bfloat16": torch.bfloat16,
+    "fp32": torch.float32,
+    "float32": torch.float32,
+}
+
+
+def run_cases_from_json(json_path: str):
+    import json
+    with open(json_path, "r") as f:
+        cases = json.load(f)
+    for i, case in enumerate(cases):
+        if not case.get("enabled", True):
+            print(f"[SKIP] case {i}: {case.get('name', '')}")
+            continue
+        name = case.get("name", f"case_{i}")
+        varlen = case.get("varlen", False)
+        B = case["B"]
+        HK = case["query_head"]
+        HV = case["value_head"]
+        T = case["T"]
+        K = case["Kdim"]
+        V = case["Vdim"]
+        chunk_size = case["chunk_size"]
+        ktype = DTYPE_MAP[case["dtype"]]
+        gtype = DTYPE_MAP[case["gtype"]]
+        print(f"\n{'='*60}")
+        print(f"[RUN] {name}  varlen={varlen}  B={B} HK={HK} HV={HV} T={T} K={K} V={V} chunk_size={chunk_size}")
+        print(f"{'='*60}")
+        if varlen:
+            cu_seqlens_len = case["mean_len"]
+            test_prepare_wy_repr_bwd_da_variable(
+                B=B, HK=HK, HV=HV, T=T, K=K, V=V,
+                chunk_size=chunk_size, cu_seqlens_len=cu_seqlens_len,
+                ktype=ktype, gtype=gtype,
+            )
+        else:
+            test_prepare_wy_repr_bwd_da_fix(
+                B=B, HK=HK, HV=HV, T=T, K=K, V=V,
+                chunk_size=chunk_size, ktype=ktype, gtype=gtype,
+            )
+
+
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="prepare_wy_repr_bwd_da precision test")
+    parser.add_argument("--json", type=str, default=None,
+                        help="Path to JSON case file; if omitted, runs built-in cases")
+    parser.add_argument("--device", type=int, default=0,
+                        help="NPU device id (default: 0)")
+    args = parser.parse_args()
+
+    torch.npu.utils.set_device(args.device)
     torch.manual_seed(0)
 
-    # Fix length tests (HK == HV, compatible with old behavior)
-    # test_prepare_wy_repr_bwd_da_fix(B=1, HK=2, HV=2, T=128, K=128, V=128, chunk_size=64, ktype=torch.float16, gtype=torch.float16)
-    # test_prepare_wy_repr_bwd_da_fix(B=2, HK=4, HV=4, T=256, K=128, V=128, chunk_size=128, ktype=torch.bfloat16, gtype=torch.bfloat16)
-    # test_prepare_wy_repr_bwd_da_fix(B=4, HK=8, HV=8, T=512, K=128, V=256, chunk_size=64, ktype=torch.float16, gtype=torch.float32)
-    # test_prepare_wy_repr_bwd_da_fix(B=8, HK=16, HV=16, T=1024, K=128, V=256, chunk_size=128, ktype=torch.bfloat16, gtype=torch.float32)
-    # test_prepare_wy_repr_bwd_da_fix(B=1, HK=32, HV=32, T=2048, K=128, V=128, chunk_size=64, ktype=torch.float16, gtype=torch.float32)
+    if args.json:
+        run_cases_from_json(args.json)
+    else:
+        # Fix length tests (HK == HV, compatible with old behavior)
+        test_prepare_wy_repr_bwd_da_fix(B=1, HK=2, HV=2, T=128, K=128, V=128, chunk_size=64, ktype=torch.float16, gtype=torch.float16)
+        test_prepare_wy_repr_bwd_da_fix(B=2, HK=4, HV=4, T=256, K=128, V=128, chunk_size=128, ktype=torch.bfloat16, gtype=torch.bfloat16)
+        test_prepare_wy_repr_bwd_da_fix(B=4, HK=8, HV=8, T=512, K=128, V=256, chunk_size=64, ktype=torch.float16, gtype=torch.float32)
+        test_prepare_wy_repr_bwd_da_fix(B=8, HK=16, HV=16, T=1024, K=128, V=256, chunk_size=128, ktype=torch.bfloat16, gtype=torch.float32)
+        test_prepare_wy_repr_bwd_da_fix(B=1, HK=32, HV=32, T=2048, K=128, V=128, chunk_size=64, ktype=torch.float16, gtype=torch.float32)
 
-    # Variable length tests (HK == HV, compatible with old behavior)
-    # test_prepare_wy_repr_bwd_da_variable(B=1, HK=4, HV=4, T=128, K=128, V=128, chunk_size=64, cu_seqlens_len=2, ktype=torch.float16, gtype=torch.float16)
-    # test_prepare_wy_repr_bwd_da_variable(B=1, HK=8, HV=8, T=256, K=128, V=128, chunk_size=128, cu_seqlens_len=3, ktype=torch.bfloat16, gtype=torch.bfloat16)
-    # test_prepare_wy_repr_bwd_da_variable(B=1, HK=16, HV=16, T=512, K=128, V=256, chunk_size=64, cu_seqlens_len=4, ktype=torch.float16, gtype=torch.float32)
-    # test_prepare_wy_repr_bwd_da_variable(B=1, HK=32, HV=32, T=1024, K=128, V=256, chunk_size=128, cu_seqlens_len=5, ktype=torch.bfloat16, gtype=torch.float32)
-    # test_prepare_wy_repr_bwd_da_variable(B=1, HK=32, HV=32, T=2048, K=128, V=128, chunk_size=64, cu_seqlens_len=16, ktype=torch.bfloat16, gtype=torch.float32)
+        # Variable length tests (HK == HV, compatible with old behavior)
+        test_prepare_wy_repr_bwd_da_variable(B=1, HK=4, HV=4, T=128, K=128, V=128, chunk_size=64, cu_seqlens_len=2, ktype=torch.float16, gtype=torch.float16)
+        test_prepare_wy_repr_bwd_da_variable(B=1, HK=8, HV=8, T=256, K=128, V=128, chunk_size=128, cu_seqlens_len=3, ktype=torch.bfloat16, gtype=torch.bfloat16)
+        test_prepare_wy_repr_bwd_da_variable(B=1, HK=16, HV=16, T=512, K=128, V=256, chunk_size=64, cu_seqlens_len=4, ktype=torch.float16, gtype=torch.float32)
+        test_prepare_wy_repr_bwd_da_variable(B=1, HK=32, HV=32, T=1024, K=128, V=256, chunk_size=128, cu_seqlens_len=5, ktype=torch.bfloat16, gtype=torch.float32)
+        test_prepare_wy_repr_bwd_da_variable(B=1, HK=32, HV=32, T=2048, K=128, V=128, chunk_size=64, cu_seqlens_len=16, ktype=torch.bfloat16, gtype=torch.float32)
 
-    # Fix length tests (HK == HV)
-    # test_prepare_wy_repr_bwd_da_fix(B=1, HK=16, HV=16, T=4096, K=128, V=256, chunk_size=64, ktype=torch.float16, gtype=torch.float32)
-    # test_prepare_wy_repr_bwd_da_fix(B=16, HK=21, HV=21, T=2048, K=128, V=256, chunk_size=64, ktype=torch.bfloat16, gtype=torch.float32)
-    # test_prepare_wy_repr_bwd_da_fix(B=711, HK=4, HV=4, T=196, K=128, V=128, chunk_size=128, ktype=torch.float16, gtype=torch.float32)
-    # test_prepare_wy_repr_bwd_da_fix(B=176, HK=2, HV=2, T=24, K=128, V=256, chunk_size=64, ktype=torch.bfloat16, gtype=torch.float32)
+        # GVA fix length tests (HK != HV)
+        # test_prepare_wy_repr_bwd_da_fix(B=1, HK=16, HV=32, T=4096, K=128, V=256, chunk_size=64, ktype=torch.float16, gtype=torch.float32)
+        # test_prepare_wy_repr_bwd_da_fix(B=16, HK=21, HV=63, T=2048, K=128, V=256, chunk_size=64, ktype=torch.bfloat16, gtype=torch.float32)
+        # test_prepare_wy_repr_bwd_da_fix(B=711, HK=4, HV=32, T=196, K=128, V=128, chunk_size=128, ktype=torch.float16, gtype=torch.float32)
+        # test_prepare_wy_repr_bwd_da_fix(B=176, HK=2, HV=64, T=24, K=128, V=256, chunk_size=64, ktype=torch.bfloat16, gtype=torch.float32)
 
-    # Variable length tests (HK == HV)
-    # test_prepare_wy_repr_bwd_da_variable(B=1, HK=16, HV=16, T=16384, K=128, V=256, chunk_size=64, cu_seqlens_len=128, ktype=torch.float16, gtype=torch.float32)
-    # test_prepare_wy_repr_bwd_da_variable(B=1, HK=21, HV=21, T=16384, K=128, V=256, chunk_size=64, cu_seqlens_len=2, ktype=torch.bfloat16, gtype=torch.float32)
-    # test_prepare_wy_repr_bwd_da_variable(B=1, HK=8, HV=8, T=65536, K=128, V=256, chunk_size=128, cu_seqlens_len=172, ktype=torch.bfloat16, gtype=torch.float32)
-    # test_prepare_wy_repr_bwd_da_variable(B=1, HK=16, HV=16, T=65536, K=128, V=128, chunk_size=64, cu_seqlens_len=668, ktype=torch.float16, gtype=torch.float32)
-    # test_prepare_wy_repr_bwd_da_variable(B=1, HK=4, HV=4, T=65536, K=128, V=128, chunk_size=128, cu_seqlens_len=17, ktype=torch.bfloat16, gtype=torch.float32)
-    # test_prepare_wy_repr_bwd_da_variable(B=1, HK=2, HV=2, T=262144, K=128, V=256, chunk_size=64, cu_seqlens_len=32, ktype=torch.float16, gtype=torch.float32)
-
-    # GVA fix length tests (HK != HV)
-    test_prepare_wy_repr_bwd_da_fix(B=1, HK=16, HV=32, T=4096, K=128, V=256, chunk_size=64, ktype=torch.float16, gtype=torch.float32)
-    test_prepare_wy_repr_bwd_da_fix(B=16, HK=21, HV=63, T=2048, K=128, V=256, chunk_size=64, ktype=torch.bfloat16, gtype=torch.float32)
-    test_prepare_wy_repr_bwd_da_fix(B=711, HK=4, HV=32, T=196, K=128, V=128, chunk_size=128, ktype=torch.float16, gtype=torch.float32)
-    test_prepare_wy_repr_bwd_da_fix(B=176, HK=2, HV=64, T=24, K=128, V=256, chunk_size=64, ktype=torch.bfloat16, gtype=torch.float32)
-
-    # GVA variable length tests (HK != HV)
-    test_prepare_wy_repr_bwd_da_variable(B=1, HK=16, HV=32, T=16384, K=128, V=256, chunk_size=64, cu_seqlens_len=128, ktype=torch.float16, gtype=torch.float32)
-    test_prepare_wy_repr_bwd_da_variable(B=1, HK=21, HV=63, T=16384, K=128, V=256, chunk_size=64, cu_seqlens_len=2, ktype=torch.bfloat16, gtype=torch.float32)
-    test_prepare_wy_repr_bwd_da_variable(B=1, HK=8, HV=32, T=65536, K=128, V=256, chunk_size=128, cu_seqlens_len=172, ktype=torch.bfloat16, gtype=torch.float32)
-    test_prepare_wy_repr_bwd_da_variable(B=1, HK=16, HV=32, T=65536, K=128, V=128, chunk_size=64, cu_seqlens_len=668, ktype=torch.float16, gtype=torch.float32)
-    test_prepare_wy_repr_bwd_da_variable(B=1, HK=4, HV=32, T=65536, K=128, V=128, chunk_size=128, cu_seqlens_len=17, ktype=torch.bfloat16, gtype=torch.float32)
-    test_prepare_wy_repr_bwd_da_variable(B=1, HK=2, HV=64, T=262144, K=128, V=256, chunk_size=64, cu_seqlens_len=32, ktype=torch.float16, gtype=torch.float32)
+        # GVA variable length tests (HK != HV)
+        # test_prepare_wy_repr_bwd_da_variable(B=1, HK=16, HV=32, T=16384, K=128, V=256, chunk_size=64, cu_seqlens_len=128, ktype=torch.float16, gtype=torch.float32)
+        # test_prepare_wy_repr_bwd_da_variable(B=1, HK=21, HV=63, T=16384, K=128, V=256, chunk_size=64, cu_seqlens_len=2, ktype=torch.bfloat16, gtype=torch.float32)
+        # test_prepare_wy_repr_bwd_da_variable(B=1, HK=8, HV=32, T=65536, K=128, V=256, chunk_size=128, cu_seqlens_len=172, ktype=torch.bfloat16, gtype=torch.float32)
+        # test_prepare_wy_repr_bwd_da_variable(B=1, HK=16, HV=32, T=65536, K=128, V=128, chunk_size=64, cu_seqlens_len=668, ktype=torch.float16, gtype=torch.float32)
+        # test_prepare_wy_repr_bwd_da_variable(B=1, HK=4, HV=32, T=65536, K=128, V=128, chunk_size=128, cu_seqlens_len=17, ktype=torch.bfloat16, gtype=torch.float32)
+        # test_prepare_wy_repr_bwd_da_variable(B=1, HK=2, HV=64, T=262144, K=128, V=256, chunk_size=64, cu_seqlens_len=32, ktype=torch.float16, gtype=torch.float32)
 

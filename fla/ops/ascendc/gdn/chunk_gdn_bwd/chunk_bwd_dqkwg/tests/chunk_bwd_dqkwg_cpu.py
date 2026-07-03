@@ -92,10 +92,14 @@ def chunk_bwd_dqkwg_cpu(
     """
     if benchmark:
         calc_type = torch.float64
+        datatype = torch.float64
+        gtype = torch.float64
+        mmtype = torch.float64
     else:
         calc_type = torch.float32
-    datatype = q.dtype
-    gtype = g.dtype
+        datatype = q.dtype
+        gtype = g.dtype
+        mmtype = datatype
     q.to(calc_type)
     k.to(calc_type)
     v.to(calc_type)
@@ -103,21 +107,20 @@ def chunk_bwd_dqkwg_cpu(
     h.to(calc_type)
     dh.to(calc_type)
     
-    g.to(calc_type)
+    g.to(gtype).to(calc_type)
     dv.to(calc_type)
     B, T, HK, K = q.shape
     HV = v.shape[2]
     V = v.shape[-1]
+    if HK <= 0 or HV <= 0 or HV % HK != 0:
+        raise ValueError(f"GVA requires HV divisible by HK, got HV={HV}, HK={HK}")
     n_ratio = HV // HK  # HV = n_ratio * HK
 
-    if benchmark:
-        datatype = torch.float64
-        gtype = torch.float64
     g_gamma = None
     
-    # 输出使用 HV 维度
-    dq = torch.zeros((B, T, HV, K), dtype=datatype)
-    dk = torch.zeros((B, T, HV, K), dtype=datatype)
+    # Keep per-value-head contributions first, then reduce them into key heads.
+    dq_hv = torch.zeros((B, T, HV, K), dtype=datatype)
+    dk_hv = torch.zeros((B, T, HV, K), dtype=datatype)
     dg = torch.zeros_like(g) if g is not None else None
     dw = torch.zeros((B, T, HV, K), dtype=datatype)
     w = torch.zeros((B, T, HV, K), dtype=datatype)
@@ -170,19 +173,19 @@ def chunk_bwd_dqkwg_cpu(
                 # -----------------------------------------------------------
                 # Triton: b_dq += dot(b_do, b_h) -> do @ h_prev.T
                 # h_prev 是 [K, V], do_c 是 [BT, V] -> [BT, K]
-                dq_from_state = do_c.to(calc_type) @ h_prev.transpose(-1, -2).to(calc_type)
+                dq_from_state = do_c.to(calc_type).to(mmtype) @ h_prev.transpose(-1, -2).to(calc_type).to(mmtype)
 
                 dq_from_state = dq_from_state.to(datatype).to(calc_type)
 
                 # Triton: b_dk += dot(b_v, b_dh) -> v @ dh_curr.T
                 # dh_curr 是 [K, V], v_c 是 [BT, V] -> [BT, K]
-                dk_from_state = v_c.to(calc_type) @ dh_curr.transpose(-1, -2).to(calc_type)
+                dk_from_state = v_c.to(calc_type).to(mmtype) @ dh_curr.transpose(-1, -2).to(calc_type).to(mmtype)
                 dk_from_state = dk_from_state.to(datatype).to(calc_type)
                 # Triton: if USE_DW -> b_dw += dot(b_dv, b_h)
                 if w is not None and dv is not None:
                     dv_c = dv[b_idx, chunk_start_token_idx:chunk_end_token_idx, h_idx, :] # [BT, V]
                     # dw_c: [BT, K]
-                    dw_c_val = dv_c.to(calc_type) @ h_prev.transpose(-1, -2).to(calc_type)
+                    dw_c_val = dv_c.to(calc_type).to(mmtype) @ h_prev.transpose(-1, -2).to(calc_type).to(mmtype)
                     dw_c_val = dw_c_val.to(datatype).to(calc_type)
                     # Triton stores -b_dw
                     dw[b_idx, chunk_start_token_idx:chunk_end_token_idx, h_idx, :] = -dw_c_val
@@ -217,7 +220,7 @@ def chunk_bwd_dqkwg_cpu(
                     # print("dk_from_state",dk_from_state)
                     # print("k_c * dk_from_state",( k_c * dk_from_state)[0])
                     # print("Add0.B", -(k_c * dk_from_state).sum(dim=-1))
-                    dg_c = dg_c.to(datatype).to(calc_type)
+                    dg_c = dg_c.to(gtype).to(calc_type)
 
                     # b_dg_last += sum(b_dk * b_k)
                     # print(f"dg_last_accum {dg_last_accum} += (dk_from_state * k_c).sum() {(dk_from_state * k_c).sum()}")
@@ -249,7 +252,7 @@ def chunk_bwd_dqkwg_cpu(
                 # -----------------------------------------------------------
                 # 3. Intra-chunk Attention
                 # -----------------------------------------------------------
-                ds = do_c.to(calc_type) @ v_c.transpose(-1, -2).to(calc_type) # [BT, BT]
+                ds = do_c.to(calc_type).to(mmtype) @ v_c.transpose(-1, -2).to(calc_type).to(mmtype) # [BT, BT]
                 ds = ds.to(datatype).to(calc_type)
 
                 
@@ -273,7 +276,7 @@ def chunk_bwd_dqkwg_cpu(
                     
                     # DG Calculation Part 2 (Intra-chunk)
                     # b_ds2 = b_ds * (q @ k.T)
-                    qk_t = q_c.to(calc_type) @ k_c.transpose(-1, -2).to(calc_type)
+                    qk_t = q_c.to(calc_type).to(mmtype) @ k_c.transpose(-1, -2).to(calc_type).to(mmtype)
                     qk_t = qk_t.to(datatype).to(calc_type)
 
 
@@ -282,6 +285,7 @@ def chunk_bwd_dqkwg_cpu(
                     # print("ADD0.C : +ds2.sum(dim=1)", ds2.sum(dim=1))
                     # print("ADD0.D : -ds2.sum(dim=0)", ds2.sum(dim=0))
                     dg_c += ds2.sum(dim=1)
+                    dg_c = dg_c.to(gtype).to(calc_type)
                     dg_c -= ds2.sum(dim=0)
 
                     # dg_c = dg_c_C.to(torch.float16) + dg_c_D.to(torch.float16) + dg_c_A.to(torch.float16) + dg_c_B.to(torch.float16)
@@ -328,13 +332,13 @@ def chunk_bwd_dqkwg_cpu(
                 # -----------------------------------------------------------
                 # dq += ds @ k
 
-                dq_intra = ds.to(calc_type) @ k_c.to(calc_type)
+                dq_intra = ds.to(calc_type).to(mmtype) @ k_c.to(calc_type).to(mmtype)
                 # if h_idx == 0 and i_t == 7:
                 #     print("ds.to(torch.float32)",ds.to(torch.float32))
                 #     print("k_c.to(torch.float32)",k_c.to(torch.float32))
                 dq_intra = dq_intra.to(datatype).to(calc_type)
                 # dk += ds.T @ q
-                dk_intra = ds.transpose(-1, -2).to(calc_type) @ q_c.to(calc_type)
+                dk_intra = ds.transpose(-1, -2).to(calc_type).to(mmtype) @ q_c.to(calc_type).to(mmtype)
                 dk_intra = dk_intra.to(datatype).to(calc_type)
 
                 
@@ -356,8 +360,8 @@ def chunk_bwd_dqkwg_cpu(
                     # print(h_idx,i_t,"dk_total",dk_total)
 
 
-                dq[b_idx, chunk_start_token_idx:chunk_end_token_idx, h_idx, :] = dq_total
-                dk[b_idx, chunk_start_token_idx:chunk_end_token_idx, h_idx, :] = dk_total
+                dq_hv[b_idx, chunk_start_token_idx:chunk_end_token_idx, h_idx, :] = dq_total.to(datatype)
+                dk_hv[b_idx, chunk_start_token_idx:chunk_end_token_idx, h_idx, :] = dk_total.to(datatype)
 
                 # if RANDOM_DATA == False:
                 #     pass
@@ -408,5 +412,8 @@ def chunk_bwd_dqkwg_cpu(
                 # 但如果发生，通常 cu_seqlens[i] 是第 i 个样本的长度。
                 # 简化起见，我们假设 input 是 packed flat tensor 如果 cu_seqlens 存在。
                 pass 
+
+    dq = dq_hv.view(B, T, HK, n_ratio, K).sum(dim=3).to(datatype)
+    dk = dk_hv.view(B, T, HK, n_ratio, K).sum(dim=3).to(datatype)
 
     return dq, dk, dw, dg

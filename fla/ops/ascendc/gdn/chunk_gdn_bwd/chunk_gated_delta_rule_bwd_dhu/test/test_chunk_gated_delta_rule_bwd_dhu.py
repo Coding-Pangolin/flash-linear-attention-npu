@@ -250,6 +250,7 @@ def chunk_gated_delta_rule_bwd_dhu_torch(
     scale: Optional[float] = None,
     chunk_size: int = 64,
     accum_dtype: torch.dtype = torch.float32,
+    matmul_elem_dtype: Optional[torch.dtype] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor]:
     """
     PyTorch 版 chunk_gated_delta_rule_bwd_dhu（GVA 形状）。
@@ -288,6 +289,14 @@ def chunk_gated_delta_rule_bwd_dhu_torch(
 
     if scale is None:
         scale = 1.0
+
+    def _matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        if matmul_elem_dtype is None:
+            return torch.matmul(a.to(accum_dtype), b.to(accum_dtype))
+        return torch.matmul(
+            a.to(matmul_elem_dtype).to(torch.float32),
+            b.to(matmul_elem_dtype).to(torch.float32),
+        )
 
     chunk_info = []
     for i_t in range(NT):
@@ -351,7 +360,7 @@ def chunk_gated_delta_rule_bwd_dhu_torch(
             b_do = do[:, :, global_start_t:global_end_t, :]
             b_dv_existing = dv[:, :, global_start_t:global_end_t, :]
 
-            b_dv = torch.matmul(k_blk.to(accum_dtype), b_dh.to(accum_dtype))
+            b_dv = _matmul(k_blk, b_dh)
 
             if g is not None:
                 bg_last = g[:, :, global_last_idx]
@@ -376,8 +385,8 @@ def chunk_gated_delta_rule_bwd_dhu_torch(
                 b_dh_for_update = b_dh.clone()
                 b_q_gated = b_q_t
 
-            term1 = torch.matmul(b_q_gated.to(accum_dtype), b_do.to(accum_dtype)) * scale
-            term2 = torch.matmul(b_w_t.to(accum_dtype), b_dv.to(accum_dtype))
+            term1 = _matmul(b_q_gated, b_do) * scale
+            term2 = _matmul(b_w_t, b_dv)
             b_dh = b_dh_for_update + term1 - term2
     else:
         for b in range(B):
@@ -413,7 +422,7 @@ def chunk_gated_delta_rule_bwd_dhu_torch(
                     b_dv_existing = dv[b, i_h, global_start_t:global_end_t, :]
 
                     b_k = k[b, hq, global_start_t:global_end_t, :]
-                    b_dv = torch.matmul(b_k.to(accum_dtype), b_dh.to(accum_dtype))
+                    b_dv = _matmul(b_k, b_dh)
 
                     if g is not None:
                         m_t = torch.arange(block_size_t, device=device) < block_size_t
@@ -437,8 +446,8 @@ def chunk_gated_delta_rule_bwd_dhu_torch(
                     if g is not None:
                         b_q_gated = b_q_t * b_g_exp.unsqueeze(0)
 
-                    term1 = torch.matmul(b_q_gated.to(accum_dtype), b_do.to(accum_dtype)) * scale
-                    term2 = torch.matmul(b_w_t.to(accum_dtype), b_dv.to(accum_dtype))
+                    term1 = _matmul(b_q_gated, b_do) * scale
+                    term2 = _matmul(b_w_t, b_dv)
 
                     new_b_dh = b_dh_for_update + term1 - term2
                     b_dh_buffers[i_n] = new_b_dh

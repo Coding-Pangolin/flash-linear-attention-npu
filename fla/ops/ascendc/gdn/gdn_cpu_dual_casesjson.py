@@ -92,6 +92,23 @@ SMOKE_CASES: list[dict[str, Any]] = [
 ]
 
 
+# bwd_dhu smoke：与 torch_custom/fla_npu/test/test_npu_bwd_dhu_gva.py 对齐
+BWD_DHU_SMOKE_CASES: list[dict[str, Any]] = [
+    {
+        "name": "smoke_varlen_t256_v256",
+        "B": 1, "query_head": 16, "value_head": 32, "T": 256,
+        "Kdim": 128, "Vdim": 256, "chunk_size": 64, "mean_len": 5,
+        "dtype": "bf16", "gtype": "fp32", "varlen": True,
+    },
+    {
+        "name": "smoke_fixed_t4096_v256",
+        "B": 1, "query_head": 16, "value_head": 32, "T": 4096,
+        "Kdim": 128, "Vdim": 256, "chunk_size": 64,
+        "dtype": "bf16", "gtype": "fp32", "varlen": False,
+    },
+]
+
+
 def generate_cu_seqlens_for_case(case: dict[str, Any]) -> torch.LongTensor | None:
     if not case.get("varlen"):
         return None
@@ -151,9 +168,10 @@ def resolve_cases(
     cases_json: Path,
     case_names: list[str] | None,
     smoke: bool,
+    smoke_cases: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if smoke:
-        return list(SMOKE_CASES)
+        return list(smoke_cases if smoke_cases is not None else SMOKE_CASES)
     names = case_names or DEFAULT_GPU_UNSUPPORTED_CASES
     by_name = {c["name"]: c for c in load_cases(cases_json)}
     missing = [n for n in names if n not in by_name]
@@ -177,7 +195,12 @@ def dual_check(
     level: str = "L1",
 ) -> tuple[bool, dict[str, Any]]:
     print(f"================== {name} (dual: fp64 gt / npu-aligned bench) ==================", flush=True)
-    result = ct.dual(npu_out.cpu(), ref_fp64.cpu(), ref_npu.cpu(), level=level)
+    result = ct.dual(
+        npu_out.cpu().float(),
+        ref_fp64.cpu().float(),
+        ref_npu.cpu().float(),
+        level=level,
+    )
     ok = bool(result.get("success"))
     print(
         f"[{name}] dual {'PASS' if ok else 'FAIL'}: "

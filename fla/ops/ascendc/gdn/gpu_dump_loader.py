@@ -68,7 +68,7 @@ def chunk_indices_npu_list(chunk_indices: Any) -> list[int] | None:
 
 
 def prepare_chunk_offsets_list(cu_seqlens: list[int], chunk_size: int) -> list[int]:
-    """fwd_h NPU aclnn uses cumsum chunk offsets, not pairwise chunk_indices."""
+    """Cumulative chunk offsets per sequence (length = num_seq + 1). Legacy PTA path only."""
     if len(cu_seqlens) < 2:
         return [0]
     offsets = [0]
@@ -76,6 +76,44 @@ def prepare_chunk_offsets_list(cu_seqlens: list[int], chunk_size: int) -> list[i
         seg = cu_seqlens[i + 1] - cu_seqlens[i]
         offsets.append(offsets[-1] + (seg + chunk_size - 1) // chunk_size)
     return offsets
+
+
+def prepare_pairwise_chunk_indices_list(cu_seqlens: list[int], chunk_size: int) -> list[int]:
+    """Flat [seq_id, chunk_id, ...] for varlen; FLANpuOpApi uses NT = len(list) // 2."""
+    if len(cu_seqlens) < 2:
+        return []
+    out: list[int] = []
+    for seq_id in range(len(cu_seqlens) - 1):
+        seg = cu_seqlens[seq_id + 1] - cu_seqlens[seq_id]
+        chunk_num = (seg + chunk_size - 1) // chunk_size
+        for chunk_id in range(chunk_num):
+            out.extend([seq_id, chunk_id])
+    return out
+
+
+def resolve_fwd_h_chunk_indices(
+    cu_seqlens: list[int] | None,
+    chunk_size: int,
+    meta: dict[str, Any],
+    case_meta: dict[str, Any] | None = None,
+) -> list[int] | None:
+    """Pairwise chunk_indices for fwd_h (must NOT pass cumsum chunk_offsets)."""
+    if cu_seqlens is None:
+        return None
+    case_meta = case_meta or {}
+    for key in ("chunk_indices_npu", "chunk_indices"):
+        raw = meta.get(key)
+        if raw is not None:
+            if isinstance(raw, torch.Tensor):
+                listed = chunk_indices_npu_list(raw)
+            else:
+                listed = [int(x) for x in raw]
+            if listed:
+                return listed
+    raw = case_meta.get("chunk_indices")
+    if raw is not None:
+        return [int(x) for x in raw]
+    return prepare_pairwise_chunk_indices_list(cu_seqlens, chunk_size)
 
 
 def resolve_seq_meta(

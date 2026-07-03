@@ -44,7 +44,7 @@ from gdn_case_utils import (  # noqa: E402
     _rand_uniform,
     parse_dtype,
 )
-from gpu_dump_loader import prepare_chunk_offsets_list  # noqa: E402
+from gpu_dump_loader import prepare_pairwise_chunk_indices_list  # noqa: E402
 from test_fwd_h import forward_h_trans_cpu  # noqa: E402
 
 torch.npu.config.allow_internal_format = False
@@ -98,7 +98,7 @@ def build_fwd_h_inputs(case: dict[str, Any], device: torch.device, seed: int = 0
 
     cu_seqlens_t = generate_cu_seqlens_for_case(case)
     cu_list = None if cu_seqlens_t is None else cu_seqlens_t.detach().cpu().tolist()
-    chunk_offsets = None if cu_list is None else prepare_chunk_offsets_list(cu_list, chunk_size)
+    chunk_indices = None if cu_list is None else prepare_pairwise_chunk_indices_list(cu_list, chunk_size)
 
     g_cum = chunk_local_cumsum_cpu(g_bth.cpu(), cu_list, chunk_size).to(device)
     g = g_cum.transpose(1, 2).contiguous()
@@ -115,12 +115,12 @@ def build_fwd_h_inputs(case: dict[str, Any], device: torch.device, seed: int = 0
         "dtype": case["dtype"],
         "varlen": bool(case.get("varlen", False)),
         "cu_seqlens": cu_list,
-        "chunk_offsets": chunk_offsets,
+        "chunk_indices": chunk_indices,
         "num_seqs": 0 if cu_list is None else len(cu_list) - 1,
-        "num_chunks": 0 if chunk_offsets is None else chunk_offsets[-1],
+        "num_chunks": 0 if chunk_indices is None else len(chunk_indices) // 2,
         "seed": seed,
     }
-    return k, w, u, g, cu_list, chunk_offsets, meta
+    return k, w, u, g, cu_list, chunk_indices, meta
 
 
 def _dual_check(name: str, npu_out: torch.Tensor, ref_fp64: torch.Tensor, ref_npu: torch.Tensor, level: str):
@@ -153,16 +153,20 @@ def run_one_case(
     try:
         torch.npu.set_device(device_id)
         device = torch.device(f"npu:{device_id}")
-        k, w, u, g, cu_list, chunk_offsets, meta = build_fwd_h_inputs(case, device, seed=seed)
+        k, w, u, g, cu_list, chunk_indices, meta = build_fwd_h_inputs(case, device, seed=seed)
         record["meta"] = meta
         print(f"\n=== {case_name} ===", flush=True)
         print(json.dumps(meta, indent=2), flush=True)
 
         cu_tensor = None if cu_list is None else torch.tensor(cu_list, dtype=torch.long)
+        chunk_indices_tensor = (
+            torch.tensor(chunk_indices, dtype=torch.long) if chunk_indices is not None else None
+        )
         golden_kwargs = dict(
             initial_state=None,
             chunk_size=meta["chunk_size"],
             cu_seqlens=cu_tensor,
+            chunk_indices=chunk_indices_tensor,
         )
         k_cpu, w_cpu, u_cpu, g_cpu = k.cpu(), w.cpu(), u.cpu(), g.cpu()
         print("[CPU] fp64 golden ...", flush=True)
@@ -189,7 +193,7 @@ def run_one_case(
             chunk_size=meta["chunk_size"],
             save_new_value=True,
             cu_seqlens=cu_list,
-            chunk_indices=chunk_offsets,
+            chunk_indices=chunk_indices,
             use_exp2=False,
             transpose_state_layout=False,
         )

@@ -28,7 +28,7 @@ from gpu_dump_loader import (  # noqa: E402
     list_case_dirs,
     load_case_meta,
     load_dump_for_npu,
-    prepare_chunk_offsets_list,
+    resolve_fwd_h_chunk_indices,
     resolve_seq_meta,
 )
 from gpu_dump_dual_utils import add_viz_cli_args, dual_then_viz, resolve_viz_dir
@@ -52,18 +52,6 @@ def _as_cu_tensor(cu_seqlens: list[int] | None) -> torch.Tensor | None:
     if cu_seqlens is None:
         return None
     return torch.tensor(cu_seqlens, dtype=torch.long)
-
-
-def _fwd_h_chunk_indices_arg(
-    cu_seqlens: list[int] | None,
-    chunk_size: int,
-    meta: dict[str, Any],
-) -> list[int] | None:
-    if cu_seqlens is None:
-        return None
-    if meta.get("chunk_offsets") is not None:
-        return [int(x) for x in meta["chunk_offsets"]]
-    return prepare_chunk_offsets_list(cu_seqlens, chunk_size)
 
 
 def run_one_pt(
@@ -98,7 +86,9 @@ def run_one_pt(
     Hv = u.shape[1]
     V = u.shape[-1]
     cu_seqlens, _chunk_pair, chunk_size, _scale = resolve_seq_meta(meta, case_meta)
-    chunk_indices_arg = _fwd_h_chunk_indices_arg(cu_seqlens, chunk_size, meta)
+    chunk_indices_arg = resolve_fwd_h_chunk_indices(
+        cu_seqlens, chunk_size, meta, case_meta,
+    )
     output_final_state = bool(
         meta.get("output_final_state", case_meta.get("output_final_state", False))
     )
@@ -106,11 +96,16 @@ def run_one_pt(
         output_final_state = True
 
     case_name = label or f"{pt_path.parent.name}/{pt_path.name}"
+    nt = (
+        len(chunk_indices_arg) // 2
+        if chunk_indices_arg is not None
+        else (T + chunk_size - 1) // chunk_size
+    )
     if verbose:
         print(
             f"\n=== {case_name} ===\n"
             f"  pt: {pt_path} B={B} Hk={Hk} Hv={Hv} T={T} K={K} V={V} cs={chunk_size} "
-            f"varlen={cu_seqlens is not None} output_final_state={output_final_state}",
+            f"varlen={cu_seqlens is not None} NT={nt} output_final_state={output_final_state}",
             flush=True,
         )
 
@@ -130,6 +125,11 @@ def run_one_pt(
     npu_elapsed = time.time() - t0
 
     cu_tensor = _as_cu_tensor(cu_seqlens)
+    chunk_indices_tensor = (
+        torch.tensor(chunk_indices_arg, dtype=torch.long)
+        if chunk_indices_arg is not None
+        else None
+    )
     h_fp64, v_new_fp64, final_state_fp64 = forward_h_trans_cpu(
         k.double(),
         w.double(),
@@ -139,6 +139,7 @@ def run_one_pt(
         output_final_state=output_final_state,
         chunk_size=chunk_size,
         cu_seqlens=cu_tensor,
+        chunk_indices=chunk_indices_tensor,
         accum_dtype=torch.float64,
     )
 

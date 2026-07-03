@@ -18,10 +18,42 @@ torch.npu.set_compile_mode(jit_compile=False)
 
 np.random.seed(1)
 torch.manual_seed(1)
-torch.npu.set_device(int(os.environ.get("TEST_DEVICE_ID", 0)))
+if __name__ == "__main__":
+    torch.npu.set_device(int(os.environ.get("TEST_DEVICE_ID", 0)))
 
 WORKSPACE = os.path.dirname(os.path.abspath(__file__))
 from typing import Optional
+
+
+def cdiv(a, b):
+    return (a + b - 1) // b
+
+
+def prepare_lens(cu_seqlens: torch.LongTensor) -> torch.LongTensor:
+    return cu_seqlens[1:] - cu_seqlens[:-1]
+
+
+def prepare_chunk_indices(cu_seqlens: torch.LongTensor, chunk_size: int) -> torch.LongTensor:
+    indices = torch.cat([torch.arange(n) for n in cdiv(prepare_lens(cu_seqlens), chunk_size).tolist()])
+    return torch.stack([indices.eq(0).cumsum(0) - 1, indices], 1).to(cu_seqlens)
+
+
+def prepare_chunk_offsets(cu_seqlens: torch.LongTensor, chunk_size: int) -> torch.LongTensor:
+    return torch.cat([cu_seqlens.new_tensor([0]), cdiv(prepare_lens(cu_seqlens), chunk_size)]).cumsum(-1)
+
+
+def _round_elem(x: torch.Tensor, elem_dtype: torch.dtype) -> torch.Tensor:
+    """将张量舍入到 elem_dtype（bf16/fp16）精度，仍在 fp32 容器中计算。"""
+    if elem_dtype == torch.float32:
+        return x.to(torch.float32)
+    return x.to(elem_dtype).to(torch.float32)
+
+
+def _matmul_npu_aligned(a: torch.Tensor, b: torch.Tensor, elem_dtype: torch.dtype) -> torch.Tensor:
+    """bf16/fp16 乘 + fp32 累加，与 Cube MMAD 语义对齐。"""
+    return _round_elem(a, elem_dtype) @ _round_elem(b, elem_dtype)
+
+
 def forward_h_trans_cpu(
     k: torch.Tensor,
     w: torch.Tensor,
@@ -34,33 +66,134 @@ def forward_h_trans_cpu(
     save_new_value: bool = True,
     cu_seqlens: Optional[torch.LongTensor] = None,
     chunk_indices: Optional[torch.LongTensor] = None,
+    keep_fp32: bool = False,
+    compute_dtype: torch.dtype = torch.float32,
+    golden_mode: str = "fp32",
 ):
     # 典型场景 HQ=HK=16 HV=32
-    # assert HV >= HK 并且可以整除
-    # assert 变长场景下，B==1
-    # assert K==V==D
+    # golden_mode:
+    #   fp32  - 输入升 fp32，fp32×fp32 矩阵乘（旧同精度标杆）
+    #   fp64  - 输入升 fp64，fp64 累加（升精度真值）
+    #   npu   - k/w/u 保持 bf16/fp16 乘，fp32 累加；g 用 fp32；状态按 elem_dtype 回写
     dtype_ = k.dtype
+    if golden_mode == "fp64":
+        compute_dtype = torch.float64
+        elem_dtype = None
+    elif golden_mode == "npu":
+        compute_dtype = torch.float32
+        elem_dtype = dtype_
+    elif golden_mode != "fp32":
+        raise ValueError(f"unsupported golden_mode={golden_mode}")
+    else:
+        elem_dtype = None
 
-    k = k.to(torch.float32)
-    w = w.to(torch.float32)
-    u = u.to(torch.float32)
-    g = g.to(torch.float32)
+    if keep_fp32 and compute_dtype != torch.float32:
+        raise ValueError("keep_fp32=True requires compute_dtype=torch.float32")
+
+    if golden_mode == "npu":
+        k = k.to(dtype_)
+        w = w.to(dtype_)
+        u = u.to(dtype_)
+        g = g.float()
+    else:
+        k = k.to(compute_dtype)
+        w = w.to(compute_dtype)
+        u = u.to(compute_dtype)
+        g = g.to(compute_dtype)
 
     B, HK, T, K = k.shape[0], k.shape[1], k.shape[2], k.shape[3]
     HV, V = u.shape[1], u.shape[3]
 
     BT = chunk_size
-    chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size) if cu_seqlens is not None else None
+    if cu_seqlens is not None:
+        if chunk_indices is None:
+            chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size)
+        elif not isinstance(chunk_indices, torch.Tensor):
+            chunk_indices = torch.tensor(chunk_indices, dtype=torch.long)
+    else:
+        chunk_indices = None
     if cu_seqlens is None:
         N, NT, chunk_offsets = B, (T + BT - 1) // BT, None
     else:
         N, NT, chunk_offsets = len(cu_seqlens) - 1, len(chunk_indices), prepare_chunk_offsets(cu_seqlens, BT)
     final_state = None
 
-    S = torch.zeros((B, HV, NT, K, V), device=k.device, dtype=torch.float32)
-    v_new_output = torch.zeros((B, HV, T, V), device=k.device, dtype=torch.float32)
+    S = torch.zeros((B, HV, NT, K, V), device=k.device, dtype=compute_dtype)
+    v_new_output = torch.zeros((B, HV, T, V), device=k.device, dtype=compute_dtype)
 
     head_ratio = HV // HK
+
+    def _chunk_matmul(a, b):
+        if elem_dtype is None:
+            return a @ b
+        return _matmul_npu_aligned(a, b, elem_dtype)
+
+    def _store_elem(x):
+        if elem_dtype is None:
+            return x
+        return _round_elem(x, elem_dtype)
+
+    def _to_compute(x):
+        if elem_dtype is None:
+            return x.to(compute_dtype)
+        return _round_elem(x, elem_dtype)
+
+    def _run_chunk(batch_idx, h_idx, bos, eos, nt_inner, boh):
+        for i in range(nt_inner):
+            k_sel = torch.zeros((BT, k.shape[-1]), device=k.device, dtype=compute_dtype)
+            w_sel = torch.zeros((BT, w.shape[-1]), device=w.device, dtype=compute_dtype)
+            u_sel = torch.zeros((BT, u.shape[-1]), device=u.device, dtype=compute_dtype)
+            g_sel = torch.zeros((BT), device=g.device, dtype=g.dtype)
+            actual_len = min(bos + (i + 1) * BT, eos) - (bos + i * BT)
+
+            if cu_seqlens is None:
+                k_sel[:actual_len, :] = _to_compute(
+                    k[batch_idx, h_idx // head_ratio, bos + i * BT : bos + i * BT + actual_len, :],
+                )
+                w_sel[:actual_len, :] = _to_compute(
+                    w[batch_idx, h_idx, bos + i * BT : bos + i * BT + actual_len, :],
+                )
+                u_sel[:actual_len, :] = _to_compute(
+                    u[batch_idx, h_idx, bos + i * BT : bos + i * BT + actual_len, :],
+                )
+                g_sel[:actual_len] = g[batch_idx, h_idx, bos + i * BT : bos + i * BT + actual_len]
+                state = S[batch_idx, h_idx, boh + i]
+            else:
+                k_sel[:actual_len, :] = _to_compute(
+                    k[0, h_idx // head_ratio, bos + i * BT : bos + i * BT + actual_len, :],
+                )
+                w_sel[:actual_len, :] = _to_compute(
+                    w[0, h_idx, bos + i * BT : bos + i * BT + actual_len, :],
+                )
+                u_sel[:actual_len, :] = _to_compute(
+                    u[0, h_idx, bos + i * BT : bos + i * BT + actual_len, :],
+                )
+                g_sel[:actual_len] = g[0, h_idx, bos + i * BT : bos + i * BT + actual_len]
+                state = S[0, h_idx, boh + i]
+
+            v_new = u_sel - _chunk_matmul(w_sel, state)
+            if i != nt_inner - 1:
+                g_last = g_sel[actual_len - 1].to(torch.float32)
+                g_chunk = g_sel[:actual_len].to(torch.float32)
+                v_decay = v_new[:actual_len, :] * torch.exp(g_last - g_chunk).unsqueeze(-1)
+                s_decayed = _round_elem(state, elem_dtype) if elem_dtype is not None else state
+                s_decayed = s_decayed * torch.exp(g_last)
+                s_update = _chunk_matmul(
+                    k_sel[:actual_len, :].transpose(-1, -2),
+                    v_decay,
+                )
+                s_next = _store_elem(s_decayed + s_update)
+                if cu_seqlens is None:
+                    S[batch_idx, h_idx, boh + i + 1] = s_next
+                else:
+                    S[0, h_idx, boh + i + 1] = s_next
+
+            v_store = _store_elem(v_new[:actual_len, :])
+            if cu_seqlens is None:
+                v_new_output[batch_idx, h_idx, bos + i * BT : bos + i * BT + actual_len, :] = v_store
+            else:
+                v_new_output[0, h_idx, bos + i * BT : bos + i * BT + actual_len, :] = v_store
+
     for n in range(N):
         if cu_seqlens is None: # 定长
             bos = 0
@@ -76,39 +209,13 @@ def forward_h_trans_cpu(
             boh = chunk_offsets[n]
 
         for h in range(HV):
-            # B H T D ->
-            for i in range(NT_inner):
-                k_sel = torch.zeros((BT, k.shape[-1]), device=k.device, dtype=k.dtype)
-                w_sel = torch.zeros((BT, w.shape[-1]), device=w.device, dtype=w.dtype)
-                u_sel = torch.zeros((BT, u.shape[-1]), device=u.device, dtype=u.dtype)
-                g_sel = torch.zeros((BT), device=g.device, dtype=g.dtype)
-                actual_len = min(bos + (i + 1) * BT, eos) - (bos + i * BT)
-
-                if cu_seqlens is None: # 定长
-                    k_sel[:actual_len, :] = k[n, h // head_ratio, bos + i * BT : bos + i * BT + actual_len, :]
-                    w_sel[:actual_len, :] = w[n, h // head_ratio, bos + i * BT : bos + i * BT + actual_len, :]
-                    u_sel[:actual_len, :] = u[n, h, bos + i * BT : bos + i * BT + actual_len, :]
-                    g_sel[:actual_len] = g[n, h, bos + i * BT : bos + i * BT + actual_len]
-                    v_new = u_sel - w_sel @ S[n, h, boh+i]
-                    if i != NT_inner-1:
-                        # S[n, h, boh+i+1] = S[n, h, boh+i] * g_sel[actual_len-1, None, None].exp() + (k_sel * (g_sel[actual_len-1, None] - g_sel).exp()[..., None]).transpose(-1, -2) @ v_new
-                        S[n, h, boh+i+1] = S[n, h, boh+i] * g_sel[actual_len-1, None, None].exp() + k_sel.transpose(-1, -2) @ (v_new * (g_sel[actual_len-1, None] - g_sel).exp()[..., None])
-                    v_new_output[n, h, bos + i * BT: bos + i * BT + actual_len, :] = v_new[:actual_len, :]
-
-                else:
-                    k_sel[:actual_len, :] = k[0, h // head_ratio, bos + i * BT : bos + i * BT + actual_len, :]
-                    w_sel[:actual_len, :] = w[0, h // head_ratio, bos + i * BT : bos + i * BT + actual_len, :]
-                    u_sel[:actual_len, :] = u[0, h, bos + i * BT : bos + i * BT + actual_len, :]
-                    g_sel[:actual_len] = g[0, h, bos + i * BT : bos + i * BT + actual_len]
-                    v_new = u_sel - w_sel @ S[0, h, boh+i]
-                    if i != NT_inner-1:
-                        # S[0, h, boh+i+1] = S[0, h, boh+i] * g_sel[actual_len-1, None, None].exp() + (k_sel * (g_sel[actual_len-1, None] - g_sel).exp()[..., None]).transpose(-1, -2) @ v_new
-                        S[0, h, boh+i+1] = S[0, h, boh+i] * g_sel[actual_len-1, None, None].exp() + k_sel.transpose(-1, -2) @ (v_new * (g_sel[actual_len-1, None] - g_sel).exp()[..., None])
-                    v_new_output[0, h ,bos + i * BT: bos + i * BT + actual_len, :] = v_new[:actual_len, :]
+            _run_chunk(n if cu_seqlens is None else 0, h, bos, eos, NT_inner, boh)
 
 
     #S = S.to(torch.bfloat16)
     #v_new_output = v_new_output.to(torch.bfloat16)
+    if keep_fp32:
+        return S, v_new_output, None
     S = S.to(dtype_)
     v_new_output = v_new_output.to(dtype_)
     return S, v_new_output, None
@@ -145,13 +252,13 @@ class GDNFwdHInput:
             sys.exit()
 
 class GDNFwdHInputTensor:
-    def __init__(self, k, w, u, g, cu_seqlens, chunk_offsets, initial_state):
+    def __init__(self, k, w, u, g, cu_seqlens, chunk_indices, initial_state):
         self.k = k
         self.w = w
         self.u = u
         self.g = g
         self.cu_seqlens = cu_seqlens
-        self.chunk_offsets = chunk_offsets
+        self.chunk_indices = chunk_indices
         self.initial_state = initial_state
 
 class GDNFwdHOutputTensor:
@@ -162,14 +269,27 @@ class GDNFwdHOutputTensor:
 
 def parse_actual_input(h_input):
     actual_data = torch.load(h_input.data_path, map_location='cpu')
+    if actual_data.get("chunk_indices") is not None:
+        k = actual_data['k'].to(h_input.dtype)
+        w = actual_data['w'].to(h_input.dtype)
+        u = actual_data['u'].to(h_input.dtype)
+        g = actual_data['g'].float()
+        cu_raw = actual_data.get('cu_seqlens')
+        cu_seqlens = None if cu_raw is None else [int(x) for x in cu_raw]
+        chunk_indices = [int(x) for x in actual_data['chunk_indices']]
+        initial_state = actual_data.get('initial_state')
+        if initial_state is not None:
+            initial_state = initial_state.to(h_input.dtype)
+        return GDNFwdHInputTensor(k, w, u, g, cu_seqlens, chunk_indices, initial_state)
+
     k = actual_data['k'][:, :, :h_input.k_num_head].to(h_input.dtype).transpose(1, 2).contiguous()
     w = actual_data['w'][:, :, :h_input.v_num_head].to(h_input.dtype).transpose(1, 2).contiguous()
     u = actual_data['u'][:, :, :h_input.v_num_head].to(h_input.dtype).transpose(1, 2).contiguous()
     g = actual_data['g'][:, :, :h_input.v_num_head].transpose(1, 2).contiguous()
-    cu_seqlens, chunk_offsets = get_cu_offsets(h_input, actual_data.get('cu_seqlens'))
+    cu_seqlens, chunk_indices = get_cu_offsets(h_input, actual_data.get('cu_seqlens'))
     initial_state = None
     h_input.num_tokens = cu_seqlens[-1] if h_input.is_varied_len else h_input.seqlen
-    return GDNFwdHInputTensor(k, w, u, g, cu_seqlens, chunk_offsets, initial_state)
+    return GDNFwdHInputTensor(k, w, u, g, cu_seqlens, chunk_indices, initial_state)
 
 def parse_actual_output(h_input):
     actual_data = torch.load(h_input.data_path, map_location='cpu')
@@ -197,12 +317,14 @@ def get_cu_offsets(h_input, cu_seqlens):
     if cu_seqlens is None:
         return None, None
     cu_seqlens = cu_seqlens.to(torch.int64)
-    num_chunks = 0
-    curr_token = 0
-    for seq in cu_seqlens:
-        num_chunks += math.ceil((seq - curr_token) / h_input.chunk_size)
-        curr_token = seq
-    return cu_seqlens.tolist(), torch.zeros([num_chunks, 2]).to(cu_seqlens.dtype).tolist()
+    cu_list = [int(x) for x in cu_seqlens.tolist()]
+    chunk_indices = []
+    for seq_id in range(len(cu_list) - 1):
+        seq_len = cu_list[seq_id + 1] - cu_list[seq_id]
+        chunk_num = (seq_len + h_input.chunk_size - 1) // h_input.chunk_size
+        for chunk_id in range(chunk_num):
+            chunk_indices.extend([seq_id, chunk_id])
+    return cu_list, chunk_indices
 
 def gen_decay_data(h_input, cu_seqlens, chunk_offsets):
     base = torch.randint(-15, -5, [h_input.v_num_head])
@@ -223,9 +345,9 @@ def gen_decay_data(h_input, cu_seqlens, chunk_offsets):
 
 def gen_input_data(h_input, rand_wu = True):
     cu_seqlens = gen_seqlen(h_input.seqlen, h_input.is_varied_len, h_input.token_batch)
-    cu_seqlens, chunk_offsets = get_cu_offsets(h_input, cu_seqlens)
+    cu_seqlens, chunk_indices = get_cu_offsets(h_input, cu_seqlens)
     if rand_wu:
-        w = torch.randn([h_input.shape_batch, h_input.k_num_head, h_input.seqlen, h_input.k_head_dim], dtype=h_input.dtype)
+        w = torch.randn([h_input.shape_batch, h_input.v_num_head, h_input.seqlen, h_input.k_head_dim], dtype=h_input.dtype)
         u = torch.randn([h_input.shape_batch, h_input.v_num_head, h_input.seqlen, h_input.v_head_dim], dtype=h_input.dtype)
     else:
         w, u = gen_wu_data()
@@ -236,7 +358,7 @@ def gen_input_data(h_input, rand_wu = True):
         initial_state = torch.randn([h_input.shape_batch, h_input.v_num_head, h_input.token_batch, h_input.k_head_dim, h_input.v_head_dim], dtype=h_input.dtype)
     else:
         initial_state = None
-    return GDNFwdHInputTensor(k, w, u, g, cu_seqlens, chunk_offsets, initial_state)
+    return GDNFwdHInputTensor(k, w, u, g, cu_seqlens, chunk_indices, initial_state)
 
 def gen_ref_data(h_input, input_tensor):
     h, v, _ = forward_h_trans_cpu(k=input_tensor.k, w=input_tensor.w, u=input_tensor.u, g=input_tensor.g)
@@ -249,7 +371,7 @@ def save_data(input_tensor, output_tensor):
     input_tensor.u.view(torch.int16).numpy().tofile(os.path.join(WORKSPACE, "data", "u.bin"))
     input_tensor.g.numpy().tofile(os.path.join(WORKSPACE, "data", "g.bin"))
     if input_tensor.cu_seqlens is not None:
-        np.array(input_tensor.cu_seqlens.cpu()).astype(np.int64).tofile(os.path.join(WORKSPACE, "data", "cu_seqlens.bin"))
+        np.array(input_tensor.cu_seqlens).astype(np.int64).tofile(os.path.join(WORKSPACE, "data", "cu_seqlens.bin"))
 
     if input_tensor.initial_state is not None:
         input_tensor.initial_state.view(torch.int16).numpy().tofile(os.path.join(WORKSPACE, "data", "initial_state.bin"))
@@ -275,14 +397,19 @@ if __name__ == "__main__":
     torch.npu.synchronize()
 
     print("before custom op")
-    print(input_tensor.chunk_offsets)
+    print(input_tensor.chunk_indices)
     print(input_tensor.cu_seqlens)
     def _as_int_list(x):
         if x is None:
             return None
         if isinstance(x, torch.Tensor):
-            return x.cpu().tolist()
-        return list(x)
+            return [int(v) for v in x.detach().cpu().flatten().tolist()]
+        if len(x) > 0 and isinstance(x[0], (list, tuple)):
+            out = []
+            for pair in x:
+                out.extend([int(pair[0]), int(pair[1])])
+            return out
+        return [int(v) for v in x]
 
     # 与 npu_custom.yaml / FLA chunk_gated_delta_rule_fwd_h 对齐：k,w,u 位置参数；g 及之后为关键字（g 当前不可为 None）
     result = torch.ops.npu.npu_chunk_gated_delta_rule_fwd_h(
@@ -298,7 +425,7 @@ if __name__ == "__main__":
         output_final_state=bool(gdn_fwd_h_input.store_final_state),
         chunk_size=gdn_fwd_h_input.chunk_size,
         cu_seqlens=_as_int_list(input_tensor.cu_seqlens),
-        chunk_indices=_as_int_list(input_tensor.chunk_offsets),
+        chunk_indices=_as_int_list(input_tensor.chunk_indices),
     )
     print("after custom op")
     torch_npu._C._npu_synchronize()

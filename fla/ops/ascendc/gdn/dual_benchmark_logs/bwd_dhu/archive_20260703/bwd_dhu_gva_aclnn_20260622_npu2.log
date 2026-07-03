@@ -1,0 +1,29 @@
+device=2 out_dir=/data/fangziyang/code/0525/flash-linear-attention-npu/torch_custom/fla_npu/test/bwd_dhu_out
+Traceback (most recent call last):
+  File "/data/fangziyang/code/0525/flash-linear-attention-npu/torch_custom/fla_npu/test/test_npu_bwd_dhu_gva.py", line 192, in <module>
+    main()
+  File "/data/fangziyang/code/0525/flash-linear-attention-npu/torch_custom/fla_npu/test/test_npu_bwd_dhu_gva.py", line 161, in main
+    torch.npu.set_device(device)
+  File "/data/miniconda3/envs/wnc/lib/python3.11/site-packages/torch_npu/npu/utils.py", line 91, in set_device
+    torch_npu._C._npu_setDevice(device_id)
+RuntimeError: ExchangeDevice:../torch_npu/csrc/core/npu/sys_ctrl/npu_sys_ctrl.cpp:286 NPU function error: c10_npu::SetDevice(device), error code is 507033
+[ERROR] 2026-06-25-16:11:59 (PID:4009564, Device:0, RankID:-1) ERR00100 PTA call acl api failed
+[Error]: Failed to start the device. 
+        Rectify the fault based on the error information in the ascend log.
+[PID: 4009564] 2026-06-25-16:14:27.705.374 Invalid_Argument(EE1001): The argument is invalid.Reason: rtGetDevMsg execution failed, the context is a null pointer.
+        Solution: 1.Check the input parameter range of the function. 2.Check the function invocation relationship.
+        TraceBack (most recent call last):
+        TsdOpen failed. devId=2, tdt error=1[FUNC:PrintfTsdError][FILE:runtime.cc][LINE:2967]
+        Check param failed, dev can not be NULL![FUNC:DeviceRetain][FILE:runtime.cc][LINE:3886]
+        Check param failed, dev can not be NULL![FUNC:PrimaryContextRetain][FILE:runtime.cc][LINE:3509]
+        Check param failed, ctx can not be NULL![FUNC:PrimaryContextRetain][FILE:runtime.cc][LINE:3540]
+        Check param failed, context can not be null.[FUNC:NewDevice][FILE:api_impl.cc][LINE:3275]
+        New device failed, retCode=0x7010006[FUNC:SetDevice][FILE:api_impl.cc][LINE:3299]
+        rtSetDevice execution failed, reason=device retain error[FUNC:FuncErrorReason][FILE:error_message_manage.cc][LINE:61]
+        open device 2 failed, runtime result = 507033.[FUNC:ReportCallError][FILE:log_inner.cpp][LINE:148]
+        TsdOpen failed. devId=0, tdt error=1[FUNC:PrintfTsdError][FILE:runtime.cc][LINE:2967]
+        ctx is NULL![FUNC:GetDevErrMsg][FILE:api_impl.cc][LINE:6333]
+        The argument is invalid.Reason: rtGetDevMsg execution failed, the context is a null pointer.
+        ctx is NULL![FUNC:CheckCurCtxValid][FILE:api_impl.cc][LINE:219]
+        The argument is invalid.Reason: rtGetFaultEvent execution failed, the context is a null pointer.
+

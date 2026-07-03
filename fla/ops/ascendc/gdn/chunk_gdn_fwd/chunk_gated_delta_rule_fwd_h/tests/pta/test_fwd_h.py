@@ -66,7 +66,13 @@ def forward_h_trans_cpu(
     HV, V = u.shape[1], u.shape[3]
 
     BT = chunk_size
-    chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size) if cu_seqlens is not None else None
+    if cu_seqlens is not None:
+        if chunk_indices is None:
+            chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size)
+        elif not isinstance(chunk_indices, torch.Tensor):
+            chunk_indices = torch.tensor(chunk_indices, dtype=torch.long)
+    else:
+        chunk_indices = None
     if cu_seqlens is None:
         N, NT, chunk_offsets = B, (T + BT - 1) // BT, None
     else:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import math
 import os
 import sys
@@ -17,6 +18,9 @@ torch.npu.config.allow_internal_format = False
 torch.npu.set_compile_mode(jit_compile=False)
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "../../.."))
+CASES_JSON = os.path.join(_REPO_ROOT, "gpu", "cases.json")
+
 _spec = importlib.util.spec_from_file_location("test_bwd_dhu_golden", os.path.join(_SCRIPT_DIR, "test_bwd_dhu.py"))
 _golden_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_golden_mod)
@@ -29,6 +33,19 @@ prepare_chunk_indices = _golden_mod.prepare_chunk_indices
 scale_for_compute_dtype = _golden_mod.scale_for_compute_dtype
 
 DEFAULT_OUT_DIR = os.path.join(_SCRIPT_DIR, "bwd_dhu_out")
+
+# gpu/cases.json 中 GPU dump 不支持、需 CPU dual 跑的 case
+CASES_JSON_UNSUPPORTED_NAMES = [
+    "gva_fix_3",
+    "gva_var_2",
+    "gva_var_3",
+    "gva_var_5",
+    "gva_var_6",
+    "phase_1_fix_11",
+    "phase_1_fix_12",
+    "phase_1_var_5",
+    "phase_1_var_6",
+]
 
 
 @dataclass
@@ -44,13 +61,18 @@ class BwdDhuCase:
     varlen: bool = True
     cu_seqlens_len: Optional[int] = None
     dtype: str = "bf16"
+    gtype: str = "fp32"
     supported: bool = True
     skip_reason: str = ""
 
     def ktype(self) -> torch.dtype:
         return torch.bfloat16 if self.dtype == "bf16" else torch.float16
 
-    def gtype(self) -> torch.dtype:
+    def gate_dtype(self) -> torch.dtype:
+        if self.gtype == "bf16":
+            return torch.bfloat16
+        if self.gtype == "fp16":
+            return torch.float16
         return torch.float32
 
 
@@ -74,6 +96,108 @@ CASES = [
 ]
 
 
+def _normalize_dtype_str(raw: str) -> str:
+    key = str(raw).strip().lower()
+    if key in ("bf16", "bfloat16"):
+        return "bf16"
+    if key in ("fp16", "float16"):
+        return "fp16"
+    return "fp32"
+
+
+def _load_cases_json(path: str | None = None) -> dict[str, dict]:
+    json_path = path or os.environ.get("BWD_HU_CASES_JSON", CASES_JSON)
+    with open(json_path, encoding="utf-8") as f:
+        data = json.load(f)
+    entries = data.get("cases", data) if isinstance(data, dict) else data
+    return {c["name"]: c for c in entries}
+
+
+def case_from_json(entry: dict) -> BwdDhuCase:
+    varlen = bool(entry.get("varlen", False))
+    tokens = int(entry["T"])
+    supported = True
+    skip_reason = ""
+    if tokens >= 262144:
+        supported = False
+        skip_reason = f"CPU fp64 golden T={tokens} 过慢，暂跳过"
+
+    return BwdDhuCase(
+        name=str(entry["name"]),
+        batch=int(entry["B"]),
+        k_h=int(entry["query_head"]),
+        v_h=int(entry["value_head"]),
+        tokens=tokens,
+        v_dim=int(entry["Vdim"]),
+        k_dim=int(entry["Kdim"]),
+        chunk_size=int(entry.get("chunk_size", 64)),
+        varlen=varlen,
+        cu_seqlens_len=int(entry["mean_len"]) if varlen else None,
+        dtype=_normalize_dtype_str(entry.get("dtype", "bf16")),
+        gtype=_normalize_dtype_str(entry.get("gtype", "fp32")),
+        supported=supported,
+        skip_reason=skip_reason,
+    )
+
+
+def load_cases_from_json(names: list[str], path: str | None = None) -> list[BwdDhuCase]:
+    by_name = _load_cases_json(path)
+    missing = [n for n in names if n not in by_name]
+    if missing:
+        raise KeyError(f"unknown case(s) in cases.json: {', '.join(missing)}")
+    return [case_from_json(by_name[n]) for n in names]
+
+
+CASES_JSON_UNSUPPORTED = load_cases_from_json(CASES_JSON_UNSUPPORTED_NAMES)
+
+# 内置矩阵 + cases.json 中 GPU 不支持的 case（按 name 去重，json 优先覆盖同名字段）
+_BUILTIN_BY_NAME = {c.name: c for c in CASES}
+for _jc in CASES_JSON_UNSUPPORTED:
+    _BUILTIN_BY_NAME[_jc.name] = _jc
+ALL_CASES = list(_BUILTIN_BY_NAME.values())
+
+
+def _cu_seqlens_for_case(case: BwdDhuCase) -> list[int]:
+    cu_len = case.cu_seqlens_len or 2
+    if cu_len <= 2:
+        return [0, case.tokens]
+    batchsize = cu_len - 1
+    seg_avg = (case.tokens + batchsize - 1) // batchsize
+    seg_max = max(case.chunk_size, seg_avg, min(128, case.chunk_size * 2))
+    if case.tokens > 8192:
+        seg_max = max(seg_max, seg_avg)
+    return generate_cu_seqlens(
+        cu_len, case.tokens, seg_min=case.chunk_size, seg_max=seg_max,
+    )
+
+
+def _resolve_cases() -> list[BwdDhuCase]:
+    suite = os.environ.get("BWD_HU_SUITE", "").strip().lower()
+    only = os.environ.get("BWD_HU_CASE", "").strip()
+
+    if suite in ("unsupported", "casesjson", "gpu_unsupported"):
+        cases = list(CASES_JSON_UNSUPPORTED)
+    elif suite in ("all", "full"):
+        cases = list(ALL_CASES)
+    else:
+        cases = list(CASES)
+
+    if only:
+        names = [n.strip() for n in only.split(",") if n.strip()]
+        by_name = {c.name: c for c in ALL_CASES}
+        selected: list[BwdDhuCase] = []
+        missing: list[str] = []
+        for name in names:
+            if name in by_name:
+                selected.append(by_name[name])
+            else:
+                missing.append(name)
+        if missing:
+            raise SystemExit(f"unknown BWD_HU_CASE: {', '.join(missing)}")
+        cases = selected
+    return cases
+
+
 def _dual_check(name: str, npu_out: torch.Tensor, ref_fp64: torch.Tensor, ref_npu: torch.Tensor, level: str = "L1"):
     print(f"================== {name} (dual: fp64 gt / npu-aligned bench) ==================", flush=True)
     result = ct.dual(npu_out.cpu().float(), ref_fp64.cpu().float(), ref_npu.cpu().float(), level=level)
@@ -87,7 +211,7 @@ def _dual_check(name: str, npu_out: torch.Tensor, ref_fp64: torch.Tensor, ref_np
 
 def _build_inputs(case: BwdDhuCase, seed: int = 0):
     ktype = case.ktype()
-    gtype = case.gtype()
+    gtype = case.gate_dtype()
     torch.manual_seed(seed)
     q, k, w, do, dv, g = create_bwd_dhu_random_inputs(
         case.batch, case.k_h, case.v_h, case.tokens, case.k_dim, case.v_dim, ktype, gtype,
@@ -95,7 +219,7 @@ def _build_inputs(case: BwdDhuCase, seed: int = 0):
     cu_seqlens = None
     chunk_indices = None
     if case.varlen:
-        cu_seqlens = generate_cu_seqlens(case.cu_seqlens_len, case.tokens)
+        cu_seqlens = _cu_seqlens_for_case(case)
         chunk_indices = prepare_chunk_indices(cu_seqlens, case.chunk_size)
     scale = scale_for_compute_dtype(effective_scale(1.0 / math.sqrt(case.k_dim), case.k_dim), ktype)
     return q, k, w, do, dv, g, cu_seqlens, chunk_indices, scale
@@ -160,16 +284,14 @@ def main():
     device = int(os.environ.get("TEST_DEVICE_ID", 5))
     torch.npu.set_device(device)
     out_root = os.environ.get("BWD_HU_OUT_DIR", DEFAULT_OUT_DIR)
-    only = os.environ.get("BWD_HU_CASE", "").strip()
-
-    cases = CASES
-    if only:
-        cases = [c for c in cases if c.name == only]
-        if not cases:
-            raise SystemExit(f"unknown BWD_HU_CASE={only}")
+    cases = _resolve_cases()
 
     print(f"[MODE] random input + dual(fp64 gt / npu-aligned bench), no example dump", flush=True)
-    print(f"device={device} out_root={out_root} cases={len(cases)} Vdim=256", flush=True)
+    print(
+        f"device={device} out_root={out_root} cases={len(cases)} "
+        f"suite={os.environ.get('BWD_HU_SUITE', 'builtin')}",
+        flush=True,
+    )
 
     results = []
     for case in cases:

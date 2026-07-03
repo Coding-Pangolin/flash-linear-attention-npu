@@ -1,285 +1,209 @@
 #!/usr/bin/env python3
-"""bwd_dhu CPU dual benchmark from gpu/cases.json.
-
-Compare: ct.dual(npu_out, cpu_fp64_golden, cpu_npu_aligned_bench)
-"""
+"""CPU dual benchmark for bwd_dhu — aligned with test_npu_bwd_dhu_gva.py."""
 from __future__ import annotations
 
 import argparse
-import json
+import importlib.util
+import math
 import os
 import sys
 import time
-import traceback
 from pathlib import Path
 from typing import Any
 
-import fla_npu
 import torch
 import torch_npu
+import fla_npu  # noqa: F401
 
-GDN_DIR = Path(__file__).resolve().parents[3]
-TEST_DIR = Path(__file__).resolve().parent
 REPO = Path(__file__).resolve().parents[7]
-sys.path.insert(0, str(REPO / "gpu" / "scripts"))
-sys.path.insert(0, str(GDN_DIR))
-sys.path.insert(0, str(TEST_DIR))
+GDN_DIR = REPO / "fla/ops/ascendc/gdn"
+TORCH_CUSTOM_TEST = REPO / "torch_custom/fla_npu/test"
 
-from gdn_case_utils import parse_dtype  # noqa: E402
+for p in (REPO / "gpu" / "scripts", GDN_DIR, TORCH_CUSTOM_TEST):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
+
 from gdn_cpu_dual_casesjson import (  # noqa: E402
+    BWD_DHU_SMOKE_CASES,
     DEFAULT_CASES_JSON,
+    default_out_dir,
     dual_then_viz_cpu,
     generate_cu_seqlens_for_case,
-    prepare_chunk_indices_list,
     resolve_cases,
-    default_out_dir,
     write_batch_report,
     write_case_report,
 )
-from test_chunk_gated_delta_rule_bwd_dhu import (  # noqa: E402
-    chunk_gated_delta_rule_bwd_dhu_torch,
-    create_bwd_dhu_random_inputs,
-    effective_scale,
-    scale_for_compute_dtype,
-)
+from gdn_case_utils import parse_dtype  # noqa: E402
 
-torch.npu.config.allow_internal_format = False
-torch.npu.set_compile_mode(jit_compile=False)
+_BWD_DHU_GOLDEN = TORCH_CUSTOM_TEST / "test_bwd_dhu.py"
+_spec = importlib.util.spec_from_file_location("test_bwd_dhu_golden", _BWD_DHU_GOLDEN)
+_golden_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_golden_mod)
 
-OP_NAME = "bwd_dhu"
+chunk_gated_delta_rule_bwd_dhu_cpu = _golden_mod.chunk_gated_delta_rule_bwd_dhu_cpu
+create_bwd_dhu_random_inputs = _golden_mod.create_bwd_dhu_random_inputs
+effective_scale = _golden_mod.effective_scale
+generate_cu_seqlens = _golden_mod.generate_cu_seqlens
+prepare_chunk_indices = _golden_mod.prepare_chunk_indices
+scale_for_compute_dtype = _golden_mod.scale_for_compute_dtype
 
 
-def build_bwd_dhu_inputs(case: dict[str, Any], *, seed: int = 0) -> dict[str, Any]:
+def build_bwd_dhu_inputs(case: dict[str, Any], *, seed: int) -> dict[str, Any]:
     B = int(case["B"])
-    T = int(case["T"])
     Hk = int(case["query_head"])
     Hv = int(case["value_head"])
+    T = int(case["T"])
     K = int(case["Kdim"])
     V = int(case["Vdim"])
     chunk_size = int(case.get("chunk_size", 64))
-    ktype = parse_dtype(case["dtype"])
-    gtype = parse_dtype(case["gtype"])
+    ktype = parse_dtype(case.get("dtype", "bf16"))
+    gtype = parse_dtype(case.get("gtype", "fp32"))
+    varlen = bool(case.get("varlen", False))
 
     torch.manual_seed(seed)
-    q, k, w, d_o, dv, g = create_bwd_dhu_random_inputs(B, Hk, Hv, T, K, V, ktype, gtype)
+    q, k, w, do, dv, g = create_bwd_dhu_random_inputs(B, Hk, Hv, T, K, V, ktype, gtype)
 
-    cu_seqlens_t = generate_cu_seqlens_for_case(case)
-    cu_list = None if cu_seqlens_t is None else cu_seqlens_t.tolist()
-    chunk_indices = None if cu_list is None else prepare_chunk_indices_list(cu_list, chunk_size)
-    scale = scale_for_compute_dtype(effective_scale(float(case.get("scale", K ** -0.5)), K), ktype)
+    cu_seqlens = None
+    chunk_indices = None
+    if varlen:
+        cu_seqlens_len = int(case.get("mean_len", 2))
+        if cu_seqlens_len <= 2:
+            cu_seqlens = [0, T]
+        elif T <= 4096 and cu_seqlens_len <= 8:
+            cu_seqlens = generate_cu_seqlens(cu_seqlens_len, T)
+        else:
+            cu_seqlens = generate_cu_seqlens_for_case(case).tolist()
+        chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size)
 
-    meta = {
-        "case_name": case["name"],
-        "B": B,
-        "T": T,
-        "Hk": Hk,
-        "Hv": Hv,
-        "K": K,
-        "V": V,
-        "chunk_size": chunk_size,
-        "dtype": case["dtype"],
-        "varlen": bool(case.get("varlen", False)),
-        "cu_seqlens": cu_list,
-        "chunk_indices": chunk_indices,
-        "scale": scale,
-        "seed": seed,
-    }
+    scale = scale_for_compute_dtype(effective_scale(1.0 / math.sqrt(K), K), ktype)
+
     return {
-        "q": q,
-        "k": k,
-        "w": w,
-        "do": d_o,
-        "dv": dv,
-        "g": g,
-        "cu_seqlens": cu_list,
+        "q": q, "k": k, "w": w, "do": do, "dv": dv, "g": g,
+        "cu_seqlens": cu_seqlens,
         "chunk_indices": chunk_indices,
         "scale": scale,
-        "meta": meta,
+        "chunk_size": chunk_size,
     }
 
 
-def run_one_case(
+def run_case(
     case: dict[str, Any],
     *,
     device_id: int,
     seed: int,
     dual_level: str,
     enable_viz: bool,
-    viz_sample_count: int,
-    out_dir: Path,
+    viz_dir: Path | None,
+    sample_count: int,
 ) -> dict[str, Any]:
-    case_name = str(case["name"])
-    t_start = time.time()
-    record: dict[str, Any] = {
-        "case": case_name,
-        "status": "fail",
-        "dual": {},
-        "meta": {},
-        "error": None,
-    }
+    name = case["name"]
+    t0 = time.time()
+    record: dict[str, Any] = {"case": name, "status": "error", "checks": {}}
+
     try:
         torch.npu.set_device(device_id)
-        payload = build_bwd_dhu_inputs(case, seed=seed)
-        meta = payload["meta"]
-        record["meta"] = meta
-        print(f"\n=== {case_name} ===", flush=True)
-        print(json.dumps(meta, indent=2), flush=True)
-
-        q = payload["q"]
-        k = payload["k"]
-        w = payload["w"]
-        d_o = payload["do"]
-        dv = payload["dv"]
-        g = payload["g"]
-        cu_list = payload["cu_seqlens"]
-        chunk_indices = payload["chunk_indices"]
-        scale = payload["scale"]
-        chunk_size = meta["chunk_size"]
-
-        golden_kwargs = dict(
-            cu_seqlens=cu_list,
-            chunk_indices=chunk_indices,
-            g=g,
-            scale=scale,
-            chunk_size=chunk_size,
+        inputs = build_bwd_dhu_inputs(case, seed=seed)
+        common = dict(
+            q=inputs["q"], k=inputs["k"], w=inputs["w"], do=inputs["do"], dv=inputs["dv"],
+            g=inputs["g"],
+            cu_seqlens=inputs["cu_seqlens"],
+            chunk_indices=inputs["chunk_indices"],
+            scale=inputs["scale"],
+            chunk_size=inputs["chunk_size"],
         )
-        print("[CPU] fp64 + npu-aligned golden ...", flush=True)
-        t0 = time.time()
-        dh_fp64, _, dv2_fp64 = chunk_gated_delta_rule_bwd_dhu_torch(
-            q.double(), k.double(), w.double(), d_o.double(), dv.double(),
-            **golden_kwargs,
-            accum_dtype=torch.float64,
-        )
-        dh_npu_bench, _, dv2_npu_bench = chunk_gated_delta_rule_bwd_dhu_torch(
-            q, k, w, d_o, dv,
-            **golden_kwargs,
-            accum_dtype=torch.float32,
-            matmul_elem_dtype=q.dtype,
-        )
-        record["cpu_elapsed_s"] = round(time.time() - t0, 3)
 
-        print("[NPU] npu_chunk_gated_delta_rule_bwd_dhu ...", flush=True)
-        t0 = time.time()
-        dh_npu, dh0_npu, dv2_npu = torch.ops.npu.npu_chunk_gated_delta_rule_bwd_dhu(
-            q.npu(),
-            k.npu(),
-            w.npu(),
-            d_o.npu(),
-            dv.npu(),
-            scale=scale,
-            chunk_size=chunk_size,
-            g=g.npu(),
+        dh_fp64, _, dv2_fp64 = chunk_gated_delta_rule_bwd_dhu_cpu(**common, golden_mode="fp64")
+        dh_npu_bench, _, dv2_npu_bench = chunk_gated_delta_rule_bwd_dhu_cpu(**common, golden_mode="npu")
+
+        dh_npu, _, dv2_npu = torch.ops.npu.npu_chunk_gated_delta_rule_bwd_dhu(
+            inputs["q"].npu(), inputs["k"].npu(), inputs["w"].npu(),
+            inputs["do"].npu(), inputs["dv"].npu(),
+            scale=inputs["scale"],
+            chunk_size=inputs["chunk_size"],
+            g=inputs["g"].npu(),
             gK=None,
             h0=None,
             dht=None,
-            cu_seqlens=cu_list,
-            chunk_indices=chunk_indices,
+            cu_seqlens=inputs["cu_seqlens"],
+            chunk_indices=inputs["chunk_indices"],
         )
-        torch.npu.synchronize()
-        record["npu_elapsed_s"] = round(time.time() - t0, 3)
-        print(f"[NPU OK] dh={tuple(dh_npu.shape)} dv2={tuple(dv2_npu.shape)}", flush=True)
 
-        case_out = out_dir / case_name
-        case_out.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "meta": meta,
-                "dh_npu": dh_npu.cpu(),
-                "dh_ref_fp64": dh_fp64.cpu(),
-                "dh_ref_npu": dh_npu_bench.cpu(),
-                "dv2_npu": dv2_npu.cpu(),
-                "dv2_ref_fp64": dv2_fp64.cpu(),
-                "dv2_ref_npu": dv2_npu_bench.cpu(),
-            },
-            case_out / "outputs.pt",
+        ok_dh, res_dh = dual_then_viz_cpu(
+            "dh", dh_npu, dh_fp64, dh_npu_bench,
+            case_name=name, viz_dir=viz_dir, sample_count=sample_count,
+            enable_viz=enable_viz, level=dual_level,
         )
-        viz_dir = case_out / "viz" if enable_viz else None
-        dual_results = {}
-        for out_name, npu_t, hp_t, sp_t, spatial in (
-            ("dh", dh_npu, dh_fp64, dh_npu_bench, False),
-            ("dv2", dv2_npu, dv2_fp64, dv2_npu_bench, True),
-        ):
-            ok, dual_res = dual_then_viz_cpu(
-                out_name,
-                npu_t,
-                hp_t,
-                sp_t,
-                case_name=case_name,
-                viz_dir=viz_dir,
-                sample_count=viz_sample_count,
-                enable_viz=enable_viz,
-                level=dual_level,
-                spatial=spatial,
-            )
-            dual_results[out_name] = {
-                "pass": ok,
-                "checks": dual_res.get("checks"),
-                "ratios": dual_res.get("ratios"),
-            }
-        record["dual"] = dual_results
-        record["status"] = "pass" if all(v["pass"] for v in dual_results.values()) else "fail"
-    except Exception:
-        record["status"] = "error"
-        record["error"] = traceback.format_exc()
-        print(f"[{case_name}] ERROR:\n{record['error']}", flush=True)
-    record["elapsed_s"] = round(time.time() - t_start, 3)
+        ok_dv2, res_dv2 = dual_then_viz_cpu(
+            "dv2", dv2_npu, dv2_fp64, dv2_npu_bench,
+            case_name=name, viz_dir=viz_dir, sample_count=sample_count,
+            enable_viz=enable_viz, level=dual_level,
+        )
+
+        record["checks"] = {"dh": res_dh, "dv2": res_dv2}
+        record["status"] = "pass" if ok_dh and ok_dv2 else "fail"
+        record["elapsed_s"] = round(time.time() - t0, 2)
+    except Exception as exc:
+        record["error"] = str(exc)
+        record["elapsed_s"] = round(time.time() - t0, 2)
+        import traceback
+        traceback.print_exc()
+
     return record
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="bwd_dhu CPU dual from cases.json")
+    parser = argparse.ArgumentParser(description="bwd_dhu CPU dual benchmark (cases.json / smoke)")
     parser.add_argument("--cases-json", type=Path, default=DEFAULT_CASES_JSON)
-    parser.add_argument("--cases", default="", help="comma-separated case names")
-    parser.add_argument("--smoke", action="store_true", help="run built-in small smoke cases")
-    parser.add_argument("--out-dir", type=Path, default=None)
+    parser.add_argument("--case", action="append", dest="cases", default=None)
+    parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--device-id", type=int, default=int(os.environ.get("TEST_DEVICE_ID", "0")))
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dual-level", default="L1")
-    parser.add_argument("--no-viz", action="store_true")
-    parser.add_argument("-sc", "--sample-count", type=int, default=200_000)
-    parser.add_argument("--device", type=int, default=int(os.environ.get("TEST_DEVICE_ID", "0")))
+    parser.add_argument("--out-dir", type=Path, default=None)
+    parser.add_argument("--viz", action="store_true")
+    parser.add_argument("--sample-count", type=int, default=8)
     args = parser.parse_args()
 
-    case_names = [x.strip() for x in args.cases.split(",") if x.strip()] or None
-    cases = resolve_cases(cases_json=args.cases_json, case_names=case_names, smoke=args.smoke)
-    out_dir = args.out_dir or default_out_dir(OP_NAME, smoke=args.smoke)
+    cases = resolve_cases(
+        cases_json=args.cases_json,
+        case_names=args.cases,
+        smoke=args.smoke,
+        smoke_cases=BWD_DHU_SMOKE_CASES,
+    )
+    out_dir = args.out_dir or default_out_dir("bwd_dhu", smoke=args.smoke)
     out_dir.mkdir(parents=True, exist_ok=True)
+    viz_dir = out_dir / "viz" if args.viz else None
 
-    print(f"[CONFIG] op={OP_NAME} device={args.device} smoke={args.smoke}", flush=True)
-    print(f"[CONFIG] cases={[c['name'] for c in cases]}", flush=True)
-    print(f"[CONFIG] out_dir={out_dir}", flush=True)
-
-    results = []
+    print(f"[bwd_dhu cpu_dual] device={args.device_id} cases={len(cases)} out={out_dir}", flush=True)
+    results: list[dict[str, Any]] = []
     for case in cases:
-        rec = run_one_case(
+        print(f"\n=== case: {case['name']} ===", flush=True)
+        record = run_case(
             case,
-            device_id=args.device,
+            device_id=args.device_id,
             seed=args.seed,
             dual_level=args.dual_level,
-            enable_viz=not args.no_viz,
-            viz_sample_count=args.sample_count,
-            out_dir=out_dir,
+            enable_viz=args.viz,
+            viz_dir=viz_dir,
+            sample_count=args.sample_count,
         )
-        results.append(rec)
-        write_case_report(out_dir, rec)
+        write_case_report(out_dir, record)
+        results.append(record)
+        print(f"[{case['name']}] {record['status']} ({record.get('elapsed_s', '?')}s)", flush=True)
 
     report_path = write_batch_report(
         out_dir,
-        op=OP_NAME,
+        op="bwd_dhu",
         results=results,
-        device_id=args.device,
+        device_id=args.device_id,
         cases_json=args.cases_json,
         dual_level=args.dual_level,
         smoke=args.smoke,
     )
-    print("\n========== SUMMARY ==========", flush=True)
-    for r in results:
-        print(f"  {r['case']}: {r['status']}", flush=True)
-    print(f"report -> {report_path}", flush=True)
-    summary = {"fail": 0, "error": 0}
-    for r in results:
-        if r["status"] in summary:
-            summary[r["status"]] += 1
-    return 0 if summary["fail"] == 0 and summary["error"] == 0 else 1
+    summary = {r["case"]: r["status"] for r in results}
+    print(f"\nSummary: {summary}", flush=True)
+    print(f"Report: {report_path}", flush=True)
+    return 0 if all(r["status"] == "pass" for r in results) else 1
 
 
 if __name__ == "__main__":

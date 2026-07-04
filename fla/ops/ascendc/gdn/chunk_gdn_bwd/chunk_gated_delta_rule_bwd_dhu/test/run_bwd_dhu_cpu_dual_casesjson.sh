@@ -5,7 +5,7 @@
 #   TEST_DEVICE_ID=2 ./run_bwd_dhu_cpu_dual_casesjson.sh --smoke
 #   TEST_DEVICE_ID=2 ./run_bwd_dhu_cpu_dual_casesjson.sh --cases gva_fix_3,gva_var_2
 #
-# 环境：见 torch_custom/fla_npu/test/BWD_DHU_TEST.md
+# 环境：见 BWD_DHU_TEST.md / GDN_DUAL_TEST_GUIDE.md
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -13,7 +13,7 @@ import torch
 from gdn_case_utils import generate_cu_seqlens, load_cases, parse_dtype
 
 REPO = Path(__file__).resolve().parents[4]
-DEFAULT_CASES_JSON = REPO / "gpu" / "cases.json"
+DEFAULT_CASES_JSON = Path(__file__).resolve().parent / "cases.json"
 
 DEFAULT_GPU_UNSUPPORTED_CASES = [
     "gva_fix_3",

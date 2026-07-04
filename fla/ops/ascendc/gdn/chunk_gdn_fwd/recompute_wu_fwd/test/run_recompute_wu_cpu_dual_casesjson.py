@@ -125,7 +125,7 @@ def build_recompute_wu_inputs(case: dict[str, Any], *, seed: int = 0) -> dict[st
     V = int(case["Vdim"])
     chunk_size = int(case.get("chunk_size", 64))
     ktype = parse_dtype(case["dtype"])
-    gtype = parse_dtype(case["gtype"])
+    gtype = parse_dtype(case.get("gtype", case["dtype"]))
     gate_function = str(case.get("gate_function", "negative_linear")).strip().lower()
 
     torch.manual_seed(seed)
@@ -137,10 +137,11 @@ def build_recompute_wu_inputs(case: dict[str, Any], *, seed: int = 0) -> dict[st
 
     k = torch.randn(B, Hk, T, K, dtype=ktype)
     v = torch.randn(B, Hv, T, V, dtype=ktype)
-    beta = torch.randn(B, Hv, T, dtype=ktype)
+    # beta/g share gtype (cases.json gtype=fp32 => btype=fp32), aligned with test.py btype.
+    beta = torch.randn(B, Hv, T, dtype=gtype)
     A = torch.randn(B, Hv, T, chunk_size, dtype=ktype)
     if gate_function == "randn":
-        g = torch.randn(B, Hv, T, dtype=ktype)
+        g = torch.randn(B, Hv, T, dtype=gtype)
     else:
         g = _create_gate_g(
             B, Hv, T, gtype, torch.device("cpu"), narrow=low, gate_function=gate_function,
@@ -161,6 +162,7 @@ def build_recompute_wu_inputs(case: dict[str, Any], *, seed: int = 0) -> dict[st
         "V": V,
         "chunk_size": chunk_size,
         "dtype": case["dtype"],
+        "gtype": case.get("gtype", case["dtype"]),
         "varlen": bool(case.get("varlen", False)),
         "cu_seqlens": cu_list,
         "chunk_indices": chunk_indices,

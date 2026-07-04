@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# recompute_wu CPU dual benchmark for GPU-unsupported cases.json entries.
-#
-# Usage:
+# 环境：见 RECOMPUTE_WU_TEST.md / GDN_DUAL_TEST_GUIDE.md
 #   TEST_DEVICE_ID=2 ./run_recompute_wu_cpu_dual_casesjson.sh --smoke --no-viz --no-save-outputs
 #   TEST_DEVICE_ID=2 ./run_recompute_wu_cpu_dual_casesjson.sh --cases gva_fix_3,gva_var_2
 #
@@ -17,8 +15,8 @@ mkdir -p "${OUT_DIR}"
 
 source /data/miniconda3/etc/profile.d/conda.sh
 conda activate wnc
-source /data/zs/run/8.5/ascend-toolkit/set_env.sh
-source /data/zs/run/8.5/cann-8.5.0/vendors/fla_npu_transformer/bin/set_env.bash
+# shellcheck disable=SC1091
+source "${REPO_ROOT}/torch_custom/fla_npu/test/setup_cann_env.sh"
 
 export TEST_DEVICE_ID="${TEST_DEVICE_ID:-2}"
 export ASCEND_LAUNCH_BLOCKING="${ASCEND_LAUNCH_BLOCKING:-1}"

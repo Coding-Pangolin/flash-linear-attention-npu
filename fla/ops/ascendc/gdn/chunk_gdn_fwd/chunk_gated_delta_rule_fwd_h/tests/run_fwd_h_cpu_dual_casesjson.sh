@@ -7,9 +7,9 @@
 #
 # 随机输入快速路径（不 dump，推荐 CPU dual）:
 #   FWD_H_CPU_DUAL_RANDOM=1 TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh --no-viz
-#   FWD_H_CPU_DUAL_RANDOM=1 TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh --no-viz --cases gva_var_2,phase_1_fix_11
+#   FWD_H_CPU_DUAL_RANDOM=1 TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh --no-viz --cases gva_var_2,phase_1_var_4
 #
-# 环境：见 torch_custom/fla_npu/test/FWD_H_TEST.md
+# 环境：见 FWD_H_TEST.md / GDN_DUAL_TEST_GUIDE.md
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -96,8 +96,7 @@ CASES_JSON_UNSUPPORTED_NAMES = [
     "gva_var_3",
     "gva_var_5",
     "gva_var_6",
-    "phase_1_fix_11",
-    "phase_1_fix_12",
+    "phase_1_var_4",
     "phase_1_var_5",
     "phase_1_var_6",
 ]

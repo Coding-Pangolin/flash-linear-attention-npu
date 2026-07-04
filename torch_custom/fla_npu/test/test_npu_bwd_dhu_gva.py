@@ -47,8 +47,7 @@ CASES_JSON_UNSUPPORTED_NAMES = [
     "gva_var_3",
     "gva_var_5",
     "gva_var_6",
-    "phase_1_fix_11",
-    "phase_1_fix_12",
+    "phase_1_var_4",
     "phase_1_var_5",
     "phase_1_var_6",
 ]
@@ -155,17 +154,6 @@ def load_cases_from_json(names: list[str], path: str | None = None) -> list[BwdD
 
 
 CASES_JSON_UNSUPPORTED = load_cases_from_json(CASES_JSON_UNSUPPORTED_NAMES)
-
-# cases.json unsupported 中与内置 GVA 矩阵已 PASS 等价（见 bwd_dhu_gva_aclnn_20260625_v5.log）
-_UNSUPPORTED_EQUIV_GVA_PASS: dict[str, str] = {
-    "gva_var_2": "varlen_t16384_v256_cu2",      # B1 Hk21/Hv63 T16384 V256 cu2
-    "gva_var_3": "varlen_t65536_v256_cu172",    # B1 Hk8/Hv32 T65536 cu172
-    "gva_var_6": "varlen_t262144_v256_cu32",    # T=262144 主动 SKIP
-}
-for _c in CASES_JSON_UNSUPPORTED:
-    if _c.name in _UNSUPPORTED_EQUIV_GVA_PASS:
-        _c.supported = False
-        _c.skip_reason = f"同 GVA 已测 {_UNSUPPORTED_EQUIV_GVA_PASS[_c.name]} (v5 PASS/SKIP)"
 
 # 内置矩阵 + cases.json 中 GPU 不支持的 case（按 name 去重，json 优先覆盖同名字段）
 _BUILTIN_BY_NAME = {c.name: c for c in CASES}

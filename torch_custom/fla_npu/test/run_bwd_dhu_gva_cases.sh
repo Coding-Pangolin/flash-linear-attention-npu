@@ -4,8 +4,8 @@
 # 用法:
 #   TEST_DEVICE_ID=7 bash run_bwd_dhu_gva_cases.sh
 #   BWD_HU_CASE=smoke_varlen_t256_v256 TEST_DEVICE_ID=7 bash run_bwd_dhu_gva_cases.sh
-#   BWD_HU_SUITE=unsupported TEST_DEVICE_ID=7 bash run_bwd_dhu_gva_cases.sh   # cases.json 9 项
-#   BWD_HU_CASE=gva_fix_3,phase_1_fix_11 TEST_DEVICE_ID=7 bash run_bwd_dhu_gva_cases.sh
+#   BWD_HU_SUITE=unsupported TEST_DEVICE_ID=7 bash run_bwd_dhu_gva_cases.sh   # cases.json 8 项
+#   BWD_HU_CASE=gva_fix_3,phase_1_var_4 TEST_DEVICE_ID=7 bash run_bwd_dhu_gva_cases.sh
 #   BWD_HU_VIZ=1 BWD_HU_CASE=gva_fix_3 TEST_DEVICE_ID=7 bash run_bwd_dhu_gva_cases.sh  # + ct.viz
 #   BWD_HU_SAVE_OUT=0 ...  # skip outputs.pt (default: save)
 #

@@ -27,6 +27,7 @@ source /data/zs/run/8.5/cann-8.5.0/vendors/fla_npu_transformer/bin/set_env.bash
 
 export TEST_DEVICE_ID="${TEST_DEVICE_ID:-2}"
 export ASCEND_LAUNCH_BLOCKING="${ASCEND_LAUNCH_BLOCKING:-1}"
+unset FWD_H_NPU_ONLY FWD_H_TEST_ONLY FWD_H_DUMP_ONLY
 
 echo "[fwd_h cpu dual] device=${TEST_DEVICE_ID} out=${OUT_DIR}" | tee "${MASTER_LOG}"
 echo "[fwd_h cpu dual] start $(date -Is)" | tee -a "${MASTER_LOG}"
@@ -62,6 +63,8 @@ else
   export GDN_FWD_H_DUMP_DIR="${DUMP_DIR}"
   export FWD_H_OUT_DIR="${OUT_DIR}"
   export FWD_H_VIZ="${FWD_H_VIZ:-1}"
+  unset FWD_H_TEST_ONLY
+  unset FWD_H_DUMP_ONLY
   if [[ -n "${CASES_ARG}" ]]; then
     export FWD_H_CASE="${CASES_ARG}"
   fi

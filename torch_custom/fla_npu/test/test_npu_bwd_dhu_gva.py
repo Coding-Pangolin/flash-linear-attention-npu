@@ -19,7 +19,13 @@ torch.npu.set_compile_mode(jit_compile=False)
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "../../.."))
-CASES_JSON = os.path.join(_REPO_ROOT, "gpu", "cases.json")
+_DEFAULT_CASES_JSON = os.path.join(_REPO_ROOT, "fla/ops/ascendc/gdn/cases.json")
+_LEGACY_CASES_JSON = os.path.join(_REPO_ROOT, "gpu", "cases.json")
+CASES_JSON = (
+    _DEFAULT_CASES_JSON
+    if os.path.isfile(_DEFAULT_CASES_JSON)
+    else _LEGACY_CASES_JSON
+)
 
 _spec = importlib.util.spec_from_file_location("test_bwd_dhu_golden", os.path.join(_SCRIPT_DIR, "test_bwd_dhu.py"))
 _golden_mod = importlib.util.module_from_spec(_spec)
@@ -150,6 +156,17 @@ def load_cases_from_json(names: list[str], path: str | None = None) -> list[BwdD
 
 CASES_JSON_UNSUPPORTED = load_cases_from_json(CASES_JSON_UNSUPPORTED_NAMES)
 
+# cases.json unsupported 中与内置 GVA 矩阵已 PASS 等价（见 bwd_dhu_gva_aclnn_20260625_v5.log）
+_UNSUPPORTED_EQUIV_GVA_PASS: dict[str, str] = {
+    "gva_var_2": "varlen_t16384_v256_cu2",      # B1 Hk21/Hv63 T16384 V256 cu2
+    "gva_var_3": "varlen_t65536_v256_cu172",    # B1 Hk8/Hv32 T65536 cu172
+    "gva_var_6": "varlen_t262144_v256_cu32",    # T=262144 主动 SKIP
+}
+for _c in CASES_JSON_UNSUPPORTED:
+    if _c.name in _UNSUPPORTED_EQUIV_GVA_PASS:
+        _c.supported = False
+        _c.skip_reason = f"同 GVA 已测 {_UNSUPPORTED_EQUIV_GVA_PASS[_c.name]} (v5 PASS/SKIP)"
+
 # 内置矩阵 + cases.json 中 GPU 不支持的 case（按 name 去重，json 优先覆盖同名字段）
 _BUILTIN_BY_NAME = {c.name: c for c in CASES}
 for _jc in CASES_JSON_UNSUPPORTED:
@@ -198,15 +215,52 @@ def _resolve_cases() -> list[BwdDhuCase]:
     return cases
 
 
-def _dual_check(name: str, npu_out: torch.Tensor, ref_fp64: torch.Tensor, ref_npu: torch.Tensor, level: str = "L1"):
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "")
+    if raw == "":
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _dual_then_viz(
+    name: str,
+    npu_out: torch.Tensor,
+    ref_fp64: torch.Tensor,
+    ref_npu: torch.Tensor,
+    *,
+    case_name: str,
+    viz_dir: str | None,
+    sample_count: int,
+    enable_viz: bool,
+    level: str = "L1",
+) -> tuple[bool, dict]:
     print(f"================== {name} (dual: fp64 gt / npu-aligned bench) ==================", flush=True)
-    result = ct.dual(npu_out.cpu().float(), ref_fp64.cpu().float(), ref_npu.cpu().float(), level=level)
+    result = ct.dual(
+        npu_out.cpu().float(),
+        ref_fp64.cpu().float(),
+        ref_npu.cpu().float(),
+        level=level,
+    )
     ok = bool(result.get("success"))
     ratios = result.get("ratios", {})
     checks = result.get("checks", {})
     tag = "PASS" if ok else "FAIL"
     print(f"[{name}] dual {tag}: checks={checks} ratios={ratios}", flush=True)
-    return ok, ratios, checks
+
+    if enable_viz and viz_dir:
+        os.makedirs(viz_dir, exist_ok=True)
+        viz_name = f"{case_name}_{name}_npu_vs_fp64"
+        print(f"[{name}] ct.viz -> {viz_dir} (sample_count={sample_count})", flush=True)
+        ct.viz(
+            npu_out.cpu().float(),
+            ref_fp64.cpu().float(),
+            bench=ref_npu.cpu().float(),
+            out_dir=viz_dir,
+            name=viz_name,
+            diff_thd=0.001,
+            sample_count=sample_count,
+        )
+    return ok, result
 
 
 def _build_inputs(case: BwdDhuCase, seed: int = 0):
@@ -259,10 +313,23 @@ def run_case(case: BwdDhuCase, device: int, out_root: str, seed: int = 0) -> tup
         chunk_indices=chunk_indices,
     )
 
-    dh_ok, _, _ = _dual_check("dh", dh_npu, dh_fp64, dh_npu_bench)
-    dv2_ok, _, _ = _dual_check("dv2", dv2_npu, dv2_fp64, dv2_npu_bench)
-
     case_dir = os.path.join(out_root, case.name)
+    enable_viz = _env_bool("BWD_HU_VIZ", False) and not _env_bool("BWD_HU_NO_VIZ", False)
+    sample_count = int(os.environ.get("BWD_HU_VIZ_SAMPLE_COUNT", "200000"))
+    dual_level = os.environ.get("BWD_HU_DUAL_LEVEL", "L1")
+    viz_dir = os.path.join(case_dir, "viz") if enable_viz else None
+
+    dh_ok, _ = _dual_then_viz(
+        "dh", dh_npu, dh_fp64, dh_npu_bench,
+        case_name=case.name, viz_dir=viz_dir, sample_count=sample_count,
+        enable_viz=enable_viz, level=dual_level,
+    )
+    dv2_ok, _ = _dual_then_viz(
+        "dv2", dv2_npu, dv2_fp64, dv2_npu_bench,
+        case_name=case.name, viz_dir=viz_dir, sample_count=sample_count,
+        enable_viz=enable_viz, level=dual_level,
+    )
+
     if os.environ.get("BWD_HU_SAVE_OUT", "1") == "1":
         os.makedirs(case_dir, exist_ok=True)
         torch.save({
@@ -277,7 +344,8 @@ def run_case(case: BwdDhuCase, device: int, out_root: str, seed: int = 0) -> tup
 
     if dh_ok and dv2_ok:
         return "PASS", f"dh=PASS dv2=PASS | out={case_dir}"
-    return "FAIL", f"dh={'PASS' if dh_ok else 'FAIL'} dv2={'PASS' if dv2_ok else 'FAIL'}"
+    viz_note = f" viz={viz_dir}" if viz_dir else ""
+    return "FAIL", f"dh={'PASS' if dh_ok else 'FAIL'} dv2={'PASS' if dv2_ok else 'FAIL'}{viz_note} | out={case_dir}"
 
 
 def main():

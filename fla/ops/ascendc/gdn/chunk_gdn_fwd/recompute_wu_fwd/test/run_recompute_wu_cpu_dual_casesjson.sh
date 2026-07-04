@@ -2,7 +2,7 @@
 # recompute_wu CPU dual benchmark for GPU-unsupported cases.json entries.
 #
 # Usage:
-#   TEST_DEVICE_ID=2 ./run_recompute_wu_cpu_dual_casesjson.sh --smoke
+#   TEST_DEVICE_ID=2 ./run_recompute_wu_cpu_dual_casesjson.sh --smoke --no-viz --no-save-outputs
 #   TEST_DEVICE_ID=2 ./run_recompute_wu_cpu_dual_casesjson.sh --cases gva_fix_3,gva_var_2
 #
 set -euo pipefail

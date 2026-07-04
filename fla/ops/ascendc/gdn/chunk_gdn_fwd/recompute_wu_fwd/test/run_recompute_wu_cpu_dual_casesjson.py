@@ -189,6 +189,7 @@ def run_one_case(
     enable_viz: bool,
     viz_sample_count: int,
     out_dir: Path,
+    save_outputs: bool = True,
 ) -> dict[str, Any]:
     case_name = str(case["name"])
     t_start = time.time()
@@ -253,19 +254,21 @@ def run_one_case(
         print(f"[NPU OK] w={tuple(w_npu.shape)} u={tuple(u_npu.shape)}", flush=True)
 
         case_out = out_dir / case_name
-        case_out.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "meta": meta,
-                "w_npu": w_npu.cpu(),
-                "w_ref_fp64": w_fp64.cpu(),
-                "w_ref_npu": w_npu_bench.cpu(),
-                "u_npu": u_npu.cpu(),
-                "u_ref_fp64": u_fp64.cpu(),
-                "u_ref_npu": u_npu_bench.cpu(),
-            },
-            case_out / "outputs.pt",
-        )
+        if save_outputs or enable_viz:
+            case_out.mkdir(parents=True, exist_ok=True)
+        if save_outputs:
+            torch.save(
+                {
+                    "meta": meta,
+                    "w_npu": w_npu.cpu(),
+                    "w_ref_fp64": w_fp64.cpu(),
+                    "w_ref_npu": w_npu_bench.cpu(),
+                    "u_npu": u_npu.cpu(),
+                    "u_ref_fp64": u_fp64.cpu(),
+                    "u_ref_npu": u_npu_bench.cpu(),
+                },
+                case_out / "outputs.pt",
+            )
         viz_dir = case_out / "viz" if enable_viz else None
         dual_results = {}
         for out_name, npu_t, hp_t, sp_t in (
@@ -307,6 +310,11 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dual-level", default="L1")
     parser.add_argument("--no-viz", action="store_true")
+    parser.add_argument(
+        "--no-save-outputs",
+        action="store_true",
+        help="skip saving outputs.pt (only json reports + dual logs)",
+    )
     parser.add_argument("-sc", "--sample-count", type=int, default=200_000)
     parser.add_argument("--device", type=int, default=int(os.environ.get("TEST_DEVICE_ID", "0")))
     args = parser.parse_args()
@@ -330,6 +338,7 @@ def main() -> int:
             enable_viz=not args.no_viz,
             viz_sample_count=args.sample_count,
             out_dir=out_dir,
+            save_outputs=not args.no_save_outputs,
         )
         results.append(rec)
         write_case_report(out_dir, rec)

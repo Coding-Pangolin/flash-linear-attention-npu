@@ -22,7 +22,6 @@ import torch_npu
 GDN_DIR = Path(__file__).resolve().parents[3]
 TEST_DIR = Path(__file__).resolve().parent
 REPO = Path(__file__).resolve().parents[7]
-sys.path.insert(0, str(REPO / "gpu" / "scripts"))
 sys.path.insert(0, str(GDN_DIR))
 sys.path.insert(0, str(TEST_DIR))
 

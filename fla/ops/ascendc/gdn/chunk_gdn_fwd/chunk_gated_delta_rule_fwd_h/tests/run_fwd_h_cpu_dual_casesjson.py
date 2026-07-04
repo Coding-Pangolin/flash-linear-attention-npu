@@ -25,7 +25,6 @@ REPO = Path(__file__).resolve().parents[7]
 GDN_DIR = Path(__file__).resolve().parents[3]
 PTA_DIR = Path(__file__).resolve().parent / "pta"
 FLA_NPU_TEST = REPO / "torch_custom" / "fla_npu" / "test"
-sys.path.insert(0, str(REPO / "gpu" / "scripts"))
 sys.path.insert(0, str(GDN_DIR))
 sys.path.insert(0, str(FLA_NPU_TEST))
 

@@ -19,7 +19,7 @@ REPO = Path(__file__).resolve().parents[7]
 GDN_DIR = REPO / "fla/ops/ascendc/gdn"
 TORCH_CUSTOM_TEST = REPO / "torch_custom/fla_npu/test"
 
-for p in (REPO / "gpu" / "scripts", GDN_DIR, TORCH_CUSTOM_TEST):
+for p in (GDN_DIR, TORCH_CUSTOM_TEST):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 

@@ -25,7 +25,13 @@ _spec.loader.exec_module(_mod)
 forward_h_trans_cpu = _mod.forward_h_trans_cpu
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-CASES_JSON = os.path.join(REPO_ROOT, "gpu", "cases.json")
+_DEFAULT_CASES_JSON = os.path.join(REPO_ROOT, "fla/ops/ascendc/gdn/cases.json")
+_LEGACY_CASES_JSON = os.path.join(REPO_ROOT, "gpu", "cases.json")
+CASES_JSON = (
+    _DEFAULT_CASES_JSON
+    if os.path.isfile(_DEFAULT_CASES_JSON)
+    else _LEGACY_CASES_JSON
+)
 EXAMPLE = os.path.join(REPO_ROOT, "examples/flash_gated_delta_rule.py")
 DEFAULT_DUMP_DIR = os.path.join(
     REPO_ROOT,

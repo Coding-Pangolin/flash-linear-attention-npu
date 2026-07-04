@@ -1,23 +1,13 @@
 #!/bin/bash
 # fwd_h GVA 用例：example dump 模型输入 + 单算子精度比对
 #
-# 流程（参考 PR #69）:
-#   GDN_FWD_H_DUMP_EXIT=1 仅 dump fwd_h 入参后退出，不跑 fwd_h/fwd_o/bwd
-#   2) test_npu_fwd_h_gva.py 加载 .pt，dual 比对 + dump 输出到 fwd_h_out/<case>/ + ct.viz 图片
-#
 # 用法:
-#   export TEST_DEVICE_ID=1
-#   bash run_fwd_h_gva_cases.sh                          # 全部用例（Vdim=256 自动 SKIP）
-#   FWD_H_CASE=varlen_k16v32_t16384_v128 bash run_fwd_h_gva_cases.sh
-#   FWD_H_DUMP_ONLY=1 FWD_H_CASE=varlen_t65536_v128_cu17 bash run_fwd_h_gva_cases.sh  # 仅 dump
-#   FWD_H_TEST_ONLY=1 FWD_H_CASE=smoke_k16v32_t4096 bash run_fwd_h_gva_cases.sh       # 仅测已有 dump
+#   TEST_DEVICE_ID=1 bash run_fwd_h_gva_cases.sh
+#   FWD_H_SUITE=unsupported FWD_H_CASE=gva_fix_3 bash run_fwd_h_gva_cases.sh
 #
-# 手工 dump 示例:
-#   GDN_FWD_H_DUMP_DIR=$PWD/../../examples/fast_kernel_launch_example/tests/chunk_gated_delta_rule_fwd_h/data \
-#   GDN_FWD_H_DUMP_NAME=fix_k16v32_t16384 \
-#   python3 ../../examples/flash_gated_delta_rule.py \
-#     --device 1 --batch 1 --tokens 16384 --query-heads 16 --value-heads 32 \
-#     --key-dim 128 --value-dim 128 --chunk-size 64 --mean-len 128 --dtype bf16
+# 随机输入 CPU dual（推荐，不依赖 example dump）见 FWD_H_TEST.md
+#
+# 环境：见 FWD_H_TEST.md；先 export CANN_SET_ENV / CANN_OPP_LIB 再跑。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -27,13 +17,8 @@ DUMP_DIR="${GDN_FWD_H_DUMP_DIR:-$REPO_ROOT/examples/fast_kernel_launch_example/t
 
 source /data/miniconda3/etc/profile.d/conda.sh
 conda activate wnc
-source /data/zs/run/8.5/ascend-toolkit/set_env.sh
-export ASCEND_CUSTOM_OPP_PATH="${ASCEND_CUSTOM_OPP_PATH:-}"
-if [[ -f /data/zs/run/8.5/cann-8.5.0/vendors/fla_npu_transformer_transformer/bin/set_env.bash ]]; then
-  source /data/zs/run/8.5/cann-8.5.0/vendors/fla_npu_transformer_transformer/bin/set_env.bash
-elif [[ -f /data/zs/run/8.5/cann-8.5.0/vendors/fla_npu_transformer/bin/set_env.bash ]]; then
-  source /data/zs/run/8.5/cann-8.5.0/vendors/fla_npu_transformer/bin/set_env.bash
-fi
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/setup_cann_env.sh"
 
 export TEST_DEVICE_ID="$DEVICE"
 export GDN_FWD_H_DUMP_DIR="$DUMP_DIR"
@@ -44,6 +29,6 @@ export FWD_H_OUT_DIR="${FWD_H_OUT_DIR:-$SCRIPT_DIR/fwd_h_out}"
 export FWD_H_VIZ="${FWD_H_VIZ:-1}"
 export PYTHONUNBUFFERED=1
 
-echo "device=$DEVICE dump_dir=$DUMP_DIR out_dir=$FWD_H_OUT_DIR"
+echo "device=$DEVICE dump_dir=$DUMP_DIR out_dir=$FWD_H_OUT_DIR suite=${FWD_H_SUITE:-builtin}"
 cd "$SCRIPT_DIR"
 python3 test_npu_fwd_h_gva.py

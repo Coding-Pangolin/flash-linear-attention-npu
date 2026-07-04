@@ -5,9 +5,11 @@
 #   TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh
 #   TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh --cases gva_fix_3
 #
-# 随机输入快速路径（不 dump）:
-#   FWD_H_CPU_DUAL_RANDOM=1 TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh --smoke
+# 随机输入快速路径（不 dump，推荐 CPU dual）:
+#   FWD_H_CPU_DUAL_RANDOM=1 TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh --no-viz
+#   FWD_H_CPU_DUAL_RANDOM=1 TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh --no-viz --cases gva_var_2,phase_1_fix_11
 #
+# 环境：见 torch_custom/fla_npu/test/FWD_H_TEST.md
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,8 +24,8 @@ mkdir -p "${OUT_DIR}" "${DUMP_DIR}"
 
 source /data/miniconda3/etc/profile.d/conda.sh
 conda activate wnc
-source /data/zs/run/8.5/ascend-toolkit/set_env.sh
-source /data/zs/run/8.5/cann-8.5.0/vendors/fla_npu_transformer/bin/set_env.bash
+# shellcheck disable=SC1091
+source "${REPO_ROOT}/torch_custom/fla_npu/test/setup_cann_env.sh"
 
 export TEST_DEVICE_ID="${TEST_DEVICE_ID:-2}"
 export ASCEND_LAUNCH_BLOCKING="${ASCEND_LAUNCH_BLOCKING:-1}"

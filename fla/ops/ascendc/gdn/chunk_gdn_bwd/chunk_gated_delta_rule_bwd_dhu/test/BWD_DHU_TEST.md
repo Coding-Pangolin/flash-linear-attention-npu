@@ -75,8 +75,11 @@ cd fla/ops/ascendc/gdn/chunk_gdn_bwd/chunk_gated_delta_rule_bwd_dhu/test
 # smoke
 TEST_DEVICE_ID=0 ./run_bwd_dhu_cpu_dual_casesjson.sh --smoke --no-viz
 
-# 8 项 CPU-only batch
+# 8 项 CPU dual
 TEST_DEVICE_ID=0 ./run_bwd_dhu_cpu_dual_casesjson.sh --no-viz
+
+# 全量 42 项 NPU-only
+TEST_DEVICE_ID=0 ./run_bwd_dhu_cpu_dual_casesjson.sh --all-cases --npu-only --no-viz
 
 # 单 case（gva_fix_3：B=711，CPU fp64 约 30min~1h+）
 TEST_DEVICE_ID=0 ./run_bwd_dhu_cpu_dual_casesjson.sh --cases gva_fix_3 --no-viz

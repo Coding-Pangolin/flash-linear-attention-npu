@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# bwd_dhu CPU dual benchmark for GPU-unsupported cases.json entries.
+# bwd_dhu cases.json benchmark for GPU-unsupported entries.
 #
 # Usage:
 #   TEST_DEVICE_ID=2 ./run_bwd_dhu_cpu_dual_casesjson.sh --smoke
+#   TEST_DEVICE_ID=2 ./run_bwd_dhu_cpu_dual_casesjson.sh --all-cases --npu-only --no-viz
 #   TEST_DEVICE_ID=2 ./run_bwd_dhu_cpu_dual_casesjson.sh --cases gva_fix_3,gva_var_2
 #
 # 环境：见 BWD_DHU_TEST.md / GDN_DUAL_TEST_GUIDE.md

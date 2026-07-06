@@ -1,6 +1,7 @@
 """Shared helpers for GDN CPU dual benchmark from gpu/cases.json."""
 from __future__ import annotations
 
+import argparse
 import json
 import random
 from datetime import datetime
@@ -21,8 +22,7 @@ DEFAULT_GPU_UNSUPPORTED_CASES = [
     "gva_var_3",
     "gva_var_5",
     "gva_var_6",
-    "phase_1_fix_11",
-    "phase_1_fix_12",
+    "phase_1_var_4",
     "phase_1_var_5",
     "phase_1_var_6",
 ]
@@ -163,25 +163,83 @@ def chunk_local_cumsum_cpu(
     return g
 
 
+def parse_cases_csv(cases: str | None) -> list[str] | None:
+    if not cases:
+        return None
+    names = [x.strip() for x in cases.split(",") if x.strip()]
+    return names or None
+
+
 def resolve_cases(
     *,
     cases_json: Path,
     case_names: list[str] | None,
     smoke: bool,
+    all_cases: bool = False,
     smoke_cases: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if smoke:
         return list(smoke_cases if smoke_cases is not None else SMOKE_CASES)
+    loaded = load_cases(cases_json)
+    by_name = {c["name"]: c for c in loaded}
+    if all_cases:
+        if case_names:
+            raise ValueError("cannot combine --all-cases with explicit --cases")
+        return list(loaded)
     names = case_names or DEFAULT_GPU_UNSUPPORTED_CASES
-    by_name = {c["name"]: c for c in load_cases(cases_json)}
     missing = [n for n in names if n not in by_name]
     if missing:
         raise ValueError(f"unknown case(s): {', '.join(missing)}")
     return [by_name[n] for n in names]
 
 
-def default_out_dir(op: str, *, smoke: bool) -> Path:
-    tag = "smoke" if smoke else "casesjson"
+def add_cases_cli_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--cases-json", type=Path, default=DEFAULT_CASES_JSON)
+    parser.add_argument("--cases", default="", help="comma-separated cases.json names")
+    parser.add_argument("--smoke", action="store_true", help="built-in small smoke cases")
+    parser.add_argument(
+        "--all-cases",
+        action="store_true",
+        help="run all entries in cases.json (42 items)",
+    )
+    parser.add_argument(
+        "--npu-only",
+        action="store_true",
+        help="NPU forward only: skip CPU golden and ct.dual",
+    )
+
+
+def resolve_cases_from_args(
+    args: argparse.Namespace,
+    *,
+    smoke_cases: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    return resolve_cases(
+        cases_json=args.cases_json,
+        case_names=parse_cases_csv(getattr(args, "cases", "")),
+        smoke=bool(getattr(args, "smoke", False)),
+        all_cases=bool(getattr(args, "all_cases", False)),
+        smoke_cases=smoke_cases,
+    )
+
+
+def default_out_dir(
+    op: str,
+    *,
+    smoke: bool,
+    npu_only: bool = False,
+    all_cases: bool = False,
+) -> Path:
+    if smoke:
+        tag = "smoke"
+    elif npu_only and all_cases:
+        tag = "npu_only_all"
+    elif npu_only:
+        tag = "npu_only"
+    elif all_cases:
+        tag = "casesjson_all"
+    else:
+        tag = "casesjson"
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     return REPO / "fla/ops/ascendc/gdn/dual_benchmark_logs" / op / f"cpu_dual_{tag}" / ts
 
@@ -253,11 +311,15 @@ def write_batch_report(
     cases_json: Path,
     dual_level: str,
     smoke: bool,
+    npu_only: bool = False,
+    all_cases: bool = False,
 ) -> Path:
     report = {
         "op": op,
-        "benchmark": "cpu_dual",
+        "benchmark": "npu_only" if npu_only else "cpu_dual",
         "smoke": smoke,
+        "all_cases": all_cases,
+        "npu_only": npu_only,
         "timestamp": out_dir.name,
         "device_id": device_id,
         "cases_json": str(cases_json),

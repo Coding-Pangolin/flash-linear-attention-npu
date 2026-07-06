@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""recompute_wu CPU dual benchmark from gpu/cases.json.
+"""recompute_wu cases.json benchmark: CPU dual or NPU-only forward.
 
-Compare: ct.dual(npu_out, cpu_fp64_golden, cpu_npu_aligned_bench)
+Compare (default): ct.dual(npu_out, cpu_fp64_golden, cpu_npu_aligned_bench)
+NPU-only (--npu-only): random input from cases.json, NPU kernel only.
 """
 from __future__ import annotations
 
@@ -21,7 +22,6 @@ import torch_npu
 
 GDN_DIR = Path(__file__).resolve().parents[3]
 TEST_DIR = Path(__file__).resolve().parent
-REPO = Path(__file__).resolve().parents[7]
 sys.path.insert(0, str(GDN_DIR))
 sys.path.insert(0, str(TEST_DIR))
 
@@ -33,12 +33,12 @@ from gdn_case_utils import (  # noqa: E402
     parse_dtype,
 )
 from gdn_cpu_dual_casesjson import (  # noqa: E402
-    DEFAULT_CASES_JSON,
+    add_cases_cli_args,
     dual_then_viz_cpu,
     generate_cu_seqlens_for_case,
     matmul_npu_aligned,
     prepare_chunk_indices_list,
-    resolve_cases,
+    resolve_cases_from_args,
     default_out_dir,
     write_batch_report,
     write_case_report,
@@ -137,7 +137,6 @@ def build_recompute_wu_inputs(case: dict[str, Any], *, seed: int = 0) -> dict[st
 
     k = torch.randn(B, Hk, T, K, dtype=ktype)
     v = torch.randn(B, Hv, T, V, dtype=ktype)
-    # beta/g share gtype (cases.json gtype=fp32 => btype=fp32), aligned with test.py btype.
     beta = torch.randn(B, Hv, T, dtype=gtype)
     A = torch.randn(B, Hv, T, chunk_size, dtype=ktype)
     if gate_function == "randn":
@@ -191,6 +190,7 @@ def run_one_case(
     viz_sample_count: int,
     out_dir: Path,
     save_outputs: bool = True,
+    npu_only: bool = False,
 ) -> dict[str, Any]:
     case_name = str(case["name"])
     t_start = time.time()
@@ -200,13 +200,14 @@ def run_one_case(
         "dual": {},
         "meta": {},
         "error": None,
+        "mode": "npu_only" if npu_only else "cpu_dual",
     }
     try:
         torch.npu.set_device(device_id)
         payload = build_recompute_wu_inputs(case, seed=seed)
         meta = payload["meta"]
         record["meta"] = meta
-        print(f"\n=== {case_name} ===", flush=True)
+        print(f"\n=== {case_name} ({record['mode']}) ===", flush=True)
         print(json.dumps(meta, indent=2), flush=True)
 
         k = payload["k"]
@@ -219,24 +220,29 @@ def run_one_case(
         B, Hk, T, K = meta["B"], meta["Hk"], meta["T"], meta["K"]
         Hv, V, chunk_size, NT = meta["Hv"], meta["V"], meta["chunk_size"], meta["NT"]
 
-        print("[CPU] fp64 + npu-aligned golden ...", flush=True)
-        t0 = time.time()
-        w_fp64 = compute_w_golden_fp64(
-            k.double(), v.double(), beta.double(), A.double(), g.double(),
-            cu_list, chunk_indices, B, Hv, T, K, chunk_size, NT, Hk=Hk,
-        )
-        u_fp64 = compute_u_golden_fp64(
-            v.double(), beta.double(), A.double(),
-            cu_list, chunk_indices, B, Hv, T, chunk_size, NT,
-        )
-        w_npu_bench = compute_w_golden_npu_aligned(
-            k, v, beta, A, g, cu_list, chunk_indices, B, Hv, T, K, chunk_size, NT, Hk=Hk,
-        )
-        u_npu_bench = compute_u_golden_npu_aligned(
-            v, beta, A, cu_list, chunk_indices, B, Hv, T, chunk_size, NT,
-        )
-        record["cpu_elapsed_s"] = round(time.time() - t0, 3)
+        w_fp64 = u_fp64 = w_npu_bench = u_npu_bench = None
+        if not npu_only:
+            print("[CPU] fp64 + npu-aligned golden ...", flush=True)
+            t0 = time.time()
+            w_fp64 = compute_w_golden_fp64(
+                k.double(), v.double(), beta.double(), A.double(), g.double(),
+                cu_list, chunk_indices, B, Hv, T, K, chunk_size, NT, Hk=Hk,
+            )
+            u_fp64 = compute_u_golden_fp64(
+                v.double(), beta.double(), A.double(),
+                cu_list, chunk_indices, B, Hv, T, chunk_size, NT,
+            )
+            w_npu_bench = compute_w_golden_npu_aligned(
+                k, v, beta, A, g, cu_list, chunk_indices, B, Hv, T, K, chunk_size, NT, Hk=Hk,
+            )
+            u_npu_bench = compute_u_golden_npu_aligned(
+                v, beta, A, cu_list, chunk_indices, B, Hv, T, chunk_size, NT,
+            )
+            record["cpu_elapsed_s"] = round(time.time() - t0, 3)
+        else:
+            record["cpu_elapsed_s"] = 0.0
 
+        print(f"[INPUT] beta={beta.dtype} g={g.dtype}", flush=True)
         print("[NPU] npu_recompute_w_u_fwd ...", flush=True)
         t0 = time.time()
         w_npu, u_npu = torch.ops.npu.npu_recompute_w_u_fwd(
@@ -255,45 +261,46 @@ def run_one_case(
         print(f"[NPU OK] w={tuple(w_npu.shape)} u={tuple(u_npu.shape)}", flush=True)
 
         case_out = out_dir / case_name
-        if save_outputs or enable_viz:
+        if save_outputs or (enable_viz and not npu_only):
             case_out.mkdir(parents=True, exist_ok=True)
         if save_outputs:
-            torch.save(
-                {
-                    "meta": meta,
-                    "w_npu": w_npu.cpu(),
+            save_payload: dict[str, Any] = {"meta": meta, "w_npu": w_npu.cpu(), "u_npu": u_npu.cpu()}
+            if not npu_only:
+                save_payload.update({
                     "w_ref_fp64": w_fp64.cpu(),
                     "w_ref_npu": w_npu_bench.cpu(),
-                    "u_npu": u_npu.cpu(),
                     "u_ref_fp64": u_fp64.cpu(),
                     "u_ref_npu": u_npu_bench.cpu(),
-                },
-                case_out / "outputs.pt",
-            )
-        viz_dir = case_out / "viz" if enable_viz else None
-        dual_results = {}
-        for out_name, npu_t, hp_t, sp_t in (
-            ("w", w_npu, w_fp64, w_npu_bench),
-            ("u", u_npu, u_fp64, u_npu_bench),
-        ):
-            ok, dual_res = dual_then_viz_cpu(
-                out_name,
-                npu_t,
-                hp_t,
-                sp_t,
-                case_name=case_name,
-                viz_dir=viz_dir,
-                sample_count=viz_sample_count,
-                enable_viz=enable_viz,
-                level=dual_level,
-            )
-            dual_results[out_name] = {
-                "pass": ok,
-                "checks": dual_res.get("checks"),
-                "ratios": dual_res.get("ratios"),
-            }
-        record["dual"] = dual_results
-        record["status"] = "pass" if all(v["pass"] for v in dual_results.values()) else "fail"
+                })
+            torch.save(save_payload, case_out / "outputs.pt")
+
+        if npu_only:
+            record["status"] = "pass"
+        else:
+            viz_dir = case_out / "viz" if enable_viz else None
+            dual_results = {}
+            for out_name, npu_t, hp_t, sp_t in (
+                ("w", w_npu, w_fp64, w_npu_bench),
+                ("u", u_npu, u_fp64, u_npu_bench),
+            ):
+                ok, dual_res = dual_then_viz_cpu(
+                    out_name,
+                    npu_t,
+                    hp_t,
+                    sp_t,
+                    case_name=case_name,
+                    viz_dir=viz_dir,
+                    sample_count=viz_sample_count,
+                    enable_viz=enable_viz,
+                    level=dual_level,
+                )
+                dual_results[out_name] = {
+                    "pass": ok,
+                    "checks": dual_res.get("checks"),
+                    "ratios": dual_res.get("ratios"),
+                }
+            record["dual"] = dual_results
+            record["status"] = "pass" if all(v["pass"] for v in dual_results.values()) else "fail"
     except Exception:
         record["status"] = "error"
         record["error"] = traceback.format_exc()
@@ -303,10 +310,8 @@ def run_one_case(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="recompute_wu CPU dual from cases.json")
-    parser.add_argument("--cases-json", type=Path, default=DEFAULT_CASES_JSON)
-    parser.add_argument("--cases", default="", help="comma-separated case names")
-    parser.add_argument("--smoke", action="store_true", help="run built-in small smoke cases")
+    parser = argparse.ArgumentParser(description="recompute_wu cases.json benchmark")
+    add_cases_cli_args(parser)
     parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dual-level", default="L1")
@@ -314,19 +319,28 @@ def main() -> int:
     parser.add_argument(
         "--no-save-outputs",
         action="store_true",
-        help="skip saving outputs.pt (only json reports + dual logs)",
+        help="skip saving outputs.pt",
     )
     parser.add_argument("-sc", "--sample-count", type=int, default=200_000)
     parser.add_argument("--device", type=int, default=int(os.environ.get("TEST_DEVICE_ID", "0")))
     args = parser.parse_args()
 
-    case_names = [x.strip() for x in args.cases.split(",") if x.strip()] or None
-    cases = resolve_cases(cases_json=args.cases_json, case_names=case_names, smoke=args.smoke)
-    out_dir = args.out_dir or default_out_dir(OP_NAME, smoke=args.smoke)
+    if args.npu_only and not args.no_viz:
+        print("[CONFIG] --npu-only implies --no-viz", flush=True)
+        args.no_viz = True
+
+    cases = resolve_cases_from_args(args)
+    out_dir = args.out_dir or default_out_dir(
+        OP_NAME, smoke=args.smoke, npu_only=args.npu_only, all_cases=args.all_cases,
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[CONFIG] op={OP_NAME} device={args.device} smoke={args.smoke}", flush=True)
-    print(f"[CONFIG] cases={[c['name'] for c in cases]}", flush=True)
+    print(
+        f"[CONFIG] op={OP_NAME} device={args.device} smoke={args.smoke} "
+        f"all_cases={args.all_cases} npu_only={args.npu_only}",
+        flush=True,
+    )
+    print(f"[CONFIG] cases={[c['name'] for c in cases]} ({len(cases)} total)", flush=True)
     print(f"[CONFIG] out_dir={out_dir}", flush=True)
 
     results = []
@@ -340,6 +354,7 @@ def main() -> int:
             viz_sample_count=args.sample_count,
             out_dir=out_dir,
             save_outputs=not args.no_save_outputs,
+            npu_only=args.npu_only,
         )
         results.append(rec)
         write_case_report(out_dir, rec)
@@ -352,6 +367,8 @@ def main() -> int:
         cases_json=args.cases_json,
         dual_level=args.dual_level,
         smoke=args.smoke,
+        npu_only=args.npu_only,
+        all_cases=args.all_cases,
     )
     print("\n========== SUMMARY ==========", flush=True)
     for r in results:

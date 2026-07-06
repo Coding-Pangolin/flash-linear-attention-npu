@@ -271,6 +271,8 @@ def run_case(case: BwdDhuCase, device: int, out_root: str, seed: int = 0) -> tup
     if not case.supported:
         return "SKIP", case.skip_reason
 
+    npu_only = os.environ.get("BWD_HU_NPU_ONLY", "0") == "1"
+
     print(f"\n========== {case.name} ==========", flush=True)
     print(
         f"B={case.batch} Hk/Hv={case.k_h}/{case.v_h} T={case.tokens} "
@@ -280,14 +282,15 @@ def run_case(case: BwdDhuCase, device: int, out_root: str, seed: int = 0) -> tup
 
     q, k, w, do, dv, g, cu_seqlens, chunk_indices, scale = _build_inputs(case, seed=seed)
 
-    dh_fp64, _, dv2_fp64 = chunk_gated_delta_rule_bwd_dhu_cpu(
-        q, k, w, do, dv, cu_seqlens, chunk_indices, g=g, scale=scale,
-        chunk_size=case.chunk_size, golden_mode="fp64",
-    )
-    dh_npu_bench, _, dv2_npu_bench = chunk_gated_delta_rule_bwd_dhu_cpu(
-        q, k, w, do, dv, cu_seqlens, chunk_indices, g=g, scale=scale,
-        chunk_size=case.chunk_size, golden_mode="npu",
-    )
+    if not npu_only:
+        dh_fp64, _, dv2_fp64 = chunk_gated_delta_rule_bwd_dhu_cpu(
+            q, k, w, do, dv, cu_seqlens, chunk_indices, g=g, scale=scale,
+            chunk_size=case.chunk_size, golden_mode="fp64",
+        )
+        dh_npu_bench, _, dv2_npu_bench = chunk_gated_delta_rule_bwd_dhu_cpu(
+            q, k, w, do, dv, cu_seqlens, chunk_indices, g=g, scale=scale,
+            chunk_size=case.chunk_size, golden_mode="npu",
+        )
 
     dh_npu, _, dv2_npu = torch.ops.npu.npu_chunk_gated_delta_rule_bwd_dhu(
         q.npu(), k.npu(), w.npu(), do.npu(), dv.npu(),
@@ -300,6 +303,17 @@ def run_case(case: BwdDhuCase, device: int, out_root: str, seed: int = 0) -> tup
         cu_seqlens=cu_seqlens,
         chunk_indices=chunk_indices,
     )
+
+    if npu_only:
+        if os.environ.get("BWD_HU_SAVE_OUT", "1") == "1":
+            case_dir = os.path.join(out_root, case.name)
+            os.makedirs(case_dir, exist_ok=True)
+            torch.save({
+                "case": case.name,
+                "dh_npu": dh_npu.cpu(),
+                "dv2_npu": dv2_npu.cpu(),
+            }, os.path.join(case_dir, "outputs.pt"))
+        return "PASS", f"NPU-only dh/dv2 OK | out={os.path.join(out_root, case.name)}"
 
     case_dir = os.path.join(out_root, case.name)
     enable_viz = _env_bool("BWD_HU_VIZ", False) and not _env_bool("BWD_HU_NO_VIZ", False)
@@ -342,7 +356,10 @@ def main():
     out_root = os.environ.get("BWD_HU_OUT_DIR", DEFAULT_OUT_DIR)
     cases = _resolve_cases()
 
-    print(f"[MODE] random input + dual(fp64 gt / npu-aligned bench), no example dump", flush=True)
+    print(
+        f"[MODE] {'NPU-only' if os.environ.get('BWD_HU_NPU_ONLY', '0') == '1' else 'random input + dual(fp64 gt / npu-aligned bench)'}, no example dump",
+        flush=True,
+    )
     print(
         f"device={device} out_root={out_root} cases={len(cases)} "
         f"suite={os.environ.get('BWD_HU_SUITE', 'builtin')}",

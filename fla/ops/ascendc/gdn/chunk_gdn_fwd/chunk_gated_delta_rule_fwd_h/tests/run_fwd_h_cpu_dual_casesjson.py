@@ -29,10 +29,10 @@ sys.path.insert(0, str(GDN_DIR))
 sys.path.insert(0, str(FLA_NPU_TEST))
 
 from gdn_cpu_dual_casesjson import (  # noqa: E402
-    DEFAULT_CASES_JSON,
+    add_cases_cli_args,
     default_out_dir,
     generate_cu_seqlens_for_case,
-    resolve_cases,
+    resolve_cases_from_args,
     write_batch_report,
     write_case_report,
 )
@@ -139,6 +139,8 @@ def run_one_case(
     enable_viz: bool,
     viz_sample_count: int,
     out_dir: Path,
+    npu_only: bool = False,
+    save_outputs: bool = True,
 ) -> dict[str, Any]:
     case_name = str(case["name"])
     t_start = time.time()
@@ -148,6 +150,7 @@ def run_one_case(
         "dual": {},
         "meta": {},
         "error": None,
+        "mode": "npu_only" if npu_only else "cpu_dual",
     }
     try:
         torch.npu.set_device(device_id)
@@ -157,27 +160,30 @@ def run_one_case(
         print(f"\n=== {case_name} ===", flush=True)
         print(json.dumps(meta, indent=2), flush=True)
 
-        cu_tensor = None if cu_list is None else torch.tensor(cu_list, dtype=torch.long)
-        chunk_indices_tensor = (
-            torch.tensor(chunk_indices, dtype=torch.long) if chunk_indices is not None else None
-        )
-        golden_kwargs = dict(
-            initial_state=None,
-            chunk_size=meta["chunk_size"],
-            cu_seqlens=cu_tensor,
-            chunk_indices=chunk_indices_tensor,
-        )
         k_cpu, w_cpu, u_cpu, g_cpu = k.cpu(), w.cpu(), u.cpu(), g.cpu()
-        print("[CPU] fp64 golden ...", flush=True)
-        t0 = time.time()
-        ref_h_fp64, ref_v_fp64, _ = forward_h_trans_cpu(
-            k_cpu, w_cpu, u_cpu, g_cpu, **golden_kwargs, golden_mode="fp64",
-        )
-        ref_h_npu, ref_v_npu, _ = forward_h_trans_cpu(
-            k_cpu, w_cpu, u_cpu, g_cpu, **golden_kwargs, golden_mode="npu",
-        )
-        cpu_elapsed = time.time() - t0
-        record["cpu_elapsed_s"] = round(cpu_elapsed, 3)
+        ref_h_fp64 = ref_v_fp64 = ref_h_npu = ref_v_npu = None
+        if not npu_only:
+            cu_tensor = None if cu_list is None else torch.tensor(cu_list, dtype=torch.long)
+            chunk_indices_tensor = (
+                torch.tensor(chunk_indices, dtype=torch.long) if chunk_indices is not None else None
+            )
+            golden_kwargs = dict(
+                initial_state=None,
+                chunk_size=meta["chunk_size"],
+                cu_seqlens=cu_tensor,
+                chunk_indices=chunk_indices_tensor,
+            )
+            print("[CPU] fp64 golden ...", flush=True)
+            t0 = time.time()
+            ref_h_fp64, ref_v_fp64, _ = forward_h_trans_cpu(
+                k_cpu, w_cpu, u_cpu, g_cpu, **golden_kwargs, golden_mode="fp64",
+            )
+            ref_h_npu, ref_v_npu, _ = forward_h_trans_cpu(
+                k_cpu, w_cpu, u_cpu, g_cpu, **golden_kwargs, golden_mode="npu",
+            )
+            record["cpu_elapsed_s"] = round(time.time() - t0, 3)
+        else:
+            record["cpu_elapsed_s"] = 0.0
 
         print("[NPU] npu_chunk_gated_delta_rule_fwd_h ...", flush=True)
         t0 = time.time()
@@ -204,46 +210,57 @@ def run_one_case(
         )
 
         case_out = out_dir / case_name
-        case_out.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "meta": meta,
-                "h_npu": h_npu.cpu(),
-                "h_ref_fp64": ref_h_fp64.cpu(),
-                "h_ref_npu": ref_h_npu.cpu(),
-                "v_new_npu": v_npu.cpu(),
-                "v_new_ref_fp64": ref_v_fp64.cpu(),
-                "v_new_ref_npu": ref_v_npu.cpu(),
-            },
-            case_out / "outputs.pt",
-        )
+        if save_outputs or (enable_viz and not npu_only):
+            case_out.mkdir(parents=True, exist_ok=True)
 
-        viz_dir = case_out / "viz"
-        for out_name, npu_t, hp_t, sp_t, spatial in (
-            ("h", h_npu, ref_h_fp64, ref_h_npu, False),
-            ("v_new", v_npu, ref_v_fp64, ref_v_npu, True),
-        ):
-            ok, dual_res = _dual_check(out_name, npu_t, hp_t, sp_t, dual_level)
-            record["dual"][out_name] = {
-                "pass": ok,
-                "checks": dual_res.get("checks"),
-                "ratios": dual_res.get("ratios"),
-            }
-            if enable_viz:
-                os.makedirs(viz_dir, exist_ok=True)
-                ct.viz(
-                    npu_t.cpu().float(),
-                    hp_t.cpu().float(),
-                    bench=sp_t.cpu().float(),
-                    out_dir=str(viz_dir),
-                    name=f"{case_name}_{out_name}_npu_vs_fp64",
-                    diff_thd=0.001,
-                    spatial=spatial,
-                    sample_count=viz_sample_count,
+        if npu_only:
+            if save_outputs:
+                torch.save(
+                    {"meta": meta, "h_npu": h_npu.cpu(), "v_new_npu": v_npu.cpu()},
+                    case_out / "outputs.pt",
                 )
+            record["status"] = "pass"
+        else:
+            case_out.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "meta": meta,
+                    "h_npu": h_npu.cpu(),
+                    "h_ref_fp64": ref_h_fp64.cpu(),
+                    "h_ref_npu": ref_h_npu.cpu(),
+                    "v_new_npu": v_npu.cpu(),
+                    "v_new_ref_fp64": ref_v_fp64.cpu(),
+                    "v_new_ref_npu": ref_v_npu.cpu(),
+                },
+                case_out / "outputs.pt",
+            )
 
-        all_ok = all(v.get("pass") for v in record["dual"].values())
-        record["status"] = "pass" if all_ok else "fail"
+            viz_dir = case_out / "viz"
+            for out_name, npu_t, hp_t, sp_t, spatial in (
+                ("h", h_npu, ref_h_fp64, ref_h_npu, False),
+                ("v_new", v_npu, ref_v_fp64, ref_v_npu, True),
+            ):
+                ok, dual_res = _dual_check(out_name, npu_t, hp_t, sp_t, dual_level)
+                record["dual"][out_name] = {
+                    "pass": ok,
+                    "checks": dual_res.get("checks"),
+                    "ratios": dual_res.get("ratios"),
+                }
+                if enable_viz:
+                    os.makedirs(viz_dir, exist_ok=True)
+                    ct.viz(
+                        npu_t.cpu().float(),
+                        hp_t.cpu().float(),
+                        bench=sp_t.cpu().float(),
+                        out_dir=str(viz_dir),
+                        name=f"{case_name}_{out_name}_npu_vs_fp64",
+                        diff_thd=0.001,
+                        spatial=spatial,
+                        sample_count=viz_sample_count,
+                    )
+
+            all_ok = all(v.get("pass") for v in record["dual"].values())
+            record["status"] = "pass" if all_ok else "fail"
     except Exception as exc:
         record["status"] = "error"
         record["error"] = traceback.format_exc()
@@ -253,26 +270,35 @@ def run_one_case(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="fwd_h CPU dual from cases.json")
-    parser.add_argument("--cases-json", type=Path, default=DEFAULT_CASES_JSON)
-    parser.add_argument("--cases", default="", help="comma-separated case names")
-    parser.add_argument("--smoke", action="store_true", help="run built-in small smoke cases")
+    parser = argparse.ArgumentParser(description="fwd_h cases.json benchmark")
+    add_cases_cli_args(parser)
     parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dual-level", default="L1")
     parser.add_argument("--no-viz", action="store_true")
+    parser.add_argument("--no-save-outputs", action="store_true")
     parser.add_argument("-sc", "--sample-count", type=int, default=200_000)
     parser.add_argument("--device", type=int, default=int(os.environ.get("TEST_DEVICE_ID", "0")))
     args = parser.parse_args()
 
-    case_names = [x.strip() for x in args.cases.split(",") if x.strip()] or None
-    cases = resolve_cases(cases_json=args.cases_json, case_names=case_names, smoke=args.smoke)
-    out_dir = args.out_dir or default_out_dir("fwd_h", smoke=args.smoke)
+    if args.npu_only and not args.no_viz:
+        args.no_viz = True
+
+    cases = resolve_cases_from_args(args)
+    out_dir = args.out_dir or default_out_dir(
+        "fwd_h", smoke=args.smoke, npu_only=args.npu_only, all_cases=args.all_cases,
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[CONFIG] device={args.device} smoke={args.smoke} cases={[c['name'] for c in cases]}", flush=True)
+    print(
+        f"[CONFIG] device={args.device} smoke={args.smoke} all_cases={args.all_cases} "
+        f"npu_only={args.npu_only} cases={len(cases)}",
+        flush=True,
+    )
+    print(f"[CONFIG] case_names={[c['name'] for c in cases]}", flush=True)
     print(f"[CONFIG] out_dir={out_dir}", flush=True)
-    print(f"[CONFIG] dual=ct.dual(npu, fp64, npu_aligned) level={args.dual_level}", flush=True)
+    if not args.npu_only:
+        print(f"[CONFIG] dual=ct.dual(npu, fp64, npu_aligned) level={args.dual_level}", flush=True)
 
     results = []
     for case in cases:
@@ -284,6 +310,8 @@ def main() -> int:
             enable_viz=not args.no_viz,
             viz_sample_count=args.sample_count,
             out_dir=out_dir,
+            npu_only=args.npu_only,
+            save_outputs=not args.no_save_outputs,
         )
         results.append(rec)
         write_case_report(out_dir, rec)
@@ -296,6 +324,8 @@ def main() -> int:
         cases_json=args.cases_json,
         dual_level=args.dual_level,
         smoke=args.smoke,
+        npu_only=args.npu_only,
+        all_cases=args.all_cases,
     )
 
     print("\n========== SUMMARY ==========", flush=True)

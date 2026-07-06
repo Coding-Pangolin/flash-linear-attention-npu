@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Serial CPU dual benchmark for recompute_wu, fwd_h, bwd_dhu from cases.json.
+# Serial cases.json benchmark for recompute_wu, fwd_h, bwd_dhu (CPU dual or NPU-only).
 #
 # Usage:
 #   TEST_DEVICE_ID=2 ./run_gdn_cpu_dual_casesjson.sh --smoke
 #   TEST_DEVICE_ID=2 ./run_gdn_cpu_dual_casesjson.sh --op recompute_wu
 #   TEST_DEVICE_ID=2 ./run_gdn_cpu_dual_casesjson.sh --cases gva_fix_3,gva_var_2
+#   TEST_DEVICE_ID=2 ./run_gdn_cpu_dual_casesjson.sh --all-cases --npu-only --no-viz
 #
 set -euo pipefail
 
@@ -20,13 +21,15 @@ usage() {
   cat <<'EOF'
 Usage: run_gdn_cpu_dual_casesjson.sh [OPTIONS] [-- extra py args]
 
-Run recompute_wu / fwd_h / bwd_dhu CPU dual benchmarks serially.
+Run recompute_wu / fwd_h / bwd_dhu cases.json benchmarks serially.
 Logs under fla/ops/ascendc/gdn/dual_benchmark_logs/<op>/cpu_dual_*/
 
 Options:
   --op NAME         recompute_wu | fwd_h | bwd_dhu | all (default: all)
   --smoke           built-in small cases for quick validation
-  --cases LIST      comma-separated cases.json names
+  --cases LIST      comma-separated cases.json names (default: 8 CPU-only batch)
+  --all-cases       run all 42 entries in cases.json
+  --npu-only        NPU forward only (skip CPU golden and ct.dual)
   --no-viz          skip ct.viz
   -h, --help        show help
 EOF
@@ -38,17 +41,13 @@ while [[ $# -gt 0 ]]; do
       OP_FILTER="$2"
       shift 2
       ;;
-    --smoke)
-      EXTRA_ARGS+=(--smoke)
+    --smoke|--all-cases|--npu-only|--no-viz)
+      EXTRA_ARGS+=("$1")
       shift
       ;;
     --cases)
       EXTRA_ARGS+=(--cases "$2")
       shift 2
-      ;;
-    --no-viz)
-      EXTRA_ARGS+=(--no-viz)
-      shift
       ;;
     -h|--help)
       usage
@@ -73,7 +72,10 @@ run_op() {
   local name="$1"
   local script="$2"
   echo ""
-  echo "========== GDN CPU dual: ${name} =========="
+  echo "========== GDN cases.json: ${name} =========="
+  if [[ "${name}" == "fwd_h" ]]; then
+    export FWD_H_CPU_DUAL_RANDOM=1
+  fi
   if ! bash "${script}" "${EXTRA_ARGS[@]}"; then
     RC=1
   fi

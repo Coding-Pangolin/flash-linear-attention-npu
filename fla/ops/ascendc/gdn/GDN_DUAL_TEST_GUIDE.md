@@ -139,17 +139,31 @@ TEST_DEVICE_ID=0 ./run_gdn_gpu_dump_dual_all.sh /path/to/GPU_DUMP
 ```bash
 cd fla/ops/ascendc/gdn
 
-# 三算子串行 smoke
-TEST_DEVICE_ID=0 ./run_gdn_cpu_dual_casesjson.sh --smoke --no-viz
-
-# 三算子全量 8 项 CPU-only batch
+# 默认 8 项 CPU-only batch + CPU dual
 TEST_DEVICE_ID=0 ./run_gdn_cpu_dual_casesjson.sh --no-viz
 
-# 单算子
-TEST_DEVICE_ID=0 ./run_gdn_cpu_dual_casesjson.sh --op recompute_wu --smoke --no-viz
-TEST_DEVICE_ID=0 ./run_gdn_cpu_dual_casesjson.sh --op fwd_h --no-viz
-TEST_DEVICE_ID=0 ./run_gdn_cpu_dual_casesjson.sh --op bwd_dhu --cases gva_fix_3 --no-viz
+# 全量 42 项，仅 NPU 前向（跳过 CPU golden 与 ct.dual）
+TEST_DEVICE_ID=0 ./run_gdn_cpu_dual_casesjson.sh --all-cases --npu-only --no-viz
+
+# 单算子全量 NPU-only
+TEST_DEVICE_ID=0 ./run_gdn_cpu_dual_casesjson.sh --op bwd_dhu --all-cases --npu-only --no-viz
+
+# 指定 case
+TEST_DEVICE_ID=0 ./run_gdn_cpu_dual_casesjson.sh --cases gva_fix_3,phase_1_fix_1 --npu-only --no-viz
 ```
+
+**CLI 参数（三算子 runner 通用）：**
+
+| 参数 | 说明 |
+|------|------|
+| `--smoke` | 内置小 case（3 项左右） |
+| `--cases a,b,c` | 指定 cases.json 名称（默认 8 项 CPU-only） |
+| `--all-cases` | 跑 cases.json 全部 42 项 |
+| `--npu-only` | 仅 NPU 前向，跳过 CPU golden 与 ct.dual |
+| `--no-viz` | 跳过 ct.viz（大 case 建议开启） |
+| `--no-save-outputs` | 不写 outputs.pt（recompute_wu / fwd_h） |
+
+输出目录标签：`cpu_dual_casesjson_all`（全量 dual）、`cpu_dual_npu_only_all`（全量 NPU-only）等。
 
 **CPU-only 8 项**（`gdn_cpu_dual_casesjson.DEFAULT_GPU_UNSUPPORTED_CASES`）：
 

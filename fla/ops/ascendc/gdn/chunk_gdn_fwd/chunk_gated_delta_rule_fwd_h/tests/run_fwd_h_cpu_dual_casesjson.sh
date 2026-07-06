@@ -5,8 +5,9 @@
 #   TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh
 #   TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh --cases gva_fix_3
 #
-# 随机输入快速路径（不 dump，推荐 CPU dual）:
+# 随机输入快速路径（推荐）:
 #   FWD_H_CPU_DUAL_RANDOM=1 TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh --no-viz
+#   FWD_H_CPU_DUAL_RANDOM=1 TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh --all-cases --npu-only --no-viz
 #   FWD_H_CPU_DUAL_RANDOM=1 TEST_DEVICE_ID=2 ./run_fwd_h_cpu_dual_casesjson.sh --no-viz --cases gva_var_2,phase_1_var_4
 #
 # 环境：见 FWD_H_TEST.md / GDN_DUAL_TEST_GUIDE.md

@@ -86,36 +86,26 @@ TEST_DEVICE_ID=0 ./run_recompute_wu_gpu_dump_dual.sh /path/to/GPU_DUMP
 ```bash
 cd fla/ops/ascendc/gdn/chunk_gdn_fwd/recompute_wu_fwd/test
 
-# smoke（小 case，推荐先跑）
-TEST_DEVICE_ID=0 ./run_recompute_wu_cpu_dual_casesjson.sh --smoke --no-viz
-
-# 默认 8 项 CPU-only batch
+# 默认 8 项 CPU dual
 TEST_DEVICE_ID=0 ./run_recompute_wu_cpu_dual_casesjson.sh --no-viz
 
-# 单 case
-TEST_DEVICE_ID=0 ./run_recompute_wu_cpu_dual_casesjson.sh --cases gva_fix_3 --no-viz
+# 全量 42 项，仅 NPU
+TEST_DEVICE_ID=0 ./run_recompute_wu_cpu_dual_casesjson.sh --all-cases --npu-only --no-viz
 
-# 多个 case
-TEST_DEVICE_ID=0 ./run_recompute_wu_cpu_dual_casesjson.sh --cases gva_var_2,phase_1_var_4 --no-viz
+# smoke
+TEST_DEVICE_ID=0 ./run_recompute_wu_cpu_dual_casesjson.sh --smoke --no-viz
 ```
 
-### 4.2 环境变量
-
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| `TEST_DEVICE_ID` | 2 | NPU 设备号 |
-| `RECOMPUTE_WU_CPU_DUAL_OUT` | `dual_benchmark_logs/recompute_wu/cpu_dual_casesjson/<ts>/` | 输出目录 |
-| `ASCEND_LAUNCH_BLOCKING` | 1 | 同步 launch，便于定位错误 |
-
-### 4.3 Python 参数
+### 4.2 环境变量与参数
 
 | 参数 | 说明 |
 |------|------|
+| `--all-cases` | cases.json 全量 42 项 |
+| `--npu-only` | 仅 NPU，跳过 CPU golden 与 dual |
+| `--cases LIST` | 指定 case（默认 8 项 CPU-only） |
 | `--smoke` | 内置小 case |
-| `--cases LIST` | 逗号分隔 cases.json 名 |
 | `--no-viz` | 跳过 ct.viz |
 | `--no-save-outputs` | 不写 outputs.pt |
-| `--device N` | 覆盖 TEST_DEVICE_ID |
 
 输出：`fla/ops/ascendc/gdn/dual_benchmark_logs/recompute_wu/cpu_dual_casesjson/<timestamp>/`
 

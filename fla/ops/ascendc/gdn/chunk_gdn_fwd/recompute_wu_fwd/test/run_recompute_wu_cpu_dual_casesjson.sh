@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 环境：见 RECOMPUTE_WU_TEST.md / GDN_DUAL_TEST_GUIDE.md
-#   TEST_DEVICE_ID=2 ./run_recompute_wu_cpu_dual_casesjson.sh --smoke --no-viz --no-save-outputs
+#   TEST_DEVICE_ID=2 ./run_recompute_wu_cpu_dual_casesjson.sh --smoke --no-viz
+#   TEST_DEVICE_ID=2 ./run_recompute_wu_cpu_dual_casesjson.sh --all-cases --npu-only --no-viz
 #   TEST_DEVICE_ID=2 ./run_recompute_wu_cpu_dual_casesjson.sh --cases gva_fix_3,gva_var_2
 #
 set -euo pipefail

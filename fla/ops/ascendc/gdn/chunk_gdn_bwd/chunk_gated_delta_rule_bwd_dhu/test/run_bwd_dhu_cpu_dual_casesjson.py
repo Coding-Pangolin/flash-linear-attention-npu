@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CPU dual benchmark for bwd_dhu — aligned with test_npu_bwd_dhu_gva.py."""
+"""bwd_dhu cases.json benchmark: CPU dual or NPU-only forward."""
 from __future__ import annotations
 
 import argparse
@@ -8,6 +8,7 @@ import math
 import os
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -25,11 +26,11 @@ for p in (GDN_DIR, TORCH_CUSTOM_TEST):
 
 from gdn_cpu_dual_casesjson import (  # noqa: E402
     BWD_DHU_SMOKE_CASES,
-    DEFAULT_CASES_JSON,
+    add_cases_cli_args,
     default_out_dir,
     dual_then_viz_cpu,
     generate_cu_seqlens_for_case,
-    resolve_cases,
+    resolve_cases_from_args,
     write_batch_report,
     write_case_report,
 )
@@ -95,10 +96,16 @@ def run_case(
     enable_viz: bool,
     viz_dir: Path | None,
     sample_count: int,
+    npu_only: bool = False,
 ) -> dict[str, Any]:
     name = case["name"]
     t0 = time.time()
-    record: dict[str, Any] = {"case": name, "status": "error", "checks": {}}
+    record: dict[str, Any] = {
+        "case": name,
+        "status": "error",
+        "checks": {},
+        "mode": "npu_only" if npu_only else "cpu_dual",
+    }
 
     try:
         torch.npu.set_device(device_id)
@@ -112,8 +119,9 @@ def run_case(
             chunk_size=inputs["chunk_size"],
         )
 
-        dh_fp64, _, dv2_fp64 = chunk_gated_delta_rule_bwd_dhu_cpu(**common, golden_mode="fp64")
-        dh_npu_bench, _, dv2_npu_bench = chunk_gated_delta_rule_bwd_dhu_cpu(**common, golden_mode="npu")
+        if not npu_only:
+            dh_fp64, _, dv2_fp64 = chunk_gated_delta_rule_bwd_dhu_cpu(**common, golden_mode="fp64")
+            dh_npu_bench, _, dv2_npu_bench = chunk_gated_delta_rule_bwd_dhu_cpu(**common, golden_mode="npu")
 
         dh_npu, _, dv2_npu = torch.ops.npu.npu_chunk_gated_delta_rule_bwd_dhu(
             inputs["q"].npu(), inputs["k"].npu(), inputs["w"].npu(),
@@ -127,54 +135,67 @@ def run_case(
             cu_seqlens=inputs["cu_seqlens"],
             chunk_indices=inputs["chunk_indices"],
         )
+        torch.npu.synchronize()
 
-        ok_dh, res_dh = dual_then_viz_cpu(
-            "dh", dh_npu, dh_fp64, dh_npu_bench,
-            case_name=name, viz_dir=viz_dir, sample_count=sample_count,
-            enable_viz=enable_viz, level=dual_level,
-        )
-        ok_dv2, res_dv2 = dual_then_viz_cpu(
-            "dv2", dv2_npu, dv2_fp64, dv2_npu_bench,
-            case_name=name, viz_dir=viz_dir, sample_count=sample_count,
-            enable_viz=enable_viz, level=dual_level,
-        )
-
-        record["checks"] = {"dh": res_dh, "dv2": res_dv2}
-        record["status"] = "pass" if ok_dh and ok_dv2 else "fail"
+        if npu_only:
+            record["status"] = "pass"
+        else:
+            ok_dh, res_dh = dual_then_viz_cpu(
+                "dh", dh_npu, dh_fp64, dh_npu_bench,
+                case_name=name, viz_dir=viz_dir, sample_count=sample_count,
+                enable_viz=enable_viz, level=dual_level,
+            )
+            ok_dv2, res_dv2 = dual_then_viz_cpu(
+                "dv2", dv2_npu, dv2_fp64, dv2_npu_bench,
+                case_name=name, viz_dir=viz_dir, sample_count=sample_count,
+                enable_viz=enable_viz, level=dual_level,
+            )
+            record["checks"] = {"dh": res_dh, "dv2": res_dv2}
+            record["status"] = "pass" if ok_dh and ok_dv2 else "fail"
         record["elapsed_s"] = round(time.time() - t0, 2)
     except Exception as exc:
         record["error"] = str(exc)
         record["elapsed_s"] = round(time.time() - t0, 2)
-        import traceback
         traceback.print_exc()
 
     return record
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="bwd_dhu CPU dual benchmark (cases.json / smoke)")
-    parser.add_argument("--cases-json", type=Path, default=DEFAULT_CASES_JSON)
-    parser.add_argument("--case", action="append", dest="cases", default=None)
-    parser.add_argument("--smoke", action="store_true")
+    parser = argparse.ArgumentParser(description="bwd_dhu cases.json benchmark")
+    add_cases_cli_args(parser)
+    parser.add_argument("--case", action="append", dest="case_list", default=None,
+                        help="repeatable single case name (legacy)")
     parser.add_argument("--device-id", type=int, default=int(os.environ.get("TEST_DEVICE_ID", "0")))
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--dual-level", default="L1")
     parser.add_argument("--out-dir", type=Path, default=None)
-    parser.add_argument("--viz", action="store_true")
-    parser.add_argument("--sample-count", type=int, default=8)
+    parser.add_argument("--no-viz", action="store_true")
+    parser.add_argument("--no-save-outputs", action="store_true")
+    parser.add_argument("--sample-count", type=int, default=200_000)
     args = parser.parse_args()
 
-    cases = resolve_cases(
-        cases_json=args.cases_json,
-        case_names=args.cases,
-        smoke=args.smoke,
-        smoke_cases=BWD_DHU_SMOKE_CASES,
-    )
-    out_dir = args.out_dir or default_out_dir("bwd_dhu", smoke=args.smoke)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    viz_dir = out_dir / "viz" if args.viz else None
+    if args.npu_only:
+        args.no_viz = True
+    if args.case_list and args.cases:
+        raise SystemExit("use either --cases or --case, not both")
 
-    print(f"[bwd_dhu cpu_dual] device={args.device_id} cases={len(cases)} out={out_dir}", flush=True)
+    if args.case_list and not args.cases:
+        args.cases = ",".join(args.case_list)
+
+    cases = resolve_cases_from_args(args, smoke_cases=BWD_DHU_SMOKE_CASES)
+    out_dir = args.out_dir or default_out_dir(
+        "bwd_dhu", smoke=args.smoke, npu_only=args.npu_only, all_cases=args.all_cases,
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    enable_viz = not args.no_viz
+    viz_dir = out_dir / "viz" if enable_viz else None
+
+    print(
+        f"[bwd_dhu] device={args.device_id} mode={'npu_only' if args.npu_only else 'cpu_dual'} "
+        f"all_cases={args.all_cases} cases={len(cases)} out={out_dir}",
+        flush=True,
+    )
     results: list[dict[str, Any]] = []
     for case in cases:
         print(f"\n=== case: {case['name']} ===", flush=True)
@@ -183,9 +204,10 @@ def main() -> int:
             device_id=args.device_id,
             seed=args.seed,
             dual_level=args.dual_level,
-            enable_viz=args.viz,
+            enable_viz=enable_viz,
             viz_dir=viz_dir,
             sample_count=args.sample_count,
+            npu_only=args.npu_only,
         )
         write_case_report(out_dir, record)
         results.append(record)
@@ -199,6 +221,8 @@ def main() -> int:
         cases_json=args.cases_json,
         dual_level=args.dual_level,
         smoke=args.smoke,
+        npu_only=args.npu_only,
+        all_cases=args.all_cases,
     )
     summary = {r["case"]: r["status"] for r in results}
     print(f"\nSummary: {summary}", flush=True)

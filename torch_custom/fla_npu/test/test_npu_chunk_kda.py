@@ -1,13 +1,9 @@
 # Copyright (c) 2026 Tianjin University, Ltd.
 
-import json
-import os
 import pathlib
-import random
 import sys
 
 import torch
-import torch.nn.functional as F
 
 try:
     import torch_npu  # noqa: F401
@@ -28,15 +24,30 @@ def _device():
     return torch.device("cpu")
 
 
-def _make_inputs(device, b=1, h=2, hv=2, t=64, kdim=32, vdim=64, dtype=torch.float32):
+def _make_inputs(device, b=1, h=2, hv=2, t=64, kdim=32, vdim=64, dtype=torch.float32, state_b=None):
+    state_b = b if state_b is None else state_b
     torch.manual_seed(1234 + b + h + hv + t + kdim + vdim)
     q = (torch.randn(b, t, h, kdim, device=device, dtype=dtype) * 0.08).requires_grad_(True)
     k = (torch.randn(b, t, h, kdim, device=device, dtype=dtype) * 0.08).requires_grad_(True)
     v = (torch.randn(b, t, hv, vdim, device=device, dtype=dtype) * 0.08).requires_grad_(True)
     gk = (torch.randn(b, t, hv, kdim, device=device, dtype=torch.float32).cumsum(dim=1) * 0.001).requires_grad_(True)
     beta = torch.sigmoid(torch.randn(b, t, hv, device=device, dtype=torch.float32)).requires_grad_(True)
-    initial_state = (torch.randn(b, hv, kdim, vdim, device=device, dtype=torch.float32) * 0.02).requires_grad_(True)
+    initial_state = (
+        torch.randn(state_b, hv, kdim, vdim, device=device, dtype=torch.float32) * 0.02
+    ).requires_grad_(True)
     return q, k, v, gk, beta, initial_state
+
+
+def _assert_chunk_kda_o_state(
+    got,
+    ref,
+    *,
+    name: str,
+    rtol=2e-2,
+    atol=2e-2,
+):
+    _assert_close(f"{name} o", got[0], ref.o, rtol=rtol, atol=atol)
+    _assert_close(f"{name} final_state", got[1], ref.final_state, rtol=rtol, atol=atol)
 
 
 def _assert_close(name, actual, expected, rtol=2e-3, atol=2e-3):
@@ -501,419 +512,200 @@ def test_kda_gate_cumsum_safe_gate_matches_reference():
     _assert_close("gate cumsum safe", got, ref, rtol=2e-3, atol=2e-3)
 
 
-# ---------------------------------------------------------------------------
-# GPU dump registry cases (aligned with gpu/kda_cases.json + run_kda_dump_cases)
-# ---------------------------------------------------------------------------
-
-_DTYPE_MAP = {
-    "fp16": torch.float16,
-    "float16": torch.float16,
-    "bf16": torch.bfloat16,
-    "bfloat16": torch.bfloat16,
-    "fp32": torch.float32,
-    "float32": torch.float32,
-}
-_LOW_PRECISION_HALF_RANGE = 6.5e-3
-
-KDA_GPU_DUMP_CASES: list[dict] = [
-    {
-        "name": "smoke_mha_fix",
-        "description": "MHA smoke: B=1 T=256 H=HV=2 K=V=128 cs=64",
-        "enabled": True,
-        "B": 1, "T": 256, "query_head": 2, "value_head": 2,
-        "Kdim": 128, "Vdim": 128, "chunk_size": 64, "dtype": "bf16", "varlen": False,
-    },
-    {
-        "name": "smoke_gva_fix",
-        "description": "GVA smoke: B=1 T=256 Hk=2 Hv=4 K=V=128 cs=64",
-        "enabled": True,
-        "B": 1, "T": 256, "query_head": 2, "value_head": 4,
-        "Kdim": 128, "Vdim": 128, "chunk_size": 64, "dtype": "bf16", "varlen": False,
-    },
-    {
-        "name": "smoke_mha_var",
-        "description": "MHA varlen smoke: B=1 T=512 H=HV=4 mean_len=4 cs=64",
-        "enabled": True,
-        "B": 1, "T": 512, "query_head": 4, "value_head": 4,
-        "Kdim": 128, "Vdim": 128, "chunk_size": 64, "dtype": "bf16", "varlen": True, "mean_len": 4,
-    },
-    {
-        "name": "mha_t2048",
-        "description": "MHA fixed: B=2 T=2048 H=HV=4 K=V=128 cs=64",
-        "enabled": True,
-        "B": 2, "T": 2048, "query_head": 4, "value_head": 4,
-        "Kdim": 128, "Vdim": 128, "chunk_size": 64, "dtype": "bf16", "varlen": False,
-    },
-    {
-        "name": "gva_t4096_v256",
-        "description": "GVA model-scale: B=1 T=4096 Hk=16 Hv=32 K=128 V=256 cs=64",
-        "enabled": True,
-        "B": 1, "T": 4096, "query_head": 16, "value_head": 32,
-        "Kdim": 128, "Vdim": 256, "chunk_size": 64, "dtype": "fp16", "varlen": False,
-        "skip_reason": "Vdim=256 not supported by PR #152 KDA forward",
-    },
-    {
-        "name": "gva_t4096_v128",
-        "description": "GVA large-seq: B=1 T=4096 Hk=8 Hv=16 K=V=128 cs=64",
-        "enabled": True,
-        "B": 1, "T": 4096, "query_head": 8, "value_head": 16,
-        "Kdim": 128, "Vdim": 128, "chunk_size": 64, "dtype": "bf16", "varlen": False,
-    },
-    {
-        "name": "mha_cs32",
-        "description": "MHA chunk_size=32: B=1 T=512 H=HV=4 K=V=128",
-        "enabled": True,
-        "B": 1, "T": 512, "query_head": 4, "value_head": 4,
-        "Kdim": 128, "Vdim": 128, "chunk_size": 32, "dtype": "bf16", "varlen": False,
-    },
-    {
-        "name": "gva_var_t1024",
-        "description": "GVA varlen: B=1 T=1024 Hk=4 Hv=8 mean_len=8 cs=64",
-        "enabled": True,
-        "B": 1, "T": 1024, "query_head": 4, "value_head": 8,
-        "Kdim": 128, "Vdim": 128, "chunk_size": 64, "dtype": "bf16", "varlen": True, "mean_len": 8,
-    },
-]
-
-
-def _parse_case_dtype(name: str) -> torch.dtype:
-    key = str(name).strip().lower()
-    if key not in _DTYPE_MAP:
-        raise ValueError(f"unsupported dtype {name!r}")
-    return _DTYPE_MAP[key]
-
-
-def _rand_uniform(shape, dtype, half_range, device):
-    x = torch.rand(shape, dtype=torch.float32, device=device)
-    x = (x * 2.0 - 1.0) * float(half_range)
-    return x.to(dtype=dtype)
-
-
-def _l2norm_fwd(x: torch.Tensor, dim: int = -1, eps: float = 1e-6) -> torch.Tensor:
-    denom = x.float().norm(dim=dim, keepdim=True).clamp_min(eps)
-    return (x / denom.to(x.dtype)).contiguous()
-
-
-def _generate_cu_seqlens(cu_seqlens_len: int, total_length: int, *, seg_min: int = 64, seg_max: int = 128):
-    batchsize = cu_seqlens_len - 1
-    if batchsize <= 0:
-        return torch.tensor([0, total_length], dtype=torch.long)
-
-    B, T = batchsize, total_length
-    lengths = [(T * (i + 1)) // B - (T * i) // B for i in range(B)]
-    for i in range(B):
-        lengths[i] = max(seg_min, min(seg_max, lengths[i]))
-
-    diff = T - sum(lengths)
-    while diff > 0:
-        cand = [i for i in range(B) if lengths[i] < seg_max]
-        if not cand:
-            break
-        i = min(cand, key=lambda j: lengths[j])
-        lengths[i] += 1
-        diff -= 1
-    while diff < 0:
-        cand = [i for i in range(B) if lengths[i] > seg_min]
-        if not cand:
-            break
-        i = max(cand, key=lambda j: lengths[j])
-        lengths[i] -= 1
-        diff += 1
-
-    guard = 0
-    while diff != 0 and guard < B * (seg_max - seg_min + 64):
-        guard += 1
-        if diff > 0:
-            i = min(range(B), key=lambda j: lengths[j])
-            lengths[i] += 1
-            diff -= 1
-        else:
-            i = max(range(B), key=lambda j: lengths[j])
-            lengths[i] -= 1
-            diff += 1
-
-    sorted_l = sorted(lengths)
-    seq_lengths: list[int] = []
-    i, j = 0, len(sorted_l) - 1
-    while i <= j:
-        if i == j:
-            seq_lengths.append(sorted_l[i])
-        else:
-            seq_lengths.append(sorted_l[i])
-            seq_lengths.append(sorted_l[j])
-        i += 1
-        j -= 1
-
-    cu = [0]
-    for seg in seq_lengths:
-        cu.append(cu[-1] + seg)
-    if cu[-1] != total_length:
-        raise ValueError(f"generate_cu_seqlens: sum={cu[-1]} != T={total_length}")
-    return torch.tensor(cu, dtype=torch.long)
-
-
-def _default_registry_flags(case: dict) -> dict:
-    return {
-        "use_qk_l2norm_in_kernel": bool(case.get("use_qk_l2norm_in_kernel", True)),
-        "use_gate_in_kernel": bool(case.get("use_gate_in_kernel", True)),
-        "use_beta_sigmoid_in_kernel": bool(case.get("use_beta_sigmoid_in_kernel", True)),
-        "allow_neg_eigval": bool(case.get("allow_neg_eigval", False)),
-        "safe_gate": bool(case.get("safe_gate", True)),
-        "lower_bound": float(case.get("lower_bound", -5.0)),
-        "output_final_state": bool(case.get("output_final_state", True)),
-    }
-
-
-def _build_registry_case_inputs(case: dict, device: torch.device, seed: int = 0) -> dict:
-    """Construct inputs matching gpu/scripts/kda_case_utils.build_kda_inputs."""
-    B = int(case["B"])
-    T = int(case["T"])
-    Hk = int(case["query_head"])
-    Hv = int(case["value_head"])
-    K = int(case["Kdim"])
-    V = int(case["Vdim"])
-    chunk_size = int(case.get("chunk_size", 64))
-    varlen = bool(case.get("varlen", False))
-    ktype = _parse_case_dtype(case["dtype"])
-
-    if Hv % Hk != 0:
-        raise ValueError(f"GVA requires Hv % Hk == 0, got Hk={Hk}, Hv={Hv}")
-    if varlen and B != 1:
-        raise ValueError(f"varlen case {case['name']} expects B=1")
-
-    torch.manual_seed(seed)
-    random.seed(seed)
-
-    low = ktype in (torch.float16, torch.bfloat16)
-    hr = _LOW_PRECISION_HALF_RANGE if low else 2e-2
-
-    q = _rand_uniform((B, T, Hk, K), ktype, hr, device)
-    k = _rand_uniform((B, T, Hk, K), ktype, hr, device)
-    v = _rand_uniform((B, T, Hv, V), ktype, hr, device)
-
-    flags = _default_registry_flags(case)
-    if flags["use_gate_in_kernel"]:
-        g = torch.randn(B, T, Hv, K, dtype=ktype, device=device)
-        A_log = torch.log(torch.empty(Hv, dtype=torch.float32, device=device).uniform_(1, 16))
-        dt_bias = torch.randn(Hv * K, dtype=torch.float32, device=device)
-    else:
-        g = F.logsigmoid(torch.randn(B, T, Hv, K, dtype=torch.float32, device=device)).to(ktype)
-        A_log = None
-        dt_bias = None
-
-    if flags["use_beta_sigmoid_in_kernel"]:
-        beta_raw = torch.randn(B, T, Hv, dtype=ktype, device=device)
-    else:
-        beta_raw = torch.sigmoid(_rand_uniform((B, T, Hv), ktype, 0.5, device))
-
-    cu_seqlens = None
-    if varlen:
-        mean_len = int(case.get("mean_len", 4))
-        cu_seqlens = _generate_cu_seqlens(
-            mean_len,
-            T,
-            seg_min=chunk_size,
-            seg_max=min(128, chunk_size * 2),
-        ).to(device)
-
-    scale = float(case.get("scale", K ** -0.5))
-    num_seqs = len(cu_seqlens) - 1 if cu_seqlens is not None else B
-    initial_state = torch.randn(num_seqs, Hv, K, V, dtype=torch.float32, device=device)
-
-    if flags["use_qk_l2norm_in_kernel"]:
-        q = _l2norm_fwd(q)
-        k = _l2norm_fwd(k)
-
-    if flags["use_beta_sigmoid_in_kernel"]:
-        beta_scale = 2.0 if flags["allow_neg_eigval"] else 1.0
-        beta = torch.sigmoid(beta_raw.float()) * beta_scale
-    else:
-        beta = beta_raw
-
-    gk = _kda_gate_cumsum_reference(
-        g.detach().cpu(),
-        chunk_size,
-        A_log=A_log.detach().cpu() if A_log is not None else None,
-        dt_bias=dt_bias.detach().cpu() if dt_bias is not None else None,
-        use_gate_in_kernel=flags["use_gate_in_kernel"],
-        safe_gate=flags["safe_gate"],
-        lower_bound=flags["lower_bound"],
-    ).to(device)
-
-    gk = gk.float()
-    beta = beta.float()
-
-    return {
-        "q": q,
-        "k": k,
-        "v": v,
-        "gk": gk,
-        "beta": beta,
-        "initial_state": initial_state,
-        "cu_seqlens": cu_seqlens,
-        "scale": scale,
-        "chunk_size": chunk_size,
-        "flags": flags,
-    }
-
-
-def _registry_case_rtol(case: dict) -> tuple[float, float]:
-    dtype = _parse_case_dtype(case["dtype"])
-    if dtype in (torch.float16, torch.bfloat16):
-        return 2e-2, 2e-2
-    return 2e-3, 2e-3
-
-
-def _run_registry_case(case: dict, device: torch.device, seed: int = 0) -> None:
-    bundle = _build_registry_case_inputs(case, device, seed=seed)
-    q = bundle["q"]
-    k = bundle["k"]
-    v = bundle["v"]
-    gk = bundle["gk"]
-    beta = bundle["beta"]
-    initial_state = bundle["initial_state"]
-    cu_seqlens = bundle["cu_seqlens"]
-    scale = bundle["scale"]
-    chunk_size = bundle["chunk_size"]
-    flags = bundle["flags"]
-
-    npu_kwargs = {
-        "initial_state": initial_state,
-        "output_final_state": flags["output_final_state"],
-        "return_intermediate": False,
-    }
-    if cu_seqlens is not None:
-        npu_kwargs["cu_seqlens"] = cu_seqlens.detach().cpu().tolist()
-
-    got = torch.ops.npu.npu_chunk_kda_fwd(
-        q, k, v, gk, beta, scale, chunk_size, **npu_kwargs,
-    )
-    if torch.npu.is_available():
-        torch.npu.synchronize()
-
-    cu_tensor = cu_seqlens.detach().cpu() if cu_seqlens is not None else None
-    ref = chunk_kda_forward_reference(
-        q.detach().cpu().double(),
-        k.detach().cpu().double(),
-        v.detach().cpu().double(),
-        gk.detach().cpu().double(),
-        beta.detach().cpu().double(),
-        scale=scale,
-        chunk_size=chunk_size,
-        initial_state=initial_state.detach().cpu().double(),
-        output_final_state=flags["output_final_state"],
-        cu_seqlens=cu_tensor,
-    )
-
-    rtol, atol = _registry_case_rtol(case)
-    o_npu = got[0] if isinstance(got, (tuple, list)) else got
-    _assert_close(f"{case['name']} o", o_npu, ref.o, rtol=rtol, atol=atol)
-    if flags["output_final_state"]:
-        _assert_close(f"{case['name']} final_state", got[1], ref.final_state, rtol=rtol, atol=atol)
-
-
-def _load_registry_cases() -> list[dict]:
-    cases_json = os.environ.get("KDA_CASES_JSON", "").strip()
-    if cases_json:
-        with open(cases_json, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            data = data.get("cases", data)
-        return list(data)
-    return list(KDA_GPU_DUMP_CASES)
-
-
-def _registry_cases_to_run() -> list[dict]:
-    only = os.environ.get("KDA_CASE", "").strip()
-    phase = os.environ.get("KDA_CASE_PHASE", "all").strip().lower()
-    cases = [c for c in _load_registry_cases() if c.get("enabled", True)]
-    if only:
-        cases = [c for c in cases if str(c["name"]) == only]
-    elif phase == "smoke":
-        cases = [c for c in cases if str(c["name"]).startswith("smoke_")]
-    return cases
-
-
-def test_chunk_kda_fwd_gpu_dump_registry_cases():
-    """Run GPU dump registry cases with constructed inputs (gpu/kda_cases.json)."""
-    device = _device()
-    if device.type == "cpu":
-        return
-
-    base_seed = int(os.environ.get("KDA_CASE_SEED", "0"))
-    for i, case in enumerate(_registry_cases_to_run()):
-        skip_reason = case.get("skip_reason")
-        if skip_reason:
-            print(f"SKIP {case['name']}: {skip_reason}", flush=True)
-            continue
-        if int(case.get("Vdim", 0)) == 256:
-            print(f"SKIP {case['name']}: Vdim=256 not supported by PR #152", flush=True)
-            continue
-        seed = base_seed + i * 9973
-        print(f"RUN  {case['name']} seed={seed} :: {case.get('description', '')}", flush=True)
-        _run_registry_case(case, device, seed=seed)
+# gpu/kda_cases.json shapes — same style as test_chunk_kda_fwd_matches_reference()
 
 
 def test_chunk_kda_fwd_smoke_mha_fix():
     device = _device()
     if device.type == "cpu":
         return
-    case = next(c for c in KDA_GPU_DUMP_CASES if c["name"] == "smoke_mha_fix")
-    _run_registry_case(case, device, seed=int(os.environ.get("KDA_CASE_SEED", "0")))
+    q, k, v, gk, beta, initial_state = _make_inputs(
+        device, b=1, h=2, hv=2, t=256, kdim=128, vdim=128, dtype=torch.bfloat16,
+    )
+    scale = 128 ** -0.5
+    got = torch.ops.npu.npu_chunk_kda_fwd(
+        q, k, v, gk, beta, scale, 64,
+        initial_state=initial_state,
+        output_final_state=True,
+        return_intermediate=False,
+    )
+    ref = chunk_kda_forward_reference(
+        q.detach().cpu(), k.detach().cpu(), v.detach().cpu(),
+        gk.detach().cpu(), beta.detach().cpu(),
+        scale=scale, chunk_size=64,
+        initial_state=initial_state.detach().cpu(),
+        output_final_state=True,
+    )
+    _assert_chunk_kda_o_state(got, ref, name="smoke_mha_fix")
 
 
 def test_chunk_kda_fwd_smoke_gva_fix():
     device = _device()
     if device.type == "cpu":
         return
-    case = next(c for c in KDA_GPU_DUMP_CASES if c["name"] == "smoke_gva_fix")
-    _run_registry_case(case, device, seed=int(os.environ.get("KDA_CASE_SEED", "0")))
+    q, k, v, gk, beta, initial_state = _make_inputs(
+        device, b=1, h=2, hv=4, t=256, kdim=128, vdim=128, dtype=torch.bfloat16,
+    )
+    scale = 128 ** -0.5
+    got = torch.ops.npu.npu_chunk_kda_fwd(
+        q, k, v, gk, beta, scale, 64,
+        initial_state=initial_state,
+        output_final_state=True,
+        return_intermediate=False,
+    )
+    ref = chunk_kda_forward_reference(
+        q.detach().cpu(), k.detach().cpu(), v.detach().cpu(),
+        gk.detach().cpu(), beta.detach().cpu(),
+        scale=scale, chunk_size=64,
+        initial_state=initial_state.detach().cpu(),
+        output_final_state=True,
+    )
+    _assert_chunk_kda_o_state(got, ref, name="smoke_gva_fix")
 
 
 def test_chunk_kda_fwd_smoke_mha_var():
     device = _device()
     if device.type == "cpu":
         return
-    case = next(c for c in KDA_GPU_DUMP_CASES if c["name"] == "smoke_mha_var")
-    _run_registry_case(case, device, seed=int(os.environ.get("KDA_CASE_SEED", "0")))
+    cu_seqlens = [0, 128, 256, 384, 512]
+    q, k, v, gk, beta, initial_state = _make_inputs(
+        device, b=1, h=4, hv=4, t=512, kdim=128, vdim=128, dtype=torch.bfloat16,
+        state_b=len(cu_seqlens) - 1,
+    )
+    scale = 128 ** -0.5
+    got = torch.ops.npu.npu_chunk_kda_fwd(
+        q, k, v, gk, beta, scale, 64,
+        initial_state=initial_state,
+        output_final_state=True,
+        cu_seqlens=cu_seqlens,
+        return_intermediate=False,
+    )
+    ref = chunk_kda_forward_reference(
+        q.detach().cpu(), k.detach().cpu(), v.detach().cpu(),
+        gk.detach().cpu(), beta.detach().cpu(),
+        scale=scale, chunk_size=64,
+        initial_state=initial_state.detach().cpu(),
+        output_final_state=True,
+        cu_seqlens=torch.tensor(cu_seqlens, dtype=torch.int64),
+    )
+    _assert_chunk_kda_o_state(got, ref, name="smoke_mha_var")
+
+
+def test_chunk_kda_fwd_mha_t2048():
+    device = _device()
+    if device.type == "cpu":
+        return
+    q, k, v, gk, beta, initial_state = _make_inputs(
+        device, b=2, h=4, hv=4, t=2048, kdim=128, vdim=128, dtype=torch.bfloat16,
+    )
+    scale = 128 ** -0.5
+    got = torch.ops.npu.npu_chunk_kda_fwd(
+        q, k, v, gk, beta, scale, 64,
+        initial_state=initial_state,
+        output_final_state=True,
+        return_intermediate=False,
+    )
+    ref = chunk_kda_forward_reference(
+        q.detach().cpu(), k.detach().cpu(), v.detach().cpu(),
+        gk.detach().cpu(), beta.detach().cpu(),
+        scale=scale, chunk_size=64,
+        initial_state=initial_state.detach().cpu(),
+        output_final_state=True,
+    )
+    _assert_chunk_kda_o_state(got, ref, name="mha_t2048")
+
+
+def test_chunk_kda_fwd_mha_cs32():
+    device = _device()
+    if device.type == "cpu":
+        return
+    q, k, v, gk, beta, initial_state = _make_inputs(
+        device, b=1, h=4, hv=4, t=512, kdim=128, vdim=128, dtype=torch.bfloat16,
+    )
+    scale = 128 ** -0.5
+    got = torch.ops.npu.npu_chunk_kda_fwd(
+        q, k, v, gk, beta, scale, 32,
+        initial_state=initial_state,
+        output_final_state=True,
+        return_intermediate=False,
+    )
+    ref = chunk_kda_forward_reference(
+        q.detach().cpu(), k.detach().cpu(), v.detach().cpu(),
+        gk.detach().cpu(), beta.detach().cpu(),
+        scale=scale, chunk_size=32,
+        initial_state=initial_state.detach().cpu(),
+        output_final_state=True,
+    )
+    _assert_chunk_kda_o_state(got, ref, name="mha_cs32")
+
+
+def test_chunk_kda_fwd_gva_var_t1024():
+    device = _device()
+    if device.type == "cpu":
+        return
+    cu_seqlens = [0, 128, 256, 384, 512, 640, 768, 896, 1024]
+    q, k, v, gk, beta, initial_state = _make_inputs(
+        device, b=1, h=4, hv=8, t=1024, kdim=128, vdim=128, dtype=torch.bfloat16,
+        state_b=len(cu_seqlens) - 1,
+    )
+    scale = 128 ** -0.5
+    got = torch.ops.npu.npu_chunk_kda_fwd(
+        q, k, v, gk, beta, scale, 64,
+        initial_state=initial_state,
+        output_final_state=True,
+        cu_seqlens=cu_seqlens,
+        return_intermediate=False,
+    )
+    ref = chunk_kda_forward_reference(
+        q.detach().cpu(), k.detach().cpu(), v.detach().cpu(),
+        gk.detach().cpu(), beta.detach().cpu(),
+        scale=scale, chunk_size=64,
+        initial_state=initial_state.detach().cpu(),
+        output_final_state=True,
+        cu_seqlens=torch.tensor(cu_seqlens, dtype=torch.int64),
+    )
+    _assert_chunk_kda_o_state(got, ref, name="gva_var_t1024")
+
+
+def test_chunk_kda_fwd_gva_t4096_v128():
+    device = _device()
+    if device.type == "cpu":
+        return
+    q, k, v, gk, beta, initial_state = _make_inputs(
+        device, b=1, h=8, hv=16, t=4096, kdim=128, vdim=128, dtype=torch.bfloat16,
+    )
+    scale = 128 ** -0.5
+    got = torch.ops.npu.npu_chunk_kda_fwd(
+        q, k, v, gk, beta, scale, 64,
+        initial_state=initial_state,
+        output_final_state=True,
+        return_intermediate=False,
+    )
+    ref = chunk_kda_forward_reference(
+        q.detach().cpu(), k.detach().cpu(), v.detach().cpu(),
+        gk.detach().cpu(), beta.detach().cpu(),
+        scale=scale, chunk_size=64,
+        initial_state=initial_state.detach().cpu(),
+        output_final_state=True,
+    )
+    _assert_chunk_kda_o_state(got, ref, name="gva_t4096_v128")
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Run KDA NPU tests")
-    parser.add_argument(
-        "--registry-only",
-        action="store_true",
-        help="only run gpu/kda_cases.json registry cases",
-    )
-    parser.add_argument(
-        "--case",
-        default="",
-        help="single registry case name (sets KDA_CASE)",
-    )
-    parser.add_argument(
-        "--phase",
-        default="",
-        help="registry phase filter: all | smoke (sets KDA_CASE_PHASE)",
-    )
-    args, _unknown = parser.parse_known_args()
-    if args.case:
-        os.environ["KDA_CASE"] = args.case
-    if args.phase:
-        os.environ["KDA_CASE_PHASE"] = args.phase
-
-    if args.registry_only or os.environ.get("KDA_CASE") or os.environ.get("KDA_CASE_PHASE", "all") != "all":
-        test_chunk_kda_fwd_gpu_dump_registry_cases()
-    else:
-        test_chunk_kda_fwd_matches_reference()
-        test_chunk_kda_fwd_chunk128_v128_gva_varlen()
-        test_chunk_kda_fwd_bf16_chunk32_matches_reference()
-        test_chunk_kda_fwd_bf16_gate_matches_reference()
-        test_chunk_kda_fwd_fp16_matches_reference()
-        test_chunk_kda_fwd_tnd_matches_reference()
-        test_kda_gate_cumsum_default_and_fwd_integration()
-        test_kda_gate_cumsum_bnsd_direct_matches_reference()
-        test_kda_gate_cumsum_ntd_direct_matches_reference()
-        test_kda_gate_cumsum_safe_gate_matches_reference()
-        test_chunk_kda_fwd_gpu_dump_registry_cases()
+    test_chunk_kda_fwd_matches_reference()
+    test_chunk_kda_fwd_chunk128_v128_gva_varlen()
+    test_chunk_kda_fwd_bf16_chunk32_matches_reference()
+    test_chunk_kda_fwd_bf16_gate_matches_reference()
+    test_chunk_kda_fwd_fp16_matches_reference()
+    test_chunk_kda_fwd_tnd_matches_reference()
+    test_kda_gate_cumsum_default_and_fwd_integration()
+    test_kda_gate_cumsum_bnsd_direct_matches_reference()
+    test_kda_gate_cumsum_ntd_direct_matches_reference()
+    test_kda_gate_cumsum_safe_gate_matches_reference()
+    test_chunk_kda_fwd_smoke_mha_fix()
+    test_chunk_kda_fwd_smoke_gva_fix()
+    test_chunk_kda_fwd_smoke_mha_var()
+    test_chunk_kda_fwd_mha_cs32()
+    test_chunk_kda_fwd_mha_t2048()
+    test_chunk_kda_fwd_gva_var_t1024()
+    test_chunk_kda_fwd_gva_t4096_v128()

@@ -86,6 +86,15 @@ GPU dump stores raw `g` / `beta` plus kernel flags. Before NPU call:
 4. If only large-seq cases crash (e.g. `gva_t4096_v128`), use `--max-t 1024` to bisect; likely PR #152 kernel issue on long GVA sequences.
 5. Check log for `[npu] running` vs `[npu] done` — crash between them is inside `npu_chunk_kda_fwd`.
 
+## Troubleshooting all-NaN NPU output
+
+If `ct.dual` shows `Test` all NaN while GPU/CPU golden are finite:
+
+- This is **not** a dump/adapter bug; `npu_chunk_kda_fwd` returned uninitialized or broken output.
+- Check `[npu] o finite 0/N` in the log after pull with fail-fast fixes.
+- Common on this branch: `chunk_size=32` (`mha_cs32`), varlen (`smoke_mha_var`), `B>1` (`mha_t2048`) — treat as **operator/kernel gaps** until PR #152 fixes land.
+- Start with: `--case smoke_mha_fix` (B=1, T=256, cs=64, fixed length).
+
 ## Branch
 
 `feat/kda-gpu-dump-dual-pr152` — based on [flashserve/flash-linear-attention-npu#152](https://github.com/flashserve/flash-linear-attention-npu/pull/152).

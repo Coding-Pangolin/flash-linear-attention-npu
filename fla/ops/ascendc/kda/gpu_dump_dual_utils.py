@@ -53,6 +53,36 @@ def _viz_file_paths(out_dir: Path, name_prefix: str) -> list[Path]:
     ]
 
 
+def _tensor_finite_stats(t: torch.Tensor) -> dict[str, int | float]:
+    x = t.detach().cpu().float().reshape(-1)
+    total = int(x.numel())
+    finite = int(torch.isfinite(x).sum().item())
+    nan = int(torch.isnan(x).sum().item())
+    inf = int(torch.isinf(x).sum().item())
+    return {
+        "total": total,
+        "finite": finite,
+        "nan": nan,
+        "inf": inf,
+        "finite_ratio": (finite / total) if total else 0.0,
+    }
+
+
+def _require_npu_finite(name: str, t: torch.Tensor) -> None:
+    stats = _tensor_finite_stats(t)
+    if stats["finite"] == 0:
+        raise RuntimeError(
+            f"NPU output {name} has no finite values "
+            f"(nan={stats['nan']}, inf={stats['inf']}, shape={tuple(t.shape)})"
+        )
+    if stats["finite_ratio"] < 0.99:
+        print(
+            f"  [warn] {name} finite_ratio={stats['finite_ratio']:.4f} "
+            f"({stats['finite']}/{stats['total']})",
+            flush=True,
+        )
+
+
 def dual_then_viz(
     tensor_name: str,
     npu_out: torch.Tensor,
@@ -64,14 +94,17 @@ def dual_then_viz(
     enable_viz: bool = True,
     level: str = "L1",
     viz_name_prefix: str | None = None,
-) -> None:
+) -> bool:
     print(f"  [{tensor_name}] ct.dual(npu, cpu_fp64, gpu)", flush=True)
-    ct.dual(npu_out.cpu(), fp64_golden, gpu_bench, level=level)
+    dual_result = ct.dual(npu_out.cpu(), fp64_golden, gpu_bench, level=level)
+    dual_ok = bool(dual_result.get("success"))
+    if not dual_ok:
+        print(f"  [{tensor_name}] ct.dual FAIL", flush=True)
 
     if not enable_viz:
-        return
+        return dual_ok
     if viz_dir is None:
-        return
+        return dual_ok
 
     out_dir = Path(viz_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -86,7 +119,7 @@ def dual_then_viz(
             f"npu={tuple(npu_f.shape)} fp64={tuple(fp64_f.shape)}",
             flush=True,
         )
-        return
+        return dual_ok
 
     viz_kwargs: dict = {
         "out_dir": str(out_dir),
@@ -110,6 +143,7 @@ def dual_then_viz(
     else:
         print(
             f"  [{tensor_name}] viz WARNING: no png under {out_dir} "
-            f"(expected {name_prefix}_Standard.png)",
+            f"(expected {name_prefix}_Standard.png; NPU all-NaN yields no plot)",
             flush=True,
         )
+    return dual_ok

@@ -31,7 +31,12 @@ from gpu_dump_loader import (
     load_dump_for_kda,
     resolve_seq_meta,
 )
-from gpu_dump_dual_utils import dual_then_viz, resolve_viz_dir
+from gpu_dump_dual_utils import (
+    dual_then_viz,
+    resolve_viz_dir,
+    _require_npu_finite,
+    _tensor_finite_stats,
+)
 from gpu_dump_dual_runner import add_skip_cli_args, run_dual_batch
 from kda_dump_adapter import (
     is_supported_by_pr152,
@@ -155,6 +160,17 @@ def run_one_pt(
         final_state_npu = None
 
     if verbose:
+        o_stats = _tensor_finite_stats(o_npu)
+        print(
+            f"  [npu] o finite {o_stats['finite']}/{o_stats['total']} "
+            f"(nan={o_stats['nan']}, inf={o_stats['inf']})",
+            flush=True,
+        )
+    _require_npu_finite("o", o_npu)
+    if final_state_npu is not None:
+        _require_npu_finite("final_state", final_state_npu)
+
+    if verbose:
         print("  [cpu] running fp64 reference ...", flush=True)
     cu_tensor = torch.tensor(cu_seqlens, dtype=torch.int64) if cu_seqlens is not None else None
     ref = chunk_kda_forward_reference(
@@ -186,7 +202,7 @@ def run_one_pt(
         if verbose:
             print(f"  [viz] output dir: {tensor_viz_dir}", flush=True)
 
-    dual_then_viz(
+    dual_ok = dual_then_viz(
         "o",
         o_npu,
         ref.o,
@@ -198,7 +214,7 @@ def run_one_pt(
     )
 
     if output_final_state and gpu_final_state is not None and final_state_npu is not None:
-        dual_then_viz(
+        dual_ok = dual_then_viz(
             "final_state",
             final_state_npu,
             ref.final_state,
@@ -207,9 +223,12 @@ def run_one_pt(
             sample_count=sample_count,
             enable_viz=enable_viz,
             viz_name_prefix=f"{viz_case_name}_final_state_npu_vs_fp64",
-        )
+        ) and dual_ok
     elif verbose and output_final_state:
         print("  [final_state] skipped (NPU or GPU dump missing final_state)", flush=True)
+
+    if not dual_ok:
+        raise RuntimeError(f"ct.dual failed for case {viz_case_name}")
 
     result = {
         "case": case_name,
@@ -230,6 +249,14 @@ def run_one_pt(
     sidecar = pt_path.parent / f".kda_dual_result_{pt_path.stem}.json"
     sidecar.write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
+
+
+def _write_fail_sidecar(pt_path: Path, case_name: str, error: str) -> None:
+    sidecar = pt_path.parent / f".kda_dual_result_{pt_path.stem}.json"
+    sidecar.write_text(
+        json.dumps({"case": case_name, "status": "fail", "pt": str(pt_path), "error": error}, indent=2),
+        encoding="utf-8",
+    )
 
 
 def run_one_case(
@@ -326,9 +353,25 @@ def _run_isolated_batch(args: argparse.Namespace) -> int:
         print(f"\n=== isolated: {case_dir.name} ===", flush=True)
         proc = subprocess.run(cmd, check=False)
         sidecar = pt_path.parent / f".kda_dual_result_{pt_path.stem}.json"
-        if proc.returncode == 0 and sidecar.is_file():
-            results.append(json.loads(sidecar.read_text(encoding="utf-8")))
+        if sidecar.is_file():
+            rec = json.loads(sidecar.read_text(encoding="utf-8"))
             sidecar.unlink(missing_ok=True)
+            if proc.returncode != 0 or rec.get("status") != "pass":
+                failed += 1
+                if proc.returncode == 0:
+                    rec["status"] = "fail"
+                    rec.setdefault("error", "ct.dual failed or invalid NPU output")
+                results.append(rec)
+            else:
+                results.append(rec)
+        elif proc.returncode == 0:
+            failed += 1
+            results.append({
+                "case": case_dir.name,
+                "status": "fail",
+                "pt": str(pt_path),
+                "error": "subprocess exited 0 but no result sidecar",
+            })
         else:
             failed += 1
             results.append({
@@ -409,6 +452,25 @@ def main() -> int:
     if args.isolated and not _collect_pt_paths(args):
         return _run_isolated_batch(args)
     pt_paths = _collect_pt_paths(args)
+    if len(pt_paths) == 1:
+        pt_path = pt_paths[0]
+        try:
+            rec = run_one_pt(
+                pt_path,
+                case_meta=load_case_meta(pt_path.parent),
+                label=pt_path.parent.name,
+                verbose=True,
+                enable_viz=not args.no_viz,
+                sample_count=args.sample_count,
+                viz_dir=args.viz_dir,
+            )
+        except Exception as e:
+            _write_fail_sidecar(pt_path, pt_path.parent.name, str(e))
+            print(f"\n=== {pt_path.parent.name} FAILED ===\n{e}", flush=True)
+            return 1
+        if rec.get("status") != "pass":
+            return 1
+        return 0
     report_extra: dict[str, Any] = {}
     if pt_paths:
         report_extra["pt_files"] = [str(p) for p in pt_paths]

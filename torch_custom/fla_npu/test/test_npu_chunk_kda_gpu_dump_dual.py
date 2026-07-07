@@ -20,14 +20,18 @@ from pathlib import Path
 import ct
 import fla_npu  # noqa: F401
 import torch
-import torch_npu
+
+try:
+    import torch_npu  # noqa: F401
+except Exception:  # pragma: no cover
+    torch_npu = None
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 from tests.reference.chunk_kda_reference import chunk_kda_forward_reference  # noqa: E402
 
-torch.npu.config.allow_internal_format = False
-torch.npu.set_compile_mode(jit_compile=False)
+# 与 test_npu_chunk_kda.py 一致：不要设 allow_internal_format=False。
+# 大 shape bf16 case 在 False 下 kernel 输出会全 NaN（日志里会有 internal format warning）。
 
 OP_PT = "001_chunk_kda_fwd.pt"
 RCP_LN2 = 1.4426950408889634
@@ -35,8 +39,9 @@ RCP_LN2 = 1.4426950408889634
 
 def _device() -> torch.device:
     dev_id = int(os.environ.get("TEST_DEVICE_ID", "0"))
-    torch.npu.set_device(dev_id)
-    return torch.device(f"npu:{dev_id}")
+    if torch_npu is not None and hasattr(torch, "npu") and torch.npu.is_available():
+        return torch.device(f"npu:{dev_id}")
+    return torch.device("cpu")
 
 
 def _kda_gate_cumsum_reference(
@@ -85,6 +90,20 @@ def _load_dump(pt_path: Path) -> tuple[dict, dict, dict]:
     return inputs, meta, outputs
 
 
+def _merge_meta(meta: dict, case_meta: dict) -> dict:
+    merged = dict(case_meta)
+    merged.update(meta)
+    return merged
+
+
+def _int_list(value) -> list[int] | None:
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        return [int(x) for x in value.detach().cpu().tolist()]
+    return [int(x) for x in value]
+
+
 def _cu_list(meta: dict, case_meta: dict) -> list[int] | None:
     for src in (meta, case_meta):
         cu = src.get("cu_seqlens")
@@ -99,11 +118,22 @@ def _cu_list(meta: dict, case_meta: dict) -> list[int] | None:
     return None
 
 
-def _prepare_beta(beta_raw: torch.Tensor, meta: dict) -> torch.Tensor:
+def _prepare_beta(beta_raw: torch.Tensor, meta: dict, *, dtype: torch.dtype) -> torch.Tensor:
     if not meta.get("use_beta_sigmoid_in_kernel", True):
-        return beta_raw.float()
-    scale = 2.0 if meta.get("allow_neg_eigval") else 1.0
-    return (torch.sigmoid(beta_raw.float()) * scale).float()
+        out = beta_raw.float()
+    else:
+        scale = 2.0 if meta.get("allow_neg_eigval") else 1.0
+        out = torch.sigmoid(beta_raw.float()) * scale
+    return out.to(dtype)
+
+
+def _finite_stats(t: torch.Tensor) -> str:
+    x = t.detach().float().view(-1)
+    total = x.numel()
+    finite = int(torch.isfinite(x).sum())
+    nan = int(torch.isnan(x).sum())
+    inf = int(torch.isinf(x).sum())
+    return f"finite {finite}/{total} (nan={nan}, inf={inf})"
 
 
 def _prepare_gk_npu(
@@ -170,6 +200,10 @@ def _list_cases(dump_root: Path, phase: str) -> list[Path]:
 
 
 def run_case(case_dir: Path, device: torch.device, *, level: str = "L1") -> str:
+    if device.type == "cpu":
+        print(f"SKIP {case_dir.name}: NPU not available", flush=True)
+        return "skip"
+
     pt_path = case_dir / OP_PT
     case_name = case_dir.name
     inputs, meta, gpu_outputs = _load_dump(pt_path)
@@ -178,45 +212,61 @@ def run_case(case_dir: Path, device: torch.device, *, level: str = "L1") -> str:
     case_meta = {}
     if case_meta_path.is_file():
         case_meta = json.loads(case_meta_path.read_text(encoding="utf-8"))
+    meta = _merge_meta(meta, case_meta)
 
     v = inputs["v"]
     if v.shape[-1] == 256:
         print(f"SKIP {case_name}: Vdim=256 not in current NPU scope", flush=True)
         return "skip"
 
-    q = inputs["q"].to(device)
-    k = inputs["k"].to(device)
-    v = v.to(device)
-    chunk_size = int(meta.get("chunk_size") or case_meta.get("chunk_size") or 64)
-    scale = float(meta.get("scale") or case_meta.get("scale") or inputs.get("scale") or (q.shape[-1] ** -0.5))
+    q = inputs["q"].contiguous().to(device)
+    k = inputs["k"].contiguous().to(device)
+    v = v.contiguous().to(device)
+    chunk_size = int(meta.get("chunk_size") or 64)
+    scale_val = meta.get("scale", inputs.get("scale"))
+    if isinstance(scale_val, torch.Tensor):
+        scale_val = float(scale_val.item())
+    scale = float(scale_val if scale_val is not None else (q.shape[-1] ** -0.5))
     cu_seqlens = _cu_list(meta, case_meta)
+    chunk_indices = _int_list(meta.get("chunk_indices") or inputs.get("chunk_indices"))
 
     print(
         f"\n=== {case_name} ===\n"
         f"  pt={pt_path} B={q.shape[0]} Hk={q.shape[2]} Hv={v.shape[2]} "
         f"T={q.shape[1]} K={q.shape[3]} V={v.shape[3]} cs={chunk_size} "
-        f"varlen={cu_seqlens is not None} dtype={q.dtype}",
+        f"varlen={cu_seqlens is not None} dtype={q.dtype} "
+        f"use_gate={meta.get('use_gate_in_kernel')} safe_gate={meta.get('safe_gate')}",
         flush=True,
     )
 
     gk = _prepare_gk_npu(device, inputs, meta, chunk_size, cu_seqlens)
-    beta = _prepare_beta(inputs["beta"], meta).to(device)
+    torch.npu.synchronize()
+    print(f"  [npu] gk {_finite_stats(gk)} min={float(gk.float().min()):.4g} max={float(gk.float().max()):.4g}", flush=True)
+    if not torch.isfinite(gk).all():
+        raise RuntimeError(f"gk contains non-finite values for {case_name}")
+
+    beta = _prepare_beta(inputs["beta"], meta, dtype=q.dtype).contiguous().to(device)
     initial_state = inputs.get("initial_state")
     if initial_state is not None:
-        initial_state = initial_state.to(device).float()
+        initial_state = initial_state.contiguous().to(device).float()
 
     fwd_kw: dict = {"output_final_state": True, "return_intermediate": False}
     if initial_state is not None:
         fwd_kw["initial_state"] = initial_state
-    if cu_seqlens is not None:
+    if chunk_indices is not None:
+        fwd_kw["chunk_indices"] = chunk_indices
+    elif cu_seqlens is not None:
         fwd_kw["cu_seqlens"] = cu_seqlens
 
     got = torch.ops.npu.npu_chunk_kda_fwd(q, k, v, gk, beta, scale, chunk_size, **fwd_kw)
     torch.npu.synchronize()
     o_npu, final_state_npu = got[0], got[1]
+    print(f"  [npu] o {_finite_stats(o_npu)}", flush=True)
+    if not torch.isfinite(o_npu).all():
+        raise RuntimeError(f"NPU output o has non-finite values for {case_name}")
 
     gk_cpu = _prepare_gk_cpu(inputs, meta, chunk_size)
-    beta_cpu = _prepare_beta(inputs["beta"], meta)
+    beta_cpu = _prepare_beta(inputs["beta"], meta, dtype=torch.float32)
     cu_tensor = torch.tensor(cu_seqlens, dtype=torch.int64) if cu_seqlens else None
     ref = chunk_kda_forward_reference(
         q.detach().cpu().double(),

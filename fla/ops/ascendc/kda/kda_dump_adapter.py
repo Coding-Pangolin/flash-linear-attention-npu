@@ -103,3 +103,17 @@ def is_supported_by_pr152(v: torch.Tensor) -> tuple[bool, str | None]:
     if v.ndim == 4 and v.shape[-1] == 256:
         return False, "Vdim=256 not supported by PR #152 KDA forward"
     return True, None
+
+
+def prepare_npu_gate_tensors(
+    gk: torch.Tensor,
+    beta: torch.Tensor,
+    initial_state: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """NPU aclnn expects float32 gk/beta/initial_state (see FLANpuOpApi checks)."""
+    gk_npu = gk.to(torch.float32)
+    beta_npu = beta.to(torch.float32)
+    init_npu = None
+    if initial_state is not None:
+        init_npu = initial_state.to(torch.float32)
+    return gk_npu, beta_npu, init_npu

@@ -7,7 +7,9 @@ Tensors: o, final_state (g / initial_state outputs are ignored for now).
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -35,6 +37,7 @@ from kda_dump_adapter import (
     is_supported_by_pr152,
     prepare_beta,
     prepare_gk,
+    prepare_npu_gate_tensors,
     resolve_scale,
 )
 from tests.reference.chunk_kda_reference import chunk_kda_forward_reference
@@ -101,6 +104,7 @@ def run_one_pt(
     )
 
     initial_state = inputs.get("initial_state")
+    gk, beta, initial_state = prepare_npu_gate_tensors(gk, beta, initial_state)
     output_final_state = bool(meta.get("output_final_state", gpu_outputs.get("final_state") is not None))
 
     B, T, Hk, K = q.shape
@@ -111,7 +115,8 @@ def run_one_pt(
         print(
             f"\n=== {case_name} ===\n"
             f"  pt: {pt_path} B={B} Hk={Hk} Hv={Hv} T={T} K={K} V={V} cs={chunk_size} "
-            f"varlen={cu_seqlens is not None} dtype={q.dtype}",
+            f"varlen={cu_seqlens is not None} dtype={q.dtype} "
+            f"gk={gk.dtype} beta={beta.dtype}",
             flush=True,
         )
 
@@ -124,6 +129,8 @@ def run_one_pt(
     if cu_seqlens is not None:
         npu_kwargs["cu_seqlens"] = cu_seqlens
 
+    if verbose:
+        print("  [npu] running npu_chunk_kda_fwd ...", flush=True)
     t0 = time.time()
     got = torch.ops.npu.npu_chunk_kda_fwd(
         q.npu(),
@@ -137,6 +144,8 @@ def run_one_pt(
     )
     torch.npu.synchronize()
     npu_elapsed = time.time() - t0
+    if verbose:
+        print(f"  [npu] done in {npu_elapsed:.3f}s", flush=True)
 
     if isinstance(got, (tuple, list)):
         o_npu = got[0]
@@ -145,6 +154,8 @@ def run_one_pt(
         o_npu = got
         final_state_npu = None
 
+    if verbose:
+        print("  [cpu] running fp64 reference ...", flush=True)
     cu_tensor = torch.tensor(cu_seqlens, dtype=torch.int64) if cu_seqlens is not None else None
     ref = chunk_kda_forward_reference(
         q.double(),
@@ -195,7 +206,7 @@ def run_one_pt(
     elif verbose and output_final_state:
         print("  [final_state] skipped (NPU or GPU dump missing final_state)", flush=True)
 
-    return {
+    result = {
         "case": case_name,
         "status": "pass",
         "pt": str(pt_path),
@@ -211,6 +222,9 @@ def run_one_pt(
         },
         "compare_tensors": list(COMPARE_TENSORS),
     }
+    sidecar = pt_path.parent / f".kda_dual_result_{pt_path.stem}.json"
+    sidecar.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return result
 
 
 def run_one_case(
@@ -261,9 +275,88 @@ def _parse_args() -> argparse.Namespace:
         default="all",
         help="filter case dirs: all | smoke | prefix:<name_prefix>",
     )
+    p.add_argument(
+        "--max-t",
+        type=int,
+        default=None,
+        help="skip cases with T greater than this (e.g. 1024 while debugging large-seq crashes)",
+    )
+    p.add_argument(
+        "--isolated",
+        action="store_true",
+        help="run each case in a subprocess so a kernel segfault does not abort the whole batch",
+    )
     p.add_argument("--report", type=Path, default=None, help="write JSON report path")
     add_skip_cli_args(p)
     return p.parse_args()
+
+
+def _run_isolated_batch(args: argparse.Namespace) -> int:
+    """Run batch cases one subprocess each; merge JSON report at the end."""
+    if args.dump_root is None:
+        print("ERROR: --isolated batch mode requires --dump-root", file=sys.stderr)
+        return 2
+    selected = _select_cases(args.dump_root, args)
+    if not selected:
+        print("No cases selected.", file=sys.stderr)
+        return 1
+
+    report_path = args.report or (args.dump_root / "kda_gpu_dump_dual_report.json")
+    results: list[dict[str, Any]] = []
+    failed = 0
+    py = str(Path(__file__).resolve())
+    base_cmd = [sys.executable, py, "--no-viz"] if args.no_viz else [sys.executable, py]
+    if args.sample_count != 200_000:
+        base_cmd.extend(["-sc", str(args.sample_count)])
+    if args.viz_dir is not None:
+        base_cmd.extend(["--viz-dir", str(args.viz_dir)])
+    if args.force:
+        base_cmd.append("--force")
+
+    for case_dir in selected:
+        pt_path = case_dir / f"001_{OP_NAME}.pt"
+        if not pt_path.is_file():
+            pt_path = find_op_dump_pt(case_dir, OP_NAME)[0]
+        cmd = base_cmd + ["--pt", str(pt_path)]
+        print(f"\n=== isolated: {case_dir.name} ===", flush=True)
+        proc = subprocess.run(cmd, check=False)
+        sidecar = pt_path.parent / f".kda_dual_result_{pt_path.stem}.json"
+        if proc.returncode == 0 and sidecar.is_file():
+            results.append(json.loads(sidecar.read_text(encoding="utf-8")))
+            sidecar.unlink(missing_ok=True)
+        else:
+            failed += 1
+            results.append({
+                "case": case_dir.name,
+                "status": "fail",
+                "pt": str(pt_path),
+                "error": f"subprocess exit {proc.returncode}",
+            })
+
+    from gpu_dump_dual_runner import write_report
+
+    report = write_report(
+        report_path,
+        op_name=OP_NAME,
+        mode="case_dir_isolated",
+        results=results,
+        extra={"dump_root": str(args.dump_root), "isolated": True},
+    )
+    print(
+        f"\nDone: {report['passed']} passed, {report['skipped']} skipped, "
+        f"{report['failed']} failed / {report['total']} total",
+        flush=True,
+    )
+    print(f"report -> {report_path}", flush=True)
+    return 1 if failed else 0
+
+
+def _case_sort_key(case_dir: Path) -> tuple[int, int, str]:
+    meta = load_case_meta(case_dir)
+    name = case_dir.name
+    smoke_rank = 0 if name.startswith("smoke_") else 1
+    t = int(meta.get("T") or 0)
+    return smoke_rank, t, name
 
 
 def _select_cases(dump_root: Path, args: argparse.Namespace) -> list[Path]:
@@ -283,17 +376,33 @@ def _select_cases(dump_root: Path, args: argparse.Namespace) -> list[Path]:
 
     phase = args.phase.strip().lower()
     if phase in ("", "all"):
-        return all_dirs
-    if phase == "smoke":
-        return [d for d in all_dirs if d.name.startswith("smoke_")]
-    if phase.startswith("prefix:"):
+        selected = all_dirs
+    elif phase == "smoke":
+        selected = [d for d in all_dirs if d.name.startswith("smoke_")]
+    elif phase.startswith("prefix:"):
         prefix = phase.split(":", 1)[1]
-        return [d for d in all_dirs if d.name.startswith(prefix)]
-    raise ValueError(f"unknown --phase {args.phase!r}; use all, smoke, or prefix:<name_prefix>")
+        selected = [d for d in all_dirs if d.name.startswith(prefix)]
+    else:
+        raise ValueError(f"unknown --phase {args.phase!r}; use all, smoke, or prefix:<name_prefix>")
+
+    if args.max_t is not None:
+        kept: list[Path] = []
+        for case_dir in selected:
+            meta = load_case_meta(case_dir)
+            t = int(meta.get("T") or 0)
+            if t <= args.max_t:
+                kept.append(case_dir)
+            else:
+                print(f"SKIP {case_dir.name}: T={t} > max_t={args.max_t}", flush=True)
+        selected = kept
+
+    return sorted(selected, key=_case_sort_key)
 
 
 def main() -> int:
     args = _parse_args()
+    if args.isolated and not _collect_pt_paths(args):
+        return _run_isolated_batch(args)
     pt_paths = _collect_pt_paths(args)
     report_extra: dict[str, Any] = {}
     if pt_paths:

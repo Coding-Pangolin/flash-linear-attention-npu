@@ -25,7 +25,7 @@ declare -a PY_ARGS=()
 
 if [[ $# -eq 0 ]]; then
   DUMP_ROOT="./GPU_DUMP"
-  PY_ARGS=(--dump-root "$DUMP_ROOT")
+  PY_ARGS=(--dump-root "$DUMP_ROOT" --isolated)
 elif [[ "${1:-}" == *.pt ]]; then
   DUMP_ROOT="$(cd "$(dirname "$1")" && pwd)"
   PY_ARGS=(--pt "$1" "${@:2}")
@@ -37,7 +37,7 @@ elif [[ "${1:-}" == --pt || "${1:-}" == --pts ]]; then
 elif [[ -d "${1:-}" ]]; then
   DUMP_ROOT="$(cd "$1" && pwd)"
   shift
-  PY_ARGS=(--dump-root "$DUMP_ROOT" "$@")
+  PY_ARGS=(--dump-root "$DUMP_ROOT" --isolated "$@")
 else
   PY_ARGS=("$@")
 fi

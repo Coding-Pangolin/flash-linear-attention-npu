@@ -23,11 +23,15 @@ Each case dir contains `001_chunk_kda_fwd.pt` and `manifest.json`.
 export TEST_DEVICE_ID=6
 chmod +x fla/ops/ascendc/kda/test/run_kda_gpu_dump_dual.sh
 
-# all cases
+# all cases (each case in subprocess; smoke cases run first)
 ./fla/ops/ascendc/kda/test/run_kda_gpu_dump_dual.sh /data/kda_dump/all
 
-# smoke only
+# smoke only (recommended first run)
 ./fla/ops/ascendc/kda/test/run_kda_gpu_dump_dual.sh /data/kda_dump/all --phase smoke --no-viz
+
+# debug large-seq kernel crash: cap T or single case
+./fla/ops/ascendc/kda/test/run_kda_gpu_dump_dual.sh /data/kda_dump/all --max-t 512 --no-viz
+./fla/ops/ascendc/kda/test/run_kda_gpu_dump_dual.sh /data/kda_dump/all --case smoke_mha_fix --no-viz
 
 # single .pt
 ./fla/ops/ascendc/kda/test/run_kda_gpu_dump_dual.sh /data/kda_dump/all/smoke_mha_fix/001_chunk_kda_fwd.pt
@@ -56,6 +60,14 @@ GPU dump stores raw `g` / `beta` plus kernel flags. Before NPU call:
 ## Known skips
 
 - `gva_t4096_v256` (Vdim=256) is out of PR #152 scope and auto-skipped.
+
+## Troubleshooting segfault (exit 139)
+
+1. Confirm custom op package is built and `CANN_OPP_LIB` points at `fla_npu` op_api.
+2. Run smoke first: `--phase smoke --no-viz`.
+3. Batch mode uses `--isolated` (subprocess per case) so one kernel crash does not abort all cases.
+4. If only large-seq cases crash (e.g. `gva_t4096_v128`), use `--max-t 1024` to bisect; likely PR #152 kernel issue on long GVA sequences.
+5. Check log for `[npu] running` vs `[npu] done` — crash between them is inside `npu_chunk_kda_fwd`.
 
 ## Branch
 

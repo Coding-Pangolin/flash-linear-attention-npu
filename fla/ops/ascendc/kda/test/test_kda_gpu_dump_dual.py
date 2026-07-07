@@ -173,6 +173,7 @@ def run_one_pt(
     gpu_o = gpu_outputs["o"]
     gpu_final_state = gpu_outputs.get("final_state")
 
+    viz_case_name = str(case_meta.get("case_name") or pt_path.parent.name)
     tensor_viz_dir = None
     if enable_viz:
         base_viz_dir = resolve_viz_dir(
@@ -181,7 +182,9 @@ def run_one_pt(
             case_dir=None,
             default_report_dir=pt_path.parent,
         )
-        tensor_viz_dir = base_viz_dir / case_name.replace("/", "_")
+        tensor_viz_dir = (base_viz_dir / viz_case_name).resolve()
+        if verbose:
+            print(f"  [viz] output dir: {tensor_viz_dir}", flush=True)
 
     dual_then_viz(
         "o",
@@ -191,6 +194,7 @@ def run_one_pt(
         viz_dir=tensor_viz_dir,
         sample_count=sample_count,
         enable_viz=enable_viz,
+        viz_name_prefix=f"{viz_case_name}_o_npu_vs_fp64",
     )
 
     if output_final_state and gpu_final_state is not None and final_state_npu is not None:
@@ -202,6 +206,7 @@ def run_one_pt(
             viz_dir=tensor_viz_dir,
             sample_count=sample_count,
             enable_viz=enable_viz,
+            viz_name_prefix=f"{viz_case_name}_final_state_npu_vs_fp64",
         )
     elif verbose and output_final_state:
         print("  [final_state] skipped (NPU or GPU dump missing final_state)", flush=True)
@@ -413,7 +418,7 @@ def main() -> int:
         args,
         op_name=OP_NAME,
         report_basename="kda_gpu_dump_dual_report.json",
-        viz_tensor_names=COMPARE_TENSORS,
+        viz_tensor_names=("_o_npu_vs_fp64", "_final_state_npu_vs_fp64"),
         collect_pt_paths=_collect_pt_paths,
         select_cases=_select_cases,
         run_one_pt=run_one_pt,

@@ -45,6 +45,14 @@ def resolve_viz_dir(
     return default_report_dir / "viz"
 
 
+def _viz_file_paths(out_dir: Path, name_prefix: str) -> list[Path]:
+    return [
+        out_dir / f"{name_prefix}_Standard.png",
+        out_dir / f"{name_prefix}_RealPart.png",
+        out_dir / f"{name_prefix}_ImagPart.png",
+    ]
+
+
 def dual_then_viz(
     tensor_name: str,
     npu_out: torch.Tensor,
@@ -55,6 +63,7 @@ def dual_then_viz(
     sample_count: int | None = 200_000,
     enable_viz: bool = True,
     level: str = "L1",
+    viz_name_prefix: str | None = None,
 ) -> None:
     print(f"  [{tensor_name}] ct.dual(npu, cpu_fp64, gpu)", flush=True)
     ct.dual(npu_out.cpu(), fp64_golden, gpu_bench, level=level)
@@ -64,17 +73,43 @@ def dual_then_viz(
     if viz_dir is None:
         return
 
-    out_dir = Path(viz_dir)
+    out_dir = Path(viz_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    name_prefix = viz_name_prefix or tensor_name
+
+    npu_f = npu_out.detach().cpu().float()
+    fp64_f = fp64_golden.detach().cpu().float()
+    gpu_f = gpu_bench.detach().cpu().float()
+    if npu_f.shape != fp64_f.shape:
+        print(
+            f"  [{tensor_name}] ct.viz SKIPPED: shape mismatch "
+            f"npu={tuple(npu_f.shape)} fp64={tuple(fp64_f.shape)}",
+            flush=True,
+        )
+        return
+
     viz_kwargs: dict = {
         "out_dir": str(out_dir),
-        "name": tensor_name,
+        "name": name_prefix,
+        "bench": gpu_f,
     }
     if sample_count is not None and sample_count > 0:
         viz_kwargs["sample_count"] = int(sample_count)
 
     print(
-        f"  [{tensor_name}] ct.viz(npu, cpu_fp64, sample_count={sample_count})",
+        f"  [{tensor_name}] ct.viz -> {out_dir} "
+        f"(prefix={name_prefix}, sample_count={sample_count})",
         flush=True,
     )
-    ct.viz(npu_out.cpu(), fp64_golden, **viz_kwargs)
+    ct.viz(npu_f, fp64_f, **viz_kwargs)
+
+    saved = [p for p in _viz_file_paths(out_dir, name_prefix) if p.is_file()]
+    if saved:
+        for p in saved:
+            print(f"  [{tensor_name}] viz saved: {p}", flush=True)
+    else:
+        print(
+            f"  [{tensor_name}] viz WARNING: no png under {out_dir} "
+            f"(expected {name_prefix}_Standard.png)",
+            flush=True,
+        )

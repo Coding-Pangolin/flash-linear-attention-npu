@@ -40,6 +40,23 @@ chmod +x fla/ops/ascendc/kda/test/run_kda_gpu_dump_dual.sh
 Report: `<dump_root>/kda_gpu_dump_dual_report.json`  
 Logs: `<dump_root>/logs/kda_gpu_dump_dual_*.log`
 
+### ct.viz 图片路径
+
+每个 case 的图片在：
+
+```text
+<dump_root>/<case_name>/viz/<case_name>/<case_name>_o_npu_vs_fp64_Standard.png
+<dump_root>/<case_name>/viz/<case_name>/<case_name>_final_state_npu_vs_fp64_Standard.png
+```
+
+示例：
+
+```text
+KDA_DUMP/smoke_mha_fix/viz/smoke_mha_fix/smoke_mha_fix_o_npu_vs_fp64_Standard.png
+```
+
+日志里应出现 `viz saved:` 行；若只有 `ct.viz ->` 没有 `viz saved:`，说明 matplotlib 保存失败（检查 `MPLBACKEND=Agg`、磁盘权限、shape mismatch 警告）。
+
 ## Compared tensors
 
 | Tensor | Compared |

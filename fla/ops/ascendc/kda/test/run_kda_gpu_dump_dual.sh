@@ -17,6 +17,7 @@ KDA_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${KDA_DIR}/gpu_dump_dual_log.sh"
 
 export TEST_DEVICE_ID="${TEST_DEVICE_ID:-0}"
+export MPLBACKEND="${MPLBACKEND:-Agg}"
 OP_TAG="kda"
 PY="${SCRIPT_DIR}/test_kda_gpu_dump_dual.py"
 

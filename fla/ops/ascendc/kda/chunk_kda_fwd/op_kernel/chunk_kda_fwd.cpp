@@ -214,25 +214,6 @@ public:
         return GetBlockIdx() == 0 && chunkIdx == 0 && hv == 0 && start == 0;
     }
 
-    __aicore__ inline void DbgDumpScalar(float value, uint32_t tag, const char *label) const
-    {
-        LocalTensor<float> cell = scalarFp32Buf_.Get<float>();
-        Duplicate(cell, value, 1);
-        PipeBarrier<PIPE_V>();
-        AscendC::DumpTensor(cell, tag, 1);
-        AscendC::printf("%s tag=%u val=%f\n", label, tag, value);
-    }
-
-    __aicore__ inline void DbgDumpGmRow(GlobalTensor<T> &tensor, uint64_t offset, uint32_t tag, const char *label,
-                                        uint64_t count = 8) const
-    {
-        LocalTensor<float> row = exp2Buf_.Get<float>();
-        uint64_t dumpCount = count > K_ ? K_ : count;
-        LoadAsFloatRow(tensor, offset, row, dumpCount);
-        AscendC::DumpTensor(row, tag, static_cast<uint32_t>(dumpCount));
-        AscendC::printf("%s tag=%u\n", label, tag);
-    }
-
     __aicore__ inline void ProcessAivOnly()
     {
         if (stage_ == 1) {
@@ -689,7 +670,7 @@ private:
         RunExp2(exp2Local, static_cast<uint32_t>(K_));
         if (DbgProbeAiv(0, hv) && ((lhs == 0 && rhs == 1) || (lhs == 1 && rhs == 0))) {
             AscendC::DumpTensor(exp2Local, lhs == 0 ? 1101U : 1102U, 8);
-            AscendC::printf("[kda] Exp2GDiff lhs=%llu rhs=%llu\n", lhs, rhs);
+            AscendC::printf("dbg tag=%u lhs=%llu rhs=%llu\n", lhs == 0 ? 1101U : 1102U, lhs, rhs);
         }
         return exp2Local;
     }
@@ -724,7 +705,8 @@ private:
         CopyRowOut(w_, KVOffset(b, hv, ti, 0, K_), kPosLocal);
         CopyRowOut(kg_, KVOffset(b, hv, ti, 0, K_), kNegLocal);
         if (DbgProbeAiv(0, hv, ti)) {
-            DbgDumpGmRow(kg_, KVOffset(b, hv, ti, 0, K_), 1203U, "[kda] kg gm token0");
+            AscendC::DumpTensor(kNegLocal, 1203U, 16);
+            AscendC::printf("dbg tag=%u\n", 1203U);
         }
         SetFlag<HardEvent::MTE3_MTE2>(KDA_MTE3_MTE2_EVENT_ID);
         WaitFlag<HardEvent::MTE3_MTE2>(KDA_MTE3_MTE2_EVENT_ID);
@@ -769,16 +751,8 @@ private:
         Muls(expFp32, gFp32, -LN2, static_cast<uint32_t>(K_));
         PipeBarrier<PIPE_V>();
         Exp(expFp32, expFp32, static_cast<uint32_t>(K_));
-        if (DbgProbeAiv(0, 0)) {
-            AscendC::DumpTensor(expFp32, 1201U, 8);
-            AscendC::printf("[kda] exp2(-gk) before kg\n");
-        }
         PipeBarrier<PIPE_V>();
         Mul(outFp32, kFp32, expFp32, static_cast<uint32_t>(K_));
-        if (DbgProbeAiv(0, 0)) {
-            AscendC::DumpTensor(outFp32, 1202U, 8);
-            AscendC::printf("[kda] kg row after gate product\n");
-        }
         PipeBarrier<PIPE_V>();
         if constexpr (IsSameType<T, float>::value) {
             DataCopy(kNegLocal, outFp32, static_cast<uint32_t>(K_));
@@ -1128,7 +1102,7 @@ private:
             AscendC::DumpTensor(aqkMat[1], 1301U, 1);
             AscendC::DumpTensor(aqkMat[KDA_SOLVE_BT], 1302U, 1);
             AscendC::DumpTensor(akkMat[1], 1303U, 1);
-            AscendC::printf("[kda] aqk/akk after mask row0col1 row1col0\n");
+            AscendC::printf("dbg tag=%u\n", 1301U);
         }
 
         if constexpr (IsSameType<T, float>::value) {
@@ -2204,8 +2178,8 @@ private:
         blockMmad(blockAqk, blockVNew, blockLocal, shapeAV);
         PipeBarrier<PIPE_ALL>();
         if (DbgProbeAic(chunkIdx, hv, start)) {
-            DbgDumpGmRow(o_, KVOffset(b, hv, start, 0, V_), 1401U, "[kda] o after output cube row0");
-            DbgDumpGmRow(u_, KVOffset(b, hv, start, 0, V_), 1402U, "[kda] u partial row0");
+            AscendC::printf("dbg tag=%u val=%f\n", 1401U, ReadAsFloat(o_, KVOffset(b, hv, start, 0, V_)));
+            AscendC::printf("dbg tag=%u val=%f\n", 1402U, ReadAsFloat(u_, KVOffset(b, hv, start, 0, V_)));
         }
     }
 
@@ -2223,7 +2197,7 @@ private:
             PipeBarrier<PIPE_V>();
             if (DbgProbeAiv(0, hv, ti)) {
                 AscendC::DumpTensor(outLocal, 1403U, 8);
-                AscendC::printf("[kda] o finalize row0\n");
+                AscendC::printf("dbg tag=%u\n", 1403U);
             }
             StoreFloatRow(o_, KVOffset(b, hv, ti, 0, V_), outLocal, V_);
         }
@@ -2363,9 +2337,9 @@ private:
         Catlass::Arch::CrossCoreWaitFlagWithReverse<0x2, PIPE_FIX>(scoreReadyFlag_);
         ComputeRawAqkAkkCube(b, hv, start, curT);
         if (DbgProbeAic(chunkIdx, hv, start)) {
-            DbgDumpScalar(ReadAsFloat(aqk_, AOffset(b, hv, start, 1)), 1310U, "[kda] raw_aqk row0col1");
-            DbgDumpScalar(ReadAsFloat(aqk_, AOffset(b, hv, start + 1, 0)), 1311U, "[kda] raw_aqk row1col0");
-            DbgDumpScalar(ReadAsFloat(akk_, AOffset(b, hv, start, 1)), 1312U, "[kda] raw_akk row0col1");
+            AscendC::printf("dbg tag=%u val=%f\n", 1310U, ReadAsFloat(aqk_, AOffset(b, hv, start, 1)));
+            AscendC::printf("dbg tag=%u val=%f\n", 1311U, ReadAsFloat(aqk_, AOffset(b, hv, start + 1, 0)));
+            AscendC::printf("dbg tag=%u val=%f\n", 1312U, ReadAsFloat(akk_, AOffset(b, hv, start, 1)));
         }
         Catlass::Arch::CrossCoreSetFlagWithReverse<0x2, PIPE_FIX>(scoreDoneFlag_);
         bool usePostWuCube = UsePostWuCube(curT);

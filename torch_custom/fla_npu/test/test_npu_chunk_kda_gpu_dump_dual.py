@@ -74,11 +74,11 @@ def _kda_gate_cumsum_reference(
         for b in range(g.shape[0]):
             for start in range(0, g.shape[1], chunk_size):
                 end = min(start + chunk_size, g.shape[1])
-                out[b, start:end] = torch.cumsum(gate[b, start:end] * RCP_LN2, dim=0)
+                out[b, start:end] = torch.cumsum(gate[b, start:end], dim=0) * RCP_LN2
     else:
         for start in range(0, g.shape[0], chunk_size):
             end = min(start + chunk_size, g.shape[0])
-            out[start:end] = torch.cumsum(gate[start:end] * RCP_LN2, dim=0)
+            out[start:end] = torch.cumsum(gate[start:end], dim=0) * RCP_LN2
     return out
 
 

@@ -201,6 +201,38 @@ public:
         }
     }
 
+    __aicore__ inline bool DbgProbeAiv(uint64_t chunkIdx, uint64_t hv, uint64_t ti = UINT64_MAX) const
+    {
+        if (GetBlockIdx() != 0 || GetSubBlockIdx() != 0 || chunkIdx != 0 || hv != 0) {
+            return false;
+        }
+        return ti == UINT64_MAX || ti == 0;
+    }
+
+    __aicore__ inline bool DbgProbeAic(uint64_t chunkIdx, uint64_t hv, uint64_t start = 0) const
+    {
+        return GetBlockIdx() == 0 && chunkIdx == 0 && hv == 0 && start == 0;
+    }
+
+    __aicore__ inline void DbgDumpScalar(float value, uint32_t tag, const char *label) const
+    {
+        LocalTensor<float> cell = scalarFp32Buf_.Get<float>();
+        Duplicate(cell, value, 1);
+        PipeBarrier<PIPE_V>();
+        AscendC::DumpTensor(cell, tag, 1);
+        AscendC::printf("%s tag=%u val=%f\n", label, tag, value);
+    }
+
+    __aicore__ inline void DbgDumpGmRow(GlobalTensor<T> &tensor, uint64_t offset, uint32_t tag, const char *label,
+                                        uint64_t count = 8) const
+    {
+        LocalTensor<float> row = exp2Buf_.Get<float>();
+        uint64_t dumpCount = count > K_ ? K_ : count;
+        LoadAsFloatRow(tensor, offset, row, dumpCount);
+        AscendC::DumpTensor(row, tag, static_cast<uint32_t>(dumpCount));
+        AscendC::printf("%s tag=%u\n", label, tag);
+    }
+
     __aicore__ inline void ProcessAivOnly()
     {
         if (stage_ == 1) {
@@ -655,6 +687,10 @@ private:
         Muls(exp2Local, exp2Local, LN2, static_cast<uint32_t>(K_));
         PipeBarrier<PIPE_V>();
         RunExp2(exp2Local, static_cast<uint32_t>(K_));
+        if (DbgProbeAiv(0, hv) && ((lhs == 0 && rhs == 1) || (lhs == 1 && rhs == 0))) {
+            AscendC::DumpTensor(exp2Local, lhs == 0 ? 1101U : 1102U, 8);
+            AscendC::printf("[kda] Exp2GDiff lhs=%llu rhs=%llu\n", lhs, rhs);
+        }
         return exp2Local;
     }
 
@@ -687,6 +723,9 @@ private:
         CopyRowOut(qg_, KVOffset(b, hv, ti, 0, K_), qPosLocal);
         CopyRowOut(w_, KVOffset(b, hv, ti, 0, K_), kPosLocal);
         CopyRowOut(kg_, KVOffset(b, hv, ti, 0, K_), kNegLocal);
+        if (DbgProbeAiv(0, hv, ti)) {
+            DbgDumpGmRow(kg_, KVOffset(b, hv, ti, 0, K_), 1203U, "[kda] kg gm token0");
+        }
         SetFlag<HardEvent::MTE3_MTE2>(KDA_MTE3_MTE2_EVENT_ID);
         WaitFlag<HardEvent::MTE3_MTE2>(KDA_MTE3_MTE2_EVENT_ID);
         SetFlag<HardEvent::MTE3_V>(KDA_SCALAR_MTE3_V_EVENT_ID);
@@ -730,8 +769,16 @@ private:
         Muls(expFp32, gFp32, -LN2, static_cast<uint32_t>(K_));
         PipeBarrier<PIPE_V>();
         Exp(expFp32, expFp32, static_cast<uint32_t>(K_));
+        if (DbgProbeAiv(0, 0)) {
+            AscendC::DumpTensor(expFp32, 1201U, 8);
+            AscendC::printf("[kda] exp2(-gk) before kg\n");
+        }
         PipeBarrier<PIPE_V>();
         Mul(outFp32, kFp32, expFp32, static_cast<uint32_t>(K_));
+        if (DbgProbeAiv(0, 0)) {
+            AscendC::DumpTensor(outFp32, 1202U, 8);
+            AscendC::printf("[kda] kg row after gate product\n");
+        }
         PipeBarrier<PIPE_V>();
         if constexpr (IsSameType<T, float>::value) {
             DataCopy(kNegLocal, outFp32, static_cast<uint32_t>(K_));
@@ -1075,6 +1122,13 @@ private:
             PipeBarrier<PIPE_V>();
             Add(xMat[row * KDA_SOLVE_BT], xMat[row * KDA_SOLVE_BT], maskLocal, KDA_SOLVE_BT);
             PipeBarrier<PIPE_V>();
+        }
+
+        if (DbgProbeAiv(chunkIdx, hv, start)) {
+            AscendC::DumpTensor(aqkMat[1], 1301U, 1);
+            AscendC::DumpTensor(aqkMat[KDA_SOLVE_BT], 1302U, 1);
+            AscendC::DumpTensor(akkMat[1], 1303U, 1);
+            AscendC::printf("[kda] aqk/akk after mask row0col1 row1col0\n");
         }
 
         if constexpr (IsSameType<T, float>::value) {
@@ -2149,6 +2203,10 @@ private:
         auto blockLocal = GetTile(tensorLocal, tla::MakeCoord(0, 0), tla::MakeShape(shapeAV.m(), shapeAV.n()));
         blockMmad(blockAqk, blockVNew, blockLocal, shapeAV);
         PipeBarrier<PIPE_ALL>();
+        if (DbgProbeAic(chunkIdx, hv, start)) {
+            DbgDumpGmRow(o_, KVOffset(b, hv, start, 0, V_), 1401U, "[kda] o after output cube row0");
+            DbgDumpGmRow(u_, KVOffset(b, hv, start, 0, V_), 1402U, "[kda] u partial row0");
+        }
     }
 
     __aicore__ inline void FinalizeOutputRows(uint64_t b, uint64_t hv, uint64_t start, uint64_t curT,
@@ -2163,6 +2221,10 @@ private:
             LoadAsFloatRow(u_, KVOffset(b, hv, ti, 0, V_), localLocal, V_);
             Add(outLocal, stateLocal, localLocal, static_cast<uint32_t>(V_));
             PipeBarrier<PIPE_V>();
+            if (DbgProbeAiv(0, hv, ti)) {
+                AscendC::DumpTensor(outLocal, 1403U, 8);
+                AscendC::printf("[kda] o finalize row0\n");
+            }
             StoreFloatRow(o_, KVOffset(b, hv, ti, 0, V_), outLocal, V_);
         }
     }
@@ -2300,6 +2362,11 @@ private:
         }
         Catlass::Arch::CrossCoreWaitFlagWithReverse<0x2, PIPE_FIX>(scoreReadyFlag_);
         ComputeRawAqkAkkCube(b, hv, start, curT);
+        if (DbgProbeAic(chunkIdx, hv, start)) {
+            DbgDumpScalar(ReadAsFloat(aqk_, AOffset(b, hv, start, 1)), 1310U, "[kda] raw_aqk row0col1");
+            DbgDumpScalar(ReadAsFloat(aqk_, AOffset(b, hv, start + 1, 0)), 1311U, "[kda] raw_aqk row1col0");
+            DbgDumpScalar(ReadAsFloat(akk_, AOffset(b, hv, start, 1)), 1312U, "[kda] raw_akk row0col1");
+        }
         Catlass::Arch::CrossCoreSetFlagWithReverse<0x2, PIPE_FIX>(scoreDoneFlag_);
         bool usePostWuCube = UsePostWuCube(curT);
         bool useAkkCubeSolve = UseAkkCubeSolve(curT);
@@ -2634,6 +2701,7 @@ extern "C" __global__ __aicore__ void chunk_kda_fwd(GM_ADDR q, GM_ADDR k, GM_ADD
                                                       GM_ADDR kg, GM_ADDR v_new, GM_ADDR h, GM_ADDR workspace,
                                                       GM_ADDR tiling)
 {
+    AscendC::printf("------------chunk_kda_fwd-----------------");
     GM_ADDR userWS = AscendC::GetUserWorkspace(workspace);
     (void)userWS;
     GET_TILING_DATA(tilingData, tiling);

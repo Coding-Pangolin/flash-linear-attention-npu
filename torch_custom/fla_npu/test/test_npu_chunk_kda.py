@@ -53,7 +53,7 @@ MODEL_CASE = dict(
 # Scale all model-case random inputs; set 1.0 to restore prod-like magnitudes.
 MODEL_DATA_SCALE = 1.0
 # Scale gk after gate_cumsum (diag only: test exp2 overflow). 1.0 = no scaling.
-MODEL_GK_SCALE = 0.01
+MODEL_GK_SCALE = 1.0
 
 
 def _l2norm_lastdim(x: torch.Tensor) -> torch.Tensor:

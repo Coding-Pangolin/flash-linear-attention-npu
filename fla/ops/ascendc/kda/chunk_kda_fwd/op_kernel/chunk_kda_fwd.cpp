@@ -209,16 +209,24 @@ public:
         return ti == UINT64_MAX || ti == 0;
     }
 
-    // Gate-product NaN bisect: chunk0/hv0, token start (t=0) and chunk-last (t=start+BT_-1).
+    // Gate-product / output NaN bisect: chunk0/hv0, t=start and t=start+BT_-1.
     // Tags: 1200=gk, 1201=-gk*ln2, 1202=exp2(-gk), 1203=kg(fp32), 1204=k, 1205=kg(cast),
-    //       1250=kg loaded pre-finalize, 1253=kg after finalize, 1411=o_inter, 1412=u_local, 1403=o sum.
+    //       1250=kg loaded pre-finalize, 1253=kg after finalize,
+    //       1420=v_new, 1421=aqk row, 1422=u_ after out-cube GEMM, 1423=u_ after post-cube GEMM,
+    //       1411=o_inter, 1412=u_local, 1403=o sum.
     __aicore__ inline bool DbgProbeGateTi(uint64_t hv, uint64_t ti, uint64_t start) const
     {
-        if (GetBlockIdx() != 0 || GetSubBlockIdx() != 0 || hv != 0 || start != 0) {
+        if (GetBlockIdx() != 0 || hv != 0 || start != 0) {
             return false;
         }
         uint64_t tLast = start + BT_ - 1;
-        return ti == start || ti == tLast;
+        if (ti == start) {
+            return GetSubBlockIdx() == 0;
+        }
+        if (ti == tLast) {
+            return true;
+        }
+        return false;
     }
 
     __aicore__ inline void DbgDumpGateRow(LocalTensor<float> &row, uint32_t tag, uint64_t ti) const
@@ -232,6 +240,32 @@ public:
     {
         AscendC::DumpTensor(flat[row * kDim], tag, 16);
         AscendC::printf("dbg tag=%u ti=%llu row=%llu\n", tag, ti, row);
+    }
+
+    template <typename CopyT>
+    __aicore__ inline void DbgPrintfGmRow16(GlobalTensor<CopyT> &src, uint64_t offset, uint32_t tag, uint64_t ti)
+    {
+        AscendC::printf("dbg tag=%u ti=%llu\n", tag, ti);
+        for (uint32_t g = 0; g < 4; ++g) {
+            uint32_t base = g * 4;
+            AscendC::printf("  d%u: %f %f %f %f\n", base, ReadAsFloat(src, offset + base + 0),
+                            ReadAsFloat(src, offset + base + 1), ReadAsFloat(src, offset + base + 2),
+                            ReadAsFloat(src, offset + base + 3));
+        }
+    }
+
+    __aicore__ inline void DbgDumpVNewRowsAiv(uint64_t b, uint64_t hv, uint64_t start, uint64_t curT)
+    {
+        LocalTensor<float> rowLocal = VecScratch(0);
+        uint64_t watch[2] = {start, start + curT - 1};
+        for (uint32_t wi = 0; wi < 2; ++wi) {
+            uint64_t ti = watch[wi];
+            if (!DbgProbeGateTi(hv, ti, start)) {
+                continue;
+            }
+            LoadAsFloatRow(vNew_, KVOffset(b, hv, ti, 0, V_), rowLocal, V_);
+            DbgDumpGateRow(rowLocal, 1420U, ti);
+        }
     }
 
     __aicore__ inline bool DbgProbeAic(uint64_t chunkIdx, uint64_t hv, uint64_t start = 0) const
@@ -1941,6 +1975,13 @@ private:
             PipeBarrier<PIPE_ALL>();
         }
 
+        if (DbgProbeAic(chunkIdx, hv, start)) {
+            uint64_t watch[2] = {start, start + curT - 1};
+            for (uint32_t wi = 0; wi < 2; ++wi) {
+                uint64_t ti = watch[wi];
+                DbgPrintfGmRow16(u_, KVOffset(b, hv, ti, 0, V_), 1423U, ti);
+            }
+        }
     }
 
     __aicore__ inline void CopyScratchWAndFinalizeKg(uint64_t b, uint64_t h, uint64_t hv, uint64_t chunkIdx,
@@ -2267,11 +2308,22 @@ private:
         auto blockAqk = GetTile(tensorAqk, tla::MakeCoord(0, 0), tla::MakeShape(shapeAV.m(), shapeAV.k()));
         auto blockVNew = GetTile(tensorVNew, tla::MakeCoord(0, 0), tla::MakeShape(shapeAV.k(), shapeAV.n()));
         auto blockLocal = GetTile(tensorLocal, tla::MakeCoord(0, 0), tla::MakeShape(shapeAV.m(), shapeAV.n()));
+        if (DbgProbeAic(chunkIdx, hv, start)) {
+            uint64_t watch[2] = {start, start + curT - 1};
+            for (uint32_t wi = 0; wi < 2; ++wi) {
+                uint64_t ti = watch[wi];
+                DbgPrintfGmRow16(vNew_, KVOffset(b, hv, ti, 0, V_), 1420U, ti);
+                DbgPrintfGmRow16(aqk_, AOffset(b, hv, ti, 0), 1421U, ti);
+            }
+        }
         blockMmad(blockAqk, blockVNew, blockLocal, shapeAV);
         PipeBarrier<PIPE_ALL>();
         if (DbgProbeAic(chunkIdx, hv, start)) {
-            AscendC::printf("dbg tag=%u val=%f\n", 1401U, ReadAsFloat(o_, KVOffset(b, hv, start, 0, V_)));
-            AscendC::printf("dbg tag=%u val=%f\n", 1402U, ReadAsFloat(u_, KVOffset(b, hv, start, 0, V_)));
+            uint64_t watch[2] = {start, start + curT - 1};
+            for (uint32_t wi = 0; wi < 2; ++wi) {
+                uint64_t ti = watch[wi];
+                DbgPrintfGmRow16(u_, KVOffset(b, hv, ti, 0, V_), 1422U, ti);
+            }
         }
     }
 
@@ -2462,6 +2514,7 @@ private:
         if (subBlockIdx == 0) {
             CopyScratchWAndFinalizeKg(b, h, hv, chunkIdx, start, curT);
         }
+        DbgDumpVNewRowsAiv(b, hv, start, curT);
     }
 
     __aicore__ inline void ProcessChunkPostAic(uint64_t b, uint64_t hv, uint64_t chunkIdx, uint64_t start,

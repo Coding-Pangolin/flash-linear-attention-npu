@@ -9,6 +9,7 @@
 
 #include "chunk_kda_fwd_tiling.h"
 #include <algorithm>
+#include <cstdlib>
 #include <register/op_impl_registry.h>
 #include "tiling/platform/platform_ascendc.h"
 
@@ -88,6 +89,10 @@ ge::graphStatus Tiling4ChunkKdaFwd(gert::TilingContext *context)
     if (stage == 1 || stage == 2 || stage == 3 ||
         (qDesc->GetDataType() != ge::DT_FLOAT && qShape.GetDim(DIM_D) >= 16)) {
         blockDim = coreNum;
+    }
+    const char *singleCoreEnv = std::getenv("KDA_FWD_DEBUG_SINGLE_CORE");
+    if (singleCoreEnv != nullptr && singleCoreEnv[0] != '\0' && singleCoreEnv[0] != '0') {
+        blockDim = 1;
     }
     context->SetBlockDim(blockDim == 0 ? 1 : blockDim);
     size_t *workspace = context->GetWorkspaceSizes(1);

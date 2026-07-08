@@ -209,6 +209,31 @@ public:
         return ti == UINT64_MAX || ti == 0;
     }
 
+    // Gate-product NaN bisect: chunk0/hv0, token start (t=0) and chunk-last (t=start+BT_-1).
+    // Tags: 1200=gk, 1201=-gk*ln2, 1202=exp2(-gk), 1203=kg(fp32), 1204=k, 1205=kg(cast),
+    //       1250=kg loaded pre-finalize, 1253=kg after finalize, 1411=o_inter, 1412=u_local, 1403=o sum.
+    __aicore__ inline bool DbgProbeGateTi(uint64_t hv, uint64_t ti, uint64_t start) const
+    {
+        if (GetBlockIdx() != 0 || GetSubBlockIdx() != 0 || hv != 0 || start != 0) {
+            return false;
+        }
+        uint64_t tLast = start + BT_ - 1;
+        return ti == start || ti == tLast;
+    }
+
+    __aicore__ inline void DbgDumpGateRow(LocalTensor<float> &row, uint32_t tag, uint64_t ti) const
+    {
+        AscendC::DumpTensor(row, tag, 16);
+        AscendC::printf("dbg tag=%u ti=%llu\n", tag, ti);
+    }
+
+    __aicore__ inline void DbgDumpGateFlatRow(LocalTensor<float> &flat, uint64_t row, uint64_t kDim, uint32_t tag,
+                                              uint64_t ti) const
+    {
+        AscendC::DumpTensor(flat[row * kDim], tag, 16);
+        AscendC::printf("dbg tag=%u ti=%llu row=%llu\n", tag, ti, row);
+    }
+
     __aicore__ inline bool DbgProbeAic(uint64_t chunkIdx, uint64_t hv, uint64_t start = 0) const
     {
         return GetBlockIdx() == 0 && chunkIdx == 0 && hv == 0 && start == 0;
@@ -694,7 +719,7 @@ private:
         gInQue_.EnQue(gLocal);
     }
 
-    __aicore__ inline void StoreGateProductRow(uint64_t b, uint64_t hv, uint64_t ti)
+    __aicore__ inline void StoreGateProductRow(uint64_t b, uint64_t hv, uint64_t start, uint64_t ti)
     {
         LocalTensor<T> qPosLocal = qgOutQue_.DeQue<T>();
         LocalTensor<T> kPosLocal = wOutQue_.DeQue<T>();
@@ -704,9 +729,9 @@ private:
         CopyRowOut(qg_, KVOffset(b, hv, ti, 0, K_), qPosLocal);
         CopyRowOut(w_, KVOffset(b, hv, ti, 0, K_), kPosLocal);
         CopyRowOut(kg_, KVOffset(b, hv, ti, 0, K_), kNegLocal);
-        if (DbgProbeAiv(0, hv, ti)) {
-            AscendC::DumpTensor(kNegLocal, 1203U, 16);
-            AscendC::printf("dbg tag=%u\n", 1203U);
+        if (DbgProbeGateTi(hv, ti, start)) {
+            AscendC::DumpTensor(kNegLocal, 1205U, 16);
+            AscendC::printf("dbg tag=%u ti=%llu\n", 1205U, ti);
         }
         SetFlag<HardEvent::MTE3_MTE2>(KDA_MTE3_MTE2_EVENT_ID);
         WaitFlag<HardEvent::MTE3_MTE2>(KDA_MTE3_MTE2_EVENT_ID);
@@ -719,11 +744,17 @@ private:
 
     __aicore__ inline void ComputeGateProductRow(LocalTensor<float> &qFp32, LocalTensor<float> &kFp32,
                                                  LocalTensor<float> &gFp32, LocalTensor<float> &expFp32,
-                                                 LocalTensor<float> &outFp32)
+                                                 LocalTensor<float> &outFp32, uint64_t dbgTi, uint64_t dbgStart,
+                                                 uint64_t dbgHv)
     {
         LocalTensor<T> qPosLocal = qgOutQue_.AllocTensor<T>();
         LocalTensor<T> kPosLocal = wOutQue_.AllocTensor<T>();
         LocalTensor<T> kNegLocal = kgOutQue_.AllocTensor<T>();
+
+        if (DbgProbeGateTi(dbgHv, dbgTi, dbgStart)) {
+            DbgDumpGateRow(gFp32, 1200U, dbgTi);
+            DbgDumpGateRow(kFp32, 1204U, dbgTi);
+        }
 
         Muls(expFp32, gFp32, LN2, static_cast<uint32_t>(K_));
         PipeBarrier<PIPE_V>();
@@ -750,14 +781,23 @@ private:
 
         Muls(expFp32, gFp32, -LN2, static_cast<uint32_t>(K_));
         PipeBarrier<PIPE_V>();
+        if (DbgProbeGateTi(dbgHv, dbgTi, dbgStart)) {
+            DbgDumpGateRow(expFp32, 1201U, dbgTi);
+        }
         Exp(expFp32, expFp32, static_cast<uint32_t>(K_));
         PipeBarrier<PIPE_V>();
+        if (DbgProbeGateTi(dbgHv, dbgTi, dbgStart)) {
+            DbgDumpGateRow(expFp32, 1202U, dbgTi);
+        }
         Mul(outFp32, kFp32, expFp32, static_cast<uint32_t>(K_));
         PipeBarrier<PIPE_V>();
         if constexpr (IsSameType<T, float>::value) {
             DataCopy(kNegLocal, outFp32, static_cast<uint32_t>(K_));
         } else {
             Cast(kNegLocal, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(K_));
+        }
+        if (DbgProbeGateTi(dbgHv, dbgTi, dbgStart)) {
+            DbgDumpGateRow(outFp32, 1203U, dbgTi);
         }
 
         qgOutQue_.EnQue(qPosLocal);
@@ -825,6 +865,16 @@ private:
             Cast(kFp32, kTyped, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
 
+            for (uint64_t watchPass = 0; watchPass < 2; ++watchPass) {
+                uint64_t watchTi = (watchPass == 0) ? start : (start + BT_ - 1);
+                if (!DbgProbeGateTi(hv, watchTi, start) || watchTi < token || watchTi >= token + tileRows) {
+                    continue;
+                }
+                uint64_t watchRow = watchTi - token;
+                DbgDumpGateFlatRow(gFp32, watchRow, K_, 1200U, watchTi);
+                DbgDumpGateFlatRow(kFp32, watchRow, K_, 1204U, watchTi);
+            }
+
             Muls(expFp32, gFp32, LN2, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
             Exp(expFp32, expFp32, static_cast<uint32_t>(elems));
@@ -842,10 +892,34 @@ private:
 
             Muls(expFp32, gFp32, -LN2, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
+            for (uint64_t watchPass = 0; watchPass < 2; ++watchPass) {
+                uint64_t watchTi = (watchPass == 0) ? start : (start + BT_ - 1);
+                if (!DbgProbeGateTi(hv, watchTi, start) || watchTi < token || watchTi >= token + tileRows) {
+                    continue;
+                }
+                uint64_t watchRow = watchTi - token;
+                DbgDumpGateFlatRow(expFp32, watchRow, K_, 1201U, watchTi);
+            }
             Exp(expFp32, expFp32, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
+            for (uint64_t watchPass = 0; watchPass < 2; ++watchPass) {
+                uint64_t watchTi = (watchPass == 0) ? start : (start + BT_ - 1);
+                if (!DbgProbeGateTi(hv, watchTi, start) || watchTi < token || watchTi >= token + tileRows) {
+                    continue;
+                }
+                uint64_t watchRow = watchTi - token;
+                DbgDumpGateFlatRow(expFp32, watchRow, K_, 1202U, watchTi);
+            }
             Mul(outFp32, kFp32, expFp32, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
+            for (uint64_t watchPass = 0; watchPass < 2; ++watchPass) {
+                uint64_t watchTi = (watchPass == 0) ? start : (start + BT_ - 1);
+                if (!DbgProbeGateTi(hv, watchTi, start) || watchTi < token || watchTi >= token + tileRows) {
+                    continue;
+                }
+                uint64_t watchRow = watchTi - token;
+                DbgDumpGateFlatRow(outFp32, watchRow, K_, 1203U, watchTi);
+            }
             Cast(kgTyped, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
 
@@ -909,11 +983,11 @@ private:
             PipeBarrier<PIPE_V>();
 
             if (logicalIdx > 0) {
-                StoreGateProductRow(b, hv, GateProductToken(start, logicalIdx - 1, subBlockIdx, subBlockNum));
+                StoreGateProductRow(b, hv, start, GateProductToken(start, logicalIdx - 1, subBlockIdx, subBlockNum));
             }
-            ComputeGateProductRow(qFp32, kFp32, gFp32, expFp32, outFp32);
+            ComputeGateProductRow(qFp32, kFp32, gFp32, expFp32, outFp32, ti, start, hv);
         }
-        StoreGateProductRow(b, hv, GateProductToken(start, rowCount - 1, subBlockIdx, subBlockNum));
+        StoreGateProductRow(b, hv, start, GateProductToken(start, rowCount - 1, subBlockIdx, subBlockNum));
         SetFlag<HardEvent::MTE3_MTE2>(KDA_MTE3_MTE2_EVENT_ID);
         WaitFlag<HardEvent::MTE3_MTE2>(KDA_MTE3_MTE2_EVENT_ID);
     }
@@ -1915,6 +1989,15 @@ private:
             PipeBarrier<PIPE_V>();
         }
 
+        for (uint64_t watchPass = 0; watchPass < 2; ++watchPass) {
+            uint64_t watchTi = (watchPass == 0) ? start : (start + curT - 1);
+            if (!DbgProbeGateTi(hv, watchTi, start)) {
+                continue;
+            }
+            uint64_t watchRow = watchTi - start;
+            DbgDumpGateFlatRow(matrixLocal, watchRow, K_, 1250U, watchTi);
+        }
+
         for (uint64_t col = 0; col < K_; col += vecElemsPerRepeat) {
             uint64_t mask = K_ - col;
             if (mask > vecElemsPerRepeat) {
@@ -1923,6 +2006,15 @@ private:
             Mul(matrixLocal[col], matrixLocal[col], gateLast[col], mask, static_cast<uint8_t>(curT),
                 {1, 1, 1, static_cast<uint8_t>(repeatStride), static_cast<uint8_t>(repeatStride), 0});
             PipeBarrier<PIPE_V>();
+        }
+
+        for (uint64_t watchPass = 0; watchPass < 2; ++watchPass) {
+            uint64_t watchTi = (watchPass == 0) ? start : (start + curT - 1);
+            if (!DbgProbeGateTi(hv, watchTi, start)) {
+                continue;
+            }
+            uint64_t watchRow = watchTi - start;
+            DbgDumpGateFlatRow(matrixLocal, watchRow, K_, 1253U, watchTi);
         }
 
         if constexpr (IsSameType<T, float>::value) {
@@ -2195,9 +2287,10 @@ private:
             LoadAsFloatRow(u_, KVOffset(b, hv, ti, 0, V_), localLocal, V_);
             Add(outLocal, stateLocal, localLocal, static_cast<uint32_t>(V_));
             PipeBarrier<PIPE_V>();
-            if (DbgProbeAiv(0, hv, ti)) {
-                AscendC::DumpTensor(outLocal, 1403U, 8);
-                AscendC::printf("dbg tag=%u\n", 1403U);
+            if (DbgProbeGateTi(hv, ti, start)) {
+                DbgDumpGateRow(stateLocal, 1411U, ti);
+                DbgDumpGateRow(localLocal, 1412U, ti);
+                DbgDumpGateRow(outLocal, 1403U, ti);
             }
             StoreFloatRow(o_, KVOffset(b, hv, ti, 0, V_), outLocal, V_);
         }

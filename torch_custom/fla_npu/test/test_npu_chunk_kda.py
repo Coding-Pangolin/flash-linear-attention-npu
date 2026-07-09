@@ -34,6 +34,179 @@ def _make_inputs(device, b=1, h=2, hv=2, t=64, kdim=32, vdim=64, dtype=torch.flo
     initial_state = (torch.randn(b, hv, kdim, vdim, device=device, dtype=torch.float32) * 0.02).requires_grad_(True)
     return q, k, v, gk, beta, initial_state
 
+# Model-fused chunk_kda_fwd kernel profile (prod NPU graph):
+#   kda_gate_chunk_cumsum_vector:  g      [B,T,HV,K] bf16
+#   chunk_kda_fwd (intra/inter):   q,k,v  [B,T,HK,K] bf16; beta [B,T,HV] fp32; gk fp32
+#   chunk_gated_delta_rule_fwd_h:  kg,w,u,v_new ...; h [B,nt,HV,K,V] bf16
+#   chunk_gla_fwd_o:               o      [B,T,HV,V] bf16
+MODEL_CASE = dict(
+    B=1,
+    T=131072,
+    Hk=2,
+    Hv=2,
+    K=128,
+    V=128,
+    chunk_size=64,
+    dtype=torch.bfloat16,
+)
+# Scale all model-case random inputs; set 1.0 to restore prod-like magnitudes.
+MODEL_DATA_SCALE = 1.0
+# Scale gk after gate_cumsum (diag only: test exp2 overflow). 1.0 = no scaling.
+MODEL_GK_SCALE = 1.0
+
+
+def _l2norm_lastdim(x: torch.Tensor) -> torch.Tensor:
+    return x / x.norm(dim=-1, keepdim=True).clamp(min=1e-6)
+
+
+def _make_model_fused_inputs(device, seed=20260707, data_scale=MODEL_DATA_SCALE):
+    """Build NPU inputs matching prod fused-kernel shapes/dtypes."""
+    c = MODEL_CASE
+    b, t, hk, hv, kdim, vdim = c["B"], c["T"], c["Hk"], c["Hv"], c["K"], c["V"]
+    dtype = c["dtype"]
+    torch.manual_seed(seed)
+    s = float(data_scale)
+
+    half_range = 6.5e-3 * s
+    q = (torch.rand(b, t, hk, kdim, device=device, dtype=dtype) * 2.0 - 1.0) * half_range
+    k = (torch.rand(b, t, hk, kdim, device=device, dtype=dtype) * 2.0 - 1.0) * half_range
+    v = (torch.rand(b, t, hv, vdim, device=device, dtype=dtype) * 2.0 - 1.0) * half_range
+    q = _l2norm_lastdim(q)
+    k = _l2norm_lastdim(k)
+
+    g_raw = torch.randn(b, t, hv, kdim, device=device, dtype=dtype) * s
+    a_log = torch.log(torch.empty(hv, device=device, dtype=torch.float32).uniform_(1, 16)) * s
+    dt_bias = torch.randn(hv * kdim, device=device, dtype=torch.float32) * s
+    beta_raw = torch.randn(b, t, hv, device=device, dtype=dtype) * s
+
+    initial_state = torch.randn(b, hv, kdim, vdim, device=device, dtype=torch.float32) * s
+    scale = kdim ** -0.5
+    gate_kw = dict(
+        A_log=a_log,
+        dt_bias=dt_bias,
+        use_gate_in_kernel=True,
+        safe_gate=True,
+        lower_bound=-5.0,
+    )
+    return dict(
+        q=q,
+        k=k,
+        v=v,
+        g_raw=g_raw,
+        beta_raw=beta_raw,
+        a_log=a_log,
+        dt_bias=dt_bias,
+        initial_state=initial_state,
+        scale=scale,
+        gate_kw=gate_kw,
+        chunk_size=c["chunk_size"],
+    )
+
+
+def _assert_finite(name, tensor):
+    assert torch.isfinite(tensor).all(), f"{name} contains NaN/Inf"
+
+
+def _print_tensor_stats(name, tensor):
+    t = tensor.detach().float()
+    finite = int(torch.isfinite(t).sum())
+    print(
+        f"[model] {name}: shape={tuple(tensor.shape)} dtype={tensor.dtype} "
+        f"mean={t.mean().item():.6e} min={t.min().item():.6e} max={t.max().item():.6e} "
+        f"finite={finite}/{t.numel()}",
+        flush=True,
+    )
+
+
+def test_chunk_kda_fwd_model_fused_t131072_mha_bf16():
+    """Prod fused-op shape: B=1 T=131072 H=HV=2 K=V=128 cs=64, bf16 q/k/v + fp32 beta/gk."""
+    device = _device()
+    if device.type == "cpu":
+        return
+
+    bundle = _make_model_fused_inputs(device)
+    q, k, v = bundle["q"], bundle["k"], bundle["v"]
+    cs = bundle["chunk_size"]
+    scale = bundle["scale"]
+    initial_state = bundle["initial_state"]
+    gk_scale = float(MODEL_GK_SCALE)
+    print("[model] npu_kda_gate_cumsum inputs:", flush=True)
+    _print_tensor_stats("g_raw", bundle["g_raw"])
+    _print_tensor_stats("A_log", bundle["a_log"])
+    _print_tensor_stats("dt_bias", bundle["dt_bias"])
+    print(f"[model] gate_cumsum chunk_size={cs}", flush=True)
+
+    gk = torch.ops.npu.npu_kda_gate_cumsum(bundle["g_raw"], cs, **bundle["gate_kw"])
+
+    print("[model] npu_kda_gate_cumsum outputs:", flush=True)
+    _print_tensor_stats("gk", gk)
+
+    ref_gk = _kda_gate_cumsum_reference(
+        bundle["g_raw"].detach().cpu(),
+        cs,
+        A_log=bundle["a_log"].detach().cpu(),
+        dt_bias=bundle["dt_bias"].detach().cpu(),
+        use_gate_in_kernel=True,
+        safe_gate=True,
+        lower_bound=-5.0,
+    )
+    _print_tensor_stats("ref_gk", ref_gk)
+    # _assert_close("model gate cumsum gk", gk, ref_gk, rtol=2e-3, atol=2e-3)
+
+    beta = torch.sigmoid(bundle["beta_raw"].float())
+
+    print("[model] npu_chunk_kda_fwd inputs:", flush=True)
+    _print_tensor_stats("q", q)
+    _print_tensor_stats("k", k)
+    _print_tensor_stats("v", v)
+    _print_tensor_stats("gk", gk)
+    _print_tensor_stats("beta", beta)
+    _print_tensor_stats("initial_state", initial_state)
+    print(f"[model] chunk_kda_fwd scale={scale} chunk_size={cs}", flush=True)
+
+    got = torch.ops.npu.npu_chunk_kda_fwd(
+        q,
+        k,
+        v,
+        gk,
+        beta,
+        scale,
+        cs,
+        initial_state=initial_state,
+        output_final_state=True,
+        return_intermediate=False,
+    )
+    o_npu, final_state_npu = got[0], got[1]
+
+    print("[model] npu_chunk_kda_fwd outputs:", flush=True)
+    _print_tensor_stats("o", o_npu)
+    _print_tensor_stats("final_state", final_state_npu)
+    _assert_finite("model o", o_npu)
+    _assert_finite("model final_state", final_state_npu)
+    assert o_npu.shape == (1, 131072, 2, 128)
+    assert final_state_npu.shape == (1, 2, 128, 128)
+
+    # Full-sequence CPU fp64 ref is slow at T=131072; spot-check head/tail slices + final_state.
+    if gk_scale == 1.0:
+        ref = chunk_kda_forward_reference(
+            q.detach().cpu().double(),
+            k.detach().cpu().double(),
+            v.detach().cpu().double(),
+            ref_gk.double(),
+            beta.detach().cpu().double(),
+            scale=scale,
+            chunk_size=cs,
+            initial_state=initial_state.detach().cpu().double(),
+            output_final_state=True,
+        )
+        _assert_close("model final_state vs fp64", final_state_npu, ref.final_state, rtol=3e-2, atol=3e-2)
+        _assert_close("model o head128 vs fp64", o_npu[:, :128], ref.o[:, :128], rtol=3e-2, atol=3e-2)
+        _assert_close("model o tail128 vs fp64", o_npu[:, -128:], ref.o[:, -128:], rtol=3e-2, atol=3e-2)
+    else:
+        print("[diag] skip fp64 ref compare because MODEL_GK_SCALE != 1.0", flush=True)
+
+
+
 
 def _assert_close(name, actual, expected, rtol=2e-3, atol=2e-3):
     torch.testing.assert_close(actual.cpu(), expected.cpu(), rtol=rtol, atol=atol, msg=name)
@@ -546,6 +719,7 @@ def test_kda_gate_cumsum_safe_gate_multitask_last_row_matches_reference():
 
 
 if __name__ == "__main__":
+    test_chunk_kda_fwd_model_fused_t131072_mha_bf16()
     test_chunk_kda_fwd_matches_reference()
     test_chunk_kda_fwd_chunk128_v128_gva_varlen()
     test_chunk_kda_fwd_bf16_chunk32_matches_reference()

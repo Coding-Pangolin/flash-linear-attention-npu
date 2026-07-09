@@ -707,6 +707,10 @@ private:
         Muls(exp2Local, exp2Local, LN2, static_cast<uint32_t>(K_));
         PipeBarrier<PIPE_V>();
         RunExp2(exp2Local, static_cast<uint32_t>(K_));
+        if (lhs == 0 && rhs == 0 && hv == 0 && GetBlockIdx() == 0) {
+            AscendC::DumpTensor(exp2Local, __LINE__, 16);
+            AscendC::printf("Exp2GDiff lhs=%llu rhs=%llu line=%d\n", lhs, rhs, __LINE__);
+        }
         return exp2Local;
     }
 
@@ -768,6 +772,11 @@ private:
         ClampExpInput(expFp32, static_cast<uint32_t>(K_));
         Exp(expFp32, expFp32, static_cast<uint32_t>(K_));
         PipeBarrier<PIPE_V>();
+        if (GetBlockIdx() == 0) {
+            AscendC::DumpTensor(gFp32, __LINE__, 16);
+            AscendC::DumpTensor(expFp32, __LINE__, 16);
+            AscendC::printf("ComputeGateProductRow g/exp line=%d\n", __LINE__);
+        }
 
         Mul(outFp32, qFp32, expFp32, static_cast<uint32_t>(K_));
         PipeBarrier<PIPE_V>();
@@ -1042,6 +1051,10 @@ private:
                 aqkRow[j] = aqkRaw;
                 akkRow[j] = akkRaw;
             }
+            if (start == 0 && hv == 0 && GetBlockIdx() == 0 && i == 0) {
+                AscendC::printf("raw_aqk_scalar [0,0]=%f [0,1]=%f [1,0]=%f line=%d\n", aqkRow[0], aqkRow[1],
+                                aqkRow[BT_ > 1 ? 1 : 0], __LINE__);
+            }
             CopyStackFloatRowOut(aqk_, AOffset(b, hv, ti, 0), aqkRow, BT_, 0);
             CopyStackFloatRowOut(akk_, AOffset(b, hv, ti, 0), akkRow, BT_, 1);
         }
@@ -1097,6 +1110,12 @@ private:
         PipeBarrier<PIPE_ALL>();
         blockMmad(blockKPos, blockKNeg, blockAkk, shape);
         PipeBarrier<PIPE_ALL>();
+        if (start == 0 && hv == 0 && GetBlockIdx() == 0) {
+            AscendC::printf("raw_aqk_cube [0,0]=%f [0,1]=%f [1,0]=%f curT=%llu line=%d\n",
+                            ReadAsFloat(aqk_, AOffset(b, hv, start, 0)),
+                            ReadAsFloat(aqk_, AOffset(b, hv, start, 1)),
+                            curT > 1 ? ReadAsFloat(aqk_, AOffset(b, hv, start + 1, 0)) : 0.0f, curT, __LINE__);
+        }
     }
 
     __aicore__ inline bool UseAkkCubeSolve(uint64_t curT) const
@@ -1768,6 +1787,9 @@ private:
                 akkRow[j] = -sum;
             }
             akkRow[i] = 1.0f;
+            if (start == 0 && hv == 0 && GetBlockIdx() == 0 && i == 0) {
+                AscendC::printf("fin_aqk i=%llu col0=%f col1=%f line=%d\n", i, aqkRow[0], aqkRow[1], __LINE__);
+            }
             CopyStackFloatRowOut(aqk_, AOffset(b, hv, ti, 0), aqkRow, BT_, 0);
             CopyStackFloatRowOut(akk_, AOffset(b, hv, ti, 0), akkRow, BT_, 1);
         }
@@ -2042,6 +2064,15 @@ private:
         uint64_t curT = end - start;
         if (curT == 0) {
             return;
+        }
+
+        if (start == 0 && hv == 0 && GetBlockIdx() == 0) {
+            LocalTensor<float> dbgGk = exp2Buf_.Get<float>();
+            CopyRowIn(dbgGk, gk_, KVOffset(b, hv, start, 0, K_));
+            SetFlag<HardEvent::MTE2_V>(KDA_MTE2_V_EVENT_ID);
+            WaitFlag<HardEvent::MTE2_V>(KDA_MTE2_V_EVENT_ID);
+            AscendC::DumpTensor(dbgGk, __LINE__, 16);
+            AscendC::printf("ProcessChunkAiv hv=%llu start=%llu curT=%llu line=%d\n", hv, start, curT, __LINE__);
         }
 
         if constexpr (IsSameType<T, float>::value) {
@@ -2750,6 +2781,10 @@ extern "C" __global__ __aicore__ void chunk_kda_fwd(GM_ADDR q, GM_ADDR k, GM_ADD
     GM_ADDR userWS = AscendC::GetUserWorkspace(workspace);
     (void)userWS;
     GET_TILING_DATA(tilingData, tiling);
+    if (GetBlockIdx() == 0) {
+        AscendC::printf("chunk_kda_fwd stage=%d dtype=%d cs=%llu line=%d\n", tilingData.stage, tilingData.dataType,
+                        tilingData.chunkSize, __LINE__);
+    }
     TPipe pipe;
     if (TILING_KEY_IS(0)) {
         KERNEL_TASK_TYPE(0, KERNEL_TYPE_AIV_ONLY);

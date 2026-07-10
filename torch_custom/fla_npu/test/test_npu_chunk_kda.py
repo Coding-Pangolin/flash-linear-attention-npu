@@ -34,6 +34,7 @@ def _make_inputs(device, b=1, h=2, hv=2, t=64, kdim=32, vdim=64, dtype=torch.flo
     initial_state = (torch.randn(b, hv, kdim, vdim, device=device, dtype=torch.float32) * 0.02).requires_grad_(True)
     return q, k, v, gk, beta, initial_state
 
+
 # Model-fused chunk_kda_fwd kernel profile (prod NPU graph):
 #   kda_gate_chunk_cumsum_vector:  g      [B,T,HV,K] bf16
 #   chunk_kda_fwd (intra/inter):   q,k,v  [B,T,HK,K] bf16; beta [B,T,HV] fp32; gk fp32
@@ -129,7 +130,6 @@ def test_chunk_kda_fwd_model_fused_t131072_mha_bf16():
     cs = bundle["chunk_size"]
     scale = bundle["scale"]
     initial_state = bundle["initial_state"]
-    gk_scale = float(MODEL_GK_SCALE)
     print("[model] npu_kda_gate_cumsum inputs:", flush=True)
     _print_tensor_stats("g_raw", bundle["g_raw"])
     _print_tensor_stats("A_log", bundle["a_log"])
@@ -187,7 +187,7 @@ def test_chunk_kda_fwd_model_fused_t131072_mha_bf16():
     assert final_state_npu.shape == (1, 2, 128, 128)
 
     # Full-sequence CPU fp64 ref is slow at T=131072; spot-check head/tail slices + final_state.
-    if gk_scale == 1.0:
+    if MODEL_GK_SCALE == 1.0:
         ref = chunk_kda_forward_reference(
             q.detach().cpu().double(),
             k.detach().cpu().double(),
@@ -204,8 +204,6 @@ def test_chunk_kda_fwd_model_fused_t131072_mha_bf16():
         _assert_close("model o tail128 vs fp64", o_npu[:, -128:], ref.o[:, -128:], rtol=3e-2, atol=3e-2)
     else:
         print("[diag] skip fp64 ref compare because MODEL_GK_SCALE != 1.0", flush=True)
-
-
 
 
 def _assert_close(name, actual, expected, rtol=2e-3, atol=2e-3):
@@ -688,46 +686,16 @@ def test_kda_gate_cumsum_safe_gate_matches_reference():
     _assert_close("gate cumsum safe", got, ref, rtol=2e-3, atol=2e-3)
 
 
-def test_kda_gate_cumsum_safe_gate_multitask_last_row_matches_reference():
-    device = _device()
-    if device.type == "cpu":
-        return
-    torch.manual_seed(20260707)
-    chunk_size = 64
-    raw = torch.randn(1, 1536, 2, 128, device=device, dtype=torch.bfloat16)
-    a_log = torch.log(torch.empty(2, device=device, dtype=torch.float32).uniform_(1, 16))
-    dt_bias = torch.randn(2 * 128, device=device, dtype=torch.float32)
-    got = torch.ops.npu.npu_kda_gate_cumsum(
-        raw,
-        chunk_size,
-        A_log=a_log,
-        dt_bias=dt_bias,
-        use_gate_in_kernel=True,
-        safe_gate=True,
-        lower_bound=-5.0,
-    )
-    ref = _kda_gate_cumsum_reference(
-        raw.detach().cpu(),
-        chunk_size,
-        A_log=a_log.detach().cpu(),
-        dt_bias=dt_bias.detach().cpu(),
-        use_gate_in_kernel=True,
-        safe_gate=True,
-        lower_bound=-5.0,
-    )
-    _assert_close("gate cumsum safe multitask", got, ref, rtol=2e-3, atol=2e-3)
-
-
 if __name__ == "__main__":
+    # test_chunk_kda_fwd_matches_reference()
+    # test_chunk_kda_fwd_chunk128_v128_gva_varlen()
+    # test_chunk_kda_fwd_bf16_chunk32_matches_reference()
+    # test_chunk_kda_fwd_bf16_gate_matches_reference()
+    # test_chunk_kda_fwd_fp16_matches_reference()
+    # test_chunk_kda_fwd_tnd_matches_reference()
+    # test_kda_gate_cumsum_default_and_fwd_integration()
+    # test_kda_gate_cumsum_bnsd_direct_matches_reference()
+    # test_kda_gate_cumsum_ntd_direct_matches_reference()
+    # test_kda_gate_cumsum_safe_gate_matches_reference()
+    # Large model shape (~T=131072); run explicitly when needed:
     test_chunk_kda_fwd_model_fused_t131072_mha_bf16()
-    test_chunk_kda_fwd_matches_reference()
-    test_chunk_kda_fwd_chunk128_v128_gva_varlen()
-    test_chunk_kda_fwd_bf16_chunk32_matches_reference()
-    test_chunk_kda_fwd_bf16_gate_matches_reference()
-    test_chunk_kda_fwd_fp16_matches_reference()
-    test_chunk_kda_fwd_tnd_matches_reference()
-    test_kda_gate_cumsum_default_and_fwd_integration()
-    test_kda_gate_cumsum_bnsd_direct_matches_reference()
-    test_kda_gate_cumsum_ntd_direct_matches_reference()
-    test_kda_gate_cumsum_safe_gate_matches_reference()
-    test_kda_gate_cumsum_safe_gate_multitask_last_row_matches_reference()

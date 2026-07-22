@@ -10,9 +10,8 @@
 |------|------|----------------|
 | T0 -g + 本文档 | **done** `232ce89` | op_host `-g`；母本落盘 |
 | T1 Score Tile | **done** `7e329a5` | 精度绿；Dur **4.627** vs Dual 4.654 |
-| T2 CrossCore | **done** | Identity 后移 + AIC Resource 复用；Dur **4.402** |
-| T3 sim -g | in progress | |
-| T3 sim -g | pending | |
+| T2 CrossCore | **done** `f1816fc` | Identity 后移 + AIC Score Resource 复用；Dur **4.402** |
+| T3 sim -g | **done** | `prof_msprof_op_sim_t1024_g/`；`code_exe` 已有 `chunk_kda_*.cpp:行号`；Cube instr 仍以 BAR / Nd2Nz / FIX 为主（MMAD 很少） |
 | T4 MCH L1 | pending | |
 | T5 S2c | pending | |
 | T6 prefetch/S4 | pending | |
@@ -164,6 +163,13 @@ AIC: WaitFlag(ready) → Resource{} → BlockMmad×2(全部 MTE2) → SetFlag(do
 | `-g` | `add_ops_compile_options` → [`cmake/func.cmake` L280+](cmake/func.cmake) 写入 CCE OPTIONS；仿真曾 `Code call stack is empty` | [`op_host/CMakeLists.txt`](fla/ops/ascendc/kda/chunk_kda_fwd_intra_sub_chunk/op_host/CMakeLists.txt) OPTIONS 追加 `-g` |
 | 仿真入口 | 已有 [`prof_chunk_kda_fwd_intra_sub_chunk_sim_t1024.py`](torch_custom/fla_npu/test/prof_chunk_kda_fwd_intra_sub_chunk_sim_t1024.py)；`TARGET_1P5` §5.2 | 输出 `prof_msprof_op_sim_t1024_g/`；对照 instr/旗/行号写回文档 |
 
+### T3 留档（`-g`，shape `(1,2,1024,128)` BT=64）
+
+- 产物：`prof_msprof_op_sim_t1024_g/OPPROF_20260722223505_*/` · Total tick ≈ **383620**
+- `code_exe.csv`：热点映射到源文件行（例：`chunk_kda_fwd_intra_sub_chunk.cpp:1713`=`MchL0AccDual`，`:1552`/`:1540`=Fixpipe X/Y，`:1473`=Fixpipe wait，`copy_l0c_to_gm` / `copy_gm_to_l1`）
+- Cube `instr_exe`（多核合计量级）：**BAR ≫ MOV_OUT_TO_L1_MULTI_ND2NZ ≈ FIX_L0C_TO_DST ≫ MMAD** → 仍钉死 T4/T5，不刷 mac
+- 日志仍可能出现 `Code call stack is empty` WARN；以 `code_exe` 行号为准（`-g` 已生效）
+
 T0 同步落盘 `SCORE_TILE_CROSSCORE_PLAN.md`（把本文件 §1–3 与门禁抄进去，作为 agent 执行母本）。
 
 ---
@@ -211,4 +217,5 @@ flowchart LR
 
 - `USE_SCORE_TILE_MMAD`（T1，bring-up=1）
 - 既有：`USE_MCH_L0_ACC=1`、`USE_MCH_L0_DUAL=1`、`USE_MCH_S2B_STEAL=0`
-- T4/T5 新宏在实现时写入母本文档，不在本阶段空想命名以外的行为
+- T4：`USE_MCH_L1_RESIDENT`（默认 1）— 910B 无 L0C→L1；中间 X Fixpipe→`SOLVE_TMP`→L1，仅末轮 X→`SOLVE_X`；chunk 内复用 MCH `Resource` + I 驻留
+- T5 新宏在实现时写入母本

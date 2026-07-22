@@ -47,6 +47,7 @@
 //   USE_SCORE_SOFT_PREFETCH=1: prefetch next KG into Score L1B during MCH wait (R2)
 // WriteSolve half-load (WS_HALF_LOAD_PLAN.md):
 //   USE_WS_HALF_LOAD=1: each AIV DataCopy only its row half of Aqk/Akk (drop 2× GM→UB)
+//   USE_PREP_BEFORE_DONE=1: Prep(next)+ready after Store, before WaitDone(next) (W2)
 // Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
 //   USE_SCORE_TILE_MMAD=1 : Tile dual GEMM + L1B(kneg) residence (default on)
 #ifndef USE_MCH_L0_GEMM
@@ -75,6 +76,9 @@
 #endif
 #ifndef USE_WS_HALF_LOAD
 #define USE_WS_HALF_LOAD 0 // W1 tried; Dur 3.801 ≈ S4a 3.802 — keep code, default off
+#endif
+#ifndef USE_PREP_BEFORE_DONE
+#define USE_PREP_BEFORE_DONE 0 // W2 tried; Prep-before-WaitDone → aqk NaN — keep code, default off
 #endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
@@ -2141,6 +2145,15 @@ private:
 #else
         for (uint64_t iSub = 0; iSub < nc_; ++iSub) {
             const uint64_t slot = iSub % depth_;
+#if USE_PREP_BEFORE_DONE
+            // Prep(next) while AIC is in MMAD(i). Do NOT Set ready yet — early ready lets
+            // AIC start MMAD(next) before Store(i)/MCH handshake completes (NaN regression).
+            if (iSub + 1 < nc_) {
+                const uint64_t next = iSub + 1;
+                const uint64_t slotNext = next % depth_;
+                PrepareSub(bIdx, iH, iHv, bos, localT, localChunk, next, slotNext, subBlockIdx, subBlockNum);
+            }
+#endif
             Catlass::Arch::CrossCoreWaitFlag(doneFlag_);
 
             PostSubWriteSolve(bIdx, iHv, bos, localT, localChunk, iSub, slot, subBlockIdx, subBlockNum);
@@ -2149,12 +2162,19 @@ private:
 #endif
             Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
 
+#if USE_PREP_BEFORE_DONE
+            // Prep already done; Set ready immediately so AIC MCH→Wait ready sees no Prep gap.
+            if (iSub + 1 < nc_) {
+                Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(readyFlag_);
+            }
+#else
             if (iSub + 1 < nc_) {
                 const uint64_t next = iSub + 1;
                 const uint64_t slotNext = next % depth_;
                 PrepareSub(bIdx, iH, iHv, bos, localT, localChunk, next, slotNext, subBlockIdx, subBlockNum);
                 Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(readyFlag_);
             }
+#endif
 
 #if USE_MCH_L0_ACC
             PostSubMchWait(slot, subBlockIdx, subBlockNum);

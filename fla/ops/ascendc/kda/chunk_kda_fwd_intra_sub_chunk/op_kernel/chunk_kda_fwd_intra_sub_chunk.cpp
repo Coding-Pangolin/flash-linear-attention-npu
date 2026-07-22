@@ -1253,8 +1253,9 @@ private:
     }
 
     // S5: closed-form MCH — X = X0 (I+Y)(I+Y²)(I+Y⁴), Y=L².
-    // Replaces per-iter TMP=X@Y + AIV X+=TMP ping-pong (3× solveDone/Ready).
-    __aicore__ inline void ComputeMchAic(uint64_t slot)
+    // S2b: after Y-powers, steal MMAD(i+1) into the WaitSolve(I+Y) window when next prep is ready.
+    // Returns true if MMAD(iSub+1) was issued (caller must skip that MMAD in the outer loop).
+    __aicore__ inline bool ComputeMchAic(uint64_t slot, uint64_t iSub)
     {
         const uint64_t lBase = CmatOff(slot, PLANE_AKK, 0, 0);
         const uint64_t xBase = SolveOff(slot, SOLVE_X, 0, 0);
@@ -1269,6 +1270,16 @@ private:
         CubeGemmSolve(solveWs_, y1Base, solveWs_, y1Base, solveWs_, y2Base);
         Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(solveDoneFlag_);
 
+        // S2b steal: Prep(i+1) usually already pulsed ready during WriteSolve→Prep before AIV waits Y-done.
+        bool stoleNext = false;
+        if (iSub + 1 < nc_) {
+            const uint64_t nextSlot = (iSub + 1) % depth_;
+            Catlass::Arch::CrossCoreWaitFlag(readyFlag_);
+            ComputeMmad(nextSlot);
+            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(doneFlag_);
+            stoleNext = true;
+        }
+
         // AIV: in-place Pk = I + Yk on y0/y1/tmp, then solveReady.
         Catlass::Arch::CrossCoreWaitFlag(solveReadyFlag_);
         // T = P0@P1 → cmat AKK (L no longer needed); T2 = T@P2 → y0; X_new = X0@T2 → tmp.
@@ -1276,6 +1287,7 @@ private:
         CubeGemmSolve(cmatWs_, lBase, solveWs_, y2Base, solveWs_, y0Base);
         CubeGemmSolve(solveWs_, xBase, solveWs_, y0Base, solveWs_, y2Base);
         Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(solveDoneFlag_);
+        return stoleNext;
     }
 
     // S5: Pk = I + Yk in-place on half-rows (dual AIV).
@@ -1485,12 +1497,15 @@ private:
     __aicore__ inline void ProcessChunkAic(uint64_t task)
     {
         (void)task;
+        bool skipMmad = false;
         for (uint64_t iSub = 0; iSub < nc_; ++iSub) {
             const uint64_t slot = iSub % depth_;
-            Catlass::Arch::CrossCoreWaitFlag(readyFlag_);
-            ComputeMmad(slot);
-            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(doneFlag_);
-            ComputeMchAic(slot);
+            if (!skipMmad) {
+                Catlass::Arch::CrossCoreWaitFlag(readyFlag_);
+                ComputeMmad(slot);
+                Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(doneFlag_);
+            }
+            skipMmad = ComputeMchAic(slot, iSub);
         }
     }
 

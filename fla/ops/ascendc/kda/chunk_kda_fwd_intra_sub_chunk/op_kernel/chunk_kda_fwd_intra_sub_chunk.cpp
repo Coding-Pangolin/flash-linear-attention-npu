@@ -698,16 +698,35 @@ private:
 
     __aicore__ inline void ZeroScorePlaneRows(uint64_t slot, uint64_t plane, uint64_t rowBegin, uint64_t rowEnd)
     {
+        if (rowBegin >= rowEnd) {
+            return;
+        }
+        const uint64_t nRows = rowEnd - rowBegin;
+        const uint32_t elems = static_cast<uint32_t>(nRows * kDim_);
         LocalTensor<T> z = zeroBuf_.Get<T>();
-        Duplicate(z, static_cast<T>(0), static_cast<uint32_t>(kDim_));
+        Duplicate(z, static_cast<T>(0), elems);
         PipeBarrier<PIPE_V>();
         SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
-        for (uint64_t r = rowBegin; r < rowEnd; ++r) {
-            CopyVectorOut(scoreWs_, ScoreOff(slot, plane, r, 0), z, kDim_);
-        }
+        CopyVectorOut(scoreWs_, ScoreOff(slot, plane, rowBegin, 0), z, elems);
         SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
         WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+    }
+
+    // Max tile rows fitting vecBuf: 6 float planes + 3 typed planes.
+    __aicore__ inline uint64_t PrepMaxTileRows() const
+    {
+        const uint64_t bytesPerElem = 6ull * sizeof(float) + 3ull * sizeof(T);
+        const uint64_t budget = static_cast<uint64_t>(MAX_BC) * MAX_K * 6ull * sizeof(float);
+        uint64_t maxElems = budget / bytesPerElem;
+        if (maxElems > static_cast<uint64_t>(MAX_BC) * kDim_) {
+            maxElems = static_cast<uint64_t>(MAX_BC) * kDim_;
+        }
+        uint64_t rows = maxElems / kDim_;
+        if (rows == 0) {
+            rows = 1;
+        }
+        return rows;
     }
 
     __aicore__ inline void ResolveChunk(uint64_t iChunk, uint64_t iB, uint64_t &bos, uint64_t &localT,
@@ -737,7 +756,7 @@ private:
         iH = iHv / group_;
     }
 
-    // Vector prep: write QG / W(kpos) / KG(kneg). Dual AIV split rows. Never SetValue→DataCopy.
+    // P1: multi-row batched prep (align PrepareScoreFactorsBulk) — one HardEvent set per tile.
     __aicore__ inline void PrepareSub(uint64_t bIdx, uint64_t iH, uint64_t iHv, uint64_t bos, uint64_t localT,
                                       uint64_t localChunk, uint64_t iSub, uint64_t slot, uint64_t subBlockIdx,
                                       uint64_t subBlockNum)
@@ -745,10 +764,11 @@ private:
         const uint64_t iTi = localChunk * bt_ + iSub * bc_;
         const bool empty = (iTi >= localT);
         const uint64_t valid = empty ? 0 : ((iTi + bc_ <= localT) ? bc_ : (localT - iTi));
+        // Contiguous half-range split (cache-friendly); pad to bc_ so both AIVs cover full scratch rows.
         const uint64_t rowBegin = (bc_ * subBlockIdx) / subBlockNum;
         const uint64_t rowEnd = (bc_ * (subBlockIdx + 1)) / subBlockNum;
 
-        if (empty || valid == 0) {
+        if (empty || valid == 0 || rowBegin >= rowEnd) {
             ZeroScorePlaneRows(slot, PLANE_QG, rowBegin, rowEnd);
             ZeroScorePlaneRows(slot, PLANE_W, rowBegin, rowEnd);
             ZeroScorePlaneRows(slot, PLANE_KG, rowBegin, rowEnd);
@@ -759,87 +779,102 @@ private:
         LoadMidRow(HvRowOff(bIdx, iHv, bos + iTi + midRel));
         LocalTensor<float> mid = midBuf_.Get<float>();
 
-        for (uint64_t r = rowBegin; r < rowEnd; ++r) {
-            LocalTensor<float> arena = vecBuf_.Get<float>();
-            LocalTensor<float> qFp = arena;
-            LocalTensor<float> kFp = arena[kDim_];
-            LocalTensor<float> gFp = arena[2 * kDim_];
-            LocalTensor<float> expP = arena[3 * kDim_];
-            LocalTensor<float> expN = arena[4 * kDim_];
-            LocalTensor<float> out = arena[5 * kDim_];
-            const uint64_t typedOff = (6 * kDim_ * sizeof(float) + sizeof(T) - 1) / sizeof(T);
-            LocalTensor<T> typed = vecBuf_.Get<T>()[typedOff];
-            LocalTensor<T> qT = typed;
-            LocalTensor<T> kT = typed[kDim_];
-            LocalTensor<T> outT = typed[2 * kDim_];
+        const uint64_t maxTile = PrepMaxTileRows();
+        for (uint64_t tileRow = rowBegin; tileRow < rowEnd; tileRow += maxTile) {
+            uint64_t tileRows = rowEnd - tileRow;
+            if (tileRows > maxTile) {
+                tileRows = maxTile;
+            }
 
-            if (r >= valid) {
-                ZeroScorePlaneRows(slot, PLANE_QG, r, r + 1);
-                ZeroScorePlaneRows(slot, PLANE_W, r, r + 1);
-                ZeroScorePlaneRows(slot, PLANE_KG, r, r + 1);
+            // Rows in [valid, bc_) stay zero — split tile into live + pad.
+            uint64_t liveRows = 0;
+            if (tileRow < valid) {
+                liveRows = valid - tileRow;
+                if (liveRows > tileRows) {
+                    liveRows = tileRows;
+                }
+            }
+            if (liveRows < tileRows) {
+                ZeroScorePlaneRows(slot, PLANE_QG, tileRow + liveRows, tileRow + tileRows);
+                ZeroScorePlaneRows(slot, PLANE_W, tileRow + liveRows, tileRow + tileRows);
+                ZeroScorePlaneRows(slot, PLANE_KG, tileRow + liveRows, tileRow + tileRows);
+            }
+            if (liveRows == 0) {
                 continue;
             }
 
-            const uint64_t tok = bos + iTi + r;
-            CopyVectorIn(qT, q_, QkRowOff(bIdx, iH, tok), kDim_);
-            CopyVectorIn(kT, k_, QkRowOff(bIdx, iH, tok), kDim_);
-            CopyVectorIn(outT, g_, HvRowOff(bIdx, iHv, tok), kDim_);
+            const uint64_t elems = liveRows * kDim_;
+            LocalTensor<float> arena = vecBuf_.Get<float>();
+            LocalTensor<float> qFp = arena;
+            LocalTensor<float> kFp = arena[elems];
+            LocalTensor<float> gFp = arena[2 * elems];
+            LocalTensor<float> expP = arena[3 * elems];
+            LocalTensor<float> expN = arena[4 * elems];
+            LocalTensor<float> out = arena[5 * elems];
+            const uint64_t typedOff = (6 * elems * sizeof(float) + sizeof(T) - 1) / sizeof(T);
+            LocalTensor<T> typed = vecBuf_.Get<T>()[typedOff];
+            LocalTensor<T> qT = typed;
+            LocalTensor<T> kT = typed[elems];
+            LocalTensor<T> outT = typed[2 * elems];
+
+            const uint64_t tok0 = bos + iTi + tileRow;
+            CopyVectorIn(qT, q_, QkRowOff(bIdx, iH, tok0), elems);
+            CopyVectorIn(kT, k_, QkRowOff(bIdx, iH, tok0), elems);
+            CopyVectorIn(outT, g_, HvRowOff(bIdx, iHv, tok0), elems);
             SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
             WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
-            Cast(qFp, qT, RoundMode::CAST_NONE, static_cast<uint32_t>(kDim_));
-            Cast(kFp, kT, RoundMode::CAST_NONE, static_cast<uint32_t>(kDim_));
-            Cast(gFp, outT, RoundMode::CAST_NONE, static_cast<uint32_t>(kDim_));
+            Cast(qFp, qT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
+            Cast(kFp, kT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
+            Cast(gFp, outT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
 
-            Sub(expP, gFp, mid, static_cast<uint32_t>(kDim_));
+            for (uint64_t row = 0; row < liveRows; ++row) {
+                Sub(expP[row * kDim_], gFp[row * kDim_], mid, static_cast<uint32_t>(kDim_));
+            }
             PipeBarrier<PIPE_V>();
-            Muls(expP, expP, LN2, static_cast<uint32_t>(kDim_));
+            Muls(expP, expP, LN2, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
-            ClampExp(expP, static_cast<uint32_t>(kDim_));
-            Exp(expP, expP, static_cast<uint32_t>(kDim_));
+            Muls(expN, expP, -1.0f, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
-
-            Sub(expN, mid, gFp, static_cast<uint32_t>(kDim_));
-            PipeBarrier<PIPE_V>();
-            Muls(expN, expN, LN2, static_cast<uint32_t>(kDim_));
-            PipeBarrier<PIPE_V>();
-            ClampExp(expN, static_cast<uint32_t>(kDim_));
-            Exp(expN, expN, static_cast<uint32_t>(kDim_));
+            ClampExp(expP, static_cast<uint32_t>(elems));
+            ClampExp(expN, static_cast<uint32_t>(elems));
+            Exp(expP, expP, static_cast<uint32_t>(elems));
+            Exp(expN, expN, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
 
-            // qg → T scratch (bf16/fp16), align chunk_kda_fwd PrepareScoreFactorsBulk
-            Mul(out, qFp, expP, static_cast<uint32_t>(kDim_));
+            // QG
+            Mul(out, qFp, expP, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
-            ClampFp16(out, static_cast<uint32_t>(kDim_));
-            Cast(outT, out, RoundMode::CAST_RINT, static_cast<uint32_t>(kDim_));
+            ClampFp16(out, static_cast<uint32_t>(elems));
+            Cast(outT, out, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
             SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
             WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
-            CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_QG, r, 0), outT, kDim_);
+            CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_QG, tileRow, 0), outT, elems);
             SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
             WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
 
-            // kpos
-            Mul(out, kFp, expP, static_cast<uint32_t>(kDim_));
+            // W (kpos)
+            Mul(out, kFp, expP, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
-            ClampFp16(out, static_cast<uint32_t>(kDim_));
-            Cast(outT, out, RoundMode::CAST_RINT, static_cast<uint32_t>(kDim_));
+            ClampFp16(out, static_cast<uint32_t>(elems));
+            Cast(outT, out, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
             SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
             WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
-            CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_W, r, 0), outT, kDim_);
+            CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_W, tileRow, 0), outT, elems);
             SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
             WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
 
-            // kneg
-            Mul(out, kFp, expN, static_cast<uint32_t>(kDim_));
+            // KG (kneg)
+            Mul(out, kFp, expN, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
-            ClampFp16(out, static_cast<uint32_t>(kDim_));
-            Cast(outT, out, RoundMode::CAST_RINT, static_cast<uint32_t>(kDim_));
+            ClampFp16(out, static_cast<uint32_t>(elems));
+            Cast(outT, out, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
             SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
             WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
-            CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_KG, r, 0), outT, kDim_);
+            CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_KG, tileRow, 0), outT, elems);
             SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
             WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
             SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
@@ -905,27 +940,31 @@ private:
         PipeBarrier<PIPE_V>();
     }
 
-    // Phase B: vector tril / scale / β (replaces O(BC²) GetValue/SetValue).
+    // Phase B + P2: vector tril / scale / β via Brcb (no GetValue).
+    // Note: BinaryRepeatParams *RepStride is in 32B blocks — for BC=16 row → stride 2 (not 8; that is BT=64).
     __aicore__ inline void ApplyTrilScaleBeta(LocalTensor<float> aqk, LocalTensor<float> akk,
                                               LocalTensor<float> beta, uint64_t valid)
     {
         const uint32_t elems = static_cast<uint32_t>(bc_ * bc_);
         LocalTensor<float> mask = tmpBuf_.Get<float>();
+        LocalTensor<float> betaBrcb = vecBuf_.Get<float>();
+        const uint8_t rowBlk = static_cast<uint8_t>((bc_ * sizeof(float)) / 32);
 
         Muls(aqk, aqk, scale_, elems);
         PipeBarrier<PIPE_V>();
 
-        SyncVS();
-        for (uint64_t i = 0; i < bc_; ++i) {
-            const float b = (i < valid) ? beta.GetValue(static_cast<uint32_t>(i)) : 0.0f;
-            Muls(akk[static_cast<uint32_t>(i * bc_)], akk[static_cast<uint32_t>(i * bc_)], b,
-                 static_cast<uint32_t>(bc_));
-        }
+        const uint8_t brcbRepeat = static_cast<uint8_t>((bc_ + 7) / 8);
+        Brcb(betaBrcb, beta, brcbRepeat, {1, 8});
         PipeBarrier<PIPE_V>();
+        for (uint64_t col = 0; col < bc_; col += 8) {
+            Mul(akk[static_cast<uint32_t>(col)], akk[static_cast<uint32_t>(col)], betaBrcb, 8,
+                static_cast<uint8_t>(bc_), {1, 1, 1, rowBlk, rowBlk, 1});
+            PipeBarrier<PIPE_V>();
+        }
 
         for (uint64_t i = 0; i < bc_; ++i) {
-            const uint64_t aqkPrefix = (i < valid) ? (i + 1) : 0;          // tril incl diag
-            const uint64_t akkPrefix = (i < valid && i > 0) ? i : 0;       // strict tril
+            const uint64_t aqkPrefix = (i < valid) ? (i + 1) : 0;    // tril incl diag
+            const uint64_t akkPrefix = (i < valid && i > 0) ? i : 0; // strict tril
             BuildPrefixMask(mask, aqkPrefix, bc_);
             Mul(aqk[static_cast<uint32_t>(i * bc_)], aqk[static_cast<uint32_t>(i * bc_)], mask,
                 static_cast<uint32_t>(bc_));
@@ -957,6 +996,7 @@ private:
     }
 
     // Phase A: whole-row Cast + DataCopy (no per-element SetValue / SyncSV Cast(1)).
+    // Phase A helpers kept for scalar-style single-row debug; Cube Post uses PostSubStore batched path.
     __aicore__ inline void StoreAqkRow(uint64_t b, uint64_t hv, uint64_t tok, uint64_t col, LocalTensor<float> row)
     {
         LocalTensor<T> st = inBuf_.Get<T>();
@@ -1037,23 +1077,30 @@ private:
 
     // Write L (cmat AKK) and X0=I-L (solve X). akk UB holds -L after ApplyTrilScaleBeta.
     // Do not touch aqkBuf_ — it still holds tril(Aqk) for the final store.
+    // P2: diagonal I via aligned prefix one-hot Add (no Get/Set; no misaligned Adds(1)).
     __aicore__ inline void WriteSolveInputs(uint64_t slot, LocalTensor<float> akkNegL)
     {
         const uint32_t elems = static_cast<uint32_t>(bc_ * bc_);
         LocalTensor<float> arena = vecBuf_.Get<float>();
         LocalTensor<float> lMat = arena;
         LocalTensor<float> xMat = arena[elems];
+        LocalTensor<float> mask = arena[2 * elems];
+        LocalTensor<float> oneHot = arena[2 * elems + bc_];
 
         Muls(lMat, akkNegL, -1.0f, elems); // L = -(-L)
         PipeBarrier<PIPE_V>();
         Adds(xMat, akkNegL, 0.0f, elems); // X = -L
         PipeBarrier<PIPE_V>();
-        SyncVS();
         for (uint64_t i = 0; i < bc_; ++i) {
-            const uint32_t diag = static_cast<uint32_t>(i * bc_ + i);
-            xMat.SetValue(diag, xMat.GetValue(diag) + 1.0f); // X = I - L
+            // one-hot(i) = prefix(i+1) - prefix(i); Add onto row (UB-aligned).
+            BuildPrefixMask(mask, i + 1, bc_);
+            BuildPrefixMask(oneHot, i, bc_);
+            Sub(mask, mask, oneHot, static_cast<uint32_t>(bc_));
+            PipeBarrier<PIPE_V>();
+            Add(xMat[static_cast<uint32_t>(i * bc_)], xMat[static_cast<uint32_t>(i * bc_)], mask,
+                static_cast<uint32_t>(bc_));
+            PipeBarrier<PIPE_V>();
         }
-        SyncSV();
 
         SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
@@ -1071,14 +1118,20 @@ private:
         LocalTensor<float> arena = vecBuf_.Get<float>();
         LocalTensor<float> z = arena;
         LocalTensor<float> x = arena[elems];
+        LocalTensor<float> mask = arena[2 * elems];
+        LocalTensor<float> oneHot = arena[2 * elems + bc_];
         Duplicate(z, 0.0f, elems);
         Duplicate(x, 0.0f, elems);
         PipeBarrier<PIPE_V>();
-        SyncVS();
         for (uint64_t i = 0; i < bc_; ++i) {
-            x.SetValue(static_cast<uint32_t>(i * bc_ + i), 1.0f);
+            BuildPrefixMask(mask, i + 1, bc_);
+            BuildPrefixMask(oneHot, i, bc_);
+            Sub(mask, mask, oneHot, static_cast<uint32_t>(bc_));
+            PipeBarrier<PIPE_V>();
+            Add(x[static_cast<uint32_t>(i * bc_)], x[static_cast<uint32_t>(i * bc_)], mask,
+                static_cast<uint32_t>(bc_));
+            PipeBarrier<PIPE_V>();
         }
-        SyncSV();
         SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         CopyVectorOut(cmatWs_, CmatOff(slot, PLANE_AKK, 0, 0), z, elems);
@@ -1158,6 +1211,7 @@ private:
         }
     }
 
+    // P4: one Cast + strided aqk DataCopyPad + contiguous akkd — no per-row HardEvent.
     __aicore__ inline void PostSubStore(uint64_t bIdx, uint64_t iHv, uint64_t bos, uint64_t localT,
                                        uint64_t localChunk, uint64_t iSub, uint64_t slot)
     {
@@ -1166,19 +1220,40 @@ private:
             return;
         }
         const uint64_t valid = (iTi + bc_ <= localT) ? bc_ : (localT - iTi);
+        if (valid == 0) {
+            return;
+        }
         LocalTensor<float> aqk = aqkBuf_.Get<float>();
         LocalTensor<float> akk = akkBuf_.Get<float>();
         const uint32_t elems = static_cast<uint32_t>(bc_ * bc_);
+        const uint32_t live = static_cast<uint32_t>(valid * bc_);
         DataCopy(akk, solveWs_[SolveOff(slot, SOLVE_X, 0, 0)], elems);
         SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
         WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
         PipeBarrier<PIPE_V>();
-        for (uint64_t r = 0; r < valid; ++r) {
-            const uint64_t tok = bos + iTi + r;
-            const uint32_t rowOff = static_cast<uint32_t>(r * bc_);
-            StoreAqkRow(bIdx, iHv, tok, iSub * bc_, aqk[rowOff]);
-            StoreAkkdRow(bIdx, iHv, tok, akk[rowOff]);
-        }
+
+        LocalTensor<T> aqkT = vecBuf_.Get<T>();
+        Cast(aqkT, aqk, RoundMode::CAST_RINT, live);
+        PipeBarrier<PIPE_V>();
+        SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+        WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+
+        const uint64_t tok0 = bos + iTi;
+        const uint64_t aqkBase = AqkOff(bIdx, iHv, tok0, iSub * bc_);
+        DataCopyExtParams aqkParams;
+        aqkParams.blockCount = static_cast<uint16_t>(valid);
+        aqkParams.blockLen = static_cast<uint32_t>(bc_ * sizeof(T));
+        aqkParams.srcStride = 0;
+        aqkParams.dstStride = static_cast<uint32_t>((bt_ - bc_) * sizeof(T));
+        aqkParams.rsv = 0;
+        DataCopyPad(aqk_[aqkBase], aqkT, aqkParams);
+
+        CopyVectorOut(akkd_, AkkdOff(bIdx, iHv, tok0), akk, live);
+
+        SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+        WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+        SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+        WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
     }
 
     // Phase D: prep(0); for i: wait mmad(i) → write solve(i) → kick MCH → prep(i+1)‖MCH → store(i)

@@ -45,6 +45,8 @@
 // AIV S4 + Prefetch (AIV_S4_PREFETCH_PLAN.md) — 910B, no fusion:
 //   USE_S4_NO_POST_BARRIER=1: drop WriteSolve→solveReady CrossCoreBarrier (0x2 Set already joins AIVs)
 //   USE_SCORE_SOFT_PREFETCH=1: prefetch next KG into Score L1B during MCH wait (R2)
+// WriteSolve half-load (WS_HALF_LOAD_PLAN.md):
+//   USE_WS_HALF_LOAD=1: each AIV DataCopy only its row half of Aqk/Akk (drop 2× GM→UB)
 // Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
 //   USE_SCORE_TILE_MMAD=1 : Tile dual GEMM + L1B(kneg) residence (default on)
 #ifndef USE_MCH_L0_GEMM
@@ -70,6 +72,9 @@
 #endif
 #ifndef USE_SCORE_SOFT_PREFETCH
 #define USE_SCORE_SOFT_PREFETCH 0 // R2 tried; Dur 3.818 ≥ S4a 3.802 — keep code, default off
+#endif
+#ifndef USE_WS_HALF_LOAD
+#define USE_WS_HALF_LOAD 0 // W1 tried; Dur 3.801 ≈ S4a 3.802 — keep code, default off
 #endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
@@ -1942,9 +1947,19 @@ private:
         LocalTensor<float> beta = betaBuf_.Get<float>();
 
         if (!empty && valid > 0) {
+#if USE_WS_HALF_LOAD
+            // Each AIV only needs its half-rows for tril/write; avoid 2× full 16×16 GM→UB.
+            if (rowBegin < rowEnd) {
+                const uint32_t halfElems = static_cast<uint32_t>((rowEnd - rowBegin) * bc_);
+                const uint32_t base = static_cast<uint32_t>(rowBegin * bc_);
+                DataCopy(aqk[base], cmatWs_[CmatOff(slot, PLANE_AQK, rowBegin, 0)], halfElems);
+                DataCopy(akk[base], cmatWs_[CmatOff(slot, PLANE_AKK, rowBegin, 0)], halfElems);
+            }
+#else
             const uint32_t elems = static_cast<uint32_t>(bc_ * bc_);
             DataCopy(aqk, cmatWs_[CmatOff(slot, PLANE_AQK, 0, 0)], elems);
             DataCopy(akk, cmatWs_[CmatOff(slot, PLANE_AKK, 0, 0)], elems);
+#endif
             SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
             WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
             PipeBarrier<PIPE_V>();

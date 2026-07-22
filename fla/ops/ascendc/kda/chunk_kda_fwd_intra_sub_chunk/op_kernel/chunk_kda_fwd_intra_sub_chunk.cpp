@@ -52,6 +52,8 @@
 //   USE_MCH_ITERS_2=1: Neumann MCH_ITERS=2 (fewer Fixpipe/Nd2Nz)
 //   USE_MCH_SKIP_XI=1: skip X@I Mmad on iter>0 (L0C keep X after prior ACC/Fixpipe)
 //   USE_MCH_FIX_OVERLAP=1: X+=X@Y on M overlaps Y Fixpipe (defer Y Nd2Nz)
+// Post-MCH (POST_MCH_PLAN.md):
+//   USE_MCH_Y_SINGLE_LOAD=1: Y Nd2Nz once (L1A≡L1B=zN for RowMajor); alias for L0B
 // Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
 //   USE_SCORE_TILE_MMAD=1 : Tile dual GEMM + L1B(kneg) residence (default on)
 #ifndef USE_MCH_L0_GEMM
@@ -92,6 +94,9 @@
 #endif
 #ifndef USE_MCH_FIX_OVERLAP
 #define USE_MCH_FIX_OVERLAP 0 // M3 tried; Dur 3.812 ≈ S4a 3.802 — keep code, default off
+#endif
+#ifndef USE_MCH_Y_SINGLE_LOAD
+#define USE_MCH_Y_SINGLE_LOAD 1 // P1b: RowMajor zN alias — one Nd2Nz for Y/L/I (Dur 3.705)
 #endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
@@ -1572,9 +1577,16 @@ private:
         LocalTensor<float> l1X = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + MCH_L1_BYTES);
         LocalTensor<float> l1Y = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + 2 * MCH_L1_BYTES);
         LocalTensor<float> l1L = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + 3 * MCH_L1_BYTES);
+#if USE_MCH_Y_SINGLE_LOAD
+        // RowMajor→L1A/L1B both zN: one Nd2Nz per matrix, reuse as B-side source.
+        LocalTensor<float> l1Lb = l1L;
+        LocalTensor<float> l1Ib = l1I;
+        LocalTensor<float> l1Yb = l1Y;
+#else
         LocalTensor<float> l1Lb = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + 4 * MCH_L1_BYTES);
         LocalTensor<float> l1Ib = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + 5 * MCH_L1_BYTES);
         LocalTensor<float> l1Yb = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + 6 * MCH_L1_BYTES);
+#endif
 
         LocalTensor<float> l0Ax = resource.l0ABuf.template GetBufferByByte<float>(0);
         LocalTensor<float> l0Ay = resource.l0ABuf.template GetBufferByByte<float>(MCH_L0_BYTES);
@@ -1587,17 +1599,23 @@ private:
         PipeBarrier<PIPE_ALL>();
 
         MchLoadGmToL1A(l1L, cmatWs_, lBase);
+#if !USE_MCH_Y_SINGLE_LOAD
         MchLoadGmToL1B(l1Lb, cmatWs_, lBase);
+#endif
         MchLoadGmToL1A(l1X, solveWs_, xBase);
         if (loadEye) {
             MchLoadGmToL1A(l1I, solveWs_, eyeBase);
+#if !USE_MCH_Y_SINGLE_LOAD
             MchLoadGmToL1B(l1Ib, solveWs_, eyeBase);
+#endif
         }
 
-        // Y0 = L@L → L1_Y (+ L1B copy)
+        // Y0 = L@L → L1_Y (+ L1B copy unless Y single-load)
         MchMatmulL1AccFix(l1L, l1Lb, l1Lb, l0Ax, l0Bx, l0By, l0Cx, solveWs_, yBase, false);
         MchLoadGmToL1A(l1Y, solveWs_, yBase);
+#if !USE_MCH_Y_SINGLE_LOAD
         MchLoadGmToL1B(l1Yb, solveWs_, yBase);
+#endif
 
         // Priming so first-iter Waits pass (SolveTri MCHInvertDiagonal).
         SetFlag<HardEvent::M_MTE1>(EVT_X);
@@ -1637,7 +1655,9 @@ private:
 #else
                 MchFixpipeToGmEvt(l0Cy, solveWs_, yBase, EVT_Y);
                 MchLoadGmToL1A(l1Y, solveWs_, yBase);
+#if !USE_MCH_Y_SINGLE_LOAD
                 MchLoadGmToL1B(l1Yb, solveWs_, yBase);
+#endif
                 SetFlag<HardEvent::FIX_M>(EVT_Y);
 #endif
             }
@@ -1654,7 +1674,9 @@ private:
                 WaitFlag<HardEvent::FIX_MTE2>(EVT_Y);
                 MchFixpipeToGmEvt(l0Cx, solveWs_, xScratch, EVT_X, false);
                 MchLoadGmToL1A(l1Y, solveWs_, yBase);
+#if !USE_MCH_Y_SINGLE_LOAD
                 MchLoadGmToL1B(l1Yb, solveWs_, yBase);
+#endif
                 SetFlag<HardEvent::FIX_M>(EVT_Y);
                 WaitFlag<HardEvent::FIX_MTE2>(EVT_X);
                 MchLoadGmToL1A(l1X, solveWs_, xScratch);

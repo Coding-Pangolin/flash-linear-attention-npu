@@ -13,9 +13,9 @@
 | T2 CrossCore | **done** `f1816fc` | Identity 后移 + AIC Score Resource 复用；Dur **4.402** |
 | T3 sim -g | **done** `7817dfb` | `prof_msprof_op_sim_t1024_g/`；`code_exe` 有行号；instr 仍 BAR/Nd2Nz/FIX |
 | T4 MCH L1 | **done** `ce2d135` | `USE_MCH_L1_RESIDENT`；Dur **4.112** |
-| T5 S2c | **tried / default off** | `USE_S2C_BATCH` + DEPTH=4：精度绿，Dur **5.360**（丢 Prep‖MCH + aqk spill）→ 默认 0，DEPTH 回 2；代码保留 |
-| T6 prefetch/S4 | pending | |
-| T7 ceiling | pending | |
+| T5 S2c | **tried / default off** `dfe9b34` | Dur **5.360** → 默认关；DEPTH 回 2 |
+| T6 prefetch/S4 | **deferred** | 填不满 2.6 ms 缺口；见 `CEILING_1P5.md` §3 |
+| T7 ceiling | **done** | [`CEILING_1P5.md`](CEILING_1P5.md)：最佳 ~4.1；1.5 需融合/调度/Soc |
 
 ---
 

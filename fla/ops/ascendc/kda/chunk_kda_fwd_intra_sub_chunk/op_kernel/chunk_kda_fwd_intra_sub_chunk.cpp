@@ -50,6 +50,7 @@
 //   USE_PREP_BEFORE_DONE=1: Prep(next) under MMAD; ready after solveReady (W2)
 // MCH shorten (MCH_SHORTEN_PLAN.md):
 //   USE_MCH_ITERS_2=1: Neumann MCH_ITERS=2 (fewer Fixpipe/Nd2Nz)
+//   USE_MCH_SKIP_XI=1: skip X@I Mmad on iter>0 (L0C keep X after prior ACC/Fixpipe)
 // Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
 //   USE_SCORE_TILE_MMAD=1 : Tile dual GEMM + L1B(kneg) residence (default on)
 #ifndef USE_MCH_L0_GEMM
@@ -84,6 +85,9 @@
 #endif
 #ifndef USE_MCH_ITERS_2
 #define USE_MCH_ITERS_2 0 // M1 tried; akkd_rel≈520 — keep code, default off (need 3 iters)
+#endif
+#ifndef USE_MCH_SKIP_XI
+#define USE_MCH_SKIP_XI 0 // M2 tried; Dur 3.825 ≥ S4a 3.802 — keep code, default off
 #endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
@@ -1607,7 +1611,14 @@ private:
 
             WaitFlag<HardEvent::FIX_M>(EVT_X);
             WaitFlag<HardEvent::MTE1_M>(EVT_X);
+#if USE_MCH_SKIP_XI
+            // iter0: L0C = X@I. Later iters: keep L0C=X_new from prior ACC (skip I multiply).
+            if (iter == 0) {
+                MchMmad(l0Cx, l0Ax, l0Bx, true);
+            }
+#else
             MchMmad(l0Cx, l0Ax, l0Bx, true); // L0C_X = X@I
+#endif
 
             if (iter + 1 < MCH_ITERS) {
                 WaitFlag<HardEvent::FIX_M>(EVT_Y);

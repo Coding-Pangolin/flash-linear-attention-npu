@@ -1,7 +1,8 @@
 # Intra-sub-chunk：SolveTri 风格 L0 ACC MCH 详细方案
 
-> 状态：**L0 ACC 热路径已落地**（`USE_MCH_L0_ACC=1`）。  
-> 精度 suite 全绿；空闲卡 msprof Task Dur 中位 ≈ **5.33 ms**（S5b 基线 6.59 → −19%）。  
+> 状态：**Phase B Dual 已落地**（`USE_MCH_L0_DUAL=1`，~**4.65 ms**）。  
+> Phase A L0 ACC（单流）~5.33 ms；S2b steal 已评估无收益（默认关）。  
+> 指导：`PHASE_B_DUAL_PLAN.md`。  
 > 关键修复：ACC 必须对标 SolveTri **双 L0B 预载**（I→L0B[0]、Y→L0B[TILE]），禁止在 `X@I` 与 ACC 之间 `M_MTE1` 覆盖同一 L0B 槽（曾导致 `akkd_rel≈2300`）。
 
 参考实现：

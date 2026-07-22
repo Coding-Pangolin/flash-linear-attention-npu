@@ -34,13 +34,25 @@
 #include "lib/matmul_intf.h"
 #endif
 
-// L0 ACC MCH bring-up (see L0_ACC_MCH_DESIGN.md):
+// L0 ACC MCH bring-up (see L0_ACC_MCH_DESIGN.md / PHASE_B_DUAL_PLAN.md):
 //   USE_MCH_L0_GEMM=1 : CubeGemmSolve → Tile stack (L0.1 gate; S5b CV unchanged)
 //   USE_MCH_L0_ACC=1  : classic Neumann + L0 ACC; single CV; Store SOLVE_X (implies GEMM path)
+//   USE_MCH_L0_DUAL=1 : Phase B X∥Y dual-buffer (implies ACC)
+//   USE_MCH_S2B_STEAL=1: after Dual green, steal MMAD(i+1) post solveDone (default off)
 #ifndef USE_MCH_L0_GEMM
 #define USE_MCH_L0_GEMM 1
 #endif
 #ifndef USE_MCH_L0_ACC
+#define USE_MCH_L0_ACC 1
+#endif
+#ifndef USE_MCH_L0_DUAL
+#define USE_MCH_L0_DUAL 1
+#endif
+#ifndef USE_MCH_S2B_STEAL
+#define USE_MCH_S2B_STEAL 0
+#endif
+#if USE_MCH_L0_DUAL
+#undef USE_MCH_L0_ACC
 #define USE_MCH_L0_ACC 1
 #endif
 #if USE_MCH_L0_ACC
@@ -1142,6 +1154,8 @@ private:
     static constexpr uint32_t MCH_L0_BYTES = MAX_BC * MAX_BC * sizeof(float);
     // Dedicated HardEvent ids — avoid clashing with Catlass BlockMmad priming on id 0/1.
     static constexpr uint16_t MCH_EVT = 2;
+    static constexpr uint16_t EVT_X = 0; // Phase B X stream (after PIPE_ALL from Score)
+    static constexpr uint16_t EVT_Y = 1; // Phase B Y stream
 
     using MchTileCopy =
         Catlass::Gemm::Tile::PackedTileCopyTla<KdaArchTag, float, Catlass::layout::RowMajor, float,
@@ -1319,6 +1333,147 @@ private:
         PipeBarrier<PIPE_ALL>();
     }
 
+    // Phase B: SolveTri-style X∥Y dual-buffer (PHASE_B_DUAL_PLAN.md). No MBH.
+    __aicore__ inline void MchCopyL1AToL0A(LocalTensor<float> l0A, LocalTensor<float> l1A)
+    {
+        using CopyL1ToL0A = typename MchTileCopy::CopyL1ToL0A;
+        const uint32_t n = static_cast<uint32_t>(bc_);
+        auto layoutL1A = tla::MakeLayout<float, typename MchTileCopy::LayoutTagL1A>(n, n);
+        auto layoutL0A = tla::MakeLayout<float, typename MchTileCopy::LayoutTagL0A>(n, n);
+        auto tL1 = GetTile(tla::MakeTensor(l1A, layoutL1A, Catlass::Arch::PositionL1{}), tla::MakeCoord(0, 0),
+                           tla::MakeShape(n, n));
+        auto tL0 = GetTile(tla::MakeTensor(l0A, layoutL0A, Catlass::Arch::PositionL0A{}), tla::MakeCoord(0, 0),
+                           tla::MakeShape(n, n));
+        CopyL1ToL0A copy;
+        copy(tL0, tL1);
+    }
+
+    __aicore__ inline void MchCopyL1BToL0B(LocalTensor<float> l0B, LocalTensor<float> l1B)
+    {
+        using CopyL1ToL0B = typename MchTileCopy::CopyL1ToL0B;
+        const uint32_t n = static_cast<uint32_t>(bc_);
+        auto layoutL1B = tla::MakeLayout<float, typename MchTileCopy::LayoutTagL1B>(n, n);
+        auto layoutL0B = tla::MakeLayout<float, typename MchTileCopy::LayoutTagL0B>(n, n);
+        auto tL1 = GetTile(tla::MakeTensor(l1B, layoutL1B, Catlass::Arch::PositionL1{}), tla::MakeCoord(0, 0),
+                           tla::MakeShape(n, n));
+        auto tL0 = GetTile(tla::MakeTensor(l0B, layoutL0B, Catlass::Arch::PositionL0B{}), tla::MakeCoord(0, 0),
+                           tla::MakeShape(n, n));
+        CopyL1ToL0B copy;
+        copy(tL0, tL1);
+    }
+
+    __aicore__ inline void MchFixpipeToGmEvt(LocalTensor<float> l0c, GlobalTensor<float> &gm, uint64_t base,
+                                             uint16_t evt)
+    {
+        auto layoutGm = tla::MakeLayout<float, Catlass::layout::RowMajor>(bc_, bc_);
+        auto tGm = tla::MakeTensor(gm[base], layoutGm, Catlass::Arch::PositionGM{});
+        auto blockGm = GetTile(tGm, tla::MakeCoord(0, 0), tla::MakeShape(bc_, bc_));
+        auto layoutL0C = tla::MakeLayoutL0C(bc_, bc_);
+        auto tL0C = tla::MakeTensor(l0c, layoutL0C, Catlass::Arch::PositionL0C{});
+#if (defined(CATLASS_ARCH) && CATLASS_ARCH == 3510)
+        typename MchTileCopy::template CopyL0CToDst<decltype(blockGm)> copy;
+#else
+        typename MchTileCopy::template CopyL0CToGm<decltype(blockGm)> copy;
+#endif
+        SetFlag<HardEvent::M_FIX>(evt);
+        WaitFlag<HardEvent::M_FIX>(evt);
+        copy(blockGm, tL0C);
+        SetFlag<HardEvent::FIX_MTE2>(evt);
+        WaitFlag<HardEvent::FIX_MTE2>(evt);
+    }
+
+    __aicore__ inline void MchL0AccDual(uint64_t slot)
+    {
+        const uint64_t lBase = CmatOff(slot, PLANE_AKK, 0, 0);
+        const uint64_t xBase = SolveOff(slot, SOLVE_X, 0, 0);
+        const uint64_t yBase = SolveOff(slot, SOLVE_Y0, 0, 0);
+        const uint64_t eyeBase = SolveOff(0, SOLVE_Y1, 0, 0);
+
+        Catlass::Arch::Resource<KdaArchTag> resource;
+        LocalTensor<float> l1I = resource.l1Buf.template GetBufferByByte<float>(0);
+        LocalTensor<float> l1X = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BYTES);
+        LocalTensor<float> l1Y = resource.l1Buf.template GetBufferByByte<float>(2 * MCH_L1_BYTES);
+        LocalTensor<float> l1L = resource.l1Buf.template GetBufferByByte<float>(3 * MCH_L1_BYTES);
+        LocalTensor<float> l1Lb = resource.l1Buf.template GetBufferByByte<float>(4 * MCH_L1_BYTES);
+        LocalTensor<float> l1Ib = resource.l1Buf.template GetBufferByByte<float>(5 * MCH_L1_BYTES);
+        LocalTensor<float> l1Yb = resource.l1Buf.template GetBufferByByte<float>(6 * MCH_L1_BYTES);
+
+        LocalTensor<float> l0Ax = resource.l0ABuf.template GetBufferByByte<float>(0);
+        LocalTensor<float> l0Ay = resource.l0ABuf.template GetBufferByByte<float>(MCH_L0_BYTES);
+        LocalTensor<float> l0Bx = resource.l0BBuf.template GetBufferByByte<float>(0);
+        LocalTensor<float> l0By = resource.l0BBuf.template GetBufferByByte<float>(MCH_L0_BYTES);
+        LocalTensor<float> l0Cx = resource.l0CBuf.template GetBufferByByte<float>(0);
+        LocalTensor<float> l0Cy = resource.l0CBuf.template GetBufferByByte<float>(MCH_L0_BYTES);
+
+        // Isolate from Score BlockMmad HardEvent state.
+        PipeBarrier<PIPE_ALL>();
+
+        MchLoadGmToL1A(l1L, cmatWs_, lBase);
+        MchLoadGmToL1B(l1Lb, cmatWs_, lBase);
+        MchLoadGmToL1A(l1X, solveWs_, xBase);
+        MchLoadGmToL1A(l1I, solveWs_, eyeBase);
+        MchLoadGmToL1B(l1Ib, solveWs_, eyeBase);
+
+        // Y0 = L@L → L1_Y (+ L1B copy)
+        MchMatmulL1AccFix(l1L, l1Lb, l1Lb, l0Ax, l0Bx, l0By, l0Cx, solveWs_, yBase, false);
+        MchLoadGmToL1A(l1Y, solveWs_, yBase);
+        MchLoadGmToL1B(l1Yb, solveWs_, yBase);
+
+        // Priming so first-iter Waits pass (SolveTri MCHInvertDiagonal).
+        SetFlag<HardEvent::M_MTE1>(EVT_X);
+        SetFlag<HardEvent::M_MTE1>(EVT_Y);
+        SetFlag<HardEvent::FIX_M>(EVT_X);
+        SetFlag<HardEvent::FIX_M>(EVT_Y);
+
+        for (uint32_t iter = 0; iter < MCH_ITERS; ++iter) {
+            WaitFlag<HardEvent::M_MTE1>(EVT_X);
+            MchCopyL1AToL0A(l0Ax, l1X);
+            MchCopyL1BToL0B(l0Bx, l1Ib);
+            SetFlag<HardEvent::MTE1_M>(EVT_X);
+
+            WaitFlag<HardEvent::M_MTE1>(EVT_Y);
+            MchCopyL1AToL0A(l0Ay, l1Y);
+            MchCopyL1BToL0B(l0By, l1Yb);
+            SetFlag<HardEvent::MTE1_M>(EVT_Y);
+
+            WaitFlag<HardEvent::FIX_M>(EVT_X);
+            WaitFlag<HardEvent::MTE1_M>(EVT_X);
+            MchMmad(l0Cx, l0Ax, l0Bx, true); // L0C_X = X@I
+
+            if (iter + 1 < MCH_ITERS) {
+                WaitFlag<HardEvent::FIX_M>(EVT_Y);
+                WaitFlag<HardEvent::MTE1_M>(EVT_Y);
+                MchMmad(l0Cy, l0Ay, l0By, true); // L0C_Y = Y@Y
+                MchFixpipeToGmEvt(l0Cy, solveWs_, yBase, EVT_Y);
+                MchLoadGmToL1A(l1Y, solveWs_, yBase);
+                MchLoadGmToL1B(l1Yb, solveWs_, yBase);
+                SetFlag<HardEvent::FIX_M>(EVT_Y);
+            }
+
+            PipeBarrier<PIPE_M>();
+            if (iter + 1 >= MCH_ITERS) {
+                WaitFlag<HardEvent::MTE1_M>(EVT_Y);
+            }
+            // L0C_X += X@Y; L0B[Y] still holds this-iter Y (pre-square).
+            MchMmad(l0Cx, l0Ax, l0By, false);
+            MchFixpipeToGmEvt(l0Cx, solveWs_, xBase, EVT_X);
+            if (iter + 1 < MCH_ITERS) {
+                MchLoadGmToL1A(l1X, solveWs_, xBase);
+            }
+
+            SetFlag<HardEvent::M_MTE1>(EVT_X);
+            SetFlag<HardEvent::M_MTE1>(EVT_Y);
+            SetFlag<HardEvent::FIX_M>(EVT_X);
+        }
+
+        // Drain unpaired priming/loop flags (SolveTri).
+        WaitFlag<HardEvent::M_MTE1>(EVT_X);
+        WaitFlag<HardEvent::M_MTE1>(EVT_Y);
+        WaitFlag<HardEvent::FIX_M>(EVT_X);
+        WaitFlag<HardEvent::FIX_M>(EVT_Y);
+        PipeBarrier<PIPE_ALL>();
+    }
+
     __aicore__ inline void AddSolveTmpToX(uint64_t slot)
     {
         const uint32_t elems = static_cast<uint32_t>(bc_ * bc_);
@@ -1461,9 +1616,22 @@ private:
 #if USE_MCH_L0_ACC
         (void)iSub;
         Catlass::Arch::CrossCoreWaitFlag(solveReadyFlag_);
+#if USE_MCH_L0_DUAL
+        MchL0AccDual(slot);
+#else
         MchL0Acc(slot);
+#endif
         Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(solveDoneFlag_);
-        return false; // no S2b steal while ACC settle
+#if USE_MCH_S2B_STEAL
+        if (iSub + 1 < nc_) {
+            const uint64_t nextSlot = (iSub + 1) % depth_;
+            Catlass::Arch::CrossCoreWaitFlag(readyFlag_);
+            ComputeMmad(nextSlot);
+            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(doneFlag_);
+            return true;
+        }
+#endif
+        return false;
 #else
         const uint64_t lBase = CmatOff(slot, PLANE_AKK, 0, 0);
         const uint64_t xBase = SolveOff(slot, SOLVE_X, 0, 0);

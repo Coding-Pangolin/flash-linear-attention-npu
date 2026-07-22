@@ -1,7 +1,8 @@
 # ChunkKdaFwdIntraSubChunk：压缩事实 + scalar 深挖
 
 > Shape `(1,32,8192,128)` BT=64 bf16 · 空闲卡 `ASCEND_DEVICE_ID=1` · **以 msprof Task Duration 中位为准**  
-> 当前最佳：**L0 ACC ≈ 5.33 ms**（S5b 6.59）；详见 `L0_ACC_MCH_DESIGN.md`  
+> 当前最佳：**Phase B Dual ≈ 4.65 ms**（Phase A L0 ACC 5.33；S5b 6.59）  
+> 详见 `L0_ACC_MCH_DESIGN.md` / `PHASE_B_DUAL_PLAN.md`  
 > 交互分析 Canvas：`intra-sub-chunk-scalar-deep-dive.canvas.tsx`
 
 ---
@@ -112,16 +113,19 @@ prologue 双 Prep：Dur **8.51**（+0.18）。Prep1 推迟 `solveReady0`；WaitS
 | S2b | 7.988 | 3.102 | 2.815 | 0.266 |
 | **S5b+S4** | **6.588** | **2.076** | 2.766 | 0.266 |
 | **L0 ACC** | **5.325** | **1.621** | **1.016** | 0.308 |
+| **Phase B Dual** | **4.654** | **1.613** | **1.018** | **0.248** |
+| Dual+S2b（否决） | 4.681 | 1.611 | 1.015 | 0.248 |
 
 S5b：I+Y 三平面一次 burst；Store 直接读 `SOLVE_TMP`；去 post-Store barrier。  
-S2b：Y-powers 后偷发 MMAD(i+1)（墙钟持平）。  
-L0 ACC：经典 Neumann + 双 L0B 预载 `Mmad_ACC`；单次 CV；Store 读 `SOLVE_X`；默认 `USE_MCH_L0_ACC=1`（详见 `L0_ACC_MCH_DESIGN.md`）。
+S2b（闭式期）：Y-powers 后偷发 MMAD(i+1)（墙钟持平）。  
+L0 ACC：经典 Neumann + 双 L0B 预载 `Mmad_ACC`；单次 CV；Store 读 `SOLVE_X`。  
+**Phase B Dual**：`MchL0AccDual` X∥Y 双事件 + L1 回灌；`USE_MCH_L0_DUAL=1`；S2b steal 再评估无收益已关（见 `PHASE_B_DUAL_PLAN.md`）。
 
-### L0 ACC（已合入热路径）
+### L0 ACC / Phase B（当前热路径）
 
-- 精度：`test_npu_chunk_kda_fwd_intra_sub_chunk.py` all passed  
-- 空闲卡 device1 msprof：Dur **5.33 ms**（相对 S5b −19%）；`aic_scalar` 2.77→1.02（砍掉等 AIV `I+Y`）  
-- 可选后续：Phase B 双缓冲、评估恢复 S2b steal
+- 精度：suite all passed（Dual；Dual+S2b 亦绿但 Dur 无优）  
+- 空闲卡 device1：Dur **4.65 ms**（相对 S5b 6.59 −29%；相对 Phase A 5.33 −13%）  
+- 默认：`USE_MCH_L0_ACC=1` + `USE_MCH_L0_DUAL=1` + `USE_MCH_S2B_STEAL=0`
 
 ---
 

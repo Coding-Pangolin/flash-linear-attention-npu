@@ -41,6 +41,7 @@
 //   USE_MCH_S2B_STEAL=1: after Dual green, steal MMAD(i+1) post solveDone (default off)
 //   USE_MCH_L1_RESIDENT=1: T4 — chunk-reuse MCH Resource + I L1 residence;
 //     intermediate X Fixpipe→SOLVE_TMP→L1, final X→SOLVE_X (910B has no L0C→L1)
+//   USE_S2C_BATCH=1: T5 — per wave (size=depth): MMAD×n then MCH×n (fewer barriers)
 // Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
 //   USE_SCORE_TILE_MMAD=1 : Tile dual GEMM + L1B(kneg) residence (default on)
 #ifndef USE_MCH_L0_GEMM
@@ -57,6 +58,9 @@
 #endif
 #ifndef USE_MCH_L1_RESIDENT
 #define USE_MCH_L1_RESIDENT 1
+#endif
+#ifndef USE_S2C_BATCH
+#define USE_S2C_BATCH 0 // T5 tried; Dur 5.36 > T4 4.11 — keep code, default off
 #endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
@@ -75,6 +79,13 @@
 #undef USE_MCH_L0_ACC
 #define USE_MCH_L0_ACC 1
 #endif
+#if USE_S2C_BATCH
+// S2c needs Dual ACC path (single solveReady/Done per sub).
+#undef USE_MCH_L0_ACC
+#define USE_MCH_L0_ACC 1
+#undef USE_MCH_S2B_STEAL
+#define USE_MCH_S2B_STEAL 0
+#endif
 
 using namespace AscendC;
 using _16 = tla::Int<16>;
@@ -89,7 +100,7 @@ constexpr float EXP_INPUT_MIN = -EXP2_CLAMP * LN2;
 constexpr float FP16_MAX = 65504.0f;
 constexpr uint32_t MAX_K = 256;
 constexpr uint32_t MAX_BC = 16;
-constexpr uint32_t SCORE_QUEUE_DEPTH = 2;
+constexpr uint32_t SCORE_QUEUE_DEPTH = 2; // S2c (off) wanted 4; keep 2 with USE_S2C_BATCH=0
 constexpr uint32_t SCORE_PLANES = 3;
 constexpr uint32_t C_PLANES = 2;
 constexpr uint32_t PLANE_QG = 0;
@@ -1856,6 +1867,7 @@ private:
 #endif
 
     // Phase D + P6: both AIVs write L/X row halves. Leaves tril(aqk) rows in aqkBuf_.
+    // USE_S2C_BATCH: also spill tril(aqk) → cmat AQK so Store can reload after later WriteSolves.
     __aicore__ inline void PostSubWriteSolve(uint64_t bIdx, uint64_t iHv, uint64_t bos, uint64_t localT,
                                              uint64_t localChunk, uint64_t iSub, uint64_t slot,
                                              uint64_t subBlockIdx, uint64_t subBlockNum)
@@ -1880,6 +1892,20 @@ private:
             LoadBetaRows(bIdx, iHv, bos + iTi, valid, beta);
             ApplyTrilScaleBeta(aqk, akk, beta, valid, rowBegin, rowEnd);
             WriteSolveInputs(slot, akk, rowBegin, rowEnd);
+#if USE_S2C_BATCH
+            if (rowBegin < rowEnd) {
+                const uint32_t live = static_cast<uint32_t>((rowEnd - rowBegin) * bc_);
+                const uint32_t srcBase = static_cast<uint32_t>(rowBegin * bc_);
+                LocalTensor<float> aqkRows = aqk[srcBase];
+                SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+                WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+                CopyVectorOut(cmatWs_, CmatOff(slot, PLANE_AQK, rowBegin, 0), aqkRows, live);
+                SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+                WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+                SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+                WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+            }
+#endif
         } else {
             WriteSolveInputsEmpty(slot, rowBegin, rowEnd);
         }
@@ -1926,6 +1952,10 @@ private:
         const uint32_t srcBase = static_cast<uint32_t>(rowBegin * bc_);
         LocalTensor<float> akkRows = akk[srcBase];
         LocalTensor<float> aqkRows = aqk[srcBase];
+#if USE_S2C_BATCH
+        // tril(aqk) was spilled to cmat AQK in WriteSolve (aqkBuf_ reused across wave).
+        DataCopy(aqkRows, cmatWs_[CmatOff(slot, PLANE_AQK, rowBegin, 0)], live);
+#endif
 #if USE_MCH_L0_ACC
         // L0 ACC: X_new in SOLVE_X
         DataCopy(akkRows, solveWs_[SolveOff(slot, SOLVE_X, rowBegin, 0)], live);
@@ -1962,6 +1992,7 @@ private:
     }
 
     // Phase D: prep(0); for i: wait mmad(i) → write solve(i) → kick MCH → prep(i+1)‖MCH → store(i)
+    // T5 USE_S2C_BATCH: wave of depth — MMAD×n then MCH×n (one barrier per wave).
     __aicore__ inline void ProcessChunkAiv(uint64_t task)
     {
         uint64_t iB = 0, iHv = 0, iH = 0, iChunk = 0;
@@ -1973,8 +2004,6 @@ private:
         const uint64_t subBlockNum = static_cast<uint64_t>(GetSubBlockNum());
 
         // Prologue: Prep(0)+ready ASAP (T2: Identity does not block Cube start).
-        // Eye at SOLVE_Y1 is only needed before first MCH, so write it after ready
-        // while AIC runs MMAD(0) — closes Vector→Cube MTE2 bubble (SCORE_TILE plan §3).
         {
             const uint64_t slot0 = 0 % depth_;
             PrepareSub(bIdx, iH, iHv, bos, localT, localChunk, 0, slot0, subBlockIdx, subBlockNum);
@@ -1997,6 +2026,45 @@ private:
 #endif
         }
 
+#if USE_S2C_BATCH
+        for (uint64_t wave = 0; wave < nc_; wave += depth_) {
+            const uint64_t n = (wave + depth_ <= nc_) ? depth_ : (nc_ - wave);
+            // Score phase: WaitDone → WriteSolve; Prep next within wave.
+            for (uint64_t j = 0; j < n; ++j) {
+                const uint64_t iSub = wave + j;
+                const uint64_t slot = iSub % depth_;
+                Catlass::Arch::CrossCoreWaitFlag(doneFlag_);
+                PostSubWriteSolve(bIdx, iHv, bos, localT, localChunk, iSub, slot, subBlockIdx, subBlockNum);
+                if (j + 1 < n) {
+                    const uint64_t next = iSub + 1;
+                    const uint64_t slotNext = next % depth_;
+                    PrepareSub(bIdx, iH, iHv, bos, localT, localChunk, next, slotNext, subBlockIdx, subBlockNum);
+                    Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(readyFlag_);
+                }
+            }
+            // One dual-AIV barrier for the whole wave's WriteSolve (was N barriers).
+            Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
+            // MCH + Store: CrossCoreFlag is 1:1 Set/Wait (not a counting semaphore).
+            for (uint64_t j = 0; j < n; ++j) {
+                const uint64_t iSub = wave + j;
+                const uint64_t slot = iSub % depth_;
+                Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
+#if USE_MCH_L0_ACC
+                PostSubMchWait(slot, subBlockIdx, subBlockNum);
+#else
+                PostSubMchClosedForm(slot, subBlockIdx, subBlockNum);
+#endif
+                PostSubStore(bIdx, iHv, bos, localT, localChunk, iSub, slot, subBlockIdx, subBlockNum);
+            }
+            // Kick Score of next wave after slots are free.
+            if (wave + n < nc_) {
+                const uint64_t next = wave + n;
+                const uint64_t slotNext = next % depth_;
+                PrepareSub(bIdx, iH, iHv, bos, localT, localChunk, next, slotNext, subBlockIdx, subBlockNum);
+                Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(readyFlag_);
+            }
+        }
+#else
         for (uint64_t iSub = 0; iSub < nc_; ++iSub) {
             const uint64_t slot = iSub % depth_;
             Catlass::Arch::CrossCoreWaitFlag(doneFlag_);
@@ -2019,19 +2087,46 @@ private:
 #endif
             PostSubStore(bIdx, iHv, bos, localT, localChunk, iSub, slot, subBlockIdx, subBlockNum);
         }
+#endif
     }
 
     __aicore__ inline void ProcessChunkAic(uint64_t task)
     {
         (void)task;
 #if USE_MCH_L1_RESIDENT
-        // T4: one Resource for Score+MCH; MCH L1 starts at MCH_L1_BASE so I survives Score.
         Catlass::Arch::Resource<KdaArchTag> sharedResource;
         bool loadEye = true;
 #else
-        // T2: one Score Resource per chunk — avoid per-sub pipe.Destroy() in WaitReady critical path.
         Catlass::Arch::Resource<KdaArchTag> scoreResource;
 #endif
+
+#if USE_S2C_BATCH
+        for (uint64_t wave = 0; wave < nc_; wave += depth_) {
+            const uint64_t n = (wave + depth_ <= nc_) ? depth_ : (nc_ - wave);
+            for (uint64_t j = 0; j < n; ++j) {
+                const uint64_t iSub = wave + j;
+                const uint64_t slot = iSub % depth_;
+                Catlass::Arch::CrossCoreWaitFlag(readyFlag_);
+#if USE_MCH_L1_RESIDENT
+                ComputeMmad(slot, sharedResource);
+#else
+                ComputeMmad(slot, scoreResource);
+#endif
+                Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(doneFlag_);
+            }
+            for (uint64_t j = 0; j < n; ++j) {
+                const uint64_t iSub = wave + j;
+                const uint64_t slot = iSub % depth_;
+#if USE_MCH_L1_RESIDENT
+                (void)ComputeMchAic(slot, iSub, sharedResource, loadEye);
+                loadEye = false;
+#else
+                Catlass::Arch::Resource<KdaArchTag> mchResource;
+                (void)ComputeMchAic(slot, iSub, mchResource, true);
+#endif
+            }
+        }
+#else
         bool skipMmad = false;
         for (uint64_t iSub = 0; iSub < nc_; ++iSub) {
             const uint64_t slot = iSub % depth_;
@@ -2052,6 +2147,7 @@ private:
             skipMmad = ComputeMchAic(slot, iSub, mchResource, true);
 #endif
         }
+#endif
     }
 
     GlobalTensor<T> q_, k_, g_, beta_, aqk_, scoreWs_;

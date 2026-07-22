@@ -22,7 +22,7 @@ constexpr size_t ATTR_CHUNK_SIZE_IDX = 1;
 constexpr int64_t SUB_CHUNK_SIZE = 16;
 constexpr int64_t MAX_K_DIM = 256;
 constexpr int64_t MAX_HEAD = 128;
-constexpr uint64_t SCORE_QUEUE_DEPTH = 2;
+constexpr uint64_t SCORE_QUEUE_DEPTH = 2; // match op_kernel; S2c bring-up used 4 then reverted
 constexpr uint64_t SCORE_SCRATCH_PLANES = 3;
 constexpr uint64_t C_SCRATCH_PLANES = 2;
 // Phase C MCH: X / Y0 / TMP / Y1 per DEPTH slot (fp32 BC×BC).

@@ -12,8 +12,8 @@
 | T1 Score Tile | **done** `7e329a5` | 精度绿；Dur **4.627** vs Dual 4.654 |
 | T2 CrossCore | **done** `f1816fc` | Identity 后移 + AIC Score Resource 复用；Dur **4.402** |
 | T3 sim -g | **done** `7817dfb` | `prof_msprof_op_sim_t1024_g/`；`code_exe` 有行号；instr 仍 BAR/Nd2Nz/FIX |
-| T4 MCH L1 | **done** | `USE_MCH_L1_RESIDENT`：共享 Resource + I 驻留（L1@MCH_L1_BASE）+ 中间 X→TMP；精度绿；Dur **4.112**（fixpipe≈923 / mte2≈949） |
-| T5 S2c | pending | |
+| T4 MCH L1 | **done** `ce2d135` | `USE_MCH_L1_RESIDENT`；Dur **4.112** |
+| T5 S2c | **tried / default off** | `USE_S2C_BATCH` + DEPTH=4：精度绿，Dur **5.360**（丢 Prep‖MCH + aqk spill）→ 默认 0，DEPTH 回 2；代码保留 |
 | T6 prefetch/S4 | pending | |
 | T7 ceiling | pending | |
 
@@ -218,4 +218,5 @@ flowchart LR
 - `USE_SCORE_TILE_MMAD`（T1，bring-up=1）
 - 既有：`USE_MCH_L0_ACC=1`、`USE_MCH_L0_DUAL=1`、`USE_MCH_S2B_STEAL=0`
 - T4：`USE_MCH_L1_RESIDENT`（默认 1）— 910B 无 L0C→L1；中间 X Fixpipe→`SOLVE_TMP`→L1，仅末轮 X→`SOLVE_X`；chunk 内复用 MCH `Resource` + I 驻留
-- T5 新宏在实现时写入母本
+- T5：`USE_S2C_BATCH`（默认 **0**）— 试过 wave MMAD×n→MCH×n，Dur 5.36 回退；代码保留可开
+- T6 新宏在实现时写入母本

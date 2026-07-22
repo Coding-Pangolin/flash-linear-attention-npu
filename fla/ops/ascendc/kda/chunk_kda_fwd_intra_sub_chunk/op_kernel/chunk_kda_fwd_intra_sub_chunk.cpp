@@ -47,7 +47,9 @@
 //   USE_SCORE_SOFT_PREFETCH=1: prefetch next KG into Score L1B during MCH wait (R2)
 // WriteSolve half-load (WS_HALF_LOAD_PLAN.md):
 //   USE_WS_HALF_LOAD=1: each AIV DataCopy only its row half of Aqk/Akk (drop 2× GM→UB)
-//   USE_PREP_BEFORE_DONE=1: Prep(next)+ready after Store, before WaitDone(next) (W2)
+//   USE_PREP_BEFORE_DONE=1: Prep(next) under MMAD; ready after solveReady (W2)
+// MCH shorten (MCH_SHORTEN_PLAN.md):
+//   USE_MCH_ITERS_2=1: Neumann MCH_ITERS=2 (fewer Fixpipe/Nd2Nz)
 // Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
 //   USE_SCORE_TILE_MMAD=1 : Tile dual GEMM + L1B(kneg) residence (default on)
 #ifndef USE_MCH_L0_GEMM
@@ -79,6 +81,9 @@
 #endif
 #ifndef USE_PREP_BEFORE_DONE
 #define USE_PREP_BEFORE_DONE 0 // W2 tried; Prep-before-WaitDone → aqk NaN — keep code, default off
+#endif
+#ifndef USE_MCH_ITERS_2
+#define USE_MCH_ITERS_2 0 // M1 tried; akkd_rel≈520 — keep code, default off (need 3 iters)
 #endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
@@ -131,7 +136,11 @@ constexpr uint32_t SOLVE_Y0 = 1;
 constexpr uint32_t SOLVE_TMP = 2;
 constexpr uint32_t SOLVE_Y1 = 3;
 constexpr uint32_t SOLVE_PLANES = 4;
+#if USE_MCH_ITERS_2
+constexpr uint32_t MCH_ITERS = 2;
+#else
 constexpr uint32_t MCH_ITERS = 3;
+#endif
 constexpr uint8_t FLAG_DONE = 2;
 constexpr uint8_t FLAG_READY = 4;
 constexpr uint8_t FLAG_SOLVE_DONE = 6;

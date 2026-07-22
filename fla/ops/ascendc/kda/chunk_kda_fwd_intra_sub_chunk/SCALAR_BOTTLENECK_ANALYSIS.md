@@ -228,9 +228,9 @@ Workspace：DEPTH 槽上增加小块 solve scratch（或复用 cmat 平面），
 | A Store 向量化 | **实测** 52.3→36.0 ms | Sync 环消失；`aiv_mte3` 上升 |
 | B tril/β 向量化 | **实测** 再降到 **30.2 ms** | 行向量 Mul/Muls + prefix mask |
 | C Cube MCH | **实测** 再降到 **18.0 ms** | 替换 O(BC³) scalar；`aic_mac` 72→266 µs |
-| D 流水 | 中（藏 prep/post） | 当前 AIV1 空闲 |
+| D 流水 | **实测** 再降到 **15.9 ms** | prep(i+1) ‖ MCH(i)，DEPTH=2 异槽 |
 
-已完成 A+B+C（约 **−66%**）。下一刀可选 Phase D。
+已完成 A–D（约 **−70%** vs 基线 52.3 ms）。
 
 ### 6.1 Phase A+B 实现要点（已合入）
 

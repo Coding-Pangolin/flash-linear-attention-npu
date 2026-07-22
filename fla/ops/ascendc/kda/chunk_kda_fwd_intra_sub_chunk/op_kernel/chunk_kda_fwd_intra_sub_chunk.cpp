@@ -1113,8 +1113,9 @@ private:
         }
     }
 
-    __aicore__ inline void PostSub(uint64_t bIdx, uint64_t iHv, uint64_t bos, uint64_t localT, uint64_t localChunk,
-                                   uint64_t iSub, uint64_t slot)
+    // Phase D split: write L/X for MCH (AIV0 only). Leaves tril(aqk) in aqkBuf_.
+    __aicore__ inline void PostSubWriteSolve(uint64_t bIdx, uint64_t iHv, uint64_t bos, uint64_t localT,
+                                             uint64_t localChunk, uint64_t iSub, uint64_t slot)
     {
         const uint64_t iTi = localChunk * bt_ + iSub * bc_;
         const bool empty = (iTi >= localT);
@@ -1133,32 +1134,45 @@ private:
             PipeBarrier<PIPE_V>();
             LoadBetaRows(bIdx, iHv, bos + iTi, valid, beta);
             ApplyTrilScaleBeta(aqk, akk, beta, valid);
-            // Keep tril(aqk) in aqkBuf across MCH (akkBuf reused as solve scratch in Write/Add).
             WriteSolveInputs(slot, akk);
         } else {
             WriteSolveInputsEmpty(slot);
         }
+    }
 
-        // MCH handshake: AIC computes TMP=X@Y; AIV adds into X (3 iters).
-        Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
+    // MCH add rounds after solveReady already pulsed (prep(i+1) may have overlapped Y=L²).
+    __aicore__ inline void PostSubMchAdds(uint64_t slot)
+    {
         for (uint32_t iter = 0; iter < MCH_ITERS; ++iter) {
             Catlass::Arch::CrossCoreWaitFlag(solveDoneFlag_);
             AddSolveTmpToX(slot);
             Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
         }
+    }
 
-        if (empty) {
+    __aicore__ inline void PostSubMchFlagsOnly()
+    {
+        for (uint32_t iter = 0; iter < MCH_ITERS; ++iter) {
+            Catlass::Arch::CrossCoreWaitFlag(solveDoneFlag_);
+            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
+        }
+    }
+
+    __aicore__ inline void PostSubStore(uint64_t bIdx, uint64_t iHv, uint64_t bos, uint64_t localT,
+                                       uint64_t localChunk, uint64_t iSub, uint64_t slot)
+    {
+        const uint64_t iTi = localChunk * bt_ + iSub * bc_;
+        if (iTi >= localT) {
             return;
         }
-
-        // Reload X → akk for store; aqk still holds tril score in aqkBuf.
-        {
-            const uint32_t elems = static_cast<uint32_t>(bc_ * bc_);
-            DataCopy(akk, solveWs_[SolveOff(slot, SOLVE_X, 0, 0)], elems);
-            SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
-            WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
-            PipeBarrier<PIPE_V>();
-        }
+        const uint64_t valid = (iTi + bc_ <= localT) ? bc_ : (localT - iTi);
+        LocalTensor<float> aqk = aqkBuf_.Get<float>();
+        LocalTensor<float> akk = akkBuf_.Get<float>();
+        const uint32_t elems = static_cast<uint32_t>(bc_ * bc_);
+        DataCopy(akk, solveWs_[SolveOff(slot, SOLVE_X, 0, 0)], elems);
+        SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+        WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+        PipeBarrier<PIPE_V>();
         for (uint64_t r = 0; r < valid; ++r) {
             const uint64_t tok = bos + iTi + r;
             const uint32_t rowOff = static_cast<uint32_t>(r * bc_);
@@ -1167,16 +1181,7 @@ private:
         }
     }
 
-    // AIV1 mirrors solve flag traffic so MIX CrossCore waits stay balanced.
-    __aicore__ inline void PostSubSolveSyncOnly()
-    {
-        Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
-        for (uint32_t iter = 0; iter < MCH_ITERS; ++iter) {
-            Catlass::Arch::CrossCoreWaitFlag(solveDoneFlag_);
-            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
-        }
-    }
-
+    // Phase D: prep(0); for i: wait mmad(i) → write solve(i) → kick MCH → prep(i+1)‖MCH → store(i)
     __aicore__ inline void ProcessChunkAiv(uint64_t task)
     {
         uint64_t iB = 0, iHv = 0, iH = 0, iChunk = 0;
@@ -1187,15 +1192,37 @@ private:
         const uint64_t subBlockIdx = static_cast<uint64_t>(GetSubBlockIdx());
         const uint64_t subBlockNum = static_cast<uint64_t>(GetSubBlockNum());
 
+        // Prologue: fill slot0 so AIC can start MMAD(0).
+        {
+            const uint64_t slot0 = 0 % depth_;
+            PrepareSub(bIdx, iH, iHv, bos, localT, localChunk, 0, slot0, subBlockIdx, subBlockNum);
+            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(readyFlag_);
+        }
+
         for (uint64_t iSub = 0; iSub < nc_; ++iSub) {
             const uint64_t slot = iSub % depth_;
-            PrepareSub(bIdx, iH, iHv, bos, localT, localChunk, iSub, slot, subBlockIdx, subBlockNum);
-            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(readyFlag_);
             Catlass::Arch::CrossCoreWaitFlag(doneFlag_);
+
             if (subBlockIdx == 0) {
-                PostSub(bIdx, iHv, bos, localT, localChunk, iSub, slot);
+                PostSubWriteSolve(bIdx, iHv, bos, localT, localChunk, iSub, slot);
+            }
+            // AIV1 waits until L/X are visible before pulsing solveReady.
+            Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
+            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
+
+            // Overlap prep(i+1) with AIC MCH(i) (Y=L² / first X@Y) on the other DEPTH slot.
+            if (iSub + 1 < nc_) {
+                const uint64_t next = iSub + 1;
+                const uint64_t slotNext = next % depth_;
+                PrepareSub(bIdx, iH, iHv, bos, localT, localChunk, next, slotNext, subBlockIdx, subBlockNum);
+                Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(readyFlag_);
+            }
+
+            if (subBlockIdx == 0) {
+                PostSubMchAdds(slot);
+                PostSubStore(bIdx, iHv, bos, localT, localChunk, iSub, slot);
             } else {
-                PostSubSolveSyncOnly();
+                PostSubMchFlagsOnly();
             }
             Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
         }

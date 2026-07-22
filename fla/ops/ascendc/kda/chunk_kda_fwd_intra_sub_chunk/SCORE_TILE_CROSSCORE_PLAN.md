@@ -11,8 +11,8 @@
 | T0 -g + 本文档 | **done** `232ce89` | op_host `-g`；母本落盘 |
 | T1 Score Tile | **done** `7e329a5` | 精度绿；Dur **4.627** vs Dual 4.654 |
 | T2 CrossCore | **done** `f1816fc` | Identity 后移 + AIC Score Resource 复用；Dur **4.402** |
-| T3 sim -g | **done** | `prof_msprof_op_sim_t1024_g/`；`code_exe` 已有 `chunk_kda_*.cpp:行号`；Cube instr 仍以 BAR / Nd2Nz / FIX 为主（MMAD 很少） |
-| T4 MCH L1 | pending | |
+| T3 sim -g | **done** `7817dfb` | `prof_msprof_op_sim_t1024_g/`；`code_exe` 有行号；instr 仍 BAR/Nd2Nz/FIX |
+| T4 MCH L1 | **done** | `USE_MCH_L1_RESIDENT`：共享 Resource + I 驻留（L1@MCH_L1_BASE）+ 中间 X→TMP；精度绿；Dur **4.112**（fixpipe≈923 / mte2≈949） |
 | T5 S2c | pending | |
 | T6 prefetch/S4 | pending | |
 | T7 ceiling | pending | |

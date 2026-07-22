@@ -1,7 +1,7 @@
 # ChunkKdaFwdIntraSubChunk：压缩事实 + scalar 深挖
 
 > Shape `(1,32,8192,128)` BT=64 bf16 · 空闲卡 `ASCEND_DEVICE_ID=1` · **以 msprof Task Duration 中位为准**  
-> 当前最佳：**Phase B Dual ≈ 4.65 ms** · **新目标 1.5 ms**（分析：`TARGET_1P5_ANALYSIS.md`）  
+> 当前最佳：**T4 L1-resident ≈ 4.112 ms**（T2 CrossCore 4.402；Dual 4.65）· **目标 1.5 ms**（分析：`TARGET_1P5_ANALYSIS.md` / `SCORE_TILE_CROSSCORE_PLAN.md`）  
 > 详见 `L0_ACC_MCH_DESIGN.md` / `PHASE_B_DUAL_PLAN.md`  
 > 交互分析 Canvas：`intra-sub-chunk-scalar-deep-dive.canvas.tsx`
 

@@ -39,6 +39,8 @@
 //   USE_MCH_L0_ACC=1  : classic Neumann + L0 ACC; single CV; Store SOLVE_X (implies GEMM path)
 //   USE_MCH_L0_DUAL=1 : Phase B X∥Y dual-buffer (implies ACC)
 //   USE_MCH_S2B_STEAL=1: after Dual green, steal MMAD(i+1) post solveDone (default off)
+//   USE_MCH_L1_RESIDENT=1: T4 — chunk-reuse MCH Resource + I L1 residence;
+//     intermediate X Fixpipe→SOLVE_TMP→L1, final X→SOLVE_X (910B has no L0C→L1)
 // Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
 //   USE_SCORE_TILE_MMAD=1 : Tile dual GEMM + L1B(kneg) residence (default on)
 #ifndef USE_MCH_L0_GEMM
@@ -53,6 +55,9 @@
 #ifndef USE_MCH_S2B_STEAL
 #define USE_MCH_S2B_STEAL 0
 #endif
+#ifndef USE_MCH_L1_RESIDENT
+#define USE_MCH_L1_RESIDENT 1
+#endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
 #endif
@@ -63,6 +68,12 @@
 #if USE_MCH_L0_ACC
 #undef USE_MCH_L0_GEMM
 #define USE_MCH_L0_GEMM 1
+#endif
+#if USE_MCH_L1_RESIDENT
+#undef USE_MCH_L0_DUAL
+#define USE_MCH_L0_DUAL 1
+#undef USE_MCH_L0_ACC
+#define USE_MCH_L0_ACC 1
 #endif
 
 using namespace AscendC;
@@ -1245,6 +1256,13 @@ private:
     // ---- L0 ACC helpers (L0_ACC_MCH_DESIGN.md). fp32 → Catlass CopyL1ToL0 / LoadData3D only. ----
     static constexpr uint32_t MCH_L1_BYTES = MAX_BC * MAX_BC * sizeof(float);
     static constexpr uint32_t MCH_L0_BYTES = MAX_BC * MAX_BC * sizeof(float);
+    // T4: keep MCH L1 past Score Tile footprint (A+B ≤ MAX_BC×MAX_K×sizeof(T) each) so I survives Score.
+    static constexpr uint32_t MCH_L1_BASE =
+#if USE_MCH_L1_RESIDENT
+        MAX_BC * MAX_K * sizeof(T) * 2;
+#else
+        0;
+#endif
     // Dedicated HardEvent ids — avoid clashing with Catlass BlockMmad priming on id 0/1.
     static constexpr uint16_t MCH_EVT = 2;
     static constexpr uint16_t EVT_X = 0; // Phase B X stream (after PIPE_ALL from Score)
@@ -1475,21 +1493,28 @@ private:
         WaitFlag<HardEvent::FIX_MTE2>(evt);
     }
 
-    __aicore__ inline void MchL0AccDual(uint64_t slot)
+    // T4 USE_MCH_L1_RESIDENT: shared Resource + optional I reload; intermediate X→TMP.
+    __aicore__ inline void MchL0AccDual(uint64_t slot, Catlass::Arch::Resource<KdaArchTag> &resource, bool loadEye)
     {
         const uint64_t lBase = CmatOff(slot, PLANE_AKK, 0, 0);
         const uint64_t xBase = SolveOff(slot, SOLVE_X, 0, 0);
         const uint64_t yBase = SolveOff(slot, SOLVE_Y0, 0, 0);
+        const uint64_t tmpBase = SolveOff(slot, SOLVE_TMP, 0, 0);
         const uint64_t eyeBase = SolveOff(0, SOLVE_Y1, 0, 0);
+#if USE_MCH_L1_RESIDENT
+        const uint64_t xScratch = tmpBase; // intermediate X Fixpipe/Nd2Nz; final → xBase
+#else
+        const uint64_t xScratch = xBase;
+        (void)tmpBase;
+#endif
 
-        Catlass::Arch::Resource<KdaArchTag> resource;
-        LocalTensor<float> l1I = resource.l1Buf.template GetBufferByByte<float>(0);
-        LocalTensor<float> l1X = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BYTES);
-        LocalTensor<float> l1Y = resource.l1Buf.template GetBufferByByte<float>(2 * MCH_L1_BYTES);
-        LocalTensor<float> l1L = resource.l1Buf.template GetBufferByByte<float>(3 * MCH_L1_BYTES);
-        LocalTensor<float> l1Lb = resource.l1Buf.template GetBufferByByte<float>(4 * MCH_L1_BYTES);
-        LocalTensor<float> l1Ib = resource.l1Buf.template GetBufferByByte<float>(5 * MCH_L1_BYTES);
-        LocalTensor<float> l1Yb = resource.l1Buf.template GetBufferByByte<float>(6 * MCH_L1_BYTES);
+        LocalTensor<float> l1I = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + 0);
+        LocalTensor<float> l1X = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + MCH_L1_BYTES);
+        LocalTensor<float> l1Y = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + 2 * MCH_L1_BYTES);
+        LocalTensor<float> l1L = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + 3 * MCH_L1_BYTES);
+        LocalTensor<float> l1Lb = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + 4 * MCH_L1_BYTES);
+        LocalTensor<float> l1Ib = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + 5 * MCH_L1_BYTES);
+        LocalTensor<float> l1Yb = resource.l1Buf.template GetBufferByByte<float>(MCH_L1_BASE + 6 * MCH_L1_BYTES);
 
         LocalTensor<float> l0Ax = resource.l0ABuf.template GetBufferByByte<float>(0);
         LocalTensor<float> l0Ay = resource.l0ABuf.template GetBufferByByte<float>(MCH_L0_BYTES);
@@ -1504,8 +1529,10 @@ private:
         MchLoadGmToL1A(l1L, cmatWs_, lBase);
         MchLoadGmToL1B(l1Lb, cmatWs_, lBase);
         MchLoadGmToL1A(l1X, solveWs_, xBase);
-        MchLoadGmToL1A(l1I, solveWs_, eyeBase);
-        MchLoadGmToL1B(l1Ib, solveWs_, eyeBase);
+        if (loadEye) {
+            MchLoadGmToL1A(l1I, solveWs_, eyeBase);
+            MchLoadGmToL1B(l1Ib, solveWs_, eyeBase);
+        }
 
         // Y0 = L@L → L1_Y (+ L1B copy)
         MchMatmulL1AccFix(l1L, l1Lb, l1Lb, l0Ax, l0Bx, l0By, l0Cx, solveWs_, yBase, false);
@@ -1549,9 +1576,11 @@ private:
             }
             // L0C_X += X@Y; L0B[Y] still holds this-iter Y (pre-square).
             MchMmad(l0Cx, l0Ax, l0By, false);
-            MchFixpipeToGmEvt(l0Cx, solveWs_, xBase, EVT_X);
             if (iter + 1 < MCH_ITERS) {
-                MchLoadGmToL1A(l1X, solveWs_, xBase);
+                MchFixpipeToGmEvt(l0Cx, solveWs_, xScratch, EVT_X);
+                MchLoadGmToL1A(l1X, solveWs_, xScratch);
+            } else {
+                MchFixpipeToGmEvt(l0Cx, solveWs_, xBase, EVT_X);
             }
 
             SetFlag<HardEvent::M_MTE1>(EVT_X);
@@ -1565,6 +1594,12 @@ private:
         WaitFlag<HardEvent::FIX_M>(EVT_X);
         WaitFlag<HardEvent::FIX_M>(EVT_Y);
         PipeBarrier<PIPE_ALL>();
+    }
+
+    __aicore__ inline void MchL0AccDual(uint64_t slot)
+    {
+        Catlass::Arch::Resource<KdaArchTag> resource;
+        MchL0AccDual(slot, resource, true);
     }
 
     __aicore__ inline void AddSolveTmpToX(uint64_t slot)
@@ -1704,14 +1739,17 @@ private:
     }
 
     // MCH: L0 ACC Neumann (USE_MCH_L0_ACC) or S5b closed-form.
-    __aicore__ inline bool ComputeMchAic(uint64_t slot, uint64_t iSub)
+    __aicore__ inline bool ComputeMchAic(uint64_t slot, uint64_t iSub, Catlass::Arch::Resource<KdaArchTag> &mchResource,
+                                         bool loadEye)
     {
 #if USE_MCH_L0_ACC
         (void)iSub;
         Catlass::Arch::CrossCoreWaitFlag(solveReadyFlag_);
 #if USE_MCH_L0_DUAL
-        MchL0AccDual(slot);
+        MchL0AccDual(slot, mchResource, loadEye);
 #else
+        (void)mchResource;
+        (void)loadEye;
         MchL0Acc(slot);
 #endif
         Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(solveDoneFlag_);
@@ -1726,6 +1764,8 @@ private:
 #endif
         return false;
 #else
+        (void)mchResource;
+        (void)loadEye;
         const uint64_t lBase = CmatOff(slot, PLANE_AKK, 0, 0);
         const uint64_t xBase = SolveOff(slot, SOLVE_X, 0, 0);
         const uint64_t y0Base = SolveOff(slot, SOLVE_Y0, 0, 0);
@@ -1984,17 +2024,33 @@ private:
     __aicore__ inline void ProcessChunkAic(uint64_t task)
     {
         (void)task;
-        // T2: one Resource per chunk — avoid per-sub pipe.Destroy() in WaitReady critical path.
+#if USE_MCH_L1_RESIDENT
+        // T4: one Resource for Score+MCH; MCH L1 starts at MCH_L1_BASE so I survives Score.
+        Catlass::Arch::Resource<KdaArchTag> sharedResource;
+        bool loadEye = true;
+#else
+        // T2: one Score Resource per chunk — avoid per-sub pipe.Destroy() in WaitReady critical path.
         Catlass::Arch::Resource<KdaArchTag> scoreResource;
+#endif
         bool skipMmad = false;
         for (uint64_t iSub = 0; iSub < nc_; ++iSub) {
             const uint64_t slot = iSub % depth_;
             if (!skipMmad) {
                 Catlass::Arch::CrossCoreWaitFlag(readyFlag_);
+#if USE_MCH_L1_RESIDENT
+                ComputeMmad(slot, sharedResource);
+#else
                 ComputeMmad(slot, scoreResource);
+#endif
                 Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(doneFlag_);
             }
-            skipMmad = ComputeMchAic(slot, iSub);
+#if USE_MCH_L1_RESIDENT
+            skipMmad = ComputeMchAic(slot, iSub, sharedResource, loadEye);
+            loadEye = false;
+#else
+            Catlass::Arch::Resource<KdaArchTag> mchResource;
+            skipMmad = ComputeMchAic(slot, iSub, mchResource, true);
+#endif
         }
     }
 

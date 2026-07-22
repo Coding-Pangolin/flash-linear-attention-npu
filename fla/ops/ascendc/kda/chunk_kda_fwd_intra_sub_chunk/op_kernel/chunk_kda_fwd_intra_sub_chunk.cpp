@@ -69,7 +69,7 @@
 #define USE_S4_NO_POST_BARRIER 1
 #endif
 #ifndef USE_SCORE_SOFT_PREFETCH
-#define USE_SCORE_SOFT_PREFETCH 0
+#define USE_SCORE_SOFT_PREFETCH 0 // R2 tried; Dur 3.818 ≥ S4a 3.802 — keep code, default off
 #endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
@@ -1048,9 +1048,20 @@ private:
         TileMmad tileMmad;
 
         // --- MMAD1: qg @ kneg → Aqk；先齐搬 B+A 再算 ---
+#if USE_SCORE_SOFT_PREFETCH
+        if (scoreKgPrefetchPending_ && scoreKgPrefetchSlot_ == slot) {
+            WaitFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
+            scoreKgPrefetchPending_ = false;
+        } else {
+            copyGmToL1B(tL1B, blockKg);
+            SetFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
+            WaitFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
+        }
+#else
         copyGmToL1B(tL1B, blockKg);
         SetFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
         WaitFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
+#endif
         copyGmToL1A(tL1A, blockQg);
         SetFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
         WaitFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
@@ -1616,6 +1627,38 @@ private:
         PipeBarrier<PIPE_ALL>();
     }
 
+#if USE_SCORE_SOFT_PREFETCH
+    // Issue KG→L1B into Score L1 prefix (below MCH_L1_BASE). Wait in next ComputeMmad.
+    __aicore__ inline void IssuePrefetchScoreKg(Catlass::Arch::Resource<KdaArchTag> &resource, uint64_t slot)
+    {
+        constexpr uint16_t SCORE_EVT = 3;
+        using ElementA = T;
+        using ElementB = T;
+        using LayoutTagA = Catlass::layout::RowMajor;
+        using LayoutTagB = Catlass::layout::ColumnMajor;
+        using LayoutTagC = Catlass::layout::RowMajor;
+        using TileCopy = Catlass::Gemm::Tile::PackedTileCopyTla<KdaArchTag, ElementA, LayoutTagA, ElementB,
+                                                                LayoutTagB, float, LayoutTagC>;
+        const uint32_t m = static_cast<uint32_t>(bc_);
+        const uint32_t n = static_cast<uint32_t>(bc_);
+        const uint32_t k = static_cast<uint32_t>(kDim_);
+        const uint32_t l1ABytes = m * k * sizeof(ElementA);
+
+        auto layoutB = tla::MakeLayout<ElementB, LayoutTagB>(kDim_, bc_);
+        auto tensorKg = tla::MakeTensor(scoreWs_[ScoreOff(slot, PLANE_KG, 0, 0)], layoutB, Catlass::Arch::PositionGM{});
+        auto blockKg = GetTile(tensorKg, tla::MakeCoord(0, 0), tla::MakeShape(k, n));
+
+        LocalTensor<ElementB> l1B = resource.l1Buf.template GetBufferByByte<ElementB>(l1ABytes);
+        auto layoutL1B = tla::MakeLayout<ElementB, typename TileCopy::LayoutTagL1B>(k, n);
+        auto tL1B = tla::MakeTensor(l1B, layoutL1B, Catlass::Arch::PositionL1{});
+        typename TileCopy::template CopyGmToL1B<decltype(blockKg)> copyGmToL1B;
+        copyGmToL1B(tL1B, blockKg);
+        SetFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
+        scoreKgPrefetchSlot_ = slot;
+        scoreKgPrefetchPending_ = true;
+    }
+#endif
+
     __aicore__ inline void MchL0AccDual(uint64_t slot)
     {
         Catlass::Arch::Resource<KdaArchTag> resource;
@@ -1763,7 +1806,6 @@ private:
                                          bool loadEye)
     {
 #if USE_MCH_L0_ACC
-        (void)iSub;
         Catlass::Arch::CrossCoreWaitFlag(solveReadyFlag_);
 #if USE_MCH_L0_DUAL
         MchL0AccDual(slot, mchResource, loadEye);
@@ -1771,6 +1813,14 @@ private:
         (void)mchResource;
         (void)loadEye;
         MchL0Acc(slot);
+#endif
+#if USE_SCORE_SOFT_PREFETCH
+        // Prep(next)+ready already posted before AIV WaitMch; hide KG Nd2Nz under Store.
+        if (iSub + 1 < nc_) {
+            IssuePrefetchScoreKg(mchResource, (iSub + 1) % depth_);
+        }
+#else
+        (void)iSub;
 #endif
         Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(solveDoneFlag_);
 #if USE_MCH_S2B_STEAL
@@ -2170,6 +2220,10 @@ private:
              usedCoreNum_ = 0, depth_ = SCORE_QUEUE_DEPTH, coreIdx_ = 0, group_ = 1;
     bool hasVarlen_ = false;
     float scale_ = 1.0f;
+#if USE_SCORE_SOFT_PREFETCH
+    uint64_t scoreKgPrefetchSlot_ = 0;
+    bool scoreKgPrefetchPending_ = false;
+#endif
 };
 } // namespace
 

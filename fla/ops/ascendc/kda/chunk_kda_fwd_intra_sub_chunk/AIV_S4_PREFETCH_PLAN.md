@@ -70,9 +70,9 @@ CrossCoreSetFlag(solveReady)   # 仍两 AIV 都 Set；靠 0x2 汇合
 | 阶段 | 状态 | 备注 |
 |------|------|------|
 | R0 本文档 | **done** | |
-| R1 S4a no post-barrier | **done** | Dur **3.802**（基线 4.112）；`aiv_scalar` 1.57→1.37；精度绿 |
-| R2 soft-prefetch | pending | |
-| R3 S4b asymmetric | pending / 按需 | |
+| R1 S4a no post-barrier | **done** `ab95e1e` | Dur **3.802**（T4 4.112）；`aiv_scalar` 1.57→1.37 |
+| R2 soft-prefetch | **tried / default off** | Dur **3.818**（无优）→ `USE_SCORE_SOFT_PREFETCH=0`；代码保留 |
+| R3 S4b asymmetric | **skipped** | R1 已有收益；不叠加侵入更大的非对称 Post |
 
 ## 开关
 

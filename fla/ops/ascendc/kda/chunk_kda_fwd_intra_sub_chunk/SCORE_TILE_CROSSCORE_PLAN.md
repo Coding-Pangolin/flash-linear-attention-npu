@@ -8,9 +8,10 @@
 
 | 阶段 | 状态 | commit / 备注 |
 |------|------|----------------|
-| T0 -g + 本文档 | in progress | |
-| T1 Score Tile | pending | |
-| T2 CrossCore | pending | |
+| T0 -g + 本文档 | **done** `232ce89` | op_host `-g`；母本落盘 |
+| T1 Score Tile | **done** `7e329a5` | 精度绿；Dur **4.627** vs Dual 4.654 |
+| T2 CrossCore | **done** | Identity 后移 + AIC Resource 复用；Dur **4.402** |
+| T3 sim -g | in progress | |
 | T3 sim -g | pending | |
 | T4 MCH L1 | pending | |
 | T5 S2c | pending | |

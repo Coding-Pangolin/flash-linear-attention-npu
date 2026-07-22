@@ -931,7 +931,7 @@ private:
     // HARD: same blockKNeg for both MMADs (GM one KG plane).
     // USE_SCORE_TILE_MMAD: Tile stack + L1B(kneg) residence (SCORE_TILE_CROSSCORE_PLAN.md T1).
     // ElementA/B = T (bf16/fp16), ElementC = fp32 — same as chunk_kda_fwd::ComputeRawAqkAkkCubeBlock.
-    __aicore__ inline void ComputeMmad(uint64_t slot)
+    __aicore__ inline void ComputeMmad(uint64_t slot, Catlass::Arch::Resource<KdaArchTag> &resource)
     {
         using ElementA = T;
         using ElementB = T;
@@ -971,7 +971,6 @@ private:
         const uint32_t k = shape.k();
         const uint32_t l1ABytes = m * k * sizeof(ElementA);
 
-        Catlass::Arch::Resource<KdaArchTag> resource;
         LocalTensor<ElementA> l1A = resource.l1Buf.template GetBufferByByte<ElementA>(0);
         LocalTensor<ElementB> l1B = resource.l1Buf.template GetBufferByByte<ElementB>(l1ABytes);
         LocalTensor<ElementA> l0A = resource.l0ABuf.template GetBufferByByte<ElementA>(0);
@@ -1053,7 +1052,6 @@ private:
 #else
         using BlockMmad = Catlass::Gemm::Block::BlockMmadTla<KdaDispatchPolicy, KdaL1TileShape, KdaL0TileShape,
                                                               ElementA, ElementB, ElementC, void, TileCopy>;
-        Catlass::Arch::Resource<KdaArchTag> resource;
         BlockMmad blockMmad(resource);
         // MMAD1: qg @ knegᵀ → Aqk_raw  (loads B=kneg into L1/L0)
         blockMmad(blockQg, blockKg, blockAqk, shape);
@@ -1934,8 +1932,13 @@ private:
         const uint64_t subBlockIdx = static_cast<uint64_t>(GetSubBlockIdx());
         const uint64_t subBlockNum = static_cast<uint64_t>(GetSubBlockNum());
 
-        // Prologue: optional resident I for L0 ACC; fill slot0 for MMAD(0).
+        // Prologue: Prep(0)+ready ASAP (T2: Identity does not block Cube start).
+        // Eye at SOLVE_Y1 is only needed before first MCH, so write it after ready
+        // while AIC runs MMAD(0) — closes Vector→Cube MTE2 bubble (SCORE_TILE plan §3).
         {
+            const uint64_t slot0 = 0 % depth_;
+            PrepareSub(bIdx, iH, iHv, bos, localT, localChunk, 0, slot0, subBlockIdx, subBlockNum);
+            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(readyFlag_);
 #if USE_MCH_L0_ACC
             if (subBlockIdx == 0) {
                 const uint32_t elems = static_cast<uint32_t>(bc_ * bc_);
@@ -1952,9 +1955,6 @@ private:
             }
             Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
 #endif
-            const uint64_t slot0 = 0 % depth_;
-            PrepareSub(bIdx, iH, iHv, bos, localT, localChunk, 0, slot0, subBlockIdx, subBlockNum);
-            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(readyFlag_);
         }
 
         for (uint64_t iSub = 0; iSub < nc_; ++iSub) {
@@ -1984,12 +1984,14 @@ private:
     __aicore__ inline void ProcessChunkAic(uint64_t task)
     {
         (void)task;
+        // T2: one Resource per chunk — avoid per-sub pipe.Destroy() in WaitReady critical path.
+        Catlass::Arch::Resource<KdaArchTag> scoreResource;
         bool skipMmad = false;
         for (uint64_t iSub = 0; iSub < nc_; ++iSub) {
             const uint64_t slot = iSub % depth_;
             if (!skipMmad) {
                 Catlass::Arch::CrossCoreWaitFlag(readyFlag_);
-                ComputeMmad(slot);
+                ComputeMmad(slot, scoreResource);
                 Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(doneFlag_);
             }
             skipMmad = ComputeMchAic(slot, iSub);

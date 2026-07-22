@@ -713,10 +713,32 @@ private:
         WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
     }
 
-    // Max tile rows fitting vecBuf: 6 float planes + 3 typed planes.
+    // S3: one Duplicate + three CopyOut (QG/W/KG) — was 3× (Dup+sync+store).
+    __aicore__ inline void ZeroScorePlanes(uint64_t slot, uint64_t rowBegin, uint64_t rowEnd)
+    {
+        if (rowBegin >= rowEnd) {
+            return;
+        }
+        const uint64_t nRows = rowEnd - rowBegin;
+        const uint32_t elems = static_cast<uint32_t>(nRows * kDim_);
+        LocalTensor<T> z = zeroBuf_.Get<T>();
+        Duplicate(z, static_cast<T>(0), elems);
+        PipeBarrier<PIPE_V>();
+        SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+        WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+        CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_QG, rowBegin, 0), z, elems);
+        CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_W, rowBegin, 0), z, elems);
+        CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_KG, rowBegin, 0), z, elems);
+        SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+        WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+        SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+        WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+    }
+
+    // S1: float arena (6) + typed q/k/g + 3 plane outs (6×T) for batched MTE3.
     __aicore__ inline uint64_t PrepMaxTileRows() const
     {
-        const uint64_t bytesPerElem = 6ull * sizeof(float) + 3ull * sizeof(T);
+        const uint64_t bytesPerElem = 6ull * sizeof(float) + 6ull * sizeof(T);
         const uint64_t budget = static_cast<uint64_t>(MAX_BC) * MAX_K * 6ull * sizeof(float);
         uint64_t maxElems = budget / bytesPerElem;
         if (maxElems > static_cast<uint64_t>(MAX_BC) * kDim_) {
@@ -756,7 +778,7 @@ private:
         iH = iHv / group_;
     }
 
-    // P1: multi-row batched prep (align PrepareScoreFactorsBulk) — one HardEvent set per tile.
+    // P1 + S1/S3: mid once per PrepareSub; zero 3 planes together; one MTE3 burst for QG/W/KG.
     __aicore__ inline void PrepareSub(uint64_t bIdx, uint64_t iH, uint64_t iHv, uint64_t bos, uint64_t localT,
                                       uint64_t localChunk, uint64_t iSub, uint64_t slot, uint64_t subBlockIdx,
                                       uint64_t subBlockNum)
@@ -769,12 +791,11 @@ private:
         const uint64_t rowEnd = (bc_ * (subBlockIdx + 1)) / subBlockNum;
 
         if (empty || valid == 0 || rowBegin >= rowEnd) {
-            ZeroScorePlaneRows(slot, PLANE_QG, rowBegin, rowEnd);
-            ZeroScorePlaneRows(slot, PLANE_W, rowBegin, rowEnd);
-            ZeroScorePlaneRows(slot, PLANE_KG, rowBegin, rowEnd);
+            ZeroScorePlanes(slot, rowBegin, rowEnd);
             return;
         }
 
+        // Midpoint is per iSub (different iTi); load once before tiles (not per tile).
         const uint64_t midRel = (bc_ / 2 < localT - iTi) ? (bc_ / 2) : (localT - iTi - 1);
         LoadMidRow(HvRowOff(bIdx, iHv, bos + iTi + midRel));
         LocalTensor<float> mid = midBuf_.Get<float>();
@@ -795,9 +816,7 @@ private:
                 }
             }
             if (liveRows < tileRows) {
-                ZeroScorePlaneRows(slot, PLANE_QG, tileRow + liveRows, tileRow + tileRows);
-                ZeroScorePlaneRows(slot, PLANE_W, tileRow + liveRows, tileRow + tileRows);
-                ZeroScorePlaneRows(slot, PLANE_KG, tileRow + liveRows, tileRow + tileRows);
+                ZeroScorePlanes(slot, tileRow + liveRows, tileRow + tileRows);
             }
             if (liveRows == 0) {
                 continue;
@@ -815,17 +834,20 @@ private:
             LocalTensor<T> typed = vecBuf_.Get<T>()[typedOff];
             LocalTensor<T> qT = typed;
             LocalTensor<T> kT = typed[elems];
-            LocalTensor<T> outT = typed[2 * elems];
+            LocalTensor<T> gT = typed[2 * elems];
+            LocalTensor<T> outQg = typed[3 * elems];
+            LocalTensor<T> outW = typed[4 * elems];
+            LocalTensor<T> outKg = typed[5 * elems];
 
             const uint64_t tok0 = bos + iTi + tileRow;
             CopyVectorIn(qT, q_, QkRowOff(bIdx, iH, tok0), elems);
             CopyVectorIn(kT, k_, QkRowOff(bIdx, iH, tok0), elems);
-            CopyVectorIn(outT, g_, HvRowOff(bIdx, iHv, tok0), elems);
+            CopyVectorIn(gT, g_, HvRowOff(bIdx, iHv, tok0), elems);
             SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
             WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
             Cast(qFp, qT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
             Cast(kFp, kT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
-            Cast(gFp, outT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
+            Cast(gFp, gT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
 
             for (uint64_t row = 0; row < liveRows; ++row) {
@@ -842,39 +864,29 @@ private:
             Exp(expN, expN, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
 
-            // QG
             Mul(out, qFp, expP, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
             ClampFp16(out, static_cast<uint32_t>(elems));
-            Cast(outT, out, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
+            Cast(outQg, out, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
-            SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
-            WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
-            CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_QG, tileRow, 0), outT, elems);
-            SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
-            WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
 
-            // W (kpos)
             Mul(out, kFp, expP, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
             ClampFp16(out, static_cast<uint32_t>(elems));
-            Cast(outT, out, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
+            Cast(outW, out, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
-            SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
-            WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
-            CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_W, tileRow, 0), outT, elems);
-            SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
-            WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
 
-            // KG (kneg)
             Mul(out, kFp, expN, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
             ClampFp16(out, static_cast<uint32_t>(elems));
-            Cast(outT, out, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
+            Cast(outKg, out, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
+
             SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
             WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
-            CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_KG, tileRow, 0), outT, elems);
+            CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_QG, tileRow, 0), outQg, elems);
+            CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_W, tileRow, 0), outW, elems);
+            CopyVectorOut(scoreWs_, ScoreOff(slot, PLANE_KG, tileRow, 0), outKg, elems);
             SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
             WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
             SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);

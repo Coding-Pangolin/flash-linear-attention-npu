@@ -53,18 +53,20 @@ AIC: WaitReady → MMAD → Done → MCH(WaitSolveReady…)
 
 ---
 
-## 3. 剩余刀：见效预判
+## 3. 剩余刀：见效预判（与 5ms plan 对齐）
 
-| 方向 | 预期墙钟 | 判据 |
-|------|----------|------|
-| **合并/删除 HardEvent·CrossCore** | **−0.5~−1.5 ms**（最值得） | 绝对 scalar 钉在 sync 量级 |
-| Prep 减负（mid 上提、少 Zero、tile 事件合并） | −0.3~−1.0 ms | Prep 仍在 AIV 临界路径 |
-| Post 改非对称（单 AIV Post / 去 barrier） | ±0.5（可能负） | BC=16 半行算力可能 < barrier |
-| **P5b Mmad_ACC** | −0.2~−0.8，**仅当能删一次 solveReady 往返** | MAC 只有 0.27 ms |
-| 再抠 Select/tril/I | <−0.2 | P3/P3b 已验证边际 |
-| 外层改回 ×NC | 变慢 | 已否决 |
+| 方向 | 预期墙钟 | 5ms plan |
+|------|----------|----------|
+| HardEvent 合并 | −0.5~−1.5 | S1 |
+| Prep 减负 | −0.3~−1.0 | S3 |
+| **AIV 先发（Prologue 双 Prep / DEPTH=3）** | −0.2~−0.8 | **S2a** |
+| AIC MMAD 偷发 + soft-prefetch | −0.3~−1.5 | S2b |
+| 批 MMAD/MCH、双 chunk 打包 | 视缺口 | S2c 可选 |
+| 非对称 AIV / 去 Post barrier | ±0.5 | S4 |
+| **P5b SolveTri `Mmad_ACC`** | −0.5~−2 | **S5** |
+| 再抠 Select/tril/I；扁平 ×NC | 否决 | 不做 |
 
-到 5 ms 必须动 **握手次数或 Prep**，单靠 P5b/再向量化不够。
+完整清单与优先级见 plan §1「分析清单 → Plan 覆盖」。
 
 ---
 
@@ -78,11 +80,22 @@ AIC: WaitReady → MMAD → Done → MCH(WaitSolveReady…)
 
 ---
 
-## 5. 验收口径
+## 5. 验收口径与下一 plan
 
 - 看 **`Task Duration` + `aiv_scalar_time(us)` 绝对值**，少看 ratio。  
 - 空闲卡；全量精度不回退。  
-- 下一步优先：**HardEvent/CrossCore 审计** → Prep 减负 → 再考虑非对称 AIV / 有条件的 P5b。
+- **5ms 冲刺 plan（含 P5b / SolveTri `Mmad_ACC` 求逆核内化详述）**：  
+  `/root/.cursor/plans/intra_sub_chunk_sync_tax_e5f6a7b8.plan.md`  
+  三线：Sync-Tax → Cube 填饱（双 Prep / MMAD 偷发）→ **MCH 核内 `X+=X@Y`**。
+
+### S1+S3（已合入）
+
+| | Task Dur | aiv_scalar | aic_scalar |
+|--|----------|------------|------------|
+| P3b | 8.321 | 4.033 | 2.901 |
+| S1+S3 | 8.324 | **3.815** | 2.901 |
+
+Prep：`mid` 每 sub 一次、三平面一次 Zero、QG/W/KG 一次 MTE3 burst。下一刀：**S2a 双 Prep prologue**。
 
 ---
 

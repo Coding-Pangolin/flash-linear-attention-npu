@@ -95,7 +95,11 @@ AIC: WaitReady → MMAD → Done → MCH(WaitSolveReady…)
 | P3b | 8.321 | 4.033 | 2.901 |
 | S1+S3 | 8.324 | **3.815** | 2.901 |
 
-Prep：`mid` 每 sub 一次、三平面一次 Zero、QG/W/KG 一次 MTE3 burst。下一刀：**S2a 双 Prep prologue**。
+Prep：`mid` 每 sub 一次、三平面一次 Zero、QG/W/KG 一次 MTE3 burst。
+
+### S2a（已试回退）
+
+prologue 双 Prep：Dur **8.51**（+0.18）。Prep1 推迟 `solveReady0`；WaitSolve > WaitReady。下一刀 **S2b / S5**。
 
 ---
 

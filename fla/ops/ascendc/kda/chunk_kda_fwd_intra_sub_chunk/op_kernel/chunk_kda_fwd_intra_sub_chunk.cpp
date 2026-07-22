@@ -940,9 +940,64 @@ private:
         PipeBarrier<PIPE_V>();
     }
 
-    // Phase B + P2: vector tril / scale / β via Brcb (no GetValue).
+    // P3: bitmask for Select — 1s zero upper triangle (same convention as chunk_kda_fwd).
+    __aicore__ inline uint64_t BuildCausalMask(uint64_t threshold, uint64_t colBegin) const
+    {
+        if (threshold <= colBegin) {
+            return ~0ULL;
+        }
+        if (threshold >= colBegin + bc_) {
+            return 0ULL;
+        }
+        return ~0ULL << (threshold - colBegin);
+    }
+
+    __aicore__ inline void BuildCausalSelectMasks(LocalTensor<uint8_t> aqkMask, LocalTensor<uint8_t> akkMask,
+                                                  uint64_t rowBegin, uint64_t rowCount, uint64_t valid)
+    {
+        __ubuf__ uint64_t *aqkMaskPtr = reinterpret_cast<__ubuf__ uint64_t *>(aqkMask.GetPhyAddr());
+        __ubuf__ uint64_t *akkMaskPtr = reinterpret_cast<__ubuf__ uint64_t *>(akkMask.GetPhyAddr());
+        for (uint32_t localRow = 0; localRow < static_cast<uint32_t>(rowCount); ++localRow) {
+            const uint64_t row = rowBegin + localRow;
+            const uint64_t aqkThr = (row < valid) ? (row + 1) : 0;           // tril incl diag
+            const uint64_t akkThr = (row < valid && row > 0) ? row : 0;      // strict tril
+            aqkMaskPtr[localRow] = BuildCausalMask(aqkThr, 0);
+            akkMaskPtr[localRow] = BuildCausalMask(akkThr, 0);
+        }
+    }
+
+    // P3: one Select pass for BC×rowCount (bc_≤16 → single uint64 mask / row).
+    __aicore__ inline void SelectCausalRows(LocalTensor<float> aqkMat, LocalTensor<float> akkMat,
+                                            uint64_t rowBegin, uint64_t rowCount, uint64_t valid)
+    {
+        // Layout in vecBuf_: [0 .. BC*8) betaBrcb floats; then aqk/akk uint64 masks; then zero.
+        constexpr uint32_t kBetaBrcbFloats = MAX_BC * 8;
+        constexpr uint32_t kMaskBytes = MAX_BC * static_cast<uint32_t>(sizeof(uint64_t));
+        LocalTensor<uint8_t> aqkMask = vecBuf_.Get<uint8_t>()[kBetaBrcbFloats * sizeof(float)];
+        LocalTensor<uint8_t> akkMask = vecBuf_.Get<uint8_t>()[kBetaBrcbFloats * sizeof(float) + kMaskBytes];
+        LocalTensor<float> zeroLocal =
+            vecBuf_.Get<float>()[(kBetaBrcbFloats * sizeof(float) + 2 * kMaskBytes) / sizeof(float)];
+        Duplicate(zeroLocal, 0.0f, 8);
+        PipeBarrier<PIPE_V>();
+
+        BuildCausalSelectMasks(aqkMask, akkMask, rowBegin, rowCount, valid);
+        SetFlag<HardEvent::S_V>(EVT_S_V);
+        WaitFlag<HardEvent::S_V>(EVT_S_V);
+
+        const uint32_t base = static_cast<uint32_t>(rowBegin * bc_);
+        const uint8_t rowBlk = static_cast<uint8_t>((bc_ * sizeof(float)) / 32);
+        BinaryRepeatParams repeatParams = {1, 0, 1, rowBlk, 0, rowBlk};
+        Select(aqkMat[base], aqkMask, zeroLocal, aqkMat[base], SELMODE::VSEL_TENSOR_TENSOR_MODE,
+               static_cast<int32_t>(bc_), static_cast<uint8_t>(rowCount), repeatParams);
+        Select(akkMat[base], akkMask, zeroLocal, akkMat[base], SELMODE::VSEL_TENSOR_TENSOR_MODE,
+               static_cast<int32_t>(bc_), static_cast<uint8_t>(rowCount), repeatParams);
+        PipeBarrier<PIPE_V>();
+        SetFlag<HardEvent::V_S>(EVT_V_S);
+        WaitFlag<HardEvent::V_S>(EVT_V_S);
+    }
+
+    // Phase B + P2/P3/P6: scale + Brcb β + Select tril; dual-AIV half-rows.
     // Note: BinaryRepeatParams *RepStride is in 32B blocks — for BC=16 row → stride 2 (not 8; that is BT=64).
-    // P6: rowBegin/rowEnd contiguous half-range for dual AIV.
     __aicore__ inline void ApplyTrilScaleBeta(LocalTensor<float> aqk, LocalTensor<float> akk,
                                               LocalTensor<float> beta, uint64_t valid, uint64_t rowBegin,
                                               uint64_t rowEnd)
@@ -953,7 +1008,6 @@ private:
         const uint64_t rowCount = rowEnd - rowBegin;
         const uint32_t live = static_cast<uint32_t>(rowCount * bc_);
         const uint32_t base = static_cast<uint32_t>(rowBegin * bc_);
-        LocalTensor<float> mask = tmpBuf_.Get<float>();
         LocalTensor<float> betaBrcb = vecBuf_.Get<float>();
         const uint8_t rowBlk = static_cast<uint8_t>((bc_ * sizeof(float)) / 32);
 
@@ -969,18 +1023,7 @@ private:
             PipeBarrier<PIPE_V>();
         }
 
-        for (uint64_t i = rowBegin; i < rowEnd; ++i) {
-            const uint64_t aqkPrefix = (i < valid) ? (i + 1) : 0;    // tril incl diag
-            const uint64_t akkPrefix = (i < valid && i > 0) ? i : 0; // strict tril
-            BuildPrefixMask(mask, aqkPrefix, bc_);
-            Mul(aqk[static_cast<uint32_t>(i * bc_)], aqk[static_cast<uint32_t>(i * bc_)], mask,
-                static_cast<uint32_t>(bc_));
-            PipeBarrier<PIPE_V>();
-            BuildPrefixMask(mask, akkPrefix, bc_);
-            Mul(akk[static_cast<uint32_t>(i * bc_)], akk[static_cast<uint32_t>(i * bc_)], mask,
-                static_cast<uint32_t>(bc_));
-            PipeBarrier<PIPE_V>();
-        }
+        SelectCausalRows(aqk, akk, rowBegin, rowCount, valid);
         Muls(akk[base], akk[base], -1.0f, live);
         PipeBarrier<PIPE_V>();
     }

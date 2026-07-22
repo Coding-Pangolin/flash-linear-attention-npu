@@ -52,8 +52,14 @@ def chunk_kda_fwd_intra_sub_chunk_ref(
     chunk_indices: Optional[torch.Tensor] = None,
     *,
     dtype: torch.dtype = torch.float64,
+    score_dtype: Optional[torch.dtype] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Reference matching Triton safe-gate diagonal path. Inputs are BNSD."""
+    """Reference matching Triton safe-gate diagonal path. Inputs are BNSD.
+
+    score_dtype: if set (e.g. bfloat16), cast qg/kpos/kneg to that type before the
+    two score GEMMs — matches Ascend Cube path (Vector fp32 → Cast T → MMAD).
+    Forward-sub stays in ``dtype`` (fp32/fp64).
+    """
     assert q.ndim == 4 and q.shape == k.shape
     B, H, T, K = q.shape
     assert g.ndim == 4 and g.shape[0] == B and g.shape[2] == T and g.shape[3] == K
@@ -94,6 +100,11 @@ def chunk_kda_fwd_intra_sub_chunk_ref(
         q_block = q_sel[:, rows, :] * gq
         k_pos = k_sel[:, rows, :] * gq
         k_neg = k_sel[:, rows, :] * gk
+        if score_dtype is not None:
+            # Cube: Vector computes in fp32, then stores T for MMAD.
+            q_block = q_block.to(score_dtype).to(dtype)
+            k_pos = k_pos.to(score_dtype).to(dtype)
+            k_neg = k_neg.to(score_dtype).to(dtype)
         beta_row = beta_r[i_b, hv_slice, rows]
 
         aqk_blk = torch.matmul(q_block, k_neg.transpose(-1, -2)) * scale

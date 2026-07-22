@@ -67,9 +67,23 @@ pip install --force-reinstall --no-deps dist/flash_linear_attention_npu-*.whl
 
 ## 测试
 
-- Golden：`test/test_chunk_kda_fwd_intra_sub_chunk.py`（含 GVA）
-- 单算子：`torch_custom/fla_npu/test/test_npu_chunk_kda_fwd_intra_sub_chunk.py`（安装后）
+- Golden：`test/test_chunk_kda_fwd_intra_sub_chunk.py`（含 GVA；可选 `score_dtype` 对标 Cube）
+- 单算子：`torch_custom/fla_npu/test/test_npu_chunk_kda_fwd_intra_sub_chunk.py`
+  - smoke：全量 golden（`score_dtype=输入 dtype`）
+  - 模型级：`_run_case_model_sample`（NPU vs bf16-sim 采样，避免 T=8192 全量 CPU golden 过慢）
+  - `FLA_NPU_ONLY_MODEL=1` / `FLA_NPU_ONLY_GVA=1` 可筛跑
 
 ## 实现说明
 
-当前 kernel 为 AIV 路径（BC×K 小矩阵累加 + 16×16 forward-sub）；task 维按 `B*HV*NT*NC` 调度。后续可按 `chunk_kda_fwd` 的 Catlass cube 模式升级 GEMM 热路径。
+| Tiling key | 路径 | 分核 |
+|------------|------|------|
+| 0 | AIV scalar fallback | 外层 `B×HV×NT`，核内 NC |
+| **1（默认）** | **MIX_AIC_1_2 Cube** | 外层 `B×HV×NT` + `GetCoreNumAic`，核内 NC |
+
+**精度路径（对齐 `chunk_kda_fwd`）**
+
+- AIV Vector：fp32 算 midpoint gate / 乘加，再 `Cast` 成输入 dtype 写入 scratch
+- AIC Cube：`BlockMmad` 的 A/B 为 bf16/fp16，C 为 fp32（**不升精度**）
+- AIV post：fp32 tril / β / forward-sub / store
+
+计划与交接：`/root/.cursor/plans/intra_sub_chunk_cube_catlass_7a3f2c1b.plan.md`；分析见 `PARTITION_CUBE_ANALYSIS.md`。

@@ -22,6 +22,12 @@ constexpr size_t ATTR_CHUNK_SIZE_IDX = 1;
 constexpr int64_t SUB_CHUNK_SIZE = 16;
 constexpr int64_t MAX_K_DIM = 256;
 constexpr int64_t MAX_HEAD = 128;
+constexpr uint64_t SCORE_QUEUE_DEPTH = 2;
+constexpr uint64_t SCORE_SCRATCH_PLANES = 3;
+constexpr uint64_t C_SCRATCH_PLANES = 2;
+// Phase C MCH: X / Y0 / TMP / Y1 per DEPTH slot (fp32 BC×BC).
+constexpr uint64_t SOLVE_SCRATCH_PLANES = 4;
+constexpr uint64_t WORKSPACE_ALIGN = 512;
 } // namespace
 
 ge::graphStatus Tiling4ChunkKdaFwdIntraSubChunk(gert::TilingContext *context)
@@ -88,15 +94,35 @@ ge::graphStatus Tiling4ChunkKdaFwdIntraSubChunk(gert::TilingContext *context)
     }
 
     const int64_t numSubChunks = chunkSize / SUB_CHUNK_SIZE;
-    const int64_t totalTasks = numChunks * numSubChunks * batch * hv;
+    // Deep-fuse: one outer task per (b, hv, chunk); NC looped inside the core.
+    const int64_t totalChunkTasks = numChunks * batch * hv;
 
     const auto ascendcPlatform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
-    const uint32_t coreNum = ascendcPlatform.GetCoreNumAiv();
-    const uint32_t blockDim = static_cast<uint32_t>(std::min<int64_t>(std::max<int64_t>(totalTasks, 1), coreNum));
+    // Primary path is MIX cube (tiling key 1).
+    const uint32_t coreNum = ascendcPlatform.GetCoreNumAic();
+    const uint32_t blockDim =
+        static_cast<uint32_t>(std::min<int64_t>(std::max<int64_t>(totalChunkTasks, 1), coreNum));
     context->SetBlockDim(blockDim == 0 ? 1 : blockDim);
+    context->SetTilingKey(1);
+
+    const uint64_t usedCore = static_cast<uint64_t>(blockDim == 0 ? 1 : blockDim);
+    // Score planes QG/W/KG are dtype T (bf16/fp16), same as chunk_kda_fwd Cube MMAD.
+    const uint64_t elemBytes = (qDesc->GetDataType() == ge::DT_FLOAT) ? sizeof(float) : sizeof(uint16_t);
+    const uint64_t scoreScratch = usedCore * SCORE_QUEUE_DEPTH * SCORE_SCRATCH_PLANES *
+                                  static_cast<uint64_t>(SUB_CHUNK_SIZE) * static_cast<uint64_t>(k) * elemBytes;
+    const uint64_t alignedScore =
+        (scoreScratch + WORKSPACE_ALIGN - 1) / WORKSPACE_ALIGN * WORKSPACE_ALIGN;
+    const uint64_t cScratch = usedCore * SCORE_QUEUE_DEPTH * C_SCRATCH_PLANES *
+                              static_cast<uint64_t>(SUB_CHUNK_SIZE) * static_cast<uint64_t>(SUB_CHUNK_SIZE) *
+                              sizeof(float);
+    const uint64_t solveScratch = usedCore * SCORE_QUEUE_DEPTH * SOLVE_SCRATCH_PLANES *
+                                  static_cast<uint64_t>(SUB_CHUNK_SIZE) * static_cast<uint64_t>(SUB_CHUNK_SIZE) *
+                                  sizeof(float);
+    const uint64_t kernelScratch =
+        (alignedScore + cScratch + solveScratch + WORKSPACE_ALIGN - 1) / WORKSPACE_ALIGN * WORKSPACE_ALIGN;
 
     size_t *workspace = context->GetWorkspaceSizes(1);
-    workspace[0] = ascendcPlatform.GetLibApiWorkSpaceSize();
+    workspace[0] = ascendcPlatform.GetLibApiWorkSpaceSize() + kernelScratch;
 
     int64_t dataType = 0;
     if (qDesc->GetDataType() == ge::DT_FLOAT) {
@@ -114,12 +140,14 @@ ge::graphStatus Tiling4ChunkKdaFwdIntraSubChunk(gert::TilingContext *context)
     tiling.set_subChunkSize(SUB_CHUNK_SIZE);
     tiling.set_numChunks(numChunks);
     tiling.set_numSubChunks(numSubChunks);
-    tiling.set_totalTasks(totalTasks);
+    tiling.set_totalTasks(totalChunkTasks);
     tiling.set_hasCuSeqlens(hasCu ? 1 : 0);
     tiling.set_hasChunkIndices(hasIdx ? 1 : 0);
     tiling.set_seqNum(seqNum);
     tiling.set_dataType(dataType);
-    tiling.set_usedCoreNum(blockDim == 0 ? 1 : static_cast<int64_t>(blockDim));
+    tiling.set_usedCoreNum(static_cast<int64_t>(usedCore));
+    tiling.set_scoreScratchBytes(static_cast<int64_t>(alignedScore));
+    tiling.set_scoreQueueDepth(static_cast<int64_t>(SCORE_QUEUE_DEPTH));
     tiling.set_scale(scale);
 
     tiling.SaveToBuffer(context->GetRawTilingData()->GetData(), context->GetRawTilingData()->GetCapacity());

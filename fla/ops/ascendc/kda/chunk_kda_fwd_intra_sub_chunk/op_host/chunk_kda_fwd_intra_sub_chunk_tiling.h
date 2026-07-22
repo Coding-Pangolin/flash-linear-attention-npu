@@ -21,12 +21,16 @@ TILING_DATA_FIELD_DEF(int64_t, chunkSize);
 TILING_DATA_FIELD_DEF(int64_t, subChunkSize);
 TILING_DATA_FIELD_DEF(int64_t, numChunks);
 TILING_DATA_FIELD_DEF(int64_t, numSubChunks);
+// Cube / deep-fuse: flat(B, HV, NT). Scalar key0 also loops NC inside each chunk task.
 TILING_DATA_FIELD_DEF(int64_t, totalTasks);
 TILING_DATA_FIELD_DEF(int64_t, hasCuSeqlens);
 TILING_DATA_FIELD_DEF(int64_t, hasChunkIndices);
 TILING_DATA_FIELD_DEF(int64_t, seqNum);
 TILING_DATA_FIELD_DEF(int64_t, dataType);
 TILING_DATA_FIELD_DEF(int64_t, usedCoreNum);
+// Aligned byte size of score scratch region (before cmat). Kernel: cWs = userWS + scoreScratchBytes.
+TILING_DATA_FIELD_DEF(int64_t, scoreScratchBytes);
+TILING_DATA_FIELD_DEF(int64_t, scoreQueueDepth);
 TILING_DATA_FIELD_DEF(float, scale);
 END_TILING_DATA_DEF;
 

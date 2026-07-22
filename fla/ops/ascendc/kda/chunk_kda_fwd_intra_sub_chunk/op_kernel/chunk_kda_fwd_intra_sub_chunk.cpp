@@ -4,7 +4,7 @@
  *
  * ChunkKdaFwdIntraSubChunk — BNSD + GVA.
  * tiling key 0: AIV scalar fallback
- * tiling key 1: MIX_AIC_1_2 Cube (Catlass BlockMmad ×2, kneg shared GM tile)
+ * tiling key 1: MIX_AIC_1_2 Cube (Score Tile dual GEMM + L0 ACC Dual MCH)
  *
  * Aligns with GPU Triton chunk_kda_fwd_kernel_intra_sub_chunk.
  */
@@ -39,6 +39,8 @@
 //   USE_MCH_L0_ACC=1  : classic Neumann + L0 ACC; single CV; Store SOLVE_X (implies GEMM path)
 //   USE_MCH_L0_DUAL=1 : Phase B X∥Y dual-buffer (implies ACC)
 //   USE_MCH_S2B_STEAL=1: after Dual green, steal MMAD(i+1) post solveDone (default off)
+// Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
+//   USE_SCORE_TILE_MMAD=1 : Tile dual GEMM + L1B(kneg) residence (default on)
 #ifndef USE_MCH_L0_GEMM
 #define USE_MCH_L0_GEMM 1
 #endif
@@ -50,6 +52,9 @@
 #endif
 #ifndef USE_MCH_S2B_STEAL
 #define USE_MCH_S2B_STEAL 0
+#endif
+#ifndef USE_SCORE_TILE_MMAD
+#define USE_SCORE_TILE_MMAD 1
 #endif
 #if USE_MCH_L0_DUAL
 #undef USE_MCH_L0_ACC
@@ -923,7 +928,8 @@ private:
         }
     }
 
-    // HARD: same blockKNeg for both MMADs (GM one KG plane). L1 residence = profile target for c6.
+    // HARD: same blockKNeg for both MMADs (GM one KG plane).
+    // USE_SCORE_TILE_MMAD: Tile stack + L1B(kneg) residence (SCORE_TILE_CROSSCORE_PLAN.md T1).
     // ElementA/B = T (bf16/fp16), ElementC = fp32 — same as chunk_kda_fwd::ComputeRawAqkAkkCubeBlock.
     __aicore__ inline void ComputeMmad(uint64_t slot)
     {
@@ -935,11 +941,7 @@ private:
         using LayoutTagC = Catlass::layout::RowMajor;
         using TileCopy = Catlass::Gemm::Tile::PackedTileCopyTla<KdaArchTag, ElementA, LayoutTagA, ElementB,
                                                                 LayoutTagB, ElementC, LayoutTagC>;
-        using BlockMmad = Catlass::Gemm::Block::BlockMmadTla<KdaDispatchPolicy, KdaL1TileShape, KdaL0TileShape,
-                                                              ElementA, ElementB, ElementC, void, TileCopy>;
 
-        Catlass::Arch::Resource<KdaArchTag> resource;
-        BlockMmad blockMmad(resource);
         auto layoutA = tla::MakeLayout<ElementA, LayoutTagA>(bc_, kDim_);
         auto layoutB = tla::MakeLayout<ElementB, LayoutTagB>(kDim_, bc_);
         auto layoutC = tla::MakeLayout<ElementC, LayoutTagC>(bc_, bc_);
@@ -960,13 +962,106 @@ private:
         auto blockAqk = GetTile(tensorAqk, tla::MakeCoord(0, 0), tla::MakeShape(shape.m(), shape.n()));
         auto blockAkk = GetTile(tensorAkk, tla::MakeCoord(0, 0), tla::MakeShape(shape.m(), shape.n()));
 
+#if USE_SCORE_TILE_MMAD
+        // Tile dual GEMM: load kneg once into L1B; swap L1A (qg → w). Events avoid MCH_EVT=2.
+        // Self-contained Set/Wait pairs (same style as MchLoadGmToL1*) — no cross-call priming.
+        constexpr uint16_t SCORE_EVT = 3;
+        const uint32_t m = shape.m();
+        const uint32_t n = shape.n();
+        const uint32_t k = shape.k();
+        const uint32_t l1ABytes = m * k * sizeof(ElementA);
+
+        Catlass::Arch::Resource<KdaArchTag> resource;
+        LocalTensor<ElementA> l1A = resource.l1Buf.template GetBufferByByte<ElementA>(0);
+        LocalTensor<ElementB> l1B = resource.l1Buf.template GetBufferByByte<ElementB>(l1ABytes);
+        LocalTensor<ElementA> l0A = resource.l0ABuf.template GetBufferByByte<ElementA>(0);
+        LocalTensor<ElementB> l0B = resource.l0BBuf.template GetBufferByByte<ElementB>(0);
+        LocalTensor<ElementC> l0C = resource.l0CBuf.template GetBufferByByte<ElementC>(0);
+
+        using LayoutTagL1A = typename TileCopy::LayoutTagL1A;
+        using LayoutTagL1B = typename TileCopy::LayoutTagL1B;
+        using LayoutTagL0A = typename TileCopy::LayoutTagL0A;
+        using LayoutTagL0B = typename TileCopy::LayoutTagL0B;
+        using CopyGmToL1A = typename TileCopy::template CopyGmToL1A<decltype(blockQg)>;
+        using CopyGmToL1B = typename TileCopy::template CopyGmToL1B<decltype(blockKg)>;
+        using CopyL1ToL0A = typename TileCopy::CopyL1ToL0A;
+        using CopyL1ToL0B = typename TileCopy::CopyL1ToL0B;
+#if (defined(CATLASS_ARCH) && CATLASS_ARCH == 3510)
+        using CopyL0CToGm = typename TileCopy::template CopyL0CToDst<decltype(blockAqk)>;
+#else
+        using CopyL0CToGm = typename TileCopy::template CopyL0CToGm<decltype(blockAqk)>;
+#endif
+        using TileMmad = Catlass::Gemm::Tile::TileMmadTla<KdaArchTag, ElementA, LayoutTagL1A>;
+
+        auto layoutL1A = tla::MakeLayout<ElementA, LayoutTagL1A>(m, k);
+        auto layoutL1B = tla::MakeLayout<ElementB, LayoutTagL1B>(k, n);
+        auto layoutL0A = tla::MakeLayout<ElementA, LayoutTagL0A>(m, k);
+        auto layoutL0B = tla::MakeLayout<ElementB, LayoutTagL0B>(k, n);
+        auto layoutL0C = tla::MakeLayoutL0C(m, n);
+
+        auto tL1A = tla::MakeTensor(l1A, layoutL1A, Catlass::Arch::PositionL1{});
+        auto tL1B = tla::MakeTensor(l1B, layoutL1B, Catlass::Arch::PositionL1{});
+        auto tL0A = tla::MakeTensor(l0A, layoutL0A, Catlass::Arch::PositionL0A{});
+        auto tL0B = tla::MakeTensor(l0B, layoutL0B, Catlass::Arch::PositionL0B{});
+        auto tL0C = tla::MakeTensor(l0C, layoutL0C, Catlass::Arch::PositionL0C{});
+        auto tileL1A = GetTile(tL1A, tla::MakeCoord(0, 0), tla::MakeShape(m, k));
+        auto tileL1B = GetTile(tL1B, tla::MakeCoord(0, 0), tla::MakeShape(k, n));
+        auto tileL0A = GetTile(tL0A, tla::MakeCoord(0, 0), tla::MakeShape(m, k));
+        auto tileL0B = GetTile(tL0B, tla::MakeCoord(0, 0), tla::MakeShape(k, n));
+        auto tileL0C = GetTile(tL0C, tla::MakeCoord(0, 0), tla::MakeShape(m, n));
+
+        CopyGmToL1A copyGmToL1A;
+        CopyGmToL1B copyGmToL1B;
+        CopyL1ToL0A copyL1ToL0A;
+        CopyL1ToL0B copyL1ToL0B;
+        CopyL0CToGm copyL0CToGm;
+        TileMmad tileMmad;
+
+        // --- MMAD1: qg @ kneg → Aqk；先齐搬 B+A 再算 ---
+        copyGmToL1B(tL1B, blockKg);
+        SetFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
+        WaitFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
+        copyGmToL1A(tL1A, blockQg);
+        SetFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
+        WaitFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
+        copyL1ToL0B(tileL0B, tileL1B);
+        copyL1ToL0A(tileL0A, tileL1A);
+        SetFlag<HardEvent::MTE1_M>(SCORE_EVT);
+        WaitFlag<HardEvent::MTE1_M>(SCORE_EVT);
+        tileMmad(tileL0C, tileL0A, tileL0B, m, n, k, true, 0);
+        SetFlag<HardEvent::M_FIX>(SCORE_EVT);
+        WaitFlag<HardEvent::M_FIX>(SCORE_EVT);
+        copyL0CToGm(blockAqk, tL0C);
+        SetFlag<HardEvent::FIX_MTE2>(SCORE_EVT);
+        WaitFlag<HardEvent::FIX_MTE2>(SCORE_EVT);
+
+        // --- MMAD2: w @ kneg → Akk；L1B(kneg) 驻留，只换 L1A ---
+        copyGmToL1A(tL1A, blockW);
+        SetFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
+        WaitFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
+        copyL1ToL0B(tileL0B, tileL1B);
+        copyL1ToL0A(tileL0A, tileL1A);
+        SetFlag<HardEvent::MTE1_M>(SCORE_EVT);
+        WaitFlag<HardEvent::MTE1_M>(SCORE_EVT);
+        tileMmad(tileL0C, tileL0A, tileL0B, m, n, k, true, 0);
+        SetFlag<HardEvent::M_FIX>(SCORE_EVT);
+        WaitFlag<HardEvent::M_FIX>(SCORE_EVT);
+        copyL0CToGm(blockAkk, tL0C);
+        SetFlag<HardEvent::FIX_MTE2>(SCORE_EVT);
+        WaitFlag<HardEvent::FIX_MTE2>(SCORE_EVT);
+        PipeBarrier<PIPE_ALL>();
+#else
+        using BlockMmad = Catlass::Gemm::Block::BlockMmadTla<KdaDispatchPolicy, KdaL1TileShape, KdaL0TileShape,
+                                                              ElementA, ElementB, ElementC, void, TileCopy>;
+        Catlass::Arch::Resource<KdaArchTag> resource;
+        BlockMmad blockMmad(resource);
         // MMAD1: qg @ knegᵀ → Aqk_raw  (loads B=kneg into L1/L0)
         blockMmad(blockQg, blockKg, blockAqk, shape);
         PipeBarrier<PIPE_ALL>();
         // MMAD2: kpos @ knegᵀ → Akk_raw — same blockKg (one KG GM plane).
-        // Note: Catlass BlockMmad may still MTE2 B internally; c6 profiles / strengthens L1 keep.
         blockMmad(blockW, blockKg, blockAkk, shape);
         PipeBarrier<PIPE_ALL>();
+#endif
     }
 
     __aicore__ inline void BuildPrefixMask(LocalTensor<float> dst, uint64_t prefix, uint64_t count)

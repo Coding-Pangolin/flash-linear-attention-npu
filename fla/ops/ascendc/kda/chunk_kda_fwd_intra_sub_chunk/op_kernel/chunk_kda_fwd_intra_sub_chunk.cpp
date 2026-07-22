@@ -1252,29 +1252,93 @@ private:
         WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
     }
 
+    // S5: closed-form MCH — X = X0 (I+Y)(I+Y²)(I+Y⁴), Y=L².
+    // Replaces per-iter TMP=X@Y + AIV X+=TMP ping-pong (3× solveDone/Ready).
     __aicore__ inline void ComputeMchAic(uint64_t slot)
     {
         const uint64_t lBase = CmatOff(slot, PLANE_AKK, 0, 0);
-        uint64_t yBase = SolveOff(slot, SOLVE_Y0, 0, 0);
-        uint64_t yNext = SolveOff(slot, SOLVE_Y1, 0, 0);
         const uint64_t xBase = SolveOff(slot, SOLVE_X, 0, 0);
-        const uint64_t tmpBase = SolveOff(slot, SOLVE_TMP, 0, 0);
+        const uint64_t y0Base = SolveOff(slot, SOLVE_Y0, 0, 0);
+        const uint64_t y1Base = SolveOff(slot, SOLVE_Y1, 0, 0);
+        const uint64_t y2Base = SolveOff(slot, SOLVE_TMP, 0, 0);
 
         Catlass::Arch::CrossCoreWaitFlag(solveReadyFlag_);
-        // Y = L @ L
-        CubeGemmSolve(cmatWs_, lBase, cmatWs_, lBase, solveWs_, yBase);
-        for (uint32_t iter = 0; iter < MCH_ITERS; ++iter) {
-            CubeGemmSolve(solveWs_, xBase, solveWs_, yBase, solveWs_, tmpBase);
-            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(solveDoneFlag_);
-            // P5: overlap Y@Y with AIV X+=TMP (align chunk_kda_fwd MCH schedule).
-            if (iter + 1 < MCH_ITERS) {
-                CubeGemmSolve(solveWs_, yBase, solveWs_, yBase, solveWs_, yNext);
-                const uint64_t tmpY = yBase;
-                yBase = yNext;
-                yNext = tmpY;
-            }
-            Catlass::Arch::CrossCoreWaitFlag(solveReadyFlag_);
+        // Y0=L@L, Y1=Y0@Y0, Y2=Y1@Y1
+        CubeGemmSolve(cmatWs_, lBase, cmatWs_, lBase, solveWs_, y0Base);
+        CubeGemmSolve(solveWs_, y0Base, solveWs_, y0Base, solveWs_, y1Base);
+        CubeGemmSolve(solveWs_, y1Base, solveWs_, y1Base, solveWs_, y2Base);
+        Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(solveDoneFlag_);
+
+        // AIV: in-place Pk = I + Yk on y0/y1/tmp, then solveReady.
+        Catlass::Arch::CrossCoreWaitFlag(solveReadyFlag_);
+        // T = P0@P1 → cmat AKK (L no longer needed); T2 = T@P2 → y0; X_new = X0@T2 → tmp.
+        CubeGemmSolve(solveWs_, y0Base, solveWs_, y1Base, cmatWs_, lBase);
+        CubeGemmSolve(cmatWs_, lBase, solveWs_, y2Base, solveWs_, y0Base);
+        CubeGemmSolve(solveWs_, xBase, solveWs_, y0Base, solveWs_, y2Base);
+        Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(solveDoneFlag_);
+    }
+
+    // S5: Pk = I + Yk in-place on half-rows (dual AIV).
+    __aicore__ inline void AddIdentityToSolvePlaneRows(uint64_t slot, uint32_t plane, uint64_t rowBegin,
+                                                       uint64_t rowEnd)
+    {
+        if (rowBegin >= rowEnd) {
+            return;
         }
+        const uint32_t nRows = static_cast<uint32_t>(rowEnd - rowBegin);
+        const uint32_t elems = nRows * static_cast<uint32_t>(bc_);
+        const uint64_t off = SolveOff(slot, plane, rowBegin, 0);
+        LocalTensor<float> arena = vecBuf_.Get<float>();
+        LocalTensor<float> mat = arena;
+        LocalTensor<float> eye = arena[elems];
+        DataCopy(mat, solveWs_[off], elems);
+        SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+        WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+        FillIdentityRows(eye, rowBegin, nRows);
+        Add(mat, mat, eye, elems);
+        PipeBarrier<PIPE_V>();
+        SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+        WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+        CopyVectorOut(solveWs_, off, mat, elems);
+        SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+        WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+        SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+        WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+    }
+
+    // S5: wait Y-powers → I+Y ×3 → kick product → wait X_new in TMP → copy TMP→X.
+    __aicore__ inline void PostSubMchClosedForm(uint64_t slot, uint64_t subBlockIdx, uint64_t subBlockNum)
+    {
+        const uint64_t rowBegin = (bc_ * subBlockIdx) / subBlockNum;
+        const uint64_t rowEnd = (bc_ * (subBlockIdx + 1)) / subBlockNum;
+
+        Catlass::Arch::CrossCoreWaitFlag(solveDoneFlag_);
+        AddIdentityToSolvePlaneRows(slot, SOLVE_Y0, rowBegin, rowEnd);
+        AddIdentityToSolvePlaneRows(slot, SOLVE_Y1, rowBegin, rowEnd);
+        AddIdentityToSolvePlaneRows(slot, SOLVE_TMP, rowBegin, rowEnd);
+        Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
+        Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
+
+        Catlass::Arch::CrossCoreWaitFlag(solveDoneFlag_);
+        // X_new landed in SOLVE_TMP; publish to SOLVE_X for Store.
+        if (rowBegin < rowEnd) {
+            const uint32_t elems = static_cast<uint32_t>((rowEnd - rowBegin) * bc_);
+            const uint64_t xOff = SolveOff(slot, SOLVE_X, rowBegin, 0);
+            const uint64_t tOff = SolveOff(slot, SOLVE_TMP, rowBegin, 0);
+            LocalTensor<float> x = vecBuf_.Get<float>();
+            DataCopy(x, solveWs_[tOff], elems);
+            SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+            WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+            PipeBarrier<PIPE_V>();
+            SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+            WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+            CopyVectorOut(solveWs_, xOff, x, elems);
+            SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+            WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+            SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+            WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+        }
+        Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
     }
 
     // Phase D + P6: both AIVs write L/X row halves. Leaves tril(aqk) rows in aqkBuf_.
@@ -1307,17 +1371,12 @@ private:
         }
     }
 
-    // P5: both AIVs Add half-rows; Y@Y may overlap on AIC. Barrier before ready pulse.
+    // Legacy P5 Add path (replaced by S5 PostSubMchClosedForm). Kept out of hot path.
     __aicore__ inline void PostSubMchAdds(uint64_t slot, uint64_t subBlockIdx, uint64_t subBlockNum)
     {
-        const uint64_t rowBegin = (bc_ * subBlockIdx) / subBlockNum;
-        const uint64_t rowEnd = (bc_ * (subBlockIdx + 1)) / subBlockNum;
-        for (uint32_t iter = 0; iter < MCH_ITERS; ++iter) {
-            Catlass::Arch::CrossCoreWaitFlag(solveDoneFlag_);
-            AddSolveTmpToXRows(slot, rowBegin, rowEnd);
-            Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
-            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
-        }
+        (void)slot;
+        (void)subBlockIdx;
+        (void)subBlockNum;
     }
 
     // P4+P6: dual-AIV store of contiguous half valid-rows.
@@ -1409,7 +1468,7 @@ private:
             Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
             Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
 
-            // Overlap prep(i+1) with AIC MCH(i) (Y=L² / first X@Y) on the other DEPTH slot.
+            // S5 closed-form MCH (I+Y powers); prep(i+1) overlaps AIC Y-power / product phases.
             if (iSub + 1 < nc_) {
                 const uint64_t next = iSub + 1;
                 const uint64_t slotNext = next % depth_;
@@ -1417,7 +1476,7 @@ private:
                 Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(readyFlag_);
             }
 
-            PostSubMchAdds(slot, subBlockIdx, subBlockNum);
+            PostSubMchClosedForm(slot, subBlockIdx, subBlockNum);
             PostSubStore(bIdx, iHv, bos, localT, localChunk, iSub, slot, subBlockIdx, subBlockNum);
             Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
         }

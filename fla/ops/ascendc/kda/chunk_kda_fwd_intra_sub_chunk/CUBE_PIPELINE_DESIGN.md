@@ -99,7 +99,18 @@ Prep：`mid` 每 sub 一次、三平面一次 Zero、QG/W/KG 一次 MTE3 burst�
 
 ### S2a（已试回退）
 
-prologue 双 Prep：Dur **8.51**（+0.18）。Prep1 推迟 `solveReady0`；WaitSolve > WaitReady。下一刀 **S2b / S5**。
+prologue 双 Prep：Dur **8.51**（+0.18）。Prep1 推迟 `solveReady0`；WaitSolve > WaitReady。
+
+### S5（已合入：闭式 MCH）
+
+`X = X0(I+Y)(I+Y²)(I+Y⁴)`，Y=L²。砍 3×`X+=TMP` 乒乓 → 2 次 CV 握手。
+
+| | Task Dur | aiv_scalar | aic_scalar | aic_mac |
+|--|----------|------------|------------|---------|
+| S1+S3 | 8.324 | 3.815 | 2.901 | 0.266 |
+| S5 | **7.989** | **3.098** | 2.815 | 0.266 |
+
+未做 L0 驻留 `Mmad_ACC`（mac 未升）。下一刀 **S2b**。
 
 ---
 

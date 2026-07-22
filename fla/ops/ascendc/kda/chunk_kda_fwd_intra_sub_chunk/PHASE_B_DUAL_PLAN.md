@@ -121,7 +121,7 @@ AIC: MchL0AccDual → solveDone
 | **B.2** | 全量精度 suite | all passed | ✅ |
 | **B.3** | 空闲卡 msprof vs **5.325** | Dur **4.654**（保留 Dual） | ✅ |
 | **B.4** | `USE_MCH_S2B_STEAL` 试偷发 | Dur 4.681 **无优于 Dual** → 关 | ✅ 否决 |
-| **B.5** | 更新设计文档；commit | | 进行中 |
+| **B.5** | 更新设计文档；commit | `f110114` | ✅ |
 
 **降级：**
 

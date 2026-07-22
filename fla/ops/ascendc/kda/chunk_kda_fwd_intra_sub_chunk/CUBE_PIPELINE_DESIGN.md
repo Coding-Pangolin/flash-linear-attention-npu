@@ -108,14 +108,18 @@ prologue 双 Prep：Dur **8.51**（+0.18）。Prep1 推迟 `solveReady0`；WaitS
 | | Task Dur | aiv_scalar | aic_scalar | aic_mac |
 |--|----------|------------|------------|---------|
 | S1+S3 | 8.324 | 3.815 | 2.901 | 0.266 |
-| S5 | **7.989** | **3.098** | 2.815 | 0.266 |
+| S5 | 7.989 | 3.098 | 2.815 | 0.266 |
+| S2b | 7.988 | 3.102 | 2.815 | 0.266 |
+| **S5b+S4** | **6.588** | **2.076** | 2.766 | 0.266 |
 
-未做 L0 驻留 `Mmad_ACC`（mac 未升）。下一刀 **S2b**。
+S5b：I+Y 三平面一次 burst；Store 直接读 `SOLVE_TMP`；去 post-Store barrier。  
+S2b：Y-powers 后偷发 MMAD(i+1)（墙钟持平）。  
+未达 5ms；**下一步 L0 `Mmad_ACC`**（本文件 sprint 收口于 6.59）。
 
 ---
 
 ## 6. 已合入（摘要）
 
-`af4ba42` A–C → `9f3ca60` D → `af981bf` P1/2/4 → `6c2be7e` P5 → `88d97ab` P6 → `74107d1` P3 → `147bc1e` P3b  
+`af4ba42` A–C → … → `147bc1e` P3b → `3617784` S1+S3 → `905e502` S5 → `3879410` S2b → `32ecc7c` S5b/S4  
 
-旧文：`PARTITION_CUBE_ANALYSIS.md`（分核锁定）、`SCALAR_BOTTLENECK_ANALYSIS.md`（~52 ms 时代，历史参考）。
+旧文：`PARTITION_CUBE_ANALYSIS.md`、`SCALAR_BOTTLENECK_ANALYSIS.md`（历史）。

@@ -51,6 +51,7 @@
 // MCH shorten (MCH_SHORTEN_PLAN.md):
 //   USE_MCH_ITERS_2=1: Neumann MCH_ITERS=2 (fewer Fixpipe/Nd2Nz)
 //   USE_MCH_SKIP_XI=1: skip X@I Mmad on iter>0 (L0C keep X after prior ACC/Fixpipe)
+//   USE_MCH_FIX_OVERLAP=1: X+=X@Y on M overlaps Y Fixpipe (defer Y Nd2Nz)
 // Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
 //   USE_SCORE_TILE_MMAD=1 : Tile dual GEMM + L1B(kneg) residence (default on)
 #ifndef USE_MCH_L0_GEMM
@@ -88,6 +89,9 @@
 #endif
 #ifndef USE_MCH_SKIP_XI
 #define USE_MCH_SKIP_XI 0 // M2 tried; Dur 3.825 ≥ S4a 3.802 — keep code, default off
+#endif
+#ifndef USE_MCH_FIX_OVERLAP
+#define USE_MCH_FIX_OVERLAP 0 // M3 tried; Dur 3.812 ≈ S4a 3.802 — keep code, default off
 #endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
@@ -1526,8 +1530,9 @@ private:
         copy(tL0, tL1);
     }
 
+    // waitMte2=false: leave FIX_MTE2 set for caller (M3: overlap M-pipe with Fixpipe).
     __aicore__ inline void MchFixpipeToGmEvt(LocalTensor<float> l0c, GlobalTensor<float> &gm, uint64_t base,
-                                             uint16_t evt)
+                                             uint16_t evt, bool waitMte2 = true)
     {
         auto layoutGm = tla::MakeLayout<float, Catlass::layout::RowMajor>(bc_, bc_);
         auto tGm = tla::MakeTensor(gm[base], layoutGm, Catlass::Arch::PositionGM{});
@@ -1543,7 +1548,9 @@ private:
         WaitFlag<HardEvent::M_FIX>(evt);
         copy(blockGm, tL0C);
         SetFlag<HardEvent::FIX_MTE2>(evt);
-        WaitFlag<HardEvent::FIX_MTE2>(evt);
+        if (waitMte2) {
+            WaitFlag<HardEvent::FIX_MTE2>(evt);
+        }
     }
 
     // T4 USE_MCH_L1_RESIDENT: shared Resource + optional I reload; intermediate X→TMP.
@@ -1624,10 +1631,15 @@ private:
                 WaitFlag<HardEvent::FIX_M>(EVT_Y);
                 WaitFlag<HardEvent::MTE1_M>(EVT_Y);
                 MchMmad(l0Cy, l0Ay, l0By, true); // L0C_Y = Y@Y
+#if USE_MCH_FIX_OVERLAP
+                // Fixpipe Y without Wait FIX_MTE2 — M can run X+=X@Y in parallel.
+                MchFixpipeToGmEvt(l0Cy, solveWs_, yBase, EVT_Y, false);
+#else
                 MchFixpipeToGmEvt(l0Cy, solveWs_, yBase, EVT_Y);
                 MchLoadGmToL1A(l1Y, solveWs_, yBase);
                 MchLoadGmToL1B(l1Yb, solveWs_, yBase);
                 SetFlag<HardEvent::FIX_M>(EVT_Y);
+#endif
             }
 
             PipeBarrier<PIPE_M>();
@@ -1636,12 +1648,27 @@ private:
             }
             // L0C_X += X@Y; L0B[Y] still holds this-iter Y (pre-square).
             MchMmad(l0Cx, l0Ax, l0By, false);
+#if USE_MCH_FIX_OVERLAP
+            if (iter + 1 < MCH_ITERS) {
+                // Y GM ready; X Fixpipe ∥ Y Nd2Nz (FIX vs MTE2).
+                WaitFlag<HardEvent::FIX_MTE2>(EVT_Y);
+                MchFixpipeToGmEvt(l0Cx, solveWs_, xScratch, EVT_X, false);
+                MchLoadGmToL1A(l1Y, solveWs_, yBase);
+                MchLoadGmToL1B(l1Yb, solveWs_, yBase);
+                SetFlag<HardEvent::FIX_M>(EVT_Y);
+                WaitFlag<HardEvent::FIX_MTE2>(EVT_X);
+                MchLoadGmToL1A(l1X, solveWs_, xScratch);
+            } else {
+                MchFixpipeToGmEvt(l0Cx, solveWs_, xBase, EVT_X);
+            }
+#else
             if (iter + 1 < MCH_ITERS) {
                 MchFixpipeToGmEvt(l0Cx, solveWs_, xScratch, EVT_X);
                 MchLoadGmToL1A(l1X, solveWs_, xScratch);
             } else {
                 MchFixpipeToGmEvt(l0Cx, solveWs_, xBase, EVT_X);
             }
+#endif
 
             SetFlag<HardEvent::M_MTE1>(EVT_X);
             SetFlag<HardEvent::M_MTE1>(EVT_Y);

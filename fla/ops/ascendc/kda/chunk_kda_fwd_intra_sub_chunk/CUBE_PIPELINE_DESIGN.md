@@ -1,8 +1,8 @@
 # ChunkKdaFwdIntraSubChunk：压缩事实 + scalar 深挖
 
 > Shape `(1,32,8192,128)` BT=64 bf16 · 空闲卡 `ASCEND_DEVICE_ID=1` · **以 msprof Task Duration 中位为准**  
-> 当前最佳：**T4 L1-resident ≈ 4.1 ms**（天花板：`CEILING_1P5.md`）· **1.5 ms 单算子内未达成**  
-> 详见 `L0_ACC_MCH_DESIGN.md` / `PHASE_B_DUAL_PLAN.md` / `SCORE_TILE_CROSSCORE_PLAN.md`  
+> 当前最佳：**S4a ≈ 3.80 ms**（T4 L1-resident 4.11；见 `AIV_S4_PREFETCH_PLAN.md`）· 不融合 / 仅 910B  
+> 详见 `L0_ACC_MCH_DESIGN.md` / `CEILING_1P5.md` / `SCORE_TILE_CROSSCORE_PLAN.md`  
 > 交互分析 Canvas：`intra-sub-chunk-scalar-deep-dive.canvas.tsx`
 
 ---

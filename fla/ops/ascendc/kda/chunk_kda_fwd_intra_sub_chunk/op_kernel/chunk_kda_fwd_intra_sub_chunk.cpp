@@ -42,6 +42,9 @@
 //   USE_MCH_L1_RESIDENT=1: T4 — chunk-reuse MCH Resource + I L1 residence;
 //     intermediate X Fixpipe→SOLVE_TMP→L1, final X→SOLVE_X (910B has no L0C→L1)
 //   USE_S2C_BATCH=1: T5 — per wave (size=depth): MMAD×n then MCH×n (fewer barriers)
+// AIV S4 + Prefetch (AIV_S4_PREFETCH_PLAN.md) — 910B, no fusion:
+//   USE_S4_NO_POST_BARRIER=1: drop WriteSolve→solveReady CrossCoreBarrier (0x2 Set already joins AIVs)
+//   USE_SCORE_SOFT_PREFETCH=1: prefetch next KG into Score L1B during MCH wait (R2)
 // Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
 //   USE_SCORE_TILE_MMAD=1 : Tile dual GEMM + L1B(kneg) residence (default on)
 #ifndef USE_MCH_L0_GEMM
@@ -61,6 +64,12 @@
 #endif
 #ifndef USE_S2C_BATCH
 #define USE_S2C_BATCH 0 // T5 tried; Dur 5.36 > T4 4.11 — keep code, default off
+#endif
+#ifndef USE_S4_NO_POST_BARRIER
+#define USE_S4_NO_POST_BARRIER 1
+#endif
+#ifndef USE_SCORE_SOFT_PREFETCH
+#define USE_SCORE_SOFT_PREFETCH 0
 #endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
@@ -2070,7 +2079,9 @@ private:
             Catlass::Arch::CrossCoreWaitFlag(doneFlag_);
 
             PostSubWriteSolve(bIdx, iHv, bos, localT, localChunk, iSub, slot, subBlockIdx, subBlockNum);
+#if !USE_S4_NO_POST_BARRIER
             Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
+#endif
             Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
 
             if (iSub + 1 < nc_) {

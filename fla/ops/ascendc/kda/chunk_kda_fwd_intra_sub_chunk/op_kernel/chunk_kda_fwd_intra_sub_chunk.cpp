@@ -1290,67 +1290,54 @@ private:
         return stoleNext;
     }
 
-    // S5: Pk = I + Yk in-place on half-rows (dual AIV).
-    __aicore__ inline void AddIdentityToSolvePlaneRows(uint64_t slot, uint32_t plane, uint64_t rowBegin,
-                                                       uint64_t rowEnd)
+    // S5: Pk = I + Yk for Y0/Y1/TMP half-rows — one eye, three Adds, one MTE3 burst.
+    __aicore__ inline void AddIdentityToMchPlanes(uint64_t slot, uint64_t rowBegin, uint64_t rowEnd)
     {
         if (rowBegin >= rowEnd) {
             return;
         }
         const uint32_t nRows = static_cast<uint32_t>(rowEnd - rowBegin);
         const uint32_t elems = nRows * static_cast<uint32_t>(bc_);
-        const uint64_t off = SolveOff(slot, plane, rowBegin, 0);
         LocalTensor<float> arena = vecBuf_.Get<float>();
-        LocalTensor<float> mat = arena;
-        LocalTensor<float> eye = arena[elems];
-        DataCopy(mat, solveWs_[off], elems);
+        LocalTensor<float> y0 = arena;
+        LocalTensor<float> y1 = arena[elems];
+        LocalTensor<float> y2 = arena[2 * elems];
+        LocalTensor<float> eye = arena[3 * elems];
+
+        DataCopy(y0, solveWs_[SolveOff(slot, SOLVE_Y0, rowBegin, 0)], elems);
+        DataCopy(y1, solveWs_[SolveOff(slot, SOLVE_Y1, rowBegin, 0)], elems);
+        DataCopy(y2, solveWs_[SolveOff(slot, SOLVE_TMP, rowBegin, 0)], elems);
         SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
         WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
         FillIdentityRows(eye, rowBegin, nRows);
-        Add(mat, mat, eye, elems);
+        Add(y0, y0, eye, elems);
+        Add(y1, y1, eye, elems);
+        Add(y2, y2, eye, elems);
         PipeBarrier<PIPE_V>();
         SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
-        CopyVectorOut(solveWs_, off, mat, elems);
+        CopyVectorOut(solveWs_, SolveOff(slot, SOLVE_Y0, rowBegin, 0), y0, elems);
+        CopyVectorOut(solveWs_, SolveOff(slot, SOLVE_Y1, rowBegin, 0), y1, elems);
+        CopyVectorOut(solveWs_, SolveOff(slot, SOLVE_TMP, rowBegin, 0), y2, elems);
         SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
         WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
         SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
         WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
     }
 
-    // S5: wait Y-powers → I+Y ×3 → kick product → wait X_new in TMP → copy TMP→X.
+    // S5: wait Y-powers → batched I+Y → kick product → wait X_new in TMP (Store reads TMP).
     __aicore__ inline void PostSubMchClosedForm(uint64_t slot, uint64_t subBlockIdx, uint64_t subBlockNum)
     {
         const uint64_t rowBegin = (bc_ * subBlockIdx) / subBlockNum;
         const uint64_t rowEnd = (bc_ * (subBlockIdx + 1)) / subBlockNum;
 
         Catlass::Arch::CrossCoreWaitFlag(solveDoneFlag_);
-        AddIdentityToSolvePlaneRows(slot, SOLVE_Y0, rowBegin, rowEnd);
-        AddIdentityToSolvePlaneRows(slot, SOLVE_Y1, rowBegin, rowEnd);
-        AddIdentityToSolvePlaneRows(slot, SOLVE_TMP, rowBegin, rowEnd);
+        AddIdentityToMchPlanes(slot, rowBegin, rowEnd);
         Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
         Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(solveReadyFlag_);
 
         Catlass::Arch::CrossCoreWaitFlag(solveDoneFlag_);
-        // X_new landed in SOLVE_TMP; publish to SOLVE_X for Store.
-        if (rowBegin < rowEnd) {
-            const uint32_t elems = static_cast<uint32_t>((rowEnd - rowBegin) * bc_);
-            const uint64_t xOff = SolveOff(slot, SOLVE_X, rowBegin, 0);
-            const uint64_t tOff = SolveOff(slot, SOLVE_TMP, rowBegin, 0);
-            LocalTensor<float> x = vecBuf_.Get<float>();
-            DataCopy(x, solveWs_[tOff], elems);
-            SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
-            WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
-            PipeBarrier<PIPE_V>();
-            SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
-            WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
-            CopyVectorOut(solveWs_, xOff, x, elems);
-            SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
-            WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
-            SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
-            WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
-        }
-        Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
+        // X_new stays in SOLVE_TMP; PostSubStore reads TMP directly.
     }
 
     // Phase D + P6: both AIVs write L/X row halves. Leaves tril(aqk) rows in aqkBuf_.
@@ -1424,7 +1411,8 @@ private:
         const uint32_t srcBase = static_cast<uint32_t>(rowBegin * bc_);
         LocalTensor<float> akkRows = akk[srcBase];
         LocalTensor<float> aqkRows = aqk[srcBase];
-        DataCopy(akkRows, solveWs_[SolveOff(slot, SOLVE_X, rowBegin, 0)], live);
+        // S5: X_new lives in SOLVE_TMP after closed-form product.
+        DataCopy(akkRows, solveWs_[SolveOff(slot, SOLVE_TMP, rowBegin, 0)], live);
         SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
         WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
         PipeBarrier<PIPE_V>();
@@ -1490,7 +1478,7 @@ private:
 
             PostSubMchClosedForm(slot, subBlockIdx, subBlockNum);
             PostSubStore(bIdx, iHv, bos, localT, localChunk, iSub, slot, subBlockIdx, subBlockNum);
-            Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
+            // S4: drop post-Store AIV barrier — next Wait(done) + WriteSolve barrier suffice.
         }
     }
 

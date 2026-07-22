@@ -58,15 +58,15 @@ for i:
 
 | 指标 | P6 中位 | P3 中位 | 解读 |
 |------|---------|---------|------|
-| Task Duration | 8.96 ms | **8.61 ms** | Select tril 约 **-0.35 ms** |
-| `aiv_scalar_ratio` | 0.52 | **0.51** | 几乎不动 → tril 环不是主标量源 |
-| `aiv_vec_ratio` | 0.15 | 0.12 | — |
-| `aic_mac_ratio` | 0.031 | 0.032 | Cube 仍极短（~0.27 ms） |
-| `aic_scalar_ratio` | 0.33 | 0.35 | AIC 仍大量空等 AIV |
+| Task Duration | 8.96 ms | 8.61 ms | **8.32 ms** | Select tril −0.35；对角 I 再 −0.29 |
+| `aiv_scalar_ratio` | 0.52 | 0.51 | **0.50** | 几乎不动 → 主标量源不在 tril/I |
+| `aiv_vec_ratio` | 0.15 | 0.12 | 0.09 | — |
+| `aic_mac_ratio` | 0.031 | 0.032 | 0.033 | Cube 仍极短 |
+| `aic_scalar_ratio` | 0.33 | 0.35 | 0.36 | AIC 仍空等 AIV |
 
-历史：scalar Post ~52 → ~16 → P6 **8.96** → P3 **8.61**。
+历史：scalar Post ~52 → ~16 → P6 **8.96** → P3 **8.61** → P3b **8.32**。
 
-**结论：** P3 收益小；残差 scalar 更可能来自 **HardEvent/CrossCore 等待**、PrepareSub、以及 WriteSolve **对角 I 的 prefix×行**。下一刀优先 **P3b 对角 I / 减 sync**，再视情况 P5b `Mmad_ACC`。
+**结论：** Post 数学向量化已边际；距 5 ms 需砍 **PrepareSub / HardEvent / CrossCore 等待**，或 P5b 重排 MCH。
 
 ---
 
@@ -79,6 +79,7 @@ for i:
 | P1+P2+P4 | `af981bf` | Prepare 批量；Brcb β；Store 整块；杀 Get/Set |
 | P5 | `6c2be7e` | Y@Y‖Add；双 AIV Add |
 | P6 | `88d97ab` | WriteSolve/Store 双 AIV 半行 |
+| P3 | （本轮） | Select tril；设备 **8.61 ms**（−0.35） |
 
 坑：Brcb `*RepStride` 以 32B block 计（BC=16→2）；对角勿 `Adds(1)` 错位；`CopyVectorOut` 第三参须 lvalue；忙卡 host avg 可假回归。
 
@@ -86,9 +87,9 @@ for i:
 
 ## 5. 下一刀（按 msprof）
 
-1. **P3 Select tril**（优先）：缩版 `chunk_kda_fwd::SelectCausalRows`，BC=16 单 col-block，替换 `ApplyTrilScaleBeta` 内 prefix×行。预期打 `aiv_scalar`。
-2. **对角 I 向量化**（P3 附属或 P3b）：`WriteSolveInputs` 仍 prefix one-hot×行，可再 Select/预置 I。
-3. **P5b `Mmad_ACC`**：对标 `solve_tri`，收口跨核 Add；墙钟增益取决于能否缩短 AIV 临界路径。
+1. ~~P3 Select tril~~ → 收益有限已合入。
+2. **P3b 对角 I / 减 HardEvent**：砍 `WriteSolveInputs` one-hot×行与过密 `SetFlag/WaitFlag`。
+3. **P5b `Mmad_ACC`**：对标 `solve_tri`；MAC 窗短，需与 AIV 临界路径一起看。
 4. 不做：改 ABI/BC；score 升 fp32；大改 Catlass L1。
 
 验收：空闲卡 msprof + 全量 `test_npu_chunk_kda_fwd_intra_sub_chunk.py`；勿只看 host avg。

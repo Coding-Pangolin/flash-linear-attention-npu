@@ -1153,9 +1153,38 @@ private:
         WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
     }
 
+    // P3b: build I[rowBegin:rowEnd] via Select (diag bitmask), avoid prefix×2 per row.
+    // Masks in tmpBuf_ (fits dual-AIV half-rows); ones in midBuf_ — keep clear of vecBuf_ arena.
+    __aicore__ inline void FillIdentityRows(LocalTensor<float> eye, uint64_t rowBegin, uint64_t rowCount)
+    {
+        const uint32_t live = static_cast<uint32_t>(rowCount * bc_);
+        LocalTensor<uint8_t> diagMask = tmpBuf_.Get<uint8_t>();
+        LocalTensor<float> ones = midBuf_.Get<float>();
+        Duplicate(eye, 0.0f, live);
+        Duplicate(ones, 1.0f, 8);
+        PipeBarrier<PIPE_V>();
+
+        __ubuf__ uint64_t *maskPtr = reinterpret_cast<__ubuf__ uint64_t *>(diagMask.GetPhyAddr());
+        for (uint32_t local = 0; local < static_cast<uint32_t>(rowCount); ++local) {
+            const uint64_t i = rowBegin + local;
+            // Select: mask bit1 → ones, bit0 → eye(0). Put 1 only on diagonal column i.
+            maskPtr[local] = (i < 64) ? (1ULL << i) : 0ULL;
+        }
+        SetFlag<HardEvent::S_V>(EVT_S_V);
+        WaitFlag<HardEvent::S_V>(EVT_S_V);
+
+        const uint8_t rowBlk = static_cast<uint8_t>((bc_ * sizeof(float)) / 32);
+        BinaryRepeatParams repeatParams = {1, 0, 1, rowBlk, 0, rowBlk};
+        Select(eye, diagMask, ones, eye, SELMODE::VSEL_TENSOR_TENSOR_MODE, static_cast<int32_t>(bc_),
+               static_cast<uint8_t>(rowCount), repeatParams);
+        PipeBarrier<PIPE_V>();
+        SetFlag<HardEvent::V_S>(EVT_V_S);
+        WaitFlag<HardEvent::V_S>(EVT_V_S);
+    }
+
     // Write L (cmat AKK) and X0=I-L (solve X). akk UB holds -L after ApplyTrilScaleBeta.
     // Do not touch aqkBuf_ — it still holds tril(Aqk) for the final store.
-    // P2/P6: diagonal I via aligned prefix one-hot; row-split for dual AIV.
+    // P2/P3b/P6: X=-L+I via FillIdentityRows; row-split for dual AIV.
     __aicore__ inline void WriteSolveInputs(uint64_t slot, LocalTensor<float> akkNegL, uint64_t rowBegin,
                                             uint64_t rowEnd)
     {
@@ -1168,23 +1197,15 @@ private:
         LocalTensor<float> arena = vecBuf_.Get<float>();
         LocalTensor<float> lMat = arena;
         LocalTensor<float> xMat = arena[live];
-        LocalTensor<float> mask = arena[2 * live];
-        LocalTensor<float> oneHot = arena[2 * live + bc_];
+        LocalTensor<float> eye = arena[2 * live];
 
         Muls(lMat, akkNegL[srcBase], -1.0f, live); // L = -(-L)
         PipeBarrier<PIPE_V>();
         Adds(xMat, akkNegL[srcBase], 0.0f, live); // X = -L
         PipeBarrier<PIPE_V>();
-        for (uint64_t local = 0; local < rowCount; ++local) {
-            const uint64_t i = rowBegin + local;
-            BuildPrefixMask(mask, i + 1, bc_);
-            BuildPrefixMask(oneHot, i, bc_);
-            Sub(mask, mask, oneHot, static_cast<uint32_t>(bc_));
-            PipeBarrier<PIPE_V>();
-            Add(xMat[static_cast<uint32_t>(local * bc_)], xMat[static_cast<uint32_t>(local * bc_)], mask,
-                static_cast<uint32_t>(bc_));
-            PipeBarrier<PIPE_V>();
-        }
+        FillIdentityRows(eye, rowBegin, rowCount);
+        Add(xMat, xMat, eye, live); // X = I - L
+        PipeBarrier<PIPE_V>();
 
         SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
@@ -1206,21 +1227,9 @@ private:
         LocalTensor<float> arena = vecBuf_.Get<float>();
         LocalTensor<float> z = arena;
         LocalTensor<float> x = arena[live];
-        LocalTensor<float> mask = arena[2 * live];
-        LocalTensor<float> oneHot = arena[2 * live + bc_];
         Duplicate(z, 0.0f, live);
-        Duplicate(x, 0.0f, live);
+        FillIdentityRows(x, rowBegin, rowCount); // X = I
         PipeBarrier<PIPE_V>();
-        for (uint64_t local = 0; local < rowCount; ++local) {
-            const uint64_t i = rowBegin + local;
-            BuildPrefixMask(mask, i + 1, bc_);
-            BuildPrefixMask(oneHot, i, bc_);
-            Sub(mask, mask, oneHot, static_cast<uint32_t>(bc_));
-            PipeBarrier<PIPE_V>();
-            Add(x[static_cast<uint32_t>(local * bc_)], x[static_cast<uint32_t>(local * bc_)], mask,
-                static_cast<uint32_t>(bc_));
-            PipeBarrier<PIPE_V>();
-        }
         SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         CopyVectorOut(cmatWs_, CmatOff(slot, PLANE_AKK, rowBegin, 0), z, live);

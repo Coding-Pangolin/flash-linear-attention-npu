@@ -7,7 +7,7 @@
  * Tile-level dual score GEMM (NOT BlockMmad):
  *   Aqk_raw = Qg @ Kg.T ;  Akk_raw = W(=Kgq) @ Kg.T
  *   - Kg loaded once into L1B and held across both MMADs
- *   - W GM→L1A overlapped with Fixpipe(Aqk) (early load)
+ *   - W GM→L1A overlapped with MMAD1 (L1A free after L1→L0), not with Fixpipe
  *
  * NO MCH — (I+L)^{-1} is Vector Forward Substitution.
  */
@@ -18,6 +18,10 @@
 #include "chunk_kda_fwd_intra_sub_chunk_common.h"
 
 namespace kda_isub {
+
+#ifndef USE_SCORE_MMAD1_LOAD_W
+#define USE_SCORE_MMAD1_LOAD_W 1
+#endif
 
 template <typename T>
 class KdaSubChunkCube : public KdaSubChunkBase<T> {
@@ -46,7 +50,6 @@ public:
         if (!this->ValidShapes()) {
             return;
         }
-        // Shared Resource for L1/L0 buffers across sub-chunks; Tile path manages events itself.
         Catlass::Arch::Resource<KdaArchTag> resource;
         for (uint64_t task = coreIdx_; task < totalTasks_; task += usedCoreNum_) {
             for (uint64_t iSub = 0; iSub < nc_; ++iSub) {
@@ -68,9 +71,9 @@ private:
     using TileCopy = Catlass::Gemm::Tile::PackedTileCopyTla<KdaArchTag, ElementA, LayoutTagA, ElementB, LayoutTagB,
                                                             ElementC, LayoutTagC>;
 
-    // HardEvent ids kept clear of Catlass BlockMmad priming (0/1) and Vector EVT_* .
+    // Keep clear of Catlass priming (0/1). SCORE_EVT_W separate from SCORE_EVT.
     static constexpr uint16_t SCORE_EVT = 3;
-    static constexpr uint16_t SCORE_EVT_W = 4; // W MTE2 ‖ Fixpipe(Aqk)
+    static constexpr uint16_t SCORE_EVT_W = 4;
 
     __aicore__ inline void ComputeScoreTile(uint64_t slot, Catlass::Arch::Resource<KdaArchTag> &resource)
     {
@@ -157,22 +160,30 @@ private:
         copyL1ToL0A(tileL0A, tileL1A);
         SetFlag<HardEvent::MTE1_M>(SCORE_EVT);
         WaitFlag<HardEvent::MTE1_M>(SCORE_EVT);
+
+#if USE_SCORE_MMAD1_LOAD_W
+        // L1A free (Qg already in L0A); MTE2(W) ‖ MMAD1. Do NOT overlap with Fixpipe(Aqk)
+        // — that path corrupted multi-HV Aqk (GM FIX vs MTE2 hazard).
+        copyGmToL1A(tL1A, blockW);
+        SetFlag<HardEvent::MTE2_MTE1>(SCORE_EVT_W);
+#endif
         tileMmad(tileL0C, tileL0A, tileL0B, m, n, k, true, 0);
         SetFlag<HardEvent::M_FIX>(SCORE_EVT);
         WaitFlag<HardEvent::M_FIX>(SCORE_EVT);
-        // Release L0A/L0B before Fixpipe ‖ MTE2(W).
         SetFlag<HardEvent::M_MTE1>(SCORE_EVT);
         WaitFlag<HardEvent::M_MTE1>(SCORE_EVT);
         copyL0CToGm(blockAqk, tL0C);
         SetFlag<HardEvent::FIX_MTE2>(SCORE_EVT);
         WaitFlag<HardEvent::FIX_MTE2>(SCORE_EVT);
 
-        // --- MMAD2: W @ Kg → Akk_raw；L1B(Kg) resident, only L1A swapped ---
-        // NOTE: W early-load ‖ Fixpipe (SCORE_EVT_W) regresses multi-HV cases; keep serial for now.
-        (void)SCORE_EVT_W;
+        // --- MMAD2: W @ Kg → Akk_raw；L1B(Kg) resident ---
+#if USE_SCORE_MMAD1_LOAD_W
+        WaitFlag<HardEvent::MTE2_MTE1>(SCORE_EVT_W);
+#else
         copyGmToL1A(tL1A, blockW);
         SetFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
         WaitFlag<HardEvent::MTE2_MTE1>(SCORE_EVT);
+#endif
         copyL1ToL0B(tileL0B, tileL1B);
         copyL1ToL0A(tileL0A, tileL1A);
         SetFlag<HardEvent::MTE1_M>(SCORE_EVT);

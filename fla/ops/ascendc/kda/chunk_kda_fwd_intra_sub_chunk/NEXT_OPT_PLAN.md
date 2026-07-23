@@ -25,6 +25,15 @@
 
 墙钟钉在 **AIC Fixpipe + MTE2**（~0.9 ms + ~0.8 ms pipe time）。AIV 侧再叠工作（prologue / StoreAqk）实测都 &lt;0.05 ms。下一步若要动墙钟，需 **缩短 MCH Fixpipe/Nd2Nz 本身**（算法或硬件路径），而不是再填 AIV 空窗。
 
+### 下一刀（借 PR190，见 `PR190_BORROW_ANALYSIS.md`）
+
+| 优先级 | 项 |
+|--------|-----|
+| **A0** | UB：`g`/`beta` chunk resident（跨 Prep/WriteSolve 无改却每拍重载） |
+| A1 | L1 scratch/resident 显式分区（热路径只用 ~十几 KB ≪ 512KB） |
+| A2 | Score：MMAD1 ‖ 搬 W / L0 加深 |
+| — | 勿再纯 stage 批 / 勿再填 WaitSolveDone |
+
 ### 不做
 
 - DEPTH=3 / 双 Set 同 flag

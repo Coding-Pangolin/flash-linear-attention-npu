@@ -57,6 +57,8 @@
 //   USE_MCH_Y_SINGLE_LOAD=1: Y Nd2Nz once (L1A≡L1B=zN for RowMajor); alias for L0B
 // AIV MCH idle (AIV_MCH_IDLE_PLAN.md):
 //   USE_STORE_AQK_UNDER_MCH=1: Cast/store aqk under MCH; StoreAkkd after solveDone
+// PR190 borrow (ITER_A0_A2_PLAN.md / PR190_BORROW_ANALYSIS.md):
+//   USE_UB_G_BETA_RESIDENT=1: chunk-level g/beta in UB; Prep/WriteSolve slice only
 // Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
 //   USE_SCORE_TILE_MMAD=1 : Tile dual GEMM + L1B(kneg) residence (default on)
 #ifndef USE_MCH_L0_GEMM
@@ -111,6 +113,9 @@
 #undef USE_STORE_AQK_UNDER_MCH
 #define USE_STORE_AQK_UNDER_MCH 0 // S2C aqk spill path keeps monolithic PostSubStore
 #endif
+#ifndef USE_UB_G_BETA_RESIDENT
+#define USE_UB_G_BETA_RESIDENT 0 // A0 tried; short-chunk/varlen + aicore exc — keep code, default off
+#endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
 #endif
@@ -149,6 +154,9 @@ constexpr float EXP_INPUT_MIN = -EXP2_CLAMP * LN2;
 constexpr float FP16_MAX = 65504.0f;
 constexpr uint32_t MAX_K = 256;
 constexpr uint32_t MAX_BC = 16;
+constexpr uint32_t MAX_BT = 128; // tiling chunkSize ∈ {32,64,128}
+// g resident capped at K=128 to keep UB under ~192KB with vecBuf_(MAX_K=256).
+constexpr uint32_t G_RES_MAX_K = 128;
 constexpr uint32_t SCORE_QUEUE_DEPTH = 2; // S2c (off) wanted 4; keep 2 with USE_S2C_BATCH=0
 constexpr uint32_t SCORE_PLANES = 3;
 constexpr uint32_t C_PLANES = 2;
@@ -645,6 +653,11 @@ public:
                 pipe_->InitBuffer(i64Buf_, 32);
                 pipe_->InitBuffer(scalarBuf_, 32);
                 pipe_->InitBuffer(zeroBuf_, MAX_BC * MAX_K * sizeof(T));
+#if USE_UB_G_BETA_RESIDENT
+                // Independent of vecBuf_ (PR190 §10). Cap K at G_RES_MAX_K (~32KB).
+                pipe_->InitBuffer(gResBuf_, MAX_BT * G_RES_MAX_K * sizeof(T));
+                pipe_->InitBuffer(betaResBuf_, MAX_BT * sizeof(float));
+#endif
             }
         }
     }
@@ -787,6 +800,60 @@ private:
         SyncVS();
     }
 
+#if USE_UB_G_BETA_RESIDENT
+    // One-shot GM→UB for this chunk's token range [localChunk*bt_, +nTok).
+    // Indexing in Prep/WriteSolve is chunk-local: iSub*bc_ + row (== iTi - localChunk*bt_).
+    __aicore__ inline bool LoadChunkGBetaResident(uint64_t bIdx, uint64_t iHv, uint64_t bos, uint64_t localT,
+                                                  uint64_t localChunk)
+    {
+        if (kDim_ == 0 || kDim_ > G_RES_MAX_K || bt_ == 0 || bt_ > MAX_BT) {
+            return false;
+        }
+        const uint64_t chunkTok0 = localChunk * bt_;
+        if (chunkTok0 >= localT) {
+            return false;
+        }
+        uint64_t nTok = bt_;
+        if (chunkTok0 + nTok > localT) {
+            nTok = localT - chunkTok0;
+        }
+        if (nTok == 0 || nTok > MAX_BT) {
+            return false;
+        }
+        // Tail / short-seq chunks with nTok < BC: pad-row beta/g indexing is fragile with
+        // dual-AIV; keep GM path (model full chunks always nTok == bt_ >= bc_).
+        if (nTok < bc_) {
+            return false;
+        }
+        LocalTensor<T> gRes = gResBuf_.Get<T>();
+        LocalTensor<float> betaRes = betaResBuf_.Get<float>();
+        Duplicate(betaRes, 0.0f, static_cast<uint32_t>(MAX_BT));
+        PipeBarrier<PIPE_V>();
+        const uint64_t absTok0 = bos + chunkTok0;
+        const uint64_t gElems = nTok * kDim_;
+        CopyVectorIn(gRes, g_, HvRowOff(bIdx, iHv, absTok0), gElems);
+        LocalTensor<T> betaIn = inBuf_.Get<T>();
+        CopyVectorIn(betaIn, beta_, BetaOff(bIdx, iHv, absTok0), nTok);
+        SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+        WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+        Cast(betaRes, betaIn, RoundMode::CAST_NONE, static_cast<uint32_t>(nTok));
+        PipeBarrier<PIPE_V>();
+        return true;
+    }
+
+    __aicore__ inline void LoadMidRowResident(uint64_t localTok)
+    {
+        LocalTensor<float> mid = midBuf_.Get<float>();
+        LocalTensor<T> gRes = gResBuf_.Get<T>();
+        LocalTensor<T> in = inBuf_.Get<T>();
+        DataCopy(in, gRes[localTok * kDim_], static_cast<uint32_t>(kDim_));
+        PipeBarrier<PIPE_ALL>();
+        Cast(mid, in, RoundMode::CAST_NONE, static_cast<uint32_t>(kDim_));
+        PipeBarrier<PIPE_V>();
+        SyncVS();
+    }
+#endif
+
     __aicore__ inline void ClampExp(LocalTensor<float> &tensor, uint32_t count)
     {
         Mins(tensor, tensor, EXP_INPUT_MAX, count);
@@ -906,7 +973,16 @@ private:
 
         // Midpoint is per iSub (different iTi); load once before tiles (not per tile).
         const uint64_t midRel = (bc_ / 2 < localT - iTi) ? (bc_ / 2) : (localT - iTi - 1);
+#if USE_UB_G_BETA_RESIDENT
+        if (gBetaResidentActive_) {
+            // chunk-local token: iTi - localChunk*bt_ == iSub*bc_
+            LoadMidRowResident(iSub * bc_ + midRel);
+        } else {
+            LoadMidRow(HvRowOff(bIdx, iHv, bos + iTi + midRel));
+        }
+#else
         LoadMidRow(HvRowOff(bIdx, iHv, bos + iTi + midRel));
+#endif
         LocalTensor<float> mid = midBuf_.Get<float>();
 
         const uint64_t maxTile = PrepMaxTileRows();
@@ -951,9 +1027,24 @@ private:
             const uint64_t tok0 = bos + iTi + tileRow;
             CopyVectorIn(qT, q_, QkRowOff(bIdx, iH, tok0), elems);
             CopyVectorIn(kT, k_, QkRowOff(bIdx, iH, tok0), elems);
+#if USE_UB_G_BETA_RESIDENT
+            if (gBetaResidentActive_) {
+                SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+                WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+                LocalTensor<T> gRes = gResBuf_.Get<T>();
+                const uint64_t localRow0 = iSub * bc_ + tileRow;
+                DataCopy(gT, gRes[localRow0 * kDim_], static_cast<uint32_t>(elems));
+                PipeBarrier<PIPE_ALL>();
+            } else {
+                CopyVectorIn(gT, g_, HvRowOff(bIdx, iHv, tok0), elems);
+                SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+                WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+            }
+#else
             CopyVectorIn(gT, g_, HvRowOff(bIdx, iHv, tok0), elems);
             SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
             WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+#endif
             Cast(qFp, qT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
             Cast(kFp, kT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
             Cast(gFp, gT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
@@ -1257,12 +1348,30 @@ private:
         if (valid == 0) {
             return;
         }
+#if USE_UB_G_BETA_RESIDENT
+        if (gBetaResidentActive_) {
+            (void)bIdx;
+            (void)iHv;
+            // tok0 is chunk-local token index when resident is enabled (caller passes iTi).
+            LocalTensor<float> betaRes = betaResBuf_.Get<float>();
+            DataCopy(beta, betaRes[tok0], static_cast<uint32_t>(valid));
+            PipeBarrier<PIPE_V>();
+        } else {
+            LocalTensor<T> betaIn = inBuf_.Get<T>();
+            CopyVectorIn(betaIn, beta_, BetaOff(bIdx, iHv, tok0), valid);
+            SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+            WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+            Cast(beta, betaIn, RoundMode::CAST_NONE, static_cast<uint32_t>(valid));
+            PipeBarrier<PIPE_V>();
+        }
+#else
         LocalTensor<T> betaIn = inBuf_.Get<T>();
         CopyVectorIn(betaIn, beta_, BetaOff(bIdx, iHv, tok0), valid);
         SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
         WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
         Cast(beta, betaIn, RoundMode::CAST_NONE, static_cast<uint32_t>(valid));
         PipeBarrier<PIPE_V>();
+#endif
     }
 
     // Phase A: whole-row Cast + DataCopy (no per-element SetValue / SyncSV Cast(1)).
@@ -1331,10 +1440,15 @@ private:
     // ---- L0 ACC helpers (L0_ACC_MCH_DESIGN.md). fp32 → Catlass CopyL1ToL0 / LoadData3D only. ----
     static constexpr uint32_t MCH_L1_BYTES = MAX_BC * MAX_BC * sizeof(float);
     static constexpr uint32_t MCH_L0_BYTES = MAX_BC * MAX_BC * sizeof(float);
+    // A1 L1 layout (ITER_A0_A2_PLAN / PR190 §2) — bytes from l1Buf base:
+    //   [0, SCORE_L1_A_BYTES)              Score L1A (QG / W)
+    //   [SCORE_L1_A_BYTES, MCH_L1_BASE)    Score L1B (kneg)  — may equal MCH_L1_BASE when resident off
+    //   [MCH_L1_BASE, …)                   MCH I/X/Y/L (+ future RESIDENT)
     // T4: keep MCH L1 past Score Tile footprint (A+B ≤ MAX_BC×MAX_K×sizeof(T) each) so I survives Score.
+    static constexpr uint32_t SCORE_L1_A_BYTES = MAX_BC * MAX_K * sizeof(T);
     static constexpr uint32_t MCH_L1_BASE =
 #if USE_MCH_L1_RESIDENT
-        MAX_BC * MAX_K * sizeof(T) * 2;
+        SCORE_L1_A_BYTES * 2;
 #else
         0;
 #endif
@@ -2070,7 +2184,15 @@ private:
             SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
             WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
             PipeBarrier<PIPE_V>();
+#if USE_UB_G_BETA_RESIDENT
+            if (gBetaResidentActive_) {
+                LoadBetaRows(bIdx, iHv, iSub * bc_, valid, beta); // chunk-local
+            } else {
+                LoadBetaRows(bIdx, iHv, bos + iTi, valid, beta);
+            }
+#else
             LoadBetaRows(bIdx, iHv, bos + iTi, valid, beta);
+#endif
             ApplyTrilScaleBeta(aqk, akk, beta, valid, rowBegin, rowEnd);
             WriteSolveInputs(slot, akk, rowBegin, rowEnd);
 #if USE_S2C_BATCH
@@ -2263,6 +2385,10 @@ private:
         const uint64_t subBlockIdx = static_cast<uint64_t>(GetSubBlockIdx());
         const uint64_t subBlockNum = static_cast<uint64_t>(GetSubBlockNum());
 
+#if USE_UB_G_BETA_RESIDENT
+        gBetaResidentActive_ = LoadChunkGBetaResident(bIdx, iHv, bos, localT, localChunk);
+#endif
+
         // Prologue: Prep(0)+ready ASAP (T2: Identity does not block Cube start).
         {
             const uint64_t slot0 = 0 % depth_;
@@ -2441,6 +2567,10 @@ private:
     GlobalTensor<int64_t> cuSeqlens_, chunkIndices_;
     TPipe *pipe_ = nullptr;
     TBuf<> vecBuf_, midBuf_, betaBuf_, aqkBuf_, akkBuf_, tmpBuf_, inBuf_, i64Buf_, scalarBuf_, zeroBuf_;
+#if USE_UB_G_BETA_RESIDENT
+    TBuf<> gResBuf_, betaResBuf_;
+    bool gBetaResidentActive_ = false;
+#endif
     uint64_t batch_ = 0, t_ = 0, h_ = 0, hv_ = 0, kDim_ = 0, bt_ = 0, bc_ = 0, nc_ = 0, totalTasks_ = 0,
              usedCoreNum_ = 0, depth_ = SCORE_QUEUE_DEPTH, coreIdx_ = 0, group_ = 1;
     bool hasVarlen_ = false;

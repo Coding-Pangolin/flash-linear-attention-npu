@@ -314,28 +314,47 @@ private:
         PipeBarrier<PIPE_V>();
     }
 
-    // Forward Substitution on akk (= -L = Ai). akk[i,j] finalized; then add I.
+    // Forward Substitution on akk (= -L = Ai). akk[i,:] = a + a@Ai for i>=2; then +I.
+    // Vectorized: O(i) scalar coeffs × Vector Muls/Add over BC=16 (was O(i²·BC) GetValue).
     __aicore__ inline void ForwardSub(LocalTensor<float> akk, LocalTensor<float> tmp, uint64_t valid)
     {
+        if (valid < 2) {
+            for (uint64_t i = 0; i < valid; ++i) {
+                const uint32_t diag = static_cast<uint32_t>(i * bc_ + i);
+                akk.SetValue(diag, akk.GetValue(diag) + 1.0f);
+            }
+            return;
+        }
+        LocalTensor<float> work = vecBuf_.Get<float>();
+        LocalTensor<float> acc = work[static_cast<uint32_t>(bc_)];
+        for (uint64_t i = 2; i < valid; ++i) {
+            const uint32_t rowOff = static_cast<uint32_t>(i * bc_);
+            DataCopy(tmp, akk[rowOff], static_cast<uint32_t>(bc_));
+            PipeBarrier<PIPE_V>();
+            Duplicate(acc, 0.0f, static_cast<uint32_t>(bc_));
+            PipeBarrier<PIPE_V>();
+            SetFlag<HardEvent::V_S>(EVT_V_S);
+            WaitFlag<HardEvent::V_S>(EVT_V_S);
+            for (uint64_t p = 0; p < i; ++p) {
+                const float ap = tmp.GetValue(static_cast<uint32_t>(p));
+                SetFlag<HardEvent::S_V>(EVT_S_V);
+                WaitFlag<HardEvent::S_V>(EVT_S_V);
+                Muls(work, akk[static_cast<uint32_t>(p * bc_)], ap, static_cast<uint32_t>(bc_));
+                PipeBarrier<PIPE_V>();
+                Add(acc, acc, work, static_cast<uint32_t>(bc_));
+                PipeBarrier<PIPE_V>();
+                if (p + 1 < i) {
+                    SetFlag<HardEvent::V_S>(EVT_V_S);
+                    WaitFlag<HardEvent::V_S>(EVT_V_S);
+                }
+            }
+            Add(tmp, tmp, acc, static_cast<uint32_t>(bc_));
+            PipeBarrier<PIPE_V>();
+            DataCopy(akk[rowOff], tmp, static_cast<uint32_t>(bc_));
+            PipeBarrier<PIPE_V>();
+        }
         SetFlag<HardEvent::V_S>(EVT_V_S);
         WaitFlag<HardEvent::V_S>(EVT_V_S);
-        for (uint64_t i = 2; i < valid; ++i) {
-            for (uint64_t j = 0; j < bc_; ++j) {
-                const float v = (j < i) ? akk.GetValue(static_cast<uint32_t>(i * bc_ + j)) : 0.0f;
-                tmp.SetValue(static_cast<uint32_t>(j), v);
-            }
-            for (uint64_t j = 0; j < i; ++j) {
-                float acc = tmp.GetValue(static_cast<uint32_t>(j));
-                for (uint64_t p = 0; p < i; ++p) {
-                    acc += tmp.GetValue(static_cast<uint32_t>(p)) * akk.GetValue(static_cast<uint32_t>(p * bc_ + j));
-                }
-                tmp.SetValue(static_cast<uint32_t>(j), acc);
-            }
-            for (uint64_t j = 0; j < bc_; ++j) {
-                const float v = (j < i) ? tmp.GetValue(static_cast<uint32_t>(j)) : 0.0f;
-                akk.SetValue(static_cast<uint32_t>(i * bc_ + j), v);
-            }
-        }
         for (uint64_t i = 0; i < valid; ++i) {
             const uint32_t diag = static_cast<uint32_t>(i * bc_ + i);
             akk.SetValue(diag, akk.GetValue(diag) + 1.0f);

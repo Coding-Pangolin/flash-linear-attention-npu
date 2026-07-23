@@ -158,10 +158,19 @@ WaitSolveDone                 // PostSubMchWait
 | 阶段 | 内容 | 状态 |
 |------|------|------|
 | D0 | 本文档 | done |
-| **D1** | **`USE_STORE_AQK_UNDER_MCH`：拆 Store + 叠 MCH** | **pending · 下一刀** |
-| D2 | 精度 + msprof 门禁 + commit | pending |
+| **D1** | **`USE_STORE_AQK_UNDER_MCH`：拆 Store + 叠 MCH** | **done · 实现保留** |
+| D2 | 精度 + msprof 门禁 + commit | **fail → default off**（med **3.674** vs **3.705**，Δ−0.031） |
 | D3 | （可选）DEPTH=3 Prep(i+2)，仅 D1 后空窗仍厚且有证据 | pending / 默认跳过 |
 | D4 | 文档回写 best Dur / 仿真 | pending |
+
+### D2 实测
+
+| 配置 | Task Dur median | aiv_mte3 | aiv_scalar |
+|------|-----------------|----------|------------|
+| P1b | 3.705 ms | 489 us | 1374 us |
+| StoreAqk‖MCH | **3.674 ms** | 596 us | 1337 us |
+
+墙钟仍钉 AIC Fixpipe/MTE2；AIV 尾前移未露脸到 ≥0.05 ms。
 
 ---
 

@@ -14,24 +14,20 @@
 
 ### P0 — `USE_STORE_AQK_UNDER_MCH`（见 `AIV_MCH_IDLE_PLAN.md`）
 
-**问题：** Prep(i+1) 后 AIV 在 `WaitSolveDone` 空转；`aqk` 不依赖 MCH 结果。  
-**改法：** Store 拆成 `StoreAqk ‖ MCH`，`solveDone` 后再 `StoreAkkd`。  
-**风险：** CrossCore 时序 / 与 Prep 的 UB 生命周期；须保证 StoreAkkd 仍等 AIC。  
-**门禁：** 同单变量协议。
+**状态：已试 · 门禁失败 · 代码保留默认 0**  
+精度 OK；Dur **3.674** vs **3.705**（−0.031 &lt; 0.05）。
 
-### P1 —（备选）MCH 环内更长重叠
+### P1 —（备选）DEPTH=3 Prep(i+2) — **默认不做**
 
-仅当 P0 不够：例如 Fixpipe Y 与下一 iter MTE1 的更激进 EVT（已试 `FIX_OVERLAP` 无效，需新证据再动）。
+期望 ≪0.05 ms；WS×1.5。仅当有新仿真证据再开。
+
+### 当前瓶颈判断
+
+墙钟钉在 **AIC Fixpipe + MTE2**（~0.9 ms + ~0.8 ms pipe time）。AIV 侧再叠工作（prologue / StoreAqk）实测都 &lt;0.05 ms。下一步若要动墙钟，需 **缩短 MCH Fixpipe/Nd2Nz 本身**（算法或硬件路径），而不是再填 AIV 空窗。
 
 ### 不做
 
-- DEPTH=3 / 双 Set 同 flag（CrossCoreFlag 1:1 不可）
+- DEPTH=3 / 双 Set 同 flag
 - L0C→L1（非 910B）
 - 再砍 Neumann iter（精度败）
-
-## 执行顺序
-
-1. 实现 `USE_STORE_AQK_UNDER_MCH=1`  
-2. device7 精度 suite  
-3. device1 msprof vs **3.705**（prof 写 `/tmp`，workspace 近满）  
-4. ≥0.05 ms 保留；否则默认关 + commit 记账
+- 无新证据重开已否实验

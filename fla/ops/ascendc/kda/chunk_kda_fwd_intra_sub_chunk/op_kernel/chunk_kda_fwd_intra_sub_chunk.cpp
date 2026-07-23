@@ -55,6 +55,8 @@
 //   USE_MCH_PROLOGUE_PREFETCH=1: L@L Fixpipe ∥ Nd2Nz X[/I] before Load Y
 // Post-MCH (POST_MCH_PLAN.md):
 //   USE_MCH_Y_SINGLE_LOAD=1: Y Nd2Nz once (L1A≡L1B=zN for RowMajor); alias for L0B
+// AIV MCH idle (AIV_MCH_IDLE_PLAN.md):
+//   USE_STORE_AQK_UNDER_MCH=1: Cast/store aqk under MCH; StoreAkkd after solveDone
 // Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
 //   USE_SCORE_TILE_MMAD=1 : Tile dual GEMM + L1B(kneg) residence (default on)
 #ifndef USE_MCH_L0_GEMM
@@ -101,6 +103,13 @@
 #endif
 #ifndef USE_MCH_PROLOGUE_PREFETCH
 #define USE_MCH_PROLOGUE_PREFETCH 0 // tried: Dur 3.679 vs 3.705 (−0.026 < 0.05) → off
+#endif
+#ifndef USE_STORE_AQK_UNDER_MCH
+#define USE_STORE_AQK_UNDER_MCH 0 // tried: Dur 3.674 vs 3.705 (−0.031 < 0.05) → off
+#endif
+#if USE_S2C_BATCH
+#undef USE_STORE_AQK_UNDER_MCH
+#define USE_STORE_AQK_UNDER_MCH 0 // S2C aqk spill path keeps monolithic PostSubStore
 #endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
@@ -2091,30 +2100,109 @@ private:
         (void)subBlockNum;
     }
 
-    // P4+P6: dual-AIV store of contiguous half valid-rows.
-    __aicore__ inline void PostSubStore(uint64_t bIdx, uint64_t iHv, uint64_t bos, uint64_t localT,
-                                       uint64_t localChunk, uint64_t iSub, uint64_t slot, uint64_t subBlockIdx,
-                                       uint64_t subBlockNum)
+    // Shared dual-AIV half-row range for PostSubStore*. Returns false if empty.
+    __aicore__ inline bool PostSubStoreRows(uint64_t localT, uint64_t localChunk, uint64_t iSub, uint64_t subBlockIdx,
+                                            uint64_t subBlockNum, uint64_t &iTi, uint64_t &rowBegin, uint64_t &rowEnd)
     {
-        const uint64_t iTi = localChunk * bt_ + iSub * bc_;
+        iTi = localChunk * bt_ + iSub * bc_;
         if (iTi >= localT) {
-            return;
+            return false;
         }
         const uint64_t valid = (iTi + bc_ <= localT) ? bc_ : (localT - iTi);
         if (valid == 0) {
-            return;
+            return false;
         }
         const uint64_t splitBegin = (bc_ * subBlockIdx) / subBlockNum;
         const uint64_t splitEnd = (bc_ * (subBlockIdx + 1)) / subBlockNum;
-        uint64_t rowBegin = splitBegin;
-        uint64_t rowEnd = splitEnd;
+        rowBegin = splitBegin;
+        rowEnd = splitEnd;
         if (rowBegin >= valid) {
-            return;
+            return false;
         }
         if (rowEnd > valid) {
             rowEnd = valid;
         }
-        if (rowBegin >= rowEnd) {
+        return rowBegin < rowEnd;
+    }
+
+    // aqk only: aqkBuf_ → Cast → aqk_ GM. Independent of MCH / SOLVE_X.
+    // Call after Prep(next) (shares vecBuf_). Do not call under USE_S2C_BATCH spill path.
+    __aicore__ inline void PostSubStoreAqk(uint64_t bIdx, uint64_t iHv, uint64_t bos, uint64_t localT,
+                                          uint64_t localChunk, uint64_t iSub, uint64_t slot, uint64_t subBlockIdx,
+                                          uint64_t subBlockNum)
+    {
+        (void)slot;
+        uint64_t iTi = 0, rowBegin = 0, rowEnd = 0;
+        if (!PostSubStoreRows(localT, localChunk, iSub, subBlockIdx, subBlockNum, iTi, rowBegin, rowEnd)) {
+            return;
+        }
+        LocalTensor<float> aqk = aqkBuf_.Get<float>();
+        const uint32_t live = static_cast<uint32_t>((rowEnd - rowBegin) * bc_);
+        const uint32_t srcBase = static_cast<uint32_t>(rowBegin * bc_);
+        LocalTensor<float> aqkRows = aqk[srcBase];
+
+        LocalTensor<T> aqkT = vecBuf_.Get<T>();
+        Cast(aqkT, aqkRows, RoundMode::CAST_RINT, live);
+        PipeBarrier<PIPE_V>();
+        SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+        WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+
+        const uint64_t tok0 = bos + iTi + rowBegin;
+        const uint64_t aqkBase = AqkOff(bIdx, iHv, tok0, iSub * bc_);
+        DataCopyExtParams aqkParams;
+        aqkParams.blockCount = static_cast<uint16_t>(rowEnd - rowBegin);
+        aqkParams.blockLen = static_cast<uint32_t>(bc_ * sizeof(T));
+        aqkParams.srcStride = 0;
+        aqkParams.dstStride = static_cast<uint32_t>((bt_ - bc_) * sizeof(T));
+        aqkParams.rsv = 0;
+        DataCopyPad(aqk_[aqkBase], aqkT, aqkParams);
+
+        SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+        WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+        SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+        WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+    }
+
+    // akkd only: SOLVE_X[/TMP] → akkBuf_ → akkd_ GM. Must run after solveDone.
+    __aicore__ inline void PostSubStoreAkkd(uint64_t bIdx, uint64_t iHv, uint64_t bos, uint64_t localT,
+                                           uint64_t localChunk, uint64_t iSub, uint64_t slot, uint64_t subBlockIdx,
+                                           uint64_t subBlockNum)
+    {
+        uint64_t iTi = 0, rowBegin = 0, rowEnd = 0;
+        if (!PostSubStoreRows(localT, localChunk, iSub, subBlockIdx, subBlockNum, iTi, rowBegin, rowEnd)) {
+            return;
+        }
+        LocalTensor<float> akk = akkBuf_.Get<float>();
+        const uint32_t live = static_cast<uint32_t>((rowEnd - rowBegin) * bc_);
+        const uint32_t srcBase = static_cast<uint32_t>(rowBegin * bc_);
+        LocalTensor<float> akkRows = akk[srcBase];
+#if USE_MCH_L0_ACC
+        DataCopy(akkRows, solveWs_[SolveOff(slot, SOLVE_X, rowBegin, 0)], live);
+#else
+        DataCopy(akkRows, solveWs_[SolveOff(slot, SOLVE_TMP, rowBegin, 0)], live);
+#endif
+        SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+        WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+        PipeBarrier<PIPE_V>();
+        SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+        WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+
+        const uint64_t tok0 = bos + iTi + rowBegin;
+        CopyVectorOut(akkd_, AkkdOff(bIdx, iHv, tok0), akkRows, live);
+
+        SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+        WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+        SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+        WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+    }
+
+    // P4+P6: dual-AIV store of contiguous half valid-rows (aqk+akkd).
+    __aicore__ inline void PostSubStore(uint64_t bIdx, uint64_t iHv, uint64_t bos, uint64_t localT,
+                                       uint64_t localChunk, uint64_t iSub, uint64_t slot, uint64_t subBlockIdx,
+                                       uint64_t subBlockNum)
+    {
+        uint64_t iTi = 0, rowBegin = 0, rowEnd = 0;
+        if (!PostSubStoreRows(localT, localChunk, iSub, subBlockIdx, subBlockNum, iTi, rowBegin, rowEnd)) {
             return;
         }
 
@@ -2270,12 +2358,20 @@ private:
             }
 #endif
 
+#if USE_STORE_AQK_UNDER_MCH
+            // aqk independent of MCH — fill WaitSolveDone idle after Prep (vecBuf_ free).
+            PostSubStoreAqk(bIdx, iHv, bos, localT, localChunk, iSub, slot, subBlockIdx, subBlockNum);
+#endif
 #if USE_MCH_L0_ACC
             PostSubMchWait(slot, subBlockIdx, subBlockNum);
 #else
             PostSubMchClosedForm(slot, subBlockIdx, subBlockNum);
 #endif
+#if USE_STORE_AQK_UNDER_MCH
+            PostSubStoreAkkd(bIdx, iHv, bos, localT, localChunk, iSub, slot, subBlockIdx, subBlockNum);
+#else
             PostSubStore(bIdx, iHv, bos, localT, localChunk, iSub, slot, subBlockIdx, subBlockNum);
+#endif
         }
 #endif
     }

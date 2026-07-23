@@ -52,6 +52,7 @@
 //   USE_MCH_ITERS_2=1: Neumann MCH_ITERS=2 (fewer Fixpipe/Nd2Nz)
 //   USE_MCH_SKIP_XI=1: skip X@I Mmad on iter>0 (L0C keep X after prior ACC/Fixpipe)
 //   USE_MCH_FIX_OVERLAP=1: X+=X@Y on M overlaps Y Fixpipe (defer Y Nd2Nz)
+//   USE_MCH_PROLOGUE_PREFETCH=1: L@L Fixpipe ∥ Nd2Nz X[/I] before Load Y
 // Post-MCH (POST_MCH_PLAN.md):
 //   USE_MCH_Y_SINGLE_LOAD=1: Y Nd2Nz once (L1A≡L1B=zN for RowMajor); alias for L0B
 // Score Tile (SCORE_TILE_CROSSCORE_PLAN.md):
@@ -97,6 +98,9 @@
 #endif
 #ifndef USE_MCH_Y_SINGLE_LOAD
 #define USE_MCH_Y_SINGLE_LOAD 1 // P1b: RowMajor zN alias — one Nd2Nz for Y/L/I (Dur 3.705)
+#endif
+#ifndef USE_MCH_PROLOGUE_PREFETCH
+#define USE_MCH_PROLOGUE_PREFETCH 0 // tried: Dur 3.679 vs 3.705 (−0.026 < 0.05) → off
 #endif
 #ifndef USE_SCORE_TILE_MMAD
 #define USE_SCORE_TILE_MMAD 1
@@ -1360,7 +1364,8 @@ private:
         WaitFlag<HardEvent::MTE2_MTE1>(MCH_EVT);
     }
 
-    __aicore__ inline void MchFixpipeToGm(LocalTensor<float> l0c, GlobalTensor<float> &gm, uint64_t base)
+    __aicore__ inline void MchFixpipeToGm(LocalTensor<float> l0c, GlobalTensor<float> &gm, uint64_t base,
+                                          bool waitMte2 = true)
     {
         auto layoutGm = tla::MakeLayout<float, Catlass::layout::RowMajor>(bc_, bc_);
         auto tGm = tla::MakeTensor(gm[base], layoutGm, Catlass::Arch::PositionGM{});
@@ -1376,7 +1381,9 @@ private:
         WaitFlag<HardEvent::M_FIX>(MCH_EVT);
         copy(blockGm, tL0C);
         SetFlag<HardEvent::FIX_MTE2>(MCH_EVT);
-        WaitFlag<HardEvent::FIX_MTE2>(MCH_EVT);
+        if (waitMte2) {
+            WaitFlag<HardEvent::FIX_MTE2>(MCH_EVT);
+        }
     }
 
     // AscendC Mmad with SolveTri-style params (cmatrixSource=false). No PipeBarrier here —
@@ -1399,7 +1406,8 @@ private:
     // L0A (kept) + L0B[TILE] with NO mid-stream M_MTE1 rewrite of the same L0B slot.
     __aicore__ inline void MchMatmulL1AccFix(LocalTensor<float> l1A, LocalTensor<float> l1B0, LocalTensor<float> l1B1,
                                              LocalTensor<float> l0A, LocalTensor<float> l0B0, LocalTensor<float> l0B1,
-                                             LocalTensor<float> l0C, GlobalTensor<float> &gmC, uint64_t baseC, bool doAcc)
+                                             LocalTensor<float> l0C, GlobalTensor<float> &gmC, uint64_t baseC, bool doAcc,
+                                             bool waitMte2AfterFix = true)
     {
         using CopyL1ToL0A = typename MchTileCopy::CopyL1ToL0A;
         using CopyL1ToL0B = typename MchTileCopy::CopyL1ToL0B;
@@ -1441,7 +1449,7 @@ private:
             MchMmad(l0C, l0A, l0B1, false);
         }
         PipeBarrier<PIPE_M>();
-        MchFixpipeToGm(l0C, gmC, baseC);
+        MchFixpipeToGm(l0C, gmC, baseC, waitMte2AfterFix);
     }
 
     // L0.1 gate: GM→GM single matmul via Tile stack (A/B separate L1 loads).
@@ -1602,6 +1610,22 @@ private:
 #if !USE_MCH_Y_SINGLE_LOAD
         MchLoadGmToL1B(l1Lb, cmatWs_, lBase);
 #endif
+#if USE_MCH_PROLOGUE_PREFETCH
+        // Y0=L@L Fixpipe without Wait FIX_MTE2 — Nd2Nz X[/I] overlaps FIX.
+        MchMatmulL1AccFix(l1L, l1Lb, l1Lb, l0Ax, l0Bx, l0By, l0Cx, solveWs_, yBase, false, false);
+        MchLoadGmToL1A(l1X, solveWs_, xBase);
+        if (loadEye) {
+            MchLoadGmToL1A(l1I, solveWs_, eyeBase);
+#if !USE_MCH_Y_SINGLE_LOAD
+            MchLoadGmToL1B(l1Ib, solveWs_, eyeBase);
+#endif
+        }
+        WaitFlag<HardEvent::FIX_MTE2>(MCH_EVT);
+        MchLoadGmToL1A(l1Y, solveWs_, yBase);
+#if !USE_MCH_Y_SINGLE_LOAD
+        MchLoadGmToL1B(l1Yb, solveWs_, yBase);
+#endif
+#else
         MchLoadGmToL1A(l1X, solveWs_, xBase);
         if (loadEye) {
             MchLoadGmToL1A(l1I, solveWs_, eyeBase);
@@ -1615,6 +1639,7 @@ private:
         MchLoadGmToL1A(l1Y, solveWs_, yBase);
 #if !USE_MCH_Y_SINGLE_LOAD
         MchLoadGmToL1B(l1Yb, solveWs_, yBase);
+#endif
 #endif
 
         // Priming so first-iter Waits pass (SolveTri MCHInvertDiagonal).

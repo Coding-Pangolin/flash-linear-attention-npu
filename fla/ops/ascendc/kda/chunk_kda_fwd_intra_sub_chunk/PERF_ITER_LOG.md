@@ -61,8 +61,16 @@ Double-buffer (L1A[2]) still **deferred** — `SCORE_TILE_DBUF_PLAN.md`.
 | C1 | `USE_SCORE_FIX_MTE2_DBUF=1`: Akk Fix ‖ next-tile MTE2; Drain before SetCubeDone | **2.180 ms** | full suite PASS (clean rebuild) | **on** | vs P1 **2.172** Δ≈+0.008（Dur 门禁未过）；sim tick 252571→225474 |
 | C2 | `USE_SCORE_WIN_L1_RESIDENT` Prefetch 双头 | — | **FAIL** `aqk_err≈14` | **off** | 削弱 P1/C1；代码保留。理论最优见 `CUBE_OPTIMAL_PIPELINE` **路径 A** |
 
+## V-A Vector barrier hygiene (2026-07-24)
+
+| knife | change | Dur_med | Δ | precision | default | notes |
+|-------|--------|---------|---|-----------|---------|-------|
+| V-A | Prep/Tril/FwdSub/`Clamp*` 合并冗余 `PipeBarrier<PIPE_V>` | **2.159 ms** | **≈−0.021** vs pathA ~2.18 | full suite PASS | on（无宏） | 裸 `msprof` `/tmp/prof_va_barrier` n=8；**未过 −0.05 门禁**，板端不劣化，作卫生刀保留 |
+
+门禁采集：裸 `msprof`（勿 `msprof … -- python`，`--` 会吞掉 interpreter → App EPERM）。见 `MSPROF_GUIDE.md`。
+
 ## Next direction
 
-1. **主差距在 AIV**（Task Dur ~2.18 → 1.5，差 ~0.68 ms）：scalar / Post·Prep / CV Wait，用 msprof 定刀，不要再堆无 Dur 收益的 Cube 微重叠
+1. **主差距在 AIV**（Task Dur ~2.16 → 1.5，差 ~0.66 ms）：V-B FwdSub slim → V-C MTE merge → V-D Post‖S0
 2. P2 L0[2]：仅当 sim 明确 L1→L0 bubble；sibling 门禁曾失败
 3. C2 resident：精度修好前不 default；即便修好也优先验证是否伤 P1/C1

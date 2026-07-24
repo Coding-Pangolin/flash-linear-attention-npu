@@ -188,7 +188,6 @@ private:
         Mins(tensor, tensor, EXP_INPUT_MAX, count);
         PipeBarrier<PIPE_V>();
         Maxs(tensor, tensor, EXP_INPUT_MIN, count);
-        PipeBarrier<PIPE_V>();
     }
     __aicore__ inline void ClampFp16(LocalTensor<float> &tensor, uint32_t count)
     {
@@ -196,7 +195,6 @@ private:
             Mins(tensor, tensor, FP16_MAX, count);
             PipeBarrier<PIPE_V>();
             Maxs(tensor, tensor, -FP16_MAX, count);
-            PipeBarrier<PIPE_V>();
         }
     }
 
@@ -256,10 +254,12 @@ private:
         PipeBarrier<PIPE_V>();
         ClampExp(expP, static_cast<uint32_t>(elems));
         ClampExp(expN, static_cast<uint32_t>(elems));
+        PipeBarrier<PIPE_V>();
         Exp(expP, expP, static_cast<uint32_t>(elems));
         Exp(expN, expN, static_cast<uint32_t>(elems));
         PipeBarrier<PIPE_V>();
 
+        // Shared `out`: barrier only at chain boundaries (Cast before next Mul).
         Mul(out, qFp, expP, static_cast<uint32_t>(elems)); // Qg = q * gq
         PipeBarrier<PIPE_V>();
         ClampFp16(out, static_cast<uint32_t>(elems));
@@ -339,16 +339,14 @@ private:
         const uint8_t rowBlk = static_cast<uint8_t>((bc_ * sizeof(float)) / 32);
 
         Muls(aqk, aqk, scale_, live);
-        PipeBarrier<PIPE_V>();
-
         const uint8_t brcbRepeat = static_cast<uint8_t>((bc_ + 7) / 8);
         Brcb(betaBrcb, beta, brcbRepeat, {1, 8});
         PipeBarrier<PIPE_V>();
         for (uint64_t col = 0; col < bc_; col += 8) {
             Mul(akk[static_cast<uint32_t>(col)], akk[static_cast<uint32_t>(col)], betaBrcb, 8,
                 static_cast<uint8_t>(bc_), {1, 1, 1, rowBlk, rowBlk, 1});
-            PipeBarrier<PIPE_V>();
         }
+        PipeBarrier<PIPE_V>();
 
         // Select tril masks.
         constexpr uint32_t kBetaBrcbFloats = MAX_BC * 8;
@@ -375,9 +373,11 @@ private:
 
     // Forward Substitution on akk (= -L = Ai). Triton:
     //   a += ReduceSum(a[:, None] * Ai, axis=0);  then Ai[i]=a;  Akkd=Ai+I
-    // Vector (ref. prepare_wy WholeReduceSum + chunk_bwd 列求和):
-    //   brcd[p,:]=a[p]; Mul; Add-fold reduce over rows (BC=16 power-of-2).
-    // Pattern::Reduce::RA is correct but ~5× slower on 16×16 (fixed overhead).
+    // Vector: Brcb(a) → Mul (row broadcast) → Add-fold col-reduce (BC=16=2^n).
+    // USE_FWDSUB_SLIM=1: Mul from Brcb directly (no UB brcd tile). Pattern::RA rejected.
+#ifndef USE_FWDSUB_SLIM
+#define USE_FWDSUB_SLIM 1
+#endif
     __aicore__ inline void ForwardSub(LocalTensor<float> akk, LocalTensor<float> tmp, uint64_t valid)
     {
         if (valid < 2) {
@@ -391,28 +391,41 @@ private:
         constexpr uint32_t kBrcbStride = 8;
         const uint32_t bc = static_cast<uint32_t>(bc_);
         const uint32_t elems = bc * bc;
+#if USE_FWDSUB_SLIM
+        // Layout: prod[BC*BC] | aBrcb[MAX_BC*8] | acc[BC] — no full brcd matrix.
+        LocalTensor<float> prod = vecBuf_.Get<float>();
+        LocalTensor<float> aBrcb = prod[elems];
+        LocalTensor<float> acc = aBrcb[static_cast<uint32_t>(MAX_BC * kBrcbStride)];
+#else
         LocalTensor<float> brcd = vecBuf_.Get<float>();
         LocalTensor<float> prod = brcd[elems];
         LocalTensor<float> aBrcb = prod[elems];
         LocalTensor<float> acc = aBrcb[static_cast<uint32_t>(MAX_BC * kBrcbStride)];
+#endif
 
         for (uint64_t i = 2; i < valid; ++i) {
             const uint32_t rowOff = static_cast<uint32_t>(i * bc);
             DataCopy(tmp, akk[rowOff], bc);
             PipeBarrier<PIPE_V>();
 
-            // brcd[p, j] = a[p]
             const uint8_t brcbRepeat = static_cast<uint8_t>((bc + kBrcbStride - 1) / kBrcbStride);
             Brcb(aBrcb, tmp, brcbRepeat, {1, 8});
             PipeBarrier<PIPE_V>();
+#if USE_FWDSUB_SLIM
+            // prod[p, :] = akk[p, :] * a[p]; aBrcb[p*8..] holds 8 copies of a[p].
+            // Two repeats of mask=8 with src1BlkStride=0 covers BC=16 without tiling brcd.
+            for (uint32_t p = 0; p < bc; ++p) {
+                Mul(prod[p * bc], akk[p * bc], aBrcb[p * kBrcbStride], 8, 2, {1, 1, 0, 1, 1, 0});
+            }
+#else
             for (uint32_t p = 0; p < bc; ++p) {
                 const uint32_t row = p * bc;
                 DataCopy(brcd[row], aBrcb[p * kBrcbStride], kBrcbStride);
                 DataCopy(brcd[row + kBrcbStride], aBrcb[p * kBrcbStride], kBrcbStride);
             }
             PipeBarrier<PIPE_V>();
-
             Mul(prod, akk, brcd, elems);
+#endif
             PipeBarrier<PIPE_V>();
 
             // ReduceSum axis=0 via Add-fold (chunk_bwd column-sum); BC=16 = 2^n.
@@ -426,7 +439,6 @@ private:
             }
             DataCopy(acc, prod, bc);
             PipeBarrier<PIPE_V>();
-
             Add(tmp, tmp, acc, bc);
             PipeBarrier<PIPE_V>();
             DataCopy(akk[rowOff], tmp, bc);

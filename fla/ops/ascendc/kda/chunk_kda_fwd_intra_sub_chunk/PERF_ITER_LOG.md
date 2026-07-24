@@ -69,8 +69,18 @@ Double-buffer (L1A[2]) still **deferred** — `SCORE_TILE_DBUF_PLAN.md`.
 
 门禁采集：裸 `msprof`（勿 `msprof … -- python`，`--` 会吞掉 interpreter → App EPERM）。见 `MSPROF_GUIDE.md`。
 
+## V-B / V-C / V-D (2026-07-24)
+
+| knife | change | Dur_med | Δ | precision | default | notes |
+|-------|--------|---------|---|-----------|---------|-------|
+| V-B | `USE_FWDSUB_SLIM` Brcb→Mul 去 brcd 铺砖 | — | — | **hang / aicore timeout** | **off** | 两种 Mul 写法均挂；代码保留宏=0 |
+| V-C | `USE_MTE2_MERGE=1`：S0 mid‖qkg；Post cmat‖beta 单次 Wait | **2.158 ms** | **≈−0.001** vs V-A | full suite PASS | **on** | 预期中低收益；未过 −0.05，低风险保留 |
+| V-D | `USE_POST_S0_MTE_OVERLAP` 延后 Post MTE3 Wait | wall≈2.84（C+D） | — | suite PASS；**裸 msprof hang** | **off** | 墙钟可跑；profiler 下 HardEvent defer 挂；代码保留 |
+
+V-C 产物：`/tmp/prof_vc` n=8。
+
 ## Next direction
 
-1. **主差距在 AIV**（Task Dur ~2.16 → 1.5，差 ~0.66 ms）：V-B FwdSub slim → V-C MTE merge → V-D Post‖S0
-2. P2 L0[2]：仅当 sim 明确 L1→L0 bubble；sibling 门禁曾失败
-3. C2 resident：精度修好前不 default；即便修好也优先验证是否伤 P1/C1
+1. **主差距仍在 AIV**（~2.16 → 1.5，差 ~0.66 ms）：V-B/V-D 需更稳的事件/Mul 写法后再开；可考虑 sim BAR% 或别的 AIV 刀
+2. P2 L0[2]：仅当 sim 明确 L1→L0 bubble
+3. C2 resident：精度修好前不 default

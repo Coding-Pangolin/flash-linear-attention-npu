@@ -137,7 +137,7 @@ l0A[0]/l0B[0]  → MMAD1 (Qg, Kg)
 l0A[1]/l0B[1]  → MMAD2 (W,  Kg)   // 可在 MMAD1/Fix(Aqk) 期间预填
 ```
 
-### 3.3 路径 B — 0723 默认：`WIN_L1_RESIDENT=1`
+### 3.3 路径 B — 可选：`WIN_L1_RESIDENT=1`（默认关）
 
 WaitS0 后 **一次 Prefetch 两头**，L1 按 head 切块（每头 3 槽）：
 

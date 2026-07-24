@@ -28,6 +28,7 @@ class KdaSubChunkCube : public KdaSubChunkBase<T> {
     using Base = KdaSubChunkBase<T>;
     using Base::bc_;
     using Base::kDim_;
+    using Base::hv_;
     using Base::nc_;
     using Base::totalTasks_;
     using Base::usedCoreNum_;
@@ -51,12 +52,32 @@ public:
             return;
         }
         Catlass::Arch::Resource<KdaArchTag> resource;
+        uint64_t tasksOnCore = 0;
         for (uint64_t task = coreIdx_; task < totalTasks_; task += usedCoreNum_) {
-            for (uint64_t iSub = 0; iSub < nc_; ++iSub) {
-                const uint64_t slot = this->SlotOf(iSub);
+            const uint64_t nHvWin = this->NumHvWindows();
+            const uint64_t W = nc_ * nHvWin;
+            if (W == 0) {
+                continue;
+            }
+            ++tasksOnCore;
+            for (uint64_t w = 0; w < W; ++w) {
+                const uint64_t slot0 = this->SlotOfWindow(w, 0);
+                const uint64_t slot1 = this->SlotOfWindow(w, 1);
+                const uint64_t hvBase = (w % nHvWin) * 2ULL;
+                // Depth: WaitS0 only. Slot reuse safe via AIV WaitCube before S0(w+2).
                 Catlass::Arch::CrossCoreWaitFlag(s0Ready_);
-                ComputeScoreTile(slot, resource);
+                ComputeScoreTile(slot0, resource);
+                if (hvBase + 1ULL < hv_) {
+                    ComputeScoreTile(slot1, resource);
+                }
+                PipeBarrier<PIPE_FIX>();
                 Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cubeDone_);
+            }
+        }
+        // Match startup SetFree×4 once (Process bookend; not per-task).
+        if (tasksOnCore > 0) {
+            for (uint32_t s = 0; s < NUM_GM_SLOTS; ++s) {
+                Catlass::Arch::CrossCoreWaitFlag(slotFree_[s]);
             }
         }
     }
@@ -199,6 +220,8 @@ private:
 
     Catlass::Arch::CrossCoreFlag s0Ready_{FLAG_S0_READY};
     Catlass::Arch::CrossCoreFlag cubeDone_{FLAG_CUBE_DONE};
+    Catlass::Arch::CrossCoreFlag slotFree_[NUM_GM_SLOTS] = {FLAG_SLOT_FREE0, FLAG_SLOT_FREE1, FLAG_SLOT_FREE2,
+                                                             FLAG_SLOT_FREE3};
 };
 
 } // namespace kda_isub

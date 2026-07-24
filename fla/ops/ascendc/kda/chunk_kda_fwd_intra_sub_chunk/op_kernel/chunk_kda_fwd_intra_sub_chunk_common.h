@@ -4,11 +4,14 @@
  *
  * ChunkKdaFwdIntraSubChunk — shared definitions (BNSD + optional TND varlen, GVA).
  *
- * MIX_AIC_1_2 lockstep pipeline (DESIGN §4 first milestone):
+ * MIX_AIC_1_2 2-window pipeline (DESIGN §4.2):
  *   stage_0 Vector : Qg, W(=Kgq), Kg  → scoreWs   (gate in fp32, cast to qk dtype)
  *   stage_1 Cube   : Aqk_raw = Qg@Kg.T ; Akk_raw = W@Kg.T  → cmatWs (fp32)
  *   stage_1 Vector : tril/scale (Aqk) ; strict_tril*beta (L) ; Forward-Substitution
  *                    Akkd = (I+L)^{-1} ; store Aqk diag block + Akkd
+ *
+ * Handshake: window = 2 heads; SetFree prefill + S0 real prefill depth 2;
+ * dual-AIV (AIV0=hvBase, AIV1=hvBase+1); raw 0x2; no CrossCoreFlagWithReverse.
  *
  * Forward Substitution (NOT MCH) — vector-only row updates on AIV.
  */
@@ -77,9 +80,16 @@ constexpr uint32_t EVT_V_MTE3 = 6;
 constexpr uint32_t EVT_MTE3_V = 7;
 constexpr uint32_t EVT_MTE3_MTE2 = 3;
 
-// Cross-core flags (AIC <-> AIV pair). Even ids per convention.
-constexpr uint8_t FLAG_S0_READY = 4; // AIV → AIC : scoreWs slot filled
-constexpr uint8_t FLAG_CUBE_DONE = 2; // AIC → AIV : cmatWs slot filled
+// Cross-core flags (AIC <-> AIV). Protocol: VEC_2WIN_PIPE.md / reference cpp.
+// 0x2 + MIX 1:2: both AIVs must Set the same s0Ready; one AIC Wait consumes the pair.
+// FLAG_SLOT_FREE*: Process bookend only (AIV Set×4 once / AIC Wait×4 once) — not hot path.
+constexpr uint8_t FLAG_S0_READY = 4;   // AIV → AIC : window S0 filled
+constexpr uint8_t FLAG_CUBE_DONE = 2;  // AIC → AIV : window GEMM done
+constexpr uint8_t FLAG_SLOT_FREE0 = 6;
+constexpr uint8_t FLAG_SLOT_FREE1 = 8;
+constexpr uint8_t FLAG_SLOT_FREE2 = 10;
+constexpr uint8_t FLAG_SLOT_FREE3 = 12;
+constexpr uint32_t NUM_GM_SLOTS = 4;
 
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 using KdaArchTag = Catlass::Arch::Ascend950;
@@ -169,20 +179,26 @@ protected:
     {
         return (((coreIdx_ * depth_ + slot) * C_PLANES + plane) * bc_ + row) * bc_ + col;
     }
-    __aicore__ inline uint64_t SlotOf(uint64_t iSub) const
+    // DESIGN §4.2: slot = (windowId % 2) * 2 + headInWin
+    __aicore__ inline uint64_t SlotOfWindow(uint64_t windowId, uint64_t headInWin) const
     {
-        return iSub % depth_;
+        return (windowId % 2ULL) * 2ULL + headInWin;
+    }
+    __aicore__ inline uint64_t NumHvWindows() const
+    {
+        return (hv_ + 1ULL) / 2ULL;
     }
 
-    // task = iChunk * (batch*hv) + iB*hv + iHv
-    __aicore__ inline void DecodeTask(uint64_t task, uint64_t &iB, uint64_t &iHv, uint64_t &iH, uint64_t &iChunk) const
+    // DESIGN §5.1: task = iChunk * batch + iB (HV windowed inside).
+    __aicore__ inline void DecodeChunkTask(uint64_t task, uint64_t &iB, uint64_t &iChunk) const
     {
-        const uint64_t bhv = batch_ * hv_;
-        const uint64_t iBhv = task % bhv;
-        iChunk = task / bhv;
-        iB = iBhv / hv_;
-        iHv = iBhv % hv_;
-        iH = iHv / group_;
+        if (batch_ == 0) {
+            iB = 0;
+            iChunk = task;
+            return;
+        }
+        iB = task % batch_;
+        iChunk = task / batch_;
     }
 
     // AIC path: chunkIndices/cuSeqlens read via scalar GetValue (no UB). AIV path: LoadI64.

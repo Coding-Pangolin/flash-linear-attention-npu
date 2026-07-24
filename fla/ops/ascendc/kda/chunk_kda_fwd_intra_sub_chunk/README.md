@@ -60,9 +60,14 @@ aqk, akkd = npu_chunk_kda_fwd_intra_sub_chunk(
 ## 构建
 
 ```sh
+# A2/A3（精度 + 可跑）
 FLA_NPU_SOC=ascend910b FLA_NPU_OPS=chunk_kda_fwd_intra_sub_chunk \
   python -m pip wheel --no-build-isolation --no-deps . -w dist
 pip install --force-reinstall --no-deps dist/flash_linear_attention_npu-*.whl
+
+# A5 / Ascend950（首版：编译门禁；与 A2 同一套源码，CATLASS_ARCH 切换）
+FLA_NPU_SOC=ascend950 FLA_NPU_OPS=chunk_kda_fwd_intra_sub_chunk \
+  python -m pip wheel --no-build-isolation --no-deps . -w dist
 ```
 
 ## 测试
@@ -73,17 +78,30 @@ pip install --force-reinstall --no-deps dist/flash_linear_attention_npu-*.whl
   - 模型级：`_run_case_model_sample`（NPU vs bf16-sim 采样，避免 T=8192 全量 CPU golden 过慢）
   - `FLA_NPU_ONLY_MODEL=1` / `FLA_NPU_ONLY_GVA=1` 可筛跑
 
+### 性能（Phase E，未结案）
+
+- **硬目标**：模型 case `B=1,T=8192,H=HV=32,K=128,BT=64,bf16` 的 msprof **Task Duration 中位 ≤ 1.5 ms**
+- 当前板端（P1+C1 path A）约 **~2.18 ms**；Vector 侧优化待做
+- 板端：`torch_custom/fla_npu/test/prof_chunk_kda_fwd_intra_sub_chunk_model.py` + `msprof op ... --replay-mode=application`
+- 流水仿真（T=1024，不替代 1.5 ms 验收）：
+  ```sh
+  export LD_LIBRARY_PATH=/data/tracy/cann-9.1.0-beta.1/aarch64-linux/simulator/Ascend910B3/lib:$LD_LIBRARY_PATH
+  msprof op simulator --soc-version=Ascend910B3 python \
+    torch_custom/fla_npu/test/prof_chunk_kda_fwd_intra_sub_chunk_sim_t1024.py
+  ```
+- 迭代记录：`PERF_ITER_LOG.md`；Cube 理论最优路径：`CUBE_OPTIMAL_PIPELINE.md`（**路径 A**：`L1A_DBUF=1` + `FIX_MTE2_DBUF=1`，`WIN_L1_RESIDENT=0`）
+
 ## 实现说明
 
 | Tiling key | 路径 | 分核 |
 |------------|------|------|
 | 0 | AIV scalar fallback | 外层 `B×HV×NT`，核内 NC |
-| **1（默认）** | **MIX_AIC_1_2 Cube** | 外层 `B×HV×NT` + `GetCoreNumAic`，核内 NC |
+| **1（默认）** | **MIX_AIC_1_2 Cube** | 外层 `B×NT` + dual-AIV-by-head（Vec2Win）+ AIC |
 
-**精度路径（对齐 `chunk_kda_fwd`）**
+**精度路径**
 
 - AIV Vector：fp32 算 midpoint gate / 乘加，再 `Cast` 成输入 dtype 写入 scratch
-- AIC Cube：`BlockMmad` 的 A/B 为 bf16/fp16，C 为 fp32（**不升精度**）
-- AIV post：fp32 tril / β / forward-sub / store
+- AIC Cube：Tile GEMM（A/B bf16/fp16，C fp32）；**Kg→L1B 驻留**；**L1A 双槽**（Qg/W，`MTE2(W)‖MMAD1`，Wait W 再 Fix Aqk）；**C1** Akk Fix ‖ 下 tile MTE2
+- AIV post：fp32 tril / β / forward-sub / store（**无 MCH**）
 
-计划与交接：`/root/.cursor/plans/intra_sub_chunk_cube_catlass_7a3f2c1b.plan.md`；分析见 `PARTITION_CUBE_ANALYSIS.md`。
+计划：`/root/.cursor/plans/intra_subchunk_impl_c485e88b.plan.md`。

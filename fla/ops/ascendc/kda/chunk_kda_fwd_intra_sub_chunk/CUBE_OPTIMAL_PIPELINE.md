@@ -5,6 +5,7 @@
 > 不展开 Vector FwdSub 内部算法；仅标出 Vector 对 `scoreWs` / `cmatWs` 的 MTE2/MTE3，便于对照槽位生命周期。
 
 热路径尺寸：`BC=16`，`K≤128`，dtype `bf16/fp16`（Score 面），`cmat` 为 `fp32`。
+（模型 case `BT=64` ⇒ `NC=4` 个 sub-chunk；Score tile 仍是 `BC×K`。）
 
 ---
 
@@ -322,14 +323,14 @@ GM:   bank0: slot0/1     bank1: slot2/3     bank0 复用 ...
 |----|-----------|--------------|
 | `USE_SCORE_L1A_DBUF` | 1 | L1A 双槽 Qg/W，支撑 P1 |
 | `USE_SCORE_FIX_MTE2_DBUF` | 1 | Akk Fix 挂起，支撑跨 tile C1 |
-| `USE_SCORE_WIN_L1_RESIDENT` | **1** | 两头 Prefetch；**削弱 P1/C1** |
+| `USE_SCORE_WIN_L1_RESIDENT` | **0** | 两头 Prefetch；**削弱 P1/C1**；精度未绿故默认关 |
 | `USE_SCORE_L0_DBUF` | 0（未合入/门禁） | 理论 P2：MMAD1 ‖ 预填 MMAD2 的 L0 |
 | `USE_SCORE_MMAD1_LOAD_W` | 0（强制） | 单 L1A 覆盖写已否决 |
 
 **记法建议：**
 
 - **理论最优 Cube 流水** = 路径 A（`L1A_DBUF` + `FIX_MTE2_DBUF` + 可选 `L0_DBUF`），按 §4 排布。  
-- **0723 现网默认** = 路径 B（resident Prefetch）+ 片内 Fix(Aqk)‖MTE1；GM 仍为 4-slot Vec2Win。
+- **0723 现网默认** = 路径 A（`L1A_DBUF=1` + `FIX_MTE2_DBUF=1` + `WIN_L1_RESIDENT=0`）；GM 仍为 4-slot Vec2Win。路径 B 代码保留、默认关。
 
 ---
 

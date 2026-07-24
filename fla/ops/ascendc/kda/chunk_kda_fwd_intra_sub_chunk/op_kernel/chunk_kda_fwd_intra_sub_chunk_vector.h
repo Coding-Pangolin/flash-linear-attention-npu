@@ -97,14 +97,17 @@ public:
 
             const uint64_t prefill = (W < prefillCap) ? W : prefillCap;
             // Real-fill prefill windows; slot reuse via WaitCube(w) before S0(w+prefill).
+            // Bank (w%2) free only after GEMM(w) done — do not S0(w+2) earlier.
             for (uint64_t w = 0; w < prefill; ++w) {
                 RunS0Window(w, nHvWin, bIdx, bos, localT, localChunk);
                 SetS0ReadyJoined();
             }
             for (uint64_t w = 0; w < W; ++w) {
                 Catlass::Arch::CrossCoreWaitFlag(cubeDone_);
+                // cmat GM visibility: AIC SetCubeDone is after DrainAkkFix + PIPE_FIX.
                 RunPostWindow(w, nHvWin, bIdx, bos, localT, localChunk);
                 if (w + prefill < W) {
+                    // Safe: WaitCube(w) ⇒ score/cmat bank (w%2) no longer owned by Cube(w).
                     RunS0Window(w + prefill, nHvWin, bIdx, bos, localT, localChunk);
                     SetS0ReadyJoined();
                 }

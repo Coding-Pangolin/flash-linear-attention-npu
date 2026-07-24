@@ -33,10 +33,36 @@ Acceptance: Task Duration median ≤ 1.5 ms (msprof, idle card).
 - wall_ms med≈3.043 (warmup=3, iters=10); shape B=1,T=8192,H=32,K=128,BT=64,bf16
 - Formal msprof Task Dur to follow in Phase E
 
-## Next direction (from C0)
+## P0 precision fix (landed, 2026-07-24)
 
-1. msprof C0 baseline (Task Dur + pipe ratios); confirm GEMM∥Post
-2. Cut remaining **AIV scalar** (Prepare mid-row Sub loop / FwdSub diag +I SetValue)
-3. Sync hygiene (drop V_S waits that only gate vector→vector) — validate per-site, no blind strip
-4. Re-check Cube after Vector/Wait drop; optional simulator T=1024
-5. Borrow ideas from sibling 2.37ms path only as **hypotheses**; direction must come from our msprof
+Was: intermittent H=32 `aqk_err≈7–13` / aicore timeout (`fixp_error`).
+
+| change | result |
+|--------|--------|
+| `USE_SCORE_MMAD1_LOAD_W` **default 0** (serial W load) | stops single-L1A overlap corruption |
+| AIC: only `PipeBarrier<PIPE_FIX>` before `SetCubeDone` (no extra `PIPE_ALL`) | avoid fixp trap under back-to-back runs |
+| Drop `PIPE_ALL` after Akk Fix (sibling `DROP_PIPE_ALL`) | FIX Wait enough |
+| Vec2Win slot comment clarified (`WaitCube⇒bank free`) | protocol unchanged |
+
+**Verify:** full suite PASS (incl. H32 T=4096/8192); same-proc H32×5 all `aqk_max_err=0.0137`.
+
+Double-buffer (L1A[2]) still **deferred** — `SCORE_TILE_DBUF_PLAN.md`.
+
+## P1 L1A dbuf (landed, 2026-07-24)
+
+| knife | change | Dur_med | precision | default | notes |
+|-------|--------|---------|-----------|---------|-------|
+| P1 | `USE_SCORE_L1A_DBUF=1`: l1A[0]=Qg, l1A[1]=W; MTE2(W)‖MMAD1; Wait W before Fix | wall **2.971 ms** / Task Dur **~2.172–2.183 ms** | suite + H32×5 PASS | on | vs C0 wall ~3.04 → **~−0.07**; forces MMAD1_LOAD_W=0 |
+
+## C1 / C2 Cube Fix‖MTE2 & WIN L1 (2026-07-24)
+
+| knife | change | Dur_med | precision | default | notes |
+|-------|--------|---------|-----------|---------|-------|
+| C1 | `USE_SCORE_FIX_MTE2_DBUF=1`: Akk Fix ‖ next-tile MTE2; Drain before SetCubeDone | **2.180 ms** | full suite PASS (clean rebuild) | **on** | vs P1 **2.172** Δ≈+0.008（Dur 门禁未过）；sim tick 252571→225474 |
+| C2 | `USE_SCORE_WIN_L1_RESIDENT` Prefetch 双头 | — | **FAIL** `aqk_err≈14` | **off** | 削弱 P1/C1；代码保留。理论最优见 `CUBE_OPTIMAL_PIPELINE` **路径 A** |
+
+## Next direction
+
+1. **主差距在 AIV**（Task Dur ~2.18 → 1.5，差 ~0.68 ms）：scalar / Post·Prep / CV Wait，用 msprof 定刀，不要再堆无 Dur 收益的 Cube 微重叠
+2. P2 L0[2]：仅当 sim 明确 L1→L0 bubble；sibling 门禁曾失败
+3. C2 resident：精度修好前不 default；即便修好也优先验证是否伤 P1/C1

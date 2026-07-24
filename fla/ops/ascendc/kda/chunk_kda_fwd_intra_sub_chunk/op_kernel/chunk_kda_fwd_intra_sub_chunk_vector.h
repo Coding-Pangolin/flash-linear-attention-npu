@@ -7,10 +7,8 @@
  *   PostSub    : tril(Aqk)*scale ; L = strict_tril(Akk)*beta ;
  *                Akkd = (I+L)^{-1} via Forward Substitution ; store diag block + Akkd
  *
- * Lockstep MIX handshake (both AIVs Set/Wait; single AIC). Real compute runs on
- * subBlockIdx==0 (AIV0); AIV1 keeps the cross-core counts balanced. Dual-AIV row
- * split +先发多窗 pipeline are deferred (see DESIGN §4.2) — this is the correctness
- * milestone.
+ * Vec 2-win dual-issue (VEC_2WIN_PIPE.md): AIV0/AIV1 by head; S0 prefill=2;
+ * SetS0ReadyJoined (Barrier before Set); SetFree Process bookend only; raw 0x2.
  */
 
 #ifndef CHUNK_KDA_FWD_INTRA_SUB_CHUNK_VECTOR_H
@@ -70,28 +68,86 @@ public:
         if (!this->ValidShapes()) {
             return;
         }
-        const bool active = (subBlockIdx_ == 0);
+#ifndef KDA_ISUB_PREFILL_WINDOWS
+#define KDA_ISUB_PREFILL_WINDOWS 2
+#endif
+        constexpr uint64_t prefillCap = static_cast<uint64_t>(KDA_ISUB_PREFILL_WINDOWS);
+        // SetFree×4 once per Process (wy_full). Per-task re-seed races multi-task cores.
+        bool seeded = false;
         for (uint64_t task = coreIdx_; task < totalTasks_; task += usedCoreNum_) {
-            uint64_t iB = 0, iHv = 0, iH = 0, iChunk = 0;
-            this->DecodeTask(task, iB, iHv, iH, iChunk);
+            uint64_t iB = 0, iChunk = 0;
+            this->DecodeChunkTask(task, iB, iChunk);
             uint64_t bos = 0, localT = 0, localChunk = 0, bIdx = 0;
             this->ResolveChunkScalar(iChunk, iB, bos, localT, localChunk, bIdx);
 
-            // Strict lockstep per sub-chunk (no S0 prefetch of iSub+1) to isolate Cube NaNs.
-            for (uint64_t iSub = 0; iSub < nc_; ++iSub) {
-                if (active) {
-                    PrepareSub(bIdx, iH, iHv, bos, localT, localChunk, iSub, this->SlotOf(iSub));
+            const uint64_t nHvWin = this->NumHvWindows();
+            const uint64_t W = nc_ * nHvWin;
+            if (W == 0) {
+                continue;
+            }
+
+            if (!seeded) {
+                Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
+                PipeBarrier<PIPE_MTE3>();
+                for (uint32_t s = 0; s < NUM_GM_SLOTS; ++s) {
+                    Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(slotFree_[s]);
                 }
-                Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(s0Ready_);
+                seeded = true;
+            }
+
+            const uint64_t prefill = (W < prefillCap) ? W : prefillCap;
+            // Real-fill prefill windows; slot reuse via WaitCube(w) before S0(w+prefill).
+            for (uint64_t w = 0; w < prefill; ++w) {
+                RunS0Window(w, nHvWin, bIdx, bos, localT, localChunk);
+                SetS0ReadyJoined();
+            }
+            for (uint64_t w = 0; w < W; ++w) {
                 Catlass::Arch::CrossCoreWaitFlag(cubeDone_);
-                if (active) {
-                    PostSub(bIdx, iHv, bos, localT, localChunk, iSub, this->SlotOf(iSub));
+                RunPostWindow(w, nHvWin, bIdx, bos, localT, localChunk);
+                if (w + prefill < W) {
+                    RunS0Window(w + prefill, nHvWin, bIdx, bos, localT, localChunk);
+                    SetS0ReadyJoined();
                 }
             }
         }
     }
 
 private:
+    // Barrier before Set so a fast AIV cannot double-SetS0 before the peer's first Set
+    // (0x2 prefill skew → hang / later handshake corruption). VEC_2WIN_PIPE.md §5.1.
+    __aicore__ inline void SetS0ReadyJoined()
+    {
+        Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
+        PipeBarrier<PIPE_MTE3>();
+        Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(s0Ready_);
+    }
+
+    // Dual-AIV by head: AIV0↔hvBase, AIV1↔hvBase+1. Empty head returns; caller still Sets.
+    __aicore__ inline void RunS0Window(uint64_t w, uint64_t nHvWin, uint64_t bIdx, uint64_t bos, uint64_t localT,
+                                       uint64_t localChunk)
+    {
+        const uint64_t iSub = w / nHvWin;
+        const uint64_t hvBase = (w % nHvWin) * 2ULL;
+        const uint64_t iHv = hvBase + subBlockIdx_;
+        if (iHv >= hv_) {
+            return;
+        }
+        const uint64_t iH = iHv / group_;
+        PrepareSub(bIdx, iH, iHv, bos, localT, localChunk, iSub, this->SlotOfWindow(w, subBlockIdx_));
+    }
+
+    __aicore__ inline void RunPostWindow(uint64_t w, uint64_t nHvWin, uint64_t bIdx, uint64_t bos, uint64_t localT,
+                                         uint64_t localChunk)
+    {
+        const uint64_t iSub = w / nHvWin;
+        const uint64_t hvBase = (w % nHvWin) * 2ULL;
+        const uint64_t iHv = hvBase + subBlockIdx_;
+        if (iHv >= hv_) {
+            return;
+        }
+        PostSub(bIdx, iHv, bos, localT, localChunk, iSub, this->SlotOfWindow(w, subBlockIdx_));
+    }
+
     // -------------------- stage_0: Prepare Qg/W/Kg → scoreWs --------------------
     __aicore__ inline void ZeroScorePlanes(uint64_t slot, uint64_t rowBegin, uint64_t rowEnd)
     {
@@ -406,7 +462,22 @@ private:
         PipeBarrier<PIPE_V>();
 
         LoadBetaRows(bIdx, iHv, bos + iTi, valid, beta);
+#ifdef KDA_ISUB_DEBUG_DUMP
+        // Dump gate: first chunk / iSub0 / hv=3 (known model-sample miss).
+        if (localChunk == 0 && iSub == 0 && iHv == 3) {
+            AscendC::printf("[isub] post raw core=%u sub=%u slot=%u hv=%u\n",
+                            static_cast<uint32_t>(coreIdx_), static_cast<uint32_t>(subBlockIdx_),
+                            static_cast<uint32_t>(slot), static_cast<uint32_t>(iHv));
+            AscendC::DumpTensor(aqk, __LINE__, elems); // aqk_raw from Cube
+            AscendC::DumpTensor(akk, __LINE__, elems); // akk_raw from Cube
+        }
+#endif
         ApplyTrilScaleBeta(aqk, akk, beta, valid);
+#ifdef KDA_ISUB_DEBUG_DUMP
+        if (localChunk == 0 && iSub == 0 && iHv == 3) {
+            AscendC::DumpTensor(aqk, __LINE__, elems); // after tril*scale
+        }
+#endif
         ForwardSub(akk, tmp, valid);
 
         LocalTensor<T> aqkT = aqkTBuf_.Get<T>();
@@ -439,6 +510,8 @@ private:
     uint64_t subBlockIdx_ = 0;
     Catlass::Arch::CrossCoreFlag s0Ready_{FLAG_S0_READY};
     Catlass::Arch::CrossCoreFlag cubeDone_{FLAG_CUBE_DONE};
+    Catlass::Arch::CrossCoreFlag slotFree_[NUM_GM_SLOTS] = {FLAG_SLOT_FREE0, FLAG_SLOT_FREE1, FLAG_SLOT_FREE2,
+                                                             FLAG_SLOT_FREE3};
 };
 
 } // namespace kda_isub

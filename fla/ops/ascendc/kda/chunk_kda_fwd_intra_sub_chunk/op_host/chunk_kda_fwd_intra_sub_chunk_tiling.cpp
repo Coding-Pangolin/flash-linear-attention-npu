@@ -22,11 +22,10 @@ constexpr size_t ATTR_CHUNK_SIZE_IDX = 1;
 constexpr int64_t SUB_CHUNK_SIZE = 16;
 constexpr int64_t MAX_K_DIM = 256;
 constexpr int64_t MAX_HEAD = 128;
-// Task decomposition: one task per (b, hv, chunk); HV not windowed (lockstep MIX).
-constexpr uint64_t USE_HEAD_WINDOW_TILING = 0;
-// Slot ping-pong depth for score/cmat scratch (2 = double buffer). DESIGN §6.3 allocates 4
-// GM slots for the 2-window head pipeline; lockstep only needs 2.
-constexpr uint64_t SCORE_QUEUE_DEPTH = 2;
+// DESIGN §5.1/§4.2: one task per (b, chunk); HV windowed (2 heads) inside the core.
+constexpr uint64_t USE_HEAD_WINDOW_TILING = 1;
+// DESIGN §6.3: 4 GM slots = 2-window depth × 2 heads.
+constexpr uint64_t SCORE_QUEUE_DEPTH = 4;
 constexpr uint64_t SCORE_SCRATCH_PLANES = 3; // Qg / Kgq(W) / Kg  (dtype = qk)
 constexpr uint64_t C_SCRATCH_PLANES = 2;     // Aqk_raw / Akk_raw (fp32)
 // Forward-substitution replaces MCH: no Cube solve scratch region.

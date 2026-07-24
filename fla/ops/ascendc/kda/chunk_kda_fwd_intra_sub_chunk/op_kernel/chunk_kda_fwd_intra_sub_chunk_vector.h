@@ -314,8 +314,11 @@ private:
         PipeBarrier<PIPE_V>();
     }
 
-    // Forward Substitution on akk (= -L = Ai). akk[i,:] = a + a@Ai for i>=2; then +I.
-    // Vectorized: O(i) scalar coeffs × Vector Muls/Add over BC=16 (was O(i²·BC) GetValue).
+    // Forward Substitution on akk (= -L = Ai). Triton:
+    //   a += ReduceSum(a[:, None] * Ai, axis=0);  then Ai[i]=a;  Akkd=Ai+I
+    // Vector (ref. prepare_wy WholeReduceSum + chunk_bwd 列求和):
+    //   brcd[p,:]=a[p]; Mul; Add-fold reduce over rows (BC=16 power-of-2).
+    // Pattern::Reduce::RA is correct but ~5× slower on 16×16 (fixed overhead).
     __aicore__ inline void ForwardSub(LocalTensor<float> akk, LocalTensor<float> tmp, uint64_t valid)
     {
         if (valid < 2) {
@@ -325,38 +328,56 @@ private:
             }
             return;
         }
-        LocalTensor<float> work = vecBuf_.Get<float>();
-        LocalTensor<float> acc = work[static_cast<uint32_t>(bc_)];
+
+        constexpr uint32_t kBrcbStride = 8;
+        const uint32_t bc = static_cast<uint32_t>(bc_);
+        const uint32_t elems = bc * bc;
+        LocalTensor<float> brcd = vecBuf_.Get<float>();
+        LocalTensor<float> prod = brcd[elems];
+        LocalTensor<float> aBrcb = prod[elems];
+        LocalTensor<float> acc = aBrcb[static_cast<uint32_t>(MAX_BC * kBrcbStride)];
+
         for (uint64_t i = 2; i < valid; ++i) {
-            const uint32_t rowOff = static_cast<uint32_t>(i * bc_);
-            DataCopy(tmp, akk[rowOff], static_cast<uint32_t>(bc_));
+            const uint32_t rowOff = static_cast<uint32_t>(i * bc);
+            DataCopy(tmp, akk[rowOff], bc);
             PipeBarrier<PIPE_V>();
-            Duplicate(acc, 0.0f, static_cast<uint32_t>(bc_));
+
+            // brcd[p, j] = a[p]
+            const uint8_t brcbRepeat = static_cast<uint8_t>((bc + kBrcbStride - 1) / kBrcbStride);
+            Brcb(aBrcb, tmp, brcbRepeat, {1, 8});
             PipeBarrier<PIPE_V>();
-            SetFlag<HardEvent::V_S>(EVT_V_S);
-            WaitFlag<HardEvent::V_S>(EVT_V_S);
-            for (uint64_t p = 0; p < i; ++p) {
-                const float ap = tmp.GetValue(static_cast<uint32_t>(p));
-                SetFlag<HardEvent::S_V>(EVT_S_V);
-                WaitFlag<HardEvent::S_V>(EVT_S_V);
-                Muls(work, akk[static_cast<uint32_t>(p * bc_)], ap, static_cast<uint32_t>(bc_));
-                PipeBarrier<PIPE_V>();
-                Add(acc, acc, work, static_cast<uint32_t>(bc_));
-                PipeBarrier<PIPE_V>();
-                if (p + 1 < i) {
-                    SetFlag<HardEvent::V_S>(EVT_V_S);
-                    WaitFlag<HardEvent::V_S>(EVT_V_S);
-                }
+            for (uint32_t p = 0; p < bc; ++p) {
+                const uint32_t row = p * bc;
+                DataCopy(brcd[row], aBrcb[p * kBrcbStride], kBrcbStride);
+                DataCopy(brcd[row + kBrcbStride], aBrcb[p * kBrcbStride], kBrcbStride);
             }
-            Add(tmp, tmp, acc, static_cast<uint32_t>(bc_));
             PipeBarrier<PIPE_V>();
-            DataCopy(akk[rowOff], tmp, static_cast<uint32_t>(bc_));
+
+            Mul(prod, akk, brcd, elems);
+            PipeBarrier<PIPE_V>();
+
+            // ReduceSum axis=0 via Add-fold (chunk_bwd column-sum); BC=16 = 2^n.
+            uint32_t remain = bc;
+            while (remain > 1) {
+                const uint32_t calcCnt = (remain / 2) * bc;
+                remain = (remain + 1) / 2;
+                const uint32_t offset = remain * bc;
+                Add(prod, prod, prod[offset], calcCnt);
+                PipeBarrier<PIPE_V>();
+            }
+            DataCopy(acc, prod, bc);
+            PipeBarrier<PIPE_V>();
+
+            Add(tmp, tmp, acc, bc);
+            PipeBarrier<PIPE_V>();
+            DataCopy(akk[rowOff], tmp, bc);
             PipeBarrier<PIPE_V>();
         }
+
         SetFlag<HardEvent::V_S>(EVT_V_S);
         WaitFlag<HardEvent::V_S>(EVT_V_S);
         for (uint64_t i = 0; i < valid; ++i) {
-            const uint32_t diag = static_cast<uint32_t>(i * bc_ + i);
+            const uint32_t diag = static_cast<uint32_t>(i * bc + i);
             akk.SetValue(diag, akk.GetValue(diag) + 1.0f);
         }
         SetFlag<HardEvent::S_V>(EVT_S_V);

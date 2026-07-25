@@ -74,6 +74,12 @@ def _prepare_embedded_opp() -> pathlib.Path:
     if not op_api_lib.exists():
         raise FileNotFoundError(f"Embedded custom op_api library not found: {op_api_lib}")
     op_api_alias = op_api_lib.with_name("libopapi.so")
+    if op_api_alias.exists() or op_api_alias.is_symlink():
+        raise RuntimeError(
+            "The FLA NPU custom OPP contains libopapi.so, which can shadow the "
+            "CANN runtime library. Reinstall a wheel that only contains "
+            f"libcust_opapi.so, or remove the stale alias: {op_api_alias}"
+        )
 
     _prepend_env_path("ASCEND_CUSTOM_OPP_PATH", vendor_dir)
     _prepend_env_path("ASCEND_CUSTOM_OPP_PATH", opp_root)
@@ -81,8 +87,6 @@ def _prepare_embedded_opp() -> pathlib.Path:
     os.environ["FLA_NPU_OP_API_LIB"] = str(op_api_lib)
 
     mode = getattr(os, "RTLD_GLOBAL", 0) | getattr(os, "RTLD_NOW", 0)
-    if op_api_alias.exists():
-        ctypes.CDLL(str(op_api_alias), mode=mode)
     ctypes.CDLL(str(op_api_lib), mode=mode)
     return vendor_dir
 

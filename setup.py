@@ -415,11 +415,29 @@ def _rewrite_set_env(vendor_dir):
         "\n".join(
             [
                 "#!/bin/bash",
-                'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
-                'VENDOR_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"',
-                'OPP_ROOT="$(cd "${VENDOR_DIR}/../.." && pwd)"',
-                'export ASCEND_CUSTOM_OPP_PATH="${OPP_ROOT}:${VENDOR_DIR}:${ASCEND_CUSTOM_OPP_PATH}"',
-                'export LD_LIBRARY_PATH="${VENDOR_DIR}/op_api/lib:${LD_LIBRARY_PATH}"',
+                '_FLA_NPU_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+                '_FLA_NPU_VENDOR_DIR="$(cd "${_FLA_NPU_SCRIPT_DIR}/.." && pwd)"',
+                '_FLA_NPU_OPP_ROOT="$(cd "${_FLA_NPU_VENDOR_DIR}/../.." && pwd)"',
+                "_fla_npu_prepend_path() {",
+                '    local name="$1"',
+                '    local value="$2"',
+                "    local current=\"\"",
+                '    if [[ -v "${name}" ]]; then',
+                '        current="${!name}"',
+                "    fi",
+                '    case ":${current}:" in',
+                '        *":${value}:"*) return 0 ;;',
+                "    esac",
+                '    printf -v "${name}" "%s" "${value}${current:+:${current}}"',
+                '    export "${name}"',
+                "}",
+                '_fla_npu_prepend_path ASCEND_CUSTOM_OPP_PATH "${_FLA_NPU_VENDOR_DIR}"',
+                '_fla_npu_prepend_path ASCEND_CUSTOM_OPP_PATH "${_FLA_NPU_OPP_ROOT}"',
+                '_fla_npu_prepend_path LD_LIBRARY_PATH "${_FLA_NPU_VENDOR_DIR}/op_api/lib"',
+                'export FLA_NPU_OPP_PATH="${_FLA_NPU_OPP_ROOT}"',
+                'export FLA_NPU_OP_API_LIB="${_FLA_NPU_VENDOR_DIR}/op_api/lib/libcust_opapi.so"',
+                "unset -f _fla_npu_prepend_path",
+                "unset _FLA_NPU_SCRIPT_DIR _FLA_NPU_VENDOR_DIR _FLA_NPU_OPP_ROOT",
                 "",
             ]
         ),
@@ -473,6 +491,13 @@ def _has_any_glob(root, patterns):
 
 def _validate_staged_opp(vendor_dir):
     vendor_dir = Path(vendor_dir)
+    conflicting_opapi = vendor_dir / "op_api" / "lib" / "libopapi.so"
+    if conflicting_opapi.exists() or conflicting_opapi.is_symlink():
+        raise RuntimeError(
+            "Embedded OPP must not contain libopapi.so because it shadows the "
+            f"CANN runtime library: {conflicting_opapi}"
+        )
+
     required_groups = {
         "custom op_api library": ("op_api/lib/libcust_opapi.so",),
         "host/proto shared library": (
@@ -528,7 +553,10 @@ def _stage_run_package(run_file, opp_root):
     op_api_alias = op_api_lib.with_name("libopapi.so")
     if op_api_alias.exists() or op_api_alias.is_symlink():
         op_api_alias.unlink()
-    shutil.copy2(op_api_lib, op_api_alias)
+        print(
+            "[fla-npu build] Removed conflicting custom libopapi.so alias; "
+            "CANN must provide libopapi.so"
+        )
     _validate_staged_opp(vendor_dir)
     print(f"[fla-npu build] Embedded OPP staged at {vendor_dir}")
 

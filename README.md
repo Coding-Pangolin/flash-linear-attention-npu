@@ -135,6 +135,12 @@ python -m pip install --force-reinstall --no-deps dist/flash_linear_attention_np
 
 如果使用 Release 下载的 wheel，将命令中的 `dist/flash_linear_attention_npu-*.whl` 替换为实际下载路径。
 
+方式 A wheel 不安装或执行 shell 环境钩子。无论使用系统 Python、Conda、venv
+还是 Docker，每次进入新的 shell 后都需要先按 Step 1 手工 source CANN 的
+`set_env.sh`。`import fla_npu` 会在当前 Python 进程内定位并加载 wheel 内嵌 OPP；
+wheel 通过绝对路径加载 `libcust_opapi.so`，不会再生成或加载可能覆盖 CANN
+运行库的自定义 `libopapi.so`。
+
 #### 方式 B 产物安装
 
 先安装 run 包，再安装 torch_custom wheel。运行 Python 前需要 source custom OPP 的 `set_env.bash`，或设置 `FLA_NPU_OPP_PATH` 指向 OPP root / vendor 目录。
@@ -146,7 +152,7 @@ source ${FLA_NPU_OPP_INSTALL_PATH}/vendors/fla_npu_transformer/bin/set_env.bash
 python -m pip install --force-reinstall --no-deps torch_custom/fla_npu/dist/fla_npu-*.whl
 ```
 
-`import fla_npu` 会优先使用 wheel 内嵌 OPP，找不到时会继续从 `FLA_NPU_OPP_PATH`、`ASCEND_CUSTOM_OPP_PATH` 和 `ASCEND_OPP_PATH` 查找已安装 OPP。
+`import fla_npu` 会优先使用 wheel 内嵌 OPP，找不到时会继续从 `FLA_NPU_OPP_PATH`、`ASCEND_CUSTOM_OPP_PATH` 和 `ASCEND_OPP_PATH` 查找已安装 OPP。外部 OPP 的 `op_api/lib` 目录同样不得包含自定义 `libopapi.so`；如果残留该文件并可能遮蔽 CANN 运行库，导入会明确报错并要求清理旧别名。
 
 ### Step 4. 测试安装成功
 

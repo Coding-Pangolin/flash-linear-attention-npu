@@ -93,6 +93,9 @@
 | `4094141` | **FwdSub P1** | 行广播 Mul + 粗同步 → **Dur 2.075 ms**（当前最优） |
 | `00a89a6` | docs | DESIGN / ITERATION_LOG 对齐；剔除已否决 Vector 实验路径 |
 | `d8a2f44` | docs | 同步 §5 提交锚点与本分支 git log |
+| `d84c933` | docs | §5 补记 anchor-sync 提交 |
+
+> 若 tip 仍有更新，以 `git log -1 --format=%h origin/main..HEAD` 为准。
 
 明细测量目录与 PipeUtilization 见 §2–§4 与 `MSPROF_GUIDE.md`。
 

@@ -1,9 +1,10 @@
 # ChunkKdaFwdIntraSubChunk 设计方案
 
-> 状态：设计锁定（供实现对照）。首版交付 A2/A3 精度+可跑；A5 保证可编译。  
+> 状态：**已实现并对齐当前已验证最优路径**（板端模型 case Task Dur med **2.075 ms**，目标 ≤1.5 ms 未结案）。  
 > GPU 对标：`flash-linear-attention/fla/ops/kda/chunk_intra.py` `chunk_kda_fwd_kernel_intra_sub_chunk`  
-> 流水参考：`chunk_bwd_dqkwg`（raw credit）、`prepare_wy_repr_bwd_full`（SetFree 预置）、`a2_a3_common_optimization_notes.md`、KDA lessons §9.6  
-> 精度测试参考：`/workspace/fzy/code/kda/flash-linear-attention-npu/torch_custom/fla_npu/test/test_npu_chunk_kda_fwd_intra_sub_chunk.py`
+> 流水参考：`chunk_bwd_dqkwg`（raw credit）、`prepare_wy_repr_bwd_full`（SetFree 预置）、`a2_a3_common_optimization_notes.md`  
+> 精度测试：`torch_custom/fla_npu/test/test_npu_chunk_kda_fwd_intra_sub_chunk.py`  
+> 迭代档案：[`ITERATION_LOG.md`](ITERATION_LOG.md) · 采集：[`MSPROF_GUIDE.md`](MSPROF_GUIDE.md) · Cube 理论：[`CUBE_OPTIMAL_PIPELINE.md`](CUBE_OPTIMAL_PIPELINE.md)
 
 ---
 
@@ -126,7 +127,7 @@ validLen = min(BT, cu_seqlens[seqIdx+1] - timeBos)
 | A2/A3 | 仅 UB | GM scratch bounce |
 | 对标 | Triton 同构 | 另证数值差 |
 
-Forward-sub 的「乘」是 **1×BC @ BC×BC 行更新**（Mul+ReduceSum），**禁止**为此调 Cube。
+Forward-sub 的「乘」是 **1×BC @ BC×BC 行更新**（Mul + 按列归约），**禁止**为此调 Cube。
 
 ```text
 Ai = -L                                    # UB fp32 16×16
@@ -139,7 +140,26 @@ Akkd = Ai + I
 
 `validRows < 2` → `Akkd = I`（仅对角有效）。
 
-### 3.3 Cube 路径数值语义（golden 必须对齐）
+### 3.3 已验证最优：FwdSub Vector 落法（实现锁定）
+
+数学不变：\(a \leftarrow a + \sum_p a_p\,(A_i)_{p,:}\)（对齐 Triton `tl.sum(b_a[:, None] * b_Ai, 0)`）。
+
+| 步骤 | 实现 | 同步 |
+|------|------|------|
+| 取行 | `DataCopy(tmp, akk[i,:])` | `PipeBarrier<PIPE_V>` |
+| 广播 | `Brcb(aBrcb, tmp)` → 每行 8 路重复 | BAR |
+| 物化 | **行广播 `Mul`**：`prod[p,c]=akk[p,c]*a[p]`，`src1BlkStride=0`；按列 tile（步长 8）两趟盖满 BC=16 | **两趟 Mul 连发，无 mid-tile BAR** |
+| 归约 | Add-fold 对行维折半（`BC=16=2^n`） | **每层 fold 一次 BAR**（真 RAW） |
+| `+I` | 对角 `GetValue`/`SetValue` | `V_S` / `S_V` |
+
+**明确不做（已否决）**
+
+- 铺满 `brcd` 矩阵再大 `Mul`（UB2UB 热点）  
+- 每 col-tile 后 `PipeBarrier`（BAR cyc/call 暴涨，板端不稳）  
+- `Pattern::RA` / 库 `ReduceSum` 做 16×16 列和（~7.5× 更慢）  
+- 按 `next_pow2(i)` 稀疏 Mul/fold（精度偶过但不稳，sim tick 回退）
+
+### 3.4 Cube 路径数值语义（golden 必须对齐）
 
 NPU：Vector fp32 gate → **Cast 到 qk dtype** → Cube MMAD → Post fp32 FwdSub。
 
@@ -275,32 +295,50 @@ GVA：`hk = hv/(HV/H)`；同 chunk 全部 hv 留在本 AIC。
 
 ## 6. 缓冲与 Workspace
 
-### 6.1 Cube L1 / L0
+### 6.1 Cube L1 / L0（路径 A · 已验证默认）
 
-- **无**跨 stage L1 resident（Cube 每 head 只进场一次）
-- **有**单 head 内 **Kg L1 hold**（两笔 GEMM 复用）
-- L0A/L0B **双缓冲**；L0C **单槽**（A2/A3 基线）
+与 [`CUBE_OPTIMAL_PIPELINE.md`](CUBE_OPTIMAL_PIPELINE.md) **路径 A** 一致：
+
+| 宏 / 行为 | 默认 | 作用 |
+|-----------|------|------|
+| `USE_SCORE_L1A_DBUF` | **1** | `l1A[0]=Qg`，`l1A[1]=W`；`MTE2(W)‖MMAD1`，Wait W 再 Fix Aqk |
+| `USE_SCORE_FIX_MTE2_DBUF` | **1** | Akk Fix ‖ 下一 tile MTE2；SetCubeDone 前 Drain |
+| `USE_SCORE_WIN_L1_RESIDENT` | **0** | 双头 L1 Prefetch；精度失败，禁止 default on |
+| `USE_SCORE_MMAD1_LOAD_W` | **0** | 单槽 W‖MMAD（由 L1A_DBUF 取代） |
+
+- 单 head 内 **Kg → L1B 驻留**，两笔 GEMM 复用  
+- L0A/L0B 双缓冲；L0C 单槽（A2/A3）
 
 ```text
-GM→L1: Qg, Kg, Kgq
+GM→L1A[0]: Qg ; GM→L1B: Kg ; GM→L1A[1]: W (‖ MMAD1)
 L1→L0 → MMAD Aqk → Fixpipe
-复用 L1(Kg) → MMAD Akk → Fixpipe
+复用 L1(Kg) → MMAD Akk → Fixpipe (‖ 下 tile MTE2)
 ```
 
-### 6.2 Vector UB
+### 6.2 Vector UB（已验证默认）
 
 ```text
-matrixIn[2], betaIn[2], outBuf[2]     # depth 2
-AqkMat / AkkMat / AiMat 各 16×16 fp32
-单次 matrix copy ≤ 16KB
+vecBuf_     : Prep 六段 fp32 / FwdSub prod|aBrcb|acc / tril mask 雕刻
+midBuf_     : g_ref 一行
+betaBuf_    : BC
+aqkBuf_/akkBuf_ : 16×16 fp32 分块
+tmpBuf_     : FwdSub 行向量
+inBuf_      : MTE2 入口（含 beta）
+aqkTBuf_    : store 前 cast
+zeroBuf_    : 无效行清零
 ```
 
-CopyIn / Cast / CopyOut 生命周期对齐 PR190；`MTE3_MTE2` 不能替代 `MTE3_V`。
+MTE2 合并（无宏，主路径写死）：
+
+- Prepare：`mid ‖ q/k/g` → 一次 `Wait(MTE2_V)`  
+- Post：`cmat(Aqk/Akk) ‖ beta` → 一次 `Wait(MTE2_V)`  
+
+`MTE3_MTE2` 不能替代 `MTE3_V`。Post 存完后立刻 Wait MTE3（不做 Post‖S0 defer）。
 
 ### 6.3 Workspace
 
 ```text
-slotBytes = align32(BC*K*s*3 + BC*BC*s*2)   # Qg,Kg,Kgq + Aqk_raw,Akk_raw
+slotBytes = align32(BC*K*s*3 + BC*BC*s*2)   # Qg,W,Kg + Aqk_raw,Akk_raw
 total     = aicCoreNum * 4 * slotBytes
 ```
 
@@ -329,8 +367,12 @@ TilingKey：`D_T_QK ∈ {fp16,bf16}` × `CHUNK_SIZE ∈ {32,64,128}`。
 
 ```text
 chunk_kda_fwd_intra_sub_chunk/
-  DESIGN.md              ← 本文
-  README.md / docs/
+  DESIGN.md              ← 本文（方案 + 已验证最优落法）
+  ITERATION_LOG.md       ← 性能迭代 / 否决档案
+  PERF_ITER_LOG.md       ← 当前基线快照（指向 ITERATION_LOG）
+  MSPROF_GUIDE.md
+  CUBE_OPTIMAL_PIPELINE.md
+  README.md
   op_host/               def, tiling, aclnn
   op_kernel/
     *_common.h
@@ -409,15 +451,16 @@ gq/gk → Aqk_raw/Akk_raw → mask 后 Aqk/L → Akkd → 最终 GM
 
 ### 8.4 性能验收（A2/A3）
 
-- `msopprof`/`msprof`：MTE / VEC / CUBE / AIC↔AIV wait。  
-- 先发生效判据：prefill 后出现 **GEMM ∥ Post**；大段互等 → 查 Set/Wait 次数与 free。  
-- 记录主 case（`T=8192,H=32,K=128,BT=64`）中位数；不用纯 Python wall time 作结论。
+- 口径与流程：[`MSPROF_GUIDE.md`](MSPROF_GUIDE.md)。  
+- 主 case：`T=8192,H=32,K=128,BT=64,bf16` 的 **Task Duration 中位**；不用 host wall 作结论。  
+- 先发生效：prefill 后出现 **GEMM ∥ Post**；大段互等 → 查 Set/Wait 与 free。  
+- **当前基线（已验证最优）**：med **2.075 ms**；硬目标 **≤ 1.5 ms**（未结案）。历程见 [`ITERATION_LOG.md`](ITERATION_LOG.md)。
 
 ### 8.5 SOC 门禁
 
-| SOC | 首版 |
+| SOC | 状态 |
 |-----|------|
-| A2 / A3 | 精度矩阵 + 主 case 性能 |
+| A2 / A3 | 精度矩阵 + 主 case 性能（当前最优已上板） |
 | A5 | **编译通过**；精度可选后补 |
 
 ---
@@ -426,27 +469,35 @@ gq/gk → Aqk_raw/Akk_raw → mask 后 Aqk/L → Akkd → 最终 GM
 
 | 风险 | 应对 |
 |------|------|
-| Cube 过闲 | 接受 VEC bound；先发深度 + UB DB；打磨 FwdSub |
-| FwdSub scalar | 强制 UB 驻留 + 向量行更新 |
+| 仍 AIV-bound（BAR/fold） | 接受 Cube 路径 A 已尽；下一刀须结构级，见 `ITERATION_LOG` §7 |
+| FwdSub 再换库 reduce | **禁止**（RA 已证伪） |
 | 与 Stage1 MCH 不一致 | 只对齐 Triton/Cube-faithful golden |
 | flag 失衡 | 窗级次数表 + 空 AIV 空转 |
 | golden 不对齐 | §8.1：score_dtype + 相对误差 + 多样本 |
+| aicore timeout 楔卡 | 避让长任务后全卡 reset；见 `MSPROF_GUIDE` |
 
 ---
 
-## 10. 实现阶段建议顺序
+## 10. 实现阶段（已完成 / 遗留）
 
-1. Host：def / tiling / aclnn / CMake（含 A5 注册）  
-2. Golden + 单测脚手架（先对齐 §8）  
-3. A2/A3：common flags → Vector S0/Post → Cube GEMM → 接上 §4.2 流水  
-4. 精度矩阵（小 case 全量 ref → 大 case 采样）  
-5. msopprof 确认先发重叠  
-6. A5 arch35 编译门禁  
-7. `fla_npu` 导出与 wheel API 检查  
+| 阶段 | 状态 |
+|------|------|
+| Host def / tiling / aclnn | 完成 |
+| Golden + 单测 + 模型采样 | 完成 |
+| A2/A3：§4.2 流水 + Cube 路径 A + FwdSub P1 | **完成（当前最优）** |
+| A5 arch35 编译门禁 | 完成（精度后补） |
+| Task Dur ≤ 1.5 ms | **未结案**（基线 2.075 ms） |
 
 ---
 
 ## 11. 文档维护
 
-- 本文与实现双向一致；改握手/slot/BT 集须同步改 §4、§7、§8。  
-- 迭代优化（MCH 试验、更深 ring 等）另开文档，**不得**静默改写本文已锁决策而不更新验收矩阵。
+| 文档 | 职责 |
+|------|------|
+| `DESIGN.md`（本文） | 数学 / stage / 缓冲 / 已验证最优落法 / 验收 |
+| `ITERATION_LOG.md` | 性能刀时间线、否决清单、sim 画像 |
+| `CUBE_OPTIMAL_PIPELINE.md` | Cube 路径 A/B 理论与宏 |
+| `MSPROF_GUIDE.md` | 采集命令与门禁口径 |
+| `README.md` | 接口、构建、测试入口 |
+
+改握手/slot/BT/默认宏或 FwdSub 算法时：同步 §3.3、§6、§8.4，并在 `ITERATION_LOG` 追加条目。

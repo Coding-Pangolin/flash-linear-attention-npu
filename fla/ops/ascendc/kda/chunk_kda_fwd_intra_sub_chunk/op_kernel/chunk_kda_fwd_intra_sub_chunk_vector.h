@@ -16,21 +16,10 @@
 
 #include "chunk_kda_fwd_intra_sub_chunk_common.h"
 
-// P1: materialize a[:,None]*Ai via row-broadcast Mul (no brcd UB2UB).
-// Sync: issue all col-tile Muls then one PipeBarrier before Add-fold (RAW on prod).
-// Default OFF until suite + sim + bare-msprof Dur gate (Δ≤−0.05ms).
-#ifndef USE_FWDSUB_SLIM
-#define USE_FWDSUB_SLIM 1
-#endif
-// V-C: merge MTE2 waits (mid‖qkg ; cmat‖beta).
-#ifndef USE_MTE2_MERGE
-#define USE_MTE2_MERGE 1
-#endif
-// V-D: defer Post MTE3 Wait so S0 MTE2 can overlap.
-// Default OFF: suite/wall OK but bare msprof hangs (HardEvent defer under profiler).
-#ifndef USE_POST_S0_MTE_OVERLAP
-#define USE_POST_S0_MTE_OVERLAP 0
-#endif
+// Shipped Vector defaults (verified board path, Dur med 2.075ms @ model case):
+//   - MTE2 merge: S0 mid‖q/k/g ; Post cmat‖beta (single Wait each)
+//   - FwdSub: row-broadcast Mul (no brcd) + Add-fold; one PipeBarrier before fold
+// Rejected experiments removed: partial Mul/fold, resident mask/+I, Post‖S0 MTE defer.
 
 namespace kda_isub {
 
@@ -124,12 +113,10 @@ public:
                 RunPostWindow(w, nHvWin, bIdx, bos, localT, localChunk);
                 if (w + prefill < W) {
                     // Safe: WaitCube(w) ⇒ score/cmat bank (w%2) no longer owned by Cube(w).
-                    // V-D: Post MTE3 may still be in flight; S0 MTE2 uses other UB → overlap.
                     RunS0Window(w + prefill, nHvWin, bIdx, bos, localT, localChunk);
                     SetS0ReadyJoined();
                 }
             }
-            DrainPostMte3();
         }
     }
 
@@ -170,23 +157,11 @@ private:
     }
 
     // -------------------- stage_0: Prepare Qg/W/Kg → scoreWs --------------------
-    __aicore__ inline void DrainPostMte3()
-    {
-#if USE_POST_S0_MTE_OVERLAP
-        if (postMte3Pending_) {
-            WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
-            WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
-            postMte3Pending_ = false;
-        }
-#endif
-    }
-
     __aicore__ inline void ZeroScorePlanes(uint64_t slot, uint64_t rowBegin, uint64_t rowEnd)
     {
         if (rowBegin >= rowEnd) {
             return;
         }
-        DrainPostMte3(); // reuse EVT_MTE3_*
         const uint32_t elems = static_cast<uint32_t>((rowEnd - rowBegin) * kDim_);
         LocalTensor<T> z = zeroBuf_.Get<T>();
         Duplicate(z, static_cast<T>(0), elems);
@@ -263,8 +238,7 @@ private:
         LocalTensor<float> mid = midBuf_.Get<float>();
         LocalTensor<T> midIn = inBuf_.Get<T>();
         const uint64_t tok0 = bos + iTi;
-#if USE_MTE2_MERGE
-        // V-C1: mid ‖ q/k/g — one Wait(MTE2_V).
+        // mid ‖ q/k/g — one Wait(MTE2_V).
         this->CopyVectorIn(midIn, g_, this->HvRowOff(bIdx, iHv, bos + iTi + midRel), kDim_);
         this->CopyVectorIn(qT, q_, this->QkRowOff(bIdx, iH, tok0), elems);
         this->CopyVectorIn(kT, k_, this->QkRowOff(bIdx, iH, tok0), elems);
@@ -276,18 +250,6 @@ private:
         Cast(kFp, kT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
         Cast(gFp, gT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
         PipeBarrier<PIPE_V>();
-#else
-        LoadMidRow(this->HvRowOff(bIdx, iHv, bos + iTi + midRel));
-        this->CopyVectorIn(qT, q_, this->QkRowOff(bIdx, iH, tok0), elems);
-        this->CopyVectorIn(kT, k_, this->QkRowOff(bIdx, iH, tok0), elems);
-        this->CopyVectorIn(gT, g_, this->HvRowOff(bIdx, iHv, tok0), elems);
-        SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
-        WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
-        Cast(qFp, qT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
-        Cast(kFp, kT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
-        Cast(gFp, gT, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
-        PipeBarrier<PIPE_V>();
-#endif
 
         for (uint64_t row = 0; row < valid; ++row) {
             Sub(expP[row * kDim_], gFp[row * kDim_], mid, static_cast<uint32_t>(kDim_));
@@ -323,8 +285,6 @@ private:
         Cast(outKg, out, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
         PipeBarrier<PIPE_V>();
 
-        // V-D: wait prior Post store before reusing EVT_MTE3_* / publishing score.
-        DrainPostMte3();
         SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         this->CopyVectorOut(scoreWs_, this->ScoreOff(slot, PLANE_QG, 0, 0), outQg, elems);
@@ -405,7 +365,7 @@ private:
         }
         PipeBarrier<PIPE_V>();
 
-        // Select tril masks.
+        // Select tril masks (carved from vecBuf after betaBrcb).
         constexpr uint32_t kBetaBrcbFloats = MAX_BC * 8;
         constexpr uint32_t kMaskBytes = MAX_BC * static_cast<uint32_t>(sizeof(uint64_t));
         LocalTensor<uint8_t> aqkMask = vecBuf_.Get<uint8_t>()[kBetaBrcbFloats * sizeof(float)];
@@ -430,9 +390,8 @@ private:
 
     // Forward Substitution on akk (= -L = Ai). Triton:
     //   a += ReduceSum(a[:, None] * Ai, axis=0);  then Ai[i]=a;  Akkd=Ai+I
-    // Default: Brcb → UB brcd tile → Mul(elems) → Add-fold.
-    // USE_FWDSUB_SLIM=1: no brcd; prod[p,c]=akk[p,c]*a[p] via row-broadcast Mul
-    //   (src1BlkStride=0); fence once after all col tiles (RAW: fold reads prod).
+    // Shipped: Brcb(a) → row-broadcast Mul (no brcd UB2UB) → Add-fold col-reduce.
+    // Sync: issue both col-tile Muls, then one PipeBarrier before fold (RAW on prod).
     __aicore__ inline void ForwardSub(LocalTensor<float> akk, LocalTensor<float> tmp, uint64_t valid)
     {
         if (valid < 2) {
@@ -446,17 +405,10 @@ private:
         constexpr uint32_t kBrcbStride = 8;
         const uint32_t bc = static_cast<uint32_t>(bc_);
         const uint32_t elems = bc * bc;
-#if USE_FWDSUB_SLIM
-        // Layout: prod[BC*BC] | aBrcb[MAX_BC*8] | acc[BC] — no full brcd matrix.
+        // Layout: prod[BC*BC] | aBrcb[MAX_BC*8] | acc[BC]
         LocalTensor<float> prod = vecBuf_.Get<float>();
         LocalTensor<float> aBrcb = prod[elems];
         LocalTensor<float> acc = aBrcb[static_cast<uint32_t>(MAX_BC * kBrcbStride)];
-#else
-        LocalTensor<float> brcd = vecBuf_.Get<float>();
-        LocalTensor<float> prod = brcd[elems];
-        LocalTensor<float> aBrcb = prod[elems];
-        LocalTensor<float> acc = aBrcb[static_cast<uint32_t>(MAX_BC * kBrcbStride)];
-#endif
 
         for (uint64_t i = 2; i < valid; ++i) {
             const uint32_t rowOff = static_cast<uint32_t>(i * bc);
@@ -466,7 +418,6 @@ private:
             const uint8_t brcbRepeat = static_cast<uint8_t>((bc + kBrcbStride - 1) / kBrcbStride);
             Brcb(aBrcb, tmp, brcbRepeat, {1, 8});
             PipeBarrier<PIPE_V>();
-#if USE_FWDSUB_SLIM
             // prod[p,c] = akk[p,c] * a[p]. Col tiles write disjoint prod columns →
             // no mid-tile fence; one barrier before Add-fold (RAW on prod).
             {
@@ -477,18 +428,8 @@ private:
                 }
                 PipeBarrier<PIPE_V>();
             }
-#else
-            for (uint32_t p = 0; p < bc; ++p) {
-                const uint32_t row = p * bc;
-                DataCopy(brcd[row], aBrcb[p * kBrcbStride], kBrcbStride);
-                DataCopy(brcd[row + kBrcbStride], aBrcb[p * kBrcbStride], kBrcbStride);
-            }
-            PipeBarrier<PIPE_V>();
-            Mul(prod, akk, brcd, elems);
-            PipeBarrier<PIPE_V>();
-#endif
 
-            // ReduceSum axis=0 via Add-fold (chunk_bwd column-sum); BC=16 = 2^n.
+            // ReduceSum axis=0 via Add-fold (BC=16 = 2^n).
             uint32_t remain = bc;
             while (remain > 1) {
                 const uint32_t calcCnt = (remain / 2) * bc;
@@ -524,8 +465,6 @@ private:
         }
         const uint64_t valid = (iTi + bc_ <= localT) ? bc_ : (localT - iTi);
 
-        DrainPostMte3(); // prior store must finish before reuse aqkT/akk / EVT_MTE3_*
-
         LocalTensor<float> aqk = aqkBuf_.Get<float>();
         LocalTensor<float> akk = akkBuf_.Get<float>();
         LocalTensor<float> beta = betaBuf_.Get<float>();
@@ -534,8 +473,7 @@ private:
         const uint32_t elems = static_cast<uint32_t>(bc_ * bc_);
         Duplicate(beta, 0.0f, static_cast<uint32_t>(bc_));
         PipeBarrier<PIPE_V>();
-#if USE_MTE2_MERGE
-        // V-C2: cmat Aqk/Akk ‖ beta — one Wait(MTE2_V).
+        // cmat Aqk/Akk ‖ beta — one Wait(MTE2_V).
         DataCopy(aqk, cmatWs_[this->CmatOff(slot, PLANE_AQK, 0, 0)], elems);
         DataCopy(akk, cmatWs_[this->CmatOff(slot, PLANE_AKK, 0, 0)], elems);
         IssueBetaRows(bIdx, iHv, bos + iTi, valid);
@@ -546,14 +484,6 @@ private:
             Cast(beta, betaIn, RoundMode::CAST_NONE, static_cast<uint32_t>(valid));
             PipeBarrier<PIPE_V>();
         }
-#else
-        DataCopy(aqk, cmatWs_[this->CmatOff(slot, PLANE_AQK, 0, 0)], elems);
-        DataCopy(akk, cmatWs_[this->CmatOff(slot, PLANE_AKK, 0, 0)], elems);
-        SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
-        WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
-        PipeBarrier<PIPE_V>();
-        LoadBetaRows(bIdx, iHv, bos + iTi, valid, beta);
-#endif
 #ifdef KDA_ISUB_DEBUG_DUMP
         // Dump gate: first chunk / iSub0 / hv=3 (known model-sample miss).
         if (localChunk == 0 && iSub == 0 && iHv == 3) {
@@ -593,21 +523,13 @@ private:
         this->CopyVectorOut(akkd_, this->AkkdOff(bIdx, iHv, tok0), akk, liveVals);
         SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
         SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
-#if USE_POST_S0_MTE_OVERLAP
-        // V-D: defer Wait so following RunS0 MTE2 can overlap Post MTE3.
-        postMte3Pending_ = true;
-#else
         WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
         WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
-#endif
     }
 
     TPipe *pipe_ = nullptr;
     TBuf<> vecBuf_, midBuf_, betaBuf_, aqkBuf_, akkBuf_, tmpBuf_, inBuf_, aqkTBuf_, zeroBuf_;
     uint64_t subBlockIdx_ = 0;
-#if USE_POST_S0_MTE_OVERLAP
-    bool postMte3Pending_ = false;
-#endif
     Catlass::Arch::CrossCoreFlag s0Ready_{FLAG_S0_READY};
     Catlass::Arch::CrossCoreFlag cubeDone_{FLAG_CUBE_DONE};
     Catlass::Arch::CrossCoreFlag slotFree_[NUM_GM_SLOTS] = {FLAG_SLOT_FREE0, FLAG_SLOT_FREE1, FLAG_SLOT_FREE2,

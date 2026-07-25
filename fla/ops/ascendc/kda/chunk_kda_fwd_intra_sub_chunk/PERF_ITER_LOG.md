@@ -73,14 +73,36 @@ Double-buffer (L1A[2]) still **deferred** — `SCORE_TILE_DBUF_PLAN.md`.
 
 | knife | change | Dur_med | Δ | precision | default | notes |
 |-------|--------|---------|---|-----------|---------|-------|
-| V-B | `USE_FWDSUB_SLIM` Brcb→Mul 去 brcd 铺砖 | — | — | **hang / aicore timeout** | **off** | 两种 Mul 写法均挂；代码保留宏=0 |
+| V-B v1 | 错模板列广播 / 无 barrier 直乘 | — | — | **hang / aicore timeout** | **off** | 已否决 |
 | V-C | `USE_MTE2_MERGE=1`：S0 mid‖qkg；Post cmat‖beta 单次 Wait | **2.158 ms** | **≈−0.001** vs V-A | full suite PASS | **on** | 预期中低收益；未过 −0.05，低风险保留 |
 | V-D | `USE_POST_S0_MTE_OVERLAP` 延后 Post MTE3 Wait | wall≈2.84（C+D） | — | suite PASS；**裸 msprof hang** | **off** | 墙钟可跑；profiler 下 HardEvent defer 挂；代码保留 |
 
 V-C 产物：`/tmp/prof_vc` n=8。
 
+## V-B retry ScaleRowsByBeta (2026-07-25)
+
+对齐 `chunk_kda_fwd::ScaleRowsByBeta`：`Mul(..., {1,1,0,rowBlk,rowBlk,1})` + **每趟 PipeBarrier**；去掉 brcd 铺砖。
+
+| 项 | 结果 |
+|----|------|
+| 精度 | 全量 suite **PASS**（slim=1 一次） |
+| 板端裸 msprof | **hang**（timeout 120s，无 op_summary）→ **Dur 门禁未采到** |
+| 板端多 iter | 间歇 hang（iter0 OK / iter1 挂；另卡上曾 6 iter 全过）→ **不稳定** |
+| 默认 | **`USE_FWDSUB_SLIM=0`**（代码路径保留） |
+
+仿真 `prof_msprof_op_sim_t1024_vb`（slim=1 wheel）vs `l1a` 基线：
+
+| 指标 | l1a (P1) | V-B slim | 变化 |
+|------|----------|----------|------|
+| Total tick | 252571 | **157806** | −37% |
+| UB2UB % | 7.6% | **0.4%** | 目标达成 |
+| BAR % | 60.7% | 84.8% | 占比升（每 col Mul 加 barrier；总 cycle 降） |
+| vec duration med | ~20.8 µs | ~18.5 µs | 仿真核时下降 |
+
+结论：算法方向正确（sim UB2UB/tick 明显降），但板端稳定性与 msprof 门禁未过，**不 default on**。下一步需查 HardEvent/重复 launch 竞态后再开。
+
 ## Next direction
 
-1. **主差距仍在 AIV**（~2.16 → 1.5，差 ~0.66 ms）：V-B/V-D 需更稳的事件/Mul 写法后再开；可考虑 sim BAR% 或别的 AIV 刀
+1. **主差距仍在 AIV**（~2.16 → 1.5）：稳住 V-B 板端（少 barrier 或 mask=16 单趟 Mul）后再采 Task Dur；V-D 同理
 2. P2 L0[2]：仅当 sim 明确 L1→L0 bubble
 3. C2 resident：精度修好前不 default

@@ -74,7 +74,7 @@
 ## 5. 关键提交锚点（本分支）
 
 分支：`20260725_150726_chunk-kda-fwd-intra-sub-chunk-pr`（相对 `origin/main`，作者均为 Coding-Pangolin）。  
-下列 hash 与 `git log --oneline origin/main..HEAD` **从旧到新**一致，对应 §2 时间线。
+下列 hash 与 `git log --reverse --oneline origin/main..HEAD` **从旧到新**一致，对应 §2 时间线。
 
 | commit | 阶段 | 说明 |
 |--------|------|------|
@@ -91,7 +91,7 @@
 | `081be05` | V-C | MTE2 merge on；V-B/V-D 宏 off → 2.158 ms |
 | `349d299` | V-B | ScaleRowsByBeta slim（default off / 后否决） |
 | `4094141` | **FwdSub P1** | 行广播 Mul + 粗同步 → **Dur 2.075 ms**（当前最优） |
-| `7618a29` | docs | DESIGN / ITERATION_LOG 对齐；剔除已否决 Vector 实验路径 |
+| `00a89a6` | docs | DESIGN / ITERATION_LOG 对齐；剔除已否决 Vector 实验路径 |
 
 明细测量目录与 PipeUtilization 见 §2–§4 与 `MSPROF_GUIDE.md`。
 

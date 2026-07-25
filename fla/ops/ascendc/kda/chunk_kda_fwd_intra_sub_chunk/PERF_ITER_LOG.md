@@ -101,8 +101,53 @@ V-C 产物：`/tmp/prof_vc` n=8。
 
 结论：算法方向正确（sim UB2UB/tick 明显降），但板端稳定性与 msprof 门禁未过，**不 default on**。下一步需查 HardEvent/重复 launch 竞态后再开。
 
+## Sim baseline: V-A+V-C default (2026-07-25)
+
+重跑当前默认（P1+C1+V-A+V-C，`USE_FWDSUB_SLIM=0`）`msprof op simulator`：
+
+| shape | Total tick | vec_med | cube_med | BAR% | UB2UB% | MOVEMASK% | VADD+VMUL% |
+|-------|------------|---------|----------|------|--------|-----------|------------|
+| T=1024 H=2 | **157825** | 19.56 µs | 14.91 µs | 59.7% | 8.4% | 5.2% | 2.5% |
+| T=2048 H=2 | **279561** | 37.44 µs | 33.21 µs | 60.5% | 8.6% | 5.3% | 2.6% |
+| T=1024 l1a (旧 P1) | 252571 | 20.6 µs | 15.67 µs | 60.7% | 7.6% | 4.8% | 2.3% |
+| T=1024 V-B slim | 157806 | 18.67 µs | 14.43 µs | 84.8% | **0.4%** | 2.6% | 1.7% |
+
+产物：`prof_msprof_op_sim_t1024_va_vc`、`prof_msprof_op_sim_t2048_va_vc`。
+
+结论：
+
+1. **V-A/V-C 几乎没改 Vector 结构**（相对 l1a：UB2UB 绝对 cycle 相同；BAR% 60.7→59.7）。板端 ~2.16 ms 上 V-A/V-C 无感，与 sim 一致。
+2. **Total tick 相对 l1a 大降主要来自 Cube C1**，不是 Vector knife。
+3. **T=2048 与 T=1024 画像同构**（BAR/UB2UB/MOVEMASK 占比几乎不变），拉长 T 不会暴露新热点。
+4. Vector 可优化点排序：**BAR 墙（~60%）> UB2UB/brcd（~8.5%）> MOVEMASK/scalar（~5%+13%）≫ 真 VECTOR 算子（~2.5%）≫ MTE（~5%，V-C 已尽）**。
+5. V-B 仍是唯一在 sim 上砍掉 UB2UB 的刀，但每 col `PipeBarrier` 把 BAR cycle 抬高；板端不稳 → 下一步应 **稳 V-B（少 barrier / mask=16）**，而不是继续 V-A/V-C 微合并。
+
+## P1 coarse Mul sync (2026-07-25)
+
+依赖推导：消灭 brcd UB2UB；行广播 `prod[p,c]=akk[p,c]*a[p]`；**两趟 col-tile Mul 连发，Add-fold 前一次 `PipeBarrier`**（不再 per-col barrier）。
+
+| 项 | 结果 |
+|----|------|
+| 精度 | 全量 suite **PASS**；H32×6 multi-iter **OK**（无 hang） |
+| 板端裸 msprof | Task Dur med **2.075 ms**（n=4，min/max 2.071–2.078）；vs V-C **2.158** → **Δ≈−0.083 ms**（过 −0.05 门禁） |
+| 默认 | **`USE_FWDSUB_SLIM=1`** |
+| 残留风险 | 同次 msprof 末尾曾 `aicore timeout`；复采偶发无 device dump。无 profiler 多 iter 稳定 |
+
+仿真 T=1024 vs VA+VC / per-col slim：
+
+| 指标 | VA+VC (brcd) | per-col slim | **P1 coarse** |
+|------|--------------|--------------|---------------|
+| Total tick | 157825 | 157806 | **97847** |
+| vec_med | 19.56 µs | 18.67 µs | **18.12 µs** |
+| UB2UB% | 8.4% | 0.4% | **0.4%** |
+| BAR call | 23264 | 23264 | **21472** |
+| BAR cyc/call | 308 | 804 | 744（仍高，但次数↓ + UB2UB↓ → 墙钟/tick 降） |
+
+产物：`prof_msprof_op_sim_t1024_p1_coarse`；板端 `/tmp/prof_p1_coarse`。
+
 ## Next direction
 
-1. **主差距仍在 AIV**（~2.16 → 1.5）：稳住 V-B 板端（少 barrier 或 mask=16 单趟 Mul）后再采 Task Dur；V-D 同理
-2. P2 L0[2]：仅当 sim 明确 L1→L0 bubble
-3. C2 resident：精度修好前不 default
+1. **主差距仍在 AIV**（~2.08 → 1.5）：P2 评估 Add-fold（默认不换 RA/ReduceSum；可探针双缓冲）
+2. P3：Prep / tril mask / `+I`（按需）
+3. 观察 slim=1 在裸 msprof 下的偶发 timeout；勿与 V-D 同开
+4. C2 resident：精度修好前不 default

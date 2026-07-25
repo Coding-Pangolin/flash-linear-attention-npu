@@ -16,7 +16,8 @@
 
 #include "chunk_kda_fwd_intra_sub_chunk_common.h"
 
-// V-B: Brcb→Mul without brcd tile — default OFF (aicore timeout / suite hang).
+// V-B: Brcb→Mul without brcd tile (ScaleRowsByBeta row-broadcast).
+// Default OFF: suite once OK; multi-iter/msprof intermittent hang → no Dur gate.
 #ifndef USE_FWDSUB_SLIM
 #define USE_FWDSUB_SLIM 0
 #endif
@@ -429,7 +430,7 @@ private:
     // Forward Substitution on akk (= -L = Ai). Triton:
     //   a += ReduceSum(a[:, None] * Ai, axis=0);  then Ai[i]=a;  Akkd=Ai+I
     // Vector: Brcb(a) → Mul (row broadcast) → Add-fold col-reduce (BC=16=2^n).
-    // USE_FWDSUB_SLIM=1: Mul from Brcb directly (no UB brcd tile). Default OFF (hang).
+    // USE_FWDSUB_SLIM=1: ScaleRowsByBeta row-broadcast Mul (no UB brcd tile).
     __aicore__ inline void ForwardSub(LocalTensor<float> akk, LocalTensor<float> tmp, uint64_t valid)
     {
         if (valid < 2) {
@@ -464,13 +465,15 @@ private:
             Brcb(aBrcb, tmp, brcbRepeat, {1, 8});
             PipeBarrier<PIPE_V>();
 #if USE_FWDSUB_SLIM
-            // prod[p, :] = akk[p, :] * a[p]. Mirror beta col-Mul: two 8-wide passes,
-            // src1BlkStride=0 broadcasts aBrcb[p*8], src1RepStride=1 advances per row.
+            // prod[p,:] = akk[p,:] * a[p] — same row-broadcast as ScaleRowsByBeta
+            // (chunk_kda_fwd.cpp): src1BlkStride=0, src1RepStride=1; barrier after each Mul.
             {
                 const uint8_t rowBlk = static_cast<uint8_t>((bc * sizeof(float)) / 32);
-                Mul(prod, akk, aBrcb, 8, static_cast<uint8_t>(bc), {1, 1, 0, rowBlk, rowBlk, 1});
-                Mul(prod[kBrcbStride], akk[kBrcbStride], aBrcb, 8, static_cast<uint8_t>(bc),
-                    {1, 1, 0, rowBlk, rowBlk, 1});
+                for (uint32_t col = 0; col < bc; col += kBrcbStride) {
+                    Mul(prod[col], akk[col], aBrcb, static_cast<uint64_t>(kBrcbStride),
+                        static_cast<uint8_t>(bc), {1, 1, 0, rowBlk, rowBlk, 1});
+                    PipeBarrier<PIPE_V>();
+                }
             }
 #else
             for (uint32_t p = 0; p < bc; ++p) {
@@ -480,8 +483,8 @@ private:
             }
             PipeBarrier<PIPE_V>();
             Mul(prod, akk, brcd, elems);
-#endif
             PipeBarrier<PIPE_V>();
+#endif
 
             // ReduceSum axis=0 via Add-fold (chunk_bwd column-sum); BC=16 = 2^n.
             uint32_t remain = bc;

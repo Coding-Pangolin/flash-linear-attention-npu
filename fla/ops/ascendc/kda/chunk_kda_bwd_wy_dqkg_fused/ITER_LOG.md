@@ -25,6 +25,7 @@
 | Epilog kPark 复用 | reject | **+6** | — | 13348 µs；已回滚 |
 | VS0 每窗一次 | reject | **+0.12** | `VS0_ONCE=0` | 7375 µs |
 | **Epilog state panel** | **done** | **−1.29** | fold 内 | **5.97 ms**；[K,V] 整面板 CopyStrided |
+| EXP_GN_PARK | reject | **+0.06** | `=0` | 6029 µs；Exp 挪到 Kg 无净收益 |
 | **当前** | **5.97** | vs C1 **−15.5** | 下表 | 仍 Vec-bound；距 0.8 尚远 |
 
 画像（state panel 后）：Task Dur **5971 µs**。
@@ -35,9 +36,9 @@
 
 | 候选 | 裁决 | 原因 |
 |------|------|------|
-| 更深跨窗（Cube/Vec 双发 Post） | 高风险下一刀 | 单 Prefill 已吃；需重做 stage 信用 |
-| I6 减 BAR / Exp / partial scalar | 可继续 | 边际；勿破 dual-AIV |
-| I4 FIX∥MTE2 | 修好再开 | Preload/L1-resident 与 outstanding Fix 需专项审计 |
+| Gate/Epilog MTE2∥V ping-pong | **next** | PR190 InitVectorEvents；攻 MTE2 |
+| 更深跨窗双发 Post | 高风险 | 需重做 stage 信用 |
+| I4 FIX∥MTE2 | parked | model ECC |
 | PR190 Process 照搬 | 不做 | 无 Prefill |
 
 ---

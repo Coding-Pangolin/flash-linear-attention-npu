@@ -140,6 +140,10 @@ constexpr uint32_t NUM_GM_SLOTS = 4;
 #ifndef USE_VS0_ONCE_PER_WINDOW
 #define USE_VS0_ONCE_PER_WINDOW 0
 #endif
+// Tried: park exp(gn) in Kg. +0.06ms vs state-panel (6029 vs 5971) — keep off.
+#ifndef USE_EXP_GN_PARK
+#define USE_EXP_GN_PARK 0
+#endif
 
 // Cross-core flags (AIC <-> AIV), raw counting semantics (0x2). Re-used across BK
 // sub-iterations and across (task,hv) units — Set/Wait counts match because both

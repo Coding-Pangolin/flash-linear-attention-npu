@@ -863,7 +863,7 @@ private:
         uint32_t nr = OwnedRowCount();
         if (r0 >= static_cast<uint32_t>(bt_) || nr == 0) {
             if (IsSub0()) {
-                // Still park gn for Gate merge path.
+                // Park raw gn → dgkWs; optional exp(gn) → dgkMergeWs for Epilog.
                 this->CopyVectorIn(gnIn, g_, this->HvKOff(bIdx, iHv, tok0 + validRows - 1, kOff), bk);
                 SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
                 WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
@@ -872,6 +872,13 @@ private:
                 PipeBarrier<PIPE_V>();
                 SyncVToMte3();
                 DataCopy(wsF32_[f32Base + SlotLayoutF32::dgkWs], gnFp, bk);
+#if USE_EXP_GN_PARK
+                SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+                WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+                Exp2InPlace(gnFp, bk);
+                SyncVToMte3();
+                DataCopy(wsF32_[f32Base + SlotLayoutF32::dgkMergeWs], gnFp, bk);
+#endif
                 SyncMte3ToMte2();
             }
             Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
@@ -922,6 +929,13 @@ private:
         WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         if (IsSub0()) {
             DataCopy(wsF32_[f32Base + SlotLayoutF32::dgkWs], gnFp, bk);
+#if USE_EXP_GN_PARK
+            SetFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+            WaitFlag<HardEvent::MTE3_V>(EVT_MTE3_V);
+            Exp2InPlace(gnFp, bk);
+            SyncVToMte3();
+            DataCopy(wsF32_[f32Base + SlotLayoutF32::dgkMergeWs], gnFp, bk);
+#endif
         }
 #if USE_GATE_REUSE_KG_WS
         // Park owned k/g fp32 so Gate skips GM reload + Cast.
@@ -1121,11 +1135,13 @@ private:
         SetVGateJoined();
 #endif
         MergeDgkAcc(slot, dgkAcc, bk);
+#if !USE_EXP_GN_PARK
         if (IsSub0()) {
             SyncVToMte3();
             DataCopy(wsF32_[f32Base + SlotLayoutF32::dgkMergeWs], gnFp, bk);
             SyncMte3ToMte2();
         }
+#endif
 #if !USE_GATE_EARLY_SET
         Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
         PipeBarrier<PIPE_MTE3>();
@@ -1297,7 +1313,9 @@ private:
             LocalTensor<float> gnExp = smallBuf_.Get<float>()[MAX_BK];
             DataCopy(gnExp, wsF32_[f32Base + SlotLayoutF32::dgkMergeWs], bk);
             SyncMte2ToV();
+#if !USE_EXP_GN_PARK
             Exp2InPlace(gnExp, bk);
+#endif
             LocalTensor<float> stateAcc = dbAccBuf_.Get<float>();
             Duplicate(stateAcc, 0.0f, bk);
             PipeBarrier<PIPE_V>();

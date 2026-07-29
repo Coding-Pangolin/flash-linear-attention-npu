@@ -139,14 +139,18 @@ flowchart TB
 
 单 kernel 内叠流水已证明不够（E2–E4 / V2）。
 
+**权威设计（已落盘）**：[`SPLIT_KERNEL_PLAN.md`](SPLIT_KERNEL_PLAN.md)
+
 ```text
-OpA: Stage0+Stage1（+Kg partial）
+OpA: Stage0+Stage1（+Kg）
 OpB: GateWy + Epilog
 OpC: Stage3 DaFinal
 Host: 同 chunk 同 stream 顺序；跨 chunk 多 stream 重叠
 ```
 
-本轮只要求：**设计文档 + 接口草图**（可另开 `SPLIT_KERNEL_PLAN.md`）；实现单独立项。
+本轮交付：设计 + 接口草图（**完成**）。实现编码单独立项。
+
+**F3a'**：裸 BK128 仍 blocked；owned-compact 见 [`results/F3A_ARENA_NOTE.md`](results/F3A_ARENA_NOTE.md)，建议挂 OpB 后做。
 
 ---
 

@@ -23,7 +23,9 @@
 | **F3b MAX_BV=128** | **4.74** | **−0.74 vs F1** | `USE_BV128=1` | 4741 µs；nBv=1 |
 | F4 MASK_ONCE | reject | −0.016 | `USE_MASK_ONCE=0` | suite 绿；未过 −0.05；代码保留 |
 | F5 FIX∥MTE2+关 Preload | parked | ECC | `FIX_MTE2=0` | 仍 507015 L0C；Preload 门控代码保留 |
-| **当前** | **~4.74** | vs P1a **−1.1** | 下表 | 下一刀：F6 切分 / BK128 需重设计 arena |
+| F3a' BK128 owned-arena | blocked | — | — | `results/F3A_ARENA_NOTE.md`；需改索引 |
+| **F6 切分设计** | **done** | — | — | [`SPLIT_KERNEL_PLAN.md`](SPLIT_KERNEL_PLAN.md) |
+| **当前** | **~4.74** | vs P1a **−1.1** | 下表 | 下一刀：实现 F6 OpA/B/C 或 F3a' |
 
 ---
 
@@ -33,12 +35,13 @@
 |------|------|------|
 | F1 Join 收紧 | **done** | −0.43 ms |
 | F3b BV128 | **done** | −0.74 ms |
-| F3a BK128 | **blocked** | UB 爆；需减 live panels |
+| F3a BK128 裸改 | **blocked** | UB；见 F3a' |
+| F3a' owned-compact | **queued** | 设计备忘；建议 OpB 后 |
 | F4 mask-once | **reject** | flat |
 | F5 FIX ECC | **parked** | 关 Preload 仍 507015 |
-| F6 多 kernel 切分 | **next** | 仍 ≫0.8；冲 ≤4 可再抠，冲 0.8 靠切分 |
+| F6 多 kernel 切分 | **design done** | 实现另立项；冲 0.8 主路径 |
 
-权威 plan：[`NEXT_ITER_PLAN.md`](NEXT_ITER_PLAN.md)
+权威 plan：[`NEXT_ITER_PLAN.md`](NEXT_ITER_PLAN.md) · 切分：[`SPLIT_KERNEL_PLAN.md`](SPLIT_KERNEL_PLAN.md)
 
 ---
 

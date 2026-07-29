@@ -148,9 +148,9 @@ OpC: Stage3 DaFinal
 Host: 同 chunk 同 stream 顺序；跨 chunk 多 stream 重叠
 ```
 
-本轮交付：设计 + 接口草图（**完成**）。实现编码单独立项。
+**MVP 已落地**（`split_stages` / env tiling；默认 **off**）：suite split N=1 绿；e2e 仍被 launch 税拖累（见 [`results/F6_MVP_SUMMARY.md`](results/F6_MVP_SUMMARY.md)）。下一刀：减 launch / 真占用重叠后再评 default。
 
-**F3a'**：裸 BK128 仍 blocked；owned-compact 见 [`results/F3A_ARENA_NOTE.md`](results/F3A_ARENA_NOTE.md)，建议挂 OpB 后做。
+**F3a'**：owned-arena BK128 已 default on（~3.86 ms）；见 `results/F3A_SUMMARY.md`。
 
 ---
 

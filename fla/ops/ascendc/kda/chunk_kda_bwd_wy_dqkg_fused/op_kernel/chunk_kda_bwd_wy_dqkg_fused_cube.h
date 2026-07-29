@@ -42,6 +42,10 @@ class KdaWyDqkgCube : public KdaWyDqkgBase<T> {
     using Base::usedCoreNum_;
     using Base::coreIdx_;
     using Base::stateVFirst_;
+    using Base::stageId_;
+    using Base::taskBegin_;
+    using Base::taskEnd_;
+    using Base::SlotOf;
     using Base::wsF32_;
     using Base::wsT_;
     using Base::a_;
@@ -72,6 +76,23 @@ public:
         if (!this->ValidShapes()) {
             return;
         }
+        if (stageId_ == 1) {
+            ProcessStageA();
+            return;
+        }
+        if (stageId_ == 2) {
+            ProcessStageB();
+            return;
+        }
+        if (stageId_ == 3) {
+            ProcessStageC();
+            return;
+        }
+        ProcessFused();
+    }
+
+    __aicore__ inline void ProcessFused()
+    {
         Catlass::Arch::Resource<KdaArchTag> resource;
         DirectTileGemmPipeState gemmPipe_{};
         const uint32_t nBv = this->NumBv();
@@ -178,7 +199,173 @@ public:
 #endif
     }
 
+    // F6 OpA: Stage0 + Stage1 (all BK). No Stage2/3; no slotFree protocol.
+    __aicore__ inline void ProcessStageA()
+    {
+        Catlass::Arch::Resource<KdaArchTag> resource;
+        DirectTileGemmPipeState gemmPipe_{};
+        const uint32_t nBv = this->NumBv();
+        const uint32_t nBk = this->NumBk();
+        for (uint64_t task = taskBegin_ + coreIdx_; task < taskEnd_; task += usedCoreNum_) {
+            uint64_t iB = 0, iChunk = 0;
+            this->DecodeChunkTask(task, iB, iChunk);
+            uint64_t bos = 0, localT = 0, localChunk = 0, bIdx = 0;
+            this->ResolveChunkScalar(iChunk, iB, bos, localT, localChunk, bIdx);
+            const uint64_t chunkStart = localChunk * bt_;
+            if (chunkStart >= localT) {
+                continue;
+            }
+            const uint64_t validRows = (chunkStart + bt_ <= localT) ? bt_ : (localT - chunkStart);
+            const uint64_t tok0 = bos + chunkStart;
+            const uint64_t nHvWin = (hv_ + 1ULL) / 2ULL;
+            for (uint64_t w = 0; w < nHvWin; ++w) {
+                RunWindowStage0Stage(resource, gemmPipe_, w, bIdx, tok0, validRows, nBv);
+                RunWindowStage1Only(resource, gemmPipe_, w, bIdx, tok0, localChunk, validRows, nBv, nBk);
+            }
+        }
+#if USE_FIX_MTE2_OVERLAP
+        if (gemmPipe_.fixMte2Outstanding) {
+            WaitFlag<HardEvent::FIX_MTE2>(14);
+            gemmPipe_.fixMte2Outstanding = false;
+        }
+#endif
+    }
+
+    // F6 OpB: Stage2 only (Gate→Epilog on Vec). Skip Wait V_S0 (OpA already done).
+    __aicore__ inline void ProcessStageB()
+    {
+        Catlass::Arch::Resource<KdaArchTag> resource;
+        DirectTileGemmPipeState gemmPipe_{};
+        const uint32_t nBk = this->NumBk();
+        for (uint64_t task = taskBegin_ + coreIdx_; task < taskEnd_; task += usedCoreNum_) {
+            uint64_t iB = 0, iChunk = 0;
+            this->DecodeChunkTask(task, iB, iChunk);
+            uint64_t bos = 0, localT = 0, localChunk = 0, bIdx = 0;
+            this->ResolveChunkScalar(iChunk, iB, bos, localT, localChunk, bIdx);
+            const uint64_t chunkStart = localChunk * bt_;
+            if (chunkStart >= localT) {
+                continue;
+            }
+            const uint64_t validRows = (chunkStart + bt_ <= localT) ? bt_ : (localT - chunkStart);
+            const uint64_t tok0 = bos + chunkStart;
+            const uint64_t nHvWin = (hv_ + 1ULL) / 2ULL;
+            for (uint64_t w = 0; w < nHvWin; ++w) {
+                RunWindowStage2Only(resource, gemmPipe_, w, bIdx, tok0, validRows, nBk);
+            }
+        }
+#if USE_FIX_MTE2_OVERLAP
+        if (gemmPipe_.fixMte2Outstanding) {
+            WaitFlag<HardEvent::FIX_MTE2>(14);
+            gemmPipe_.fixMte2Outstanding = false;
+        }
+#endif
+    }
+
+    // F6 OpC: Stage3 only.
+    __aicore__ inline void ProcessStageC()
+    {
+        Catlass::Arch::Resource<KdaArchTag> resource;
+        DirectTileGemmPipeState gemmPipe_{};
+        for (uint64_t task = taskBegin_ + coreIdx_; task < taskEnd_; task += usedCoreNum_) {
+            uint64_t iB = 0, iChunk = 0;
+            this->DecodeChunkTask(task, iB, iChunk);
+            uint64_t bos = 0, localT = 0, localChunk = 0, bIdx = 0;
+            this->ResolveChunkScalar(iChunk, iB, bos, localT, localChunk, bIdx);
+            const uint64_t chunkStart = localChunk * bt_;
+            if (chunkStart >= localT) {
+                continue;
+            }
+            const uint64_t validRows = (chunkStart + bt_ <= localT) ? bt_ : (localT - chunkStart);
+            const uint64_t tok0 = bos + chunkStart;
+            const uint64_t nHvWin = (hv_ + 1ULL) / 2ULL;
+            for (uint64_t w = 0; w < nHvWin; ++w) {
+                RunWindowStage3Stage(resource, gemmPipe_, w, bIdx, tok0, validRows);
+            }
+        }
+#if USE_FIX_MTE2_OVERLAP
+        if (gemmPipe_.fixMte2Outstanding) {
+            WaitFlag<HardEvent::FIX_MTE2>(14);
+            gemmPipe_.fixMte2Outstanding = false;
+        }
+#endif
+    }
+
 private:
+    __aicore__ inline void RunWindowStage0Stage(Catlass::Arch::Resource<KdaArchTag> &resource,
+                                                DirectTileGemmPipeState &pipe, uint64_t windowIdx, uint64_t bIdx,
+                                                uint64_t tok0, uint64_t validRows, uint32_t nBv)
+    {
+        const uint64_t hvBase = windowIdx * 2ULL;
+        const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+        for (uint32_t h = 0; h < headCnt; ++h) {
+            const uint64_t slot = this->SlotOf(windowIdx, h);
+            const uint64_t iHv = hvBase + h;
+            RunStage0(resource, pipe, slot, bIdx, iHv, tok0, validRows, nBv);
+            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS0_);
+        }
+    }
+
+    __aicore__ inline void RunWindowStage1Only(Catlass::Arch::Resource<KdaArchTag> &resource,
+                                               DirectTileGemmPipeState &pipe, uint64_t windowIdx, uint64_t bIdx,
+                                               uint64_t tok0, uint64_t localChunk, uint64_t validRows, uint32_t nBv,
+                                               uint32_t nBk)
+    {
+        const uint64_t hvBase = windowIdx * 2ULL;
+        const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+#if USE_VS0_ONCE_PER_WINDOW
+        Catlass::Arch::CrossCoreWaitFlag(vS0_);
+        (void)headCnt;
+#else
+        for (uint32_t h = 0; h < headCnt; ++h) {
+            Catlass::Arch::CrossCoreWaitFlag(vS0_);
+        }
+#endif
+        for (uint32_t iK = 0; iK < nBk; ++iK) {
+            for (uint32_t h = 0; h < headCnt; ++h) {
+                const uint64_t slot = this->SlotOf(windowIdx, h);
+                const uint64_t iHv = hvBase + h;
+                RunStage1(resource, pipe, slot, bIdx, iHv, tok0, localChunk, validRows, nBv, iK);
+                Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS1_);
+            }
+        }
+    }
+
+    __aicore__ inline void RunWindowStage2Only(Catlass::Arch::Resource<KdaArchTag> &resource,
+                                               DirectTileGemmPipeState &pipe, uint64_t windowIdx, uint64_t bIdx,
+                                               uint64_t tok0, uint64_t validRows, uint32_t nBk)
+    {
+        const uint64_t hvBase = windowIdx * 2ULL;
+        const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+        for (uint32_t iK = 0; iK < nBk; ++iK) {
+            for (uint32_t h = 0; h < headCnt; ++h) {
+                const uint64_t slot = this->SlotOf(windowIdx, h);
+                const uint64_t iHv = hvBase + h;
+#if USE_STAGE2_PRELOAD_A && !USE_FIX_MTE2_OVERLAP
+                PreloadAToL1(resource, bIdx, iHv, tok0, validRows);
+#endif
+                Catlass::Arch::CrossCoreWaitFlag(vGate_);
+                RunStage2(resource, pipe, slot, bIdx, iHv, tok0, validRows, iK);
+                Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS2_);
+            }
+        }
+    }
+
+    __aicore__ inline void RunWindowStage3Stage(Catlass::Arch::Resource<KdaArchTag> &resource,
+                                                DirectTileGemmPipeState &pipe, uint64_t windowIdx, uint64_t bIdx,
+                                                uint64_t tok0, uint64_t validRows)
+    {
+        const uint64_t hvBase = windowIdx * 2ULL;
+        const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+        for (uint32_t h = 0; h < headCnt; ++h) {
+            const uint64_t slot = this->SlotOf(windowIdx, h);
+            const uint64_t iHv = hvBase + h;
+            Catlass::Arch::CrossCoreWaitFlag(vMask_);
+            RunStage3(resource, pipe, slot, bIdx, iHv, tok0, validRows);
+            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS3_);
+        }
+    }
+
+    // ---- legacy fused helpers (winSlot = (windowIdx&1)*2) ----
     __aicore__ inline void RunWindowStage0(Catlass::Arch::Resource<KdaArchTag> &resource,
                                            DirectTileGemmPipeState &pipe, uint64_t windowIdx, uint64_t bIdx,
                                            uint64_t tok0, uint64_t validRows, uint32_t nBv)

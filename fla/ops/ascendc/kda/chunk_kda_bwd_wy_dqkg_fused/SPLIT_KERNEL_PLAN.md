@@ -70,14 +70,19 @@ flowchart LR
 
 ## 3. Workspace / 数据契约
 
-### 3.1 持久 stage WS（Op 间）
+### 3.1 持久 stage WS（Op 间）— **修订**
 
 今日 `SlotLayoutF32/T` 按 slot 布局已覆盖中间量。切分后：
 
-- **方案 P（推荐）**：复用同一 `userWS` 布局；OpA/B/C 共享 `NUM_GM_SLOTS` 与 `SlotLayout*`；Host 保证同 chunk 同 core 映射。
-- Op 间 **无 CrossCore**（不同 launch）；靠 GM 可见性 + 同 stream 顺序。
+- **不可**用「复用 4 rolling slots + 全量 OpA 再 OpB」：OpA 写满窗口后会覆盖尚未被 OpB 消费的中间量。
+- **落地（已实现 MVP）**：
+  - `stageId≠0` 时 `numSlots = HV`（每 head 唯一 slot）；Host 按 `taskBegin/taskEnd` 批处理，保证每核 ≤1 task。
+  - A→B→C **同 stream 顺序**；Python 复用同一 `workspace` torch buffer。
+  - 控制面暂用 env：`FLA_WY_DQKG_STAGE` / `TASK_BEGIN` / `TASK_END`（后续升 Op Attr）。
+- Op 间 **无 CrossCore**；`USE_MASK_SOFT_LEAD` 在 stage 路径关闭（Mask 归 OpC）。
 
 ### 3.2 用户张量写回时机
+
 
 | 张量 | 今日 | 切分后 |
 |------|------|--------|
@@ -179,11 +184,12 @@ S6  msprof：fused vs split(N=1) vs split(N=2)；记 ITER_LOG
 
 ## 9. 验收清单（实现 PR）
 
-- [ ] `SPLIT=0` 行为与今日 bit 级一致（或文档声明的容差）
-- [ ] `SPLIT=1 N=1` suite 全绿
-- [ ] `SPLIT=1 N=2` model 无 hang/ECC；端到端有记录
-- [ ] `ITER_LOG` 一行：fused / split1 / split2 med
+- [x] `SPLIT=0` 行为与今日一致（suite fused 绿）
+- [x] `SPLIT=1 N=1` suite 全绿
+- [x] `SPLIT=1 N=2` model 无 hang；端到端有记录（~107 ms，慢）
+- [x] `ITER_LOG` 一行：fused / split1 / split2 e2e
 - [ ] DESIGN.md 增补切分契约小节
+- [ ] 性能：e2e ≤ fused×1.15 后再考虑 default
 
 ---
 

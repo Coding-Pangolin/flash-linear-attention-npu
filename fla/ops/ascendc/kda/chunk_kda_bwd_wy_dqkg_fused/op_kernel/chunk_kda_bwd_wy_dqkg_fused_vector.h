@@ -56,6 +56,10 @@ class KdaWyDqkgVector : public KdaWyDqkgBase<T> {
     using Base::coreIdx_;
     using Base::scale_;
     using Base::stateVFirst_;
+    using Base::stageId_;
+    using Base::taskBegin_;
+    using Base::taskEnd_;
+    using Base::SlotOf;
     using Base::q_;
     using Base::k_;
     using Base::v_;
@@ -130,6 +134,23 @@ public:
         if (!this->ValidShapes()) {
             return;
         }
+        if (stageId_ == 1) {
+            ProcessStageA();
+            return;
+        }
+        if (stageId_ == 2) {
+            ProcessStageB();
+            return;
+        }
+        if (stageId_ == 3) {
+            ProcessStageC();
+            return;
+        }
+        ProcessFused();
+    }
+
+    __aicore__ inline void ProcessFused()
+    {
         // Process bookend SetFree×4 (isub / I5). Hot-path depth uses C_S*/V_* +
         // WaitFree before Cube Stage0(w+2) on a reused bank.
         Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
@@ -194,7 +215,144 @@ public:
 #endif
     }
 
+    // F6 OpA: Stage0Vec + Kg (∥ Cube Stage1). No Gate/Epilog/Mask.
+    __aicore__ inline void ProcessStageA()
+    {
+        const uint32_t nBv = this->NumBv();
+        const uint32_t nBk = this->NumBk();
+        for (uint64_t task = taskBegin_ + coreIdx_; task < taskEnd_; task += usedCoreNum_) {
+            uint64_t iB = 0, iChunk = 0;
+            this->DecodeChunkTask(task, iB, iChunk);
+            uint64_t bos = 0, localT = 0, localChunk = 0, bIdx = 0;
+            this->ResolveChunkScalar(iChunk, iB, bos, localT, localChunk, bIdx);
+            const uint64_t chunkStart = localChunk * bt_;
+            if (chunkStart >= localT) {
+                continue;
+            }
+            const uint64_t validRows = (chunkStart + bt_ <= localT) ? bt_ : (localT - chunkStart);
+            const uint64_t tok0 = bos + chunkStart;
+            const uint64_t nHvWin = (hv_ + 1ULL) / 2ULL;
+            for (uint64_t w = 0; w < nHvWin; ++w) {
+                RunWindowStage0VecStage(w, bIdx, tok0, validRows, nBv);
+                for (uint32_t iK = 0; iK < nBk; ++iK) {
+                    const uint64_t hvBase = w * 2ULL;
+                    const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+                    for (uint32_t h = 0; h < headCnt; ++h) {
+                        const uint64_t slot = this->SlotOf(w, h);
+                        const uint64_t iHv = hvBase + h;
+                        const uint64_t iH = iHv / group_;
+                        KgVec(slot, bIdx, iHv, iH, tok0, validRows, iK);
+                    }
+                }
+            }
+        }
+#if USE_VEC_MTE2_PP
+        ReleaseVecMte2Pp();
+#endif
+    }
+
+    // F6 OpB: Gate + Epilog. No Wait C_S1 (OpA GM visible via stream order). No Mask.
+    __aicore__ inline void ProcessStageB()
+    {
+        const uint32_t nBv = this->NumBv();
+        const uint32_t nBk = this->NumBk();
+        for (uint64_t task = taskBegin_ + coreIdx_; task < taskEnd_; task += usedCoreNum_) {
+            uint64_t iB = 0, iChunk = 0;
+            this->DecodeChunkTask(task, iB, iChunk);
+            uint64_t bos = 0, localT = 0, localChunk = 0, bIdx = 0;
+            this->ResolveChunkScalar(iChunk, iB, bos, localT, localChunk, bIdx);
+            const uint64_t chunkStart = localChunk * bt_;
+            if (chunkStart >= localT) {
+                continue;
+            }
+            const uint64_t validRows = (chunkStart + bt_ <= localT) ? bt_ : (localT - chunkStart);
+            const uint64_t tok0 = bos + chunkStart;
+            const uint64_t nHvWin = (hv_ + 1ULL) / 2ULL;
+            for (uint64_t w = 0; w < nHvWin; ++w) {
+                const uint64_t hvBase = w * 2ULL;
+                const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+                for (uint32_t iK = 0; iK < nBk; ++iK) {
+                    for (uint32_t h = 0; h < headCnt; ++h) {
+                        const uint64_t slot = this->SlotOf(w, h);
+                        const uint64_t iHv = hvBase + h;
+                        const uint64_t iH = iHv / group_;
+                        GateOnlyVec(slot, bIdx, iHv, iH, tok0, localChunk, validRows, nBv, iK);
+#if !USE_GATE_EARLY_SET
+                        SetVGateJoined();
+#endif
+                    }
+                    for (uint32_t h = 0; h < headCnt; ++h) {
+                        const uint64_t slot = this->SlotOf(w, h);
+                        const uint64_t iHv = hvBase + h;
+                        const uint64_t iH = iHv / group_;
+                        Catlass::Arch::CrossCoreWaitFlag(cS2_);
+                        EpilogVec(slot, bIdx, iHv, iH, tok0, localChunk, validRows, nBv, iK);
+                    }
+                }
+            }
+        }
+#if USE_VEC_MTE2_PP
+        ReleaseVecMte2Pp();
+#endif
+    }
+
+    // F6 OpC: Mask + Store.
+    __aicore__ inline void ProcessStageC()
+    {
+        for (uint64_t task = taskBegin_ + coreIdx_; task < taskEnd_; task += usedCoreNum_) {
+            uint64_t iB = 0, iChunk = 0;
+            this->DecodeChunkTask(task, iB, iChunk);
+            uint64_t bos = 0, localT = 0, localChunk = 0, bIdx = 0;
+            this->ResolveChunkScalar(iChunk, iB, bos, localT, localChunk, bIdx);
+            const uint64_t chunkStart = localChunk * bt_;
+            if (chunkStart >= localT) {
+                continue;
+            }
+            const uint64_t validRows = (chunkStart + bt_ <= localT) ? bt_ : (localT - chunkStart);
+            const uint64_t tok0 = bos + chunkStart;
+            const uint64_t nHvWin = (hv_ + 1ULL) / 2ULL;
+            for (uint64_t w = 0; w < nHvWin; ++w) {
+                const uint64_t hvBase = w * 2ULL;
+                const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+                for (uint32_t h = 0; h < headCnt; ++h) {
+                    const uint64_t slot = this->SlotOf(w, h);
+                    const uint64_t iHv = hvBase + h;
+                    Stage3MaskVec(slot, bIdx, iHv, validRows);
+                    SetVMaskJoined();
+                }
+                for (uint32_t h = 0; h < headCnt; ++h) {
+                    const uint64_t slot = this->SlotOf(w, h);
+                    const uint64_t iHv = hvBase + h;
+                    Catlass::Arch::CrossCoreWaitFlag(cS3_);
+                    Stage3StoreVec(slot, bIdx, iHv, tok0, validRows);
+                }
+            }
+        }
+#if USE_VEC_MTE2_PP
+        ReleaseVecMte2Pp();
+#endif
+    }
+
 private:
+    __aicore__ inline void RunWindowStage0VecStage(uint64_t windowIdx, uint64_t bIdx, uint64_t tok0,
+                                                   uint64_t validRows, uint32_t nBv)
+    {
+        const uint64_t hvBase = windowIdx * 2ULL;
+        const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+        for (uint32_t h = 0; h < headCnt; ++h) {
+            const uint64_t slot = this->SlotOf(windowIdx, h);
+            const uint64_t iHv = hvBase + h;
+            Catlass::Arch::CrossCoreWaitFlag(cS0_);
+            Stage0Vec(slot, bIdx, iHv, tok0, validRows, nBv);
+#if !USE_VS0_ONCE_PER_WINDOW
+            SetVS0Joined();
+#endif
+        }
+#if USE_VS0_ONCE_PER_WINDOW
+        SetVS0Joined();
+#endif
+    }
+
     __aicore__ inline void RunWindowStage0Vec(uint64_t windowIdx, uint64_t bIdx, uint64_t tok0,
                                               uint64_t validRows, uint32_t nBv)
     {
@@ -1640,6 +1798,8 @@ private:
 #endif
 
 #if USE_MASK_SOFT_LEAD
+        // Fused-only: Mask belongs to OpC under stage split (no CrossCore across launches).
+        if (stageId_ == 0) {
         // Last BK: finish dA+=delta + Mask/Set before heavy state, so Cube Stage3
         // overlaps state/dg (PR190-style Set-before-tail). Safe UB past qFp slot.
         const bool lastBk = (iK + 1U == this->NumBk());
@@ -1674,6 +1834,7 @@ private:
             PipeBarrier<PIPE_MTE3>();
             Stage3MaskVec(slot, bIdx, iHv, validRows);
             SetVMaskJoined();
+        }
         }
 #endif
 
@@ -1807,8 +1968,8 @@ private:
         WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
 
 #if USE_MASK_SOFT_LEAD
-        // Non-last BK: accumulate dADelta as before (Mask already done on last BK).
-        if (iK + 1U < this->NumBk() && IsSub0()) {
+        // Fused soft-lead: Mask already did last-BK accum. Stage split: always accum here.
+        if ((stageId_ != 0 || iK + 1U < this->NumBk()) && IsSub0()) {
 #else
         // dA accumulate after dg store — reuses arena (would clobber qFp if earlier).
         if (IsSub0()) {
@@ -1839,7 +2000,7 @@ private:
 
 #if USE_MERGE_BARRIER_ONLY && USE_MASK_SOFT_LEAD
         // Last BK already Join'd before Stage3MaskVec; skip duplicate trailing Join.
-        if (iK + 1U < this->NumBk()) {
+        if (stageId_ != 0 || iK + 1U < this->NumBk()) {
             Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
             PipeBarrier<PIPE_MTE3>();
         }

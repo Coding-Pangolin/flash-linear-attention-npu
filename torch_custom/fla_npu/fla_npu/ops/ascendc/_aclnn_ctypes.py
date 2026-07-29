@@ -157,12 +157,13 @@ _GET_WORKSPACE_ARGTYPES = {
 }
 
 
-def _call_aclnn(name: str, build_args, outputs):
+def _call_aclnn(name: str, build_args, outputs, *, workspace=None):
     return _runtime_call_aclnn(
         name,
         build_args,
         outputs,
         get_workspace_argtypes=_GET_WORKSPACE_ARGTYPES.get(name),
+        workspace=workspace,
     )
 
 
@@ -1040,16 +1041,35 @@ def npu_chunk_kda_bwd_wy_dqkg_fused(
     state_v_first=False,
     cu_seqlens=None,
     chunk_indices=None,
+    split_stages=False,
+    n_stream=1,
 ):
-    """KDA fused bwd: wy + dqkg. BNSD. Returns dq, dk, dv2, dg, db, dA."""
+    """KDA fused bwd: wy + dqkg. BNSD. Returns dq, dk, dv2, dg, db, dA.
+
+    split_stages=True: F6 OpA→OpB→OpC with shared workspace (env tiling).
+    n_stream>1: partition tasks across NPU streams (same-stream A→B→C per partition).
+    """
+    import os
     import torch
+
+    if not split_stages:
+        return _npu_chunk_kda_bwd_wy_dqkg_fused_impl(
+            q, k, v, v_new, g, beta, a, h, dh, do, dv, scale, chunk_size,
+            state_v_first=state_v_first, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices,
+        )
 
     q_shape = _shape(q)
     v_shape = _shape(v)
-    batch, h_num, t, k_dim = q_shape
+    batch, _h_num, t, k_dim = q_shape
     hv = int(v_shape[1])
-    v_dim = int(v_shape[3])
     bt = int(chunk_size)
+    if cu_seqlens is None:
+        num_chunks = (int(t) + bt - 1) // bt
+        total_tasks = num_chunks * int(batch)
+    else:
+        # varlen: chunk_indices length / 2
+        total_tasks = int(chunk_indices.numel()) // 2
+
     dq = _empty((batch, hv, t, k_dim), q, dtype=torch.float32)
     dk = _empty((batch, hv, t, k_dim), q, dtype=torch.float32)
     dv2 = _empty_like(v)
@@ -1057,9 +1077,86 @@ def npu_chunk_kda_bwd_wy_dqkg_fused(
     db = _empty((batch, hv, t), q, dtype=torch.float32)
     dA = _empty((batch, hv, t, bt), q, dtype=torch.float32)
     outputs = (dq, dk, dv2, dg, db, dA)
-    return _call_aclnn(
-        "aclnnChunkKdaBwdWyDqkgFused",
-        lambda ctx: [
+
+    n_stream = max(1, int(n_stream))
+    prev = {
+        "FLA_WY_DQKG_STAGE": os.environ.get("FLA_WY_DQKG_STAGE"),
+        "FLA_WY_DQKG_TASK_BEGIN": os.environ.get("FLA_WY_DQKG_TASK_BEGIN"),
+        "FLA_WY_DQKG_TASK_END": os.environ.get("FLA_WY_DQKG_TASK_END"),
+    }
+    try:
+        # Batch size ≈ AIC count so each core owns ≤1 task (numSlots=hv).
+        batch_tasks = min(20, max(total_tasks, 1))
+        streams = [torch.npu.Stream() for _ in range(n_stream)] if n_stream > 1 else [None]
+        # Per-stream WS: concurrent streams must not share stage buffers.
+        shared_ws = [None] * n_stream
+
+        def _run_range(stage, begin, end, sidx, workspace=None, return_workspace=False):
+            os.environ["FLA_WY_DQKG_STAGE"] = str(stage)
+            os.environ["FLA_WY_DQKG_TASK_BEGIN"] = str(begin)
+            os.environ["FLA_WY_DQKG_TASK_END"] = str(end)
+            stream = streams[sidx]
+            def _call():
+                return _npu_chunk_kda_bwd_wy_dqkg_fused_impl(
+                    q, k, v, v_new, g, beta, a, h, dh, do, dv, scale, chunk_size,
+                    state_v_first=state_v_first, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices,
+                    outs=outputs, workspace=workspace, return_workspace=return_workspace,
+                )
+            if stream is not None:
+                with torch.npu.stream(stream):
+                    return _call()
+            return _call()
+
+        for sidx in range(n_stream):
+            t0 = (total_tasks * sidx) // n_stream
+            t1 = (total_tasks * (sidx + 1)) // n_stream
+            for begin in range(t0, t1, batch_tasks):
+                end = min(begin + batch_tasks, t1)
+                if begin >= end:
+                    continue
+                if shared_ws[sidx] is None:
+                    shared_ws[sidx] = _run_range(1, begin, end, sidx, return_workspace=True)
+                else:
+                    _run_range(1, begin, end, sidx, workspace=shared_ws[sidx])
+                _run_range(2, begin, end, sidx, workspace=shared_ws[sidx])
+                _run_range(3, begin, end, sidx, workspace=shared_ws[sidx])
+        if n_stream > 1:
+            torch.npu.synchronize()
+    finally:
+        for key, val in prev.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+    return outputs
+
+
+def _npu_chunk_kda_bwd_wy_dqkg_fused_impl(
+    q, k, v, v_new, g, beta, a, h, dh, do, dv, scale, chunk_size, *,
+    state_v_first=False, cu_seqlens=None, chunk_indices=None, outs=None, workspace=None,
+    return_workspace=False,
+):
+    import torch
+
+    q_shape = _shape(q)
+    v_shape = _shape(v)
+    batch, _h_num, t, k_dim = q_shape
+    hv = int(v_shape[1])
+    bt = int(chunk_size)
+    if outs is None:
+        dq = _empty((batch, hv, t, k_dim), q, dtype=torch.float32)
+        dk = _empty((batch, hv, t, k_dim), q, dtype=torch.float32)
+        dv2 = _empty_like(v)
+        dg = _empty((batch, hv, t, k_dim), q, dtype=torch.float32)
+        db = _empty((batch, hv, t), q, dtype=torch.float32)
+        dA = _empty((batch, hv, t, bt), q, dtype=torch.float32)
+        outputs = (dq, dk, dv2, dg, db, dA)
+    else:
+        outputs = outs
+        dq, dk, dv2, dg, db, dA = outputs
+
+    def build(ctx):
+        return [
             ctx.tensor(q, "q"),
             ctx.tensor(k, "k"),
             ctx.tensor(v, "v"),
@@ -1073,7 +1170,6 @@ def npu_chunk_kda_bwd_wy_dqkg_fused(
             ctx.tensor(dv, "dv"),
             ctx.int_array(cu_seqlens),
             ctx.int_array(chunk_indices),
-            # Must match aclnn ...GetWorkspaceSize(double scale, ...) — c_float mis-ABI zeros dq.
             ctypes.c_double(float(scale)),
             ctypes.c_int64(bt),
             ctypes.c_bool(bool(state_v_first)),
@@ -1083,9 +1179,32 @@ def npu_chunk_kda_bwd_wy_dqkg_fused(
             ctx.tensor(dg, "dg"),
             ctx.tensor(db, "db"),
             ctx.tensor(dA, "dA"),
-        ],
-        outputs,
-    )
+        ]
+
+    from . import _runtime as _rt
+
+    if return_workspace or workspace is not None:
+        device = dq.device
+        aclnn_runtime = _rt.runtime()
+        ctx = _rt._CallContext(aclnn_runtime, device)
+        with _rt._npu_device_guard(device):
+            try:
+                args = build(ctx)
+                ws = aclnn_runtime.call(
+                    "aclnnChunkKdaBwdWyDqkgFused",
+                    args,
+                    device,
+                    get_workspace_argtypes=_GET_WORKSPACE_ARGTYPES.get("aclnnChunkKdaBwdWyDqkgFused"),
+                    workspace=workspace,
+                )
+            finally:
+                ctx.destroy()
+        _rt.finalize(outputs, ws, ctx.keepalive_tensors)
+        if return_workspace:
+            return ws
+        return outputs
+
+    return _call_aclnn("aclnnChunkKdaBwdWyDqkgFused", build, outputs, workspace=workspace)
 
 
 ASCENDC_CTYPES_OPS = {

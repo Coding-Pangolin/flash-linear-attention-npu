@@ -40,7 +40,8 @@ def _tol_for(name: str):
     return 1e-2, 1e-2
 
 
-def run_case(B=1, T=128, H=2, HV=2, K=128, V=128, BT=64, dtype=torch.bfloat16, varlen=False, state_v_first=False):
+def run_case(B=1, T=128, H=2, HV=2, K=128, V=128, BT=64, dtype=torch.bfloat16, varlen=False,
+             state_v_first=False, split_stages=False, n_stream=1):
     device = "npu:0"
     torch.manual_seed(0)
     scale = 1.0 / math.sqrt(K)
@@ -118,12 +119,15 @@ def run_case(B=1, T=128, H=2, HV=2, K=128, V=128, BT=64, dtype=torch.bfloat16, v
         state_v_first=state_v_first,
         cu_seqlens=cu_seqlens,
         chunk_indices=chunk_indices,
+        split_stages=split_stages,
+        n_stream=n_stream,
     )
+    tag = f"T={T} varlen={varlen} svf={state_v_first} split={split_stages}"
     names = ["dq", "dk", "dv2", "dg", "db", "dA"]
     ok = True
     for name, a, b in zip(names, npu_out, ref):
         rtol, atol = _tol_for(name)
-        ok = _allclose(a, b, rtol=rtol, atol=atol, name=f"{name} T={T} varlen={varlen} svf={state_v_first}") and ok
+        ok = _allclose(a, b, rtol=rtol, atol=atol, name=f"{name} {tag}") and ok
     return ok
 
 
@@ -133,6 +137,8 @@ def main():
         dict(T=128, varlen=False, state_v_first=False),
         dict(T=128, varlen=False, state_v_first=True),
         dict(T=192, varlen=True, state_v_first=False),
+        # F6 N=1 split vs golden
+        dict(T=128, varlen=False, state_v_first=False, split_stages=True, n_stream=1),
     ]
     all_ok = True
     for c in cases:

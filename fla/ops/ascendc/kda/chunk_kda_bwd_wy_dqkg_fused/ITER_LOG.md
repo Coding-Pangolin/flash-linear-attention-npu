@@ -24,8 +24,9 @@
 | F4 MASK_ONCE | reject | −0.016 | `USE_MASK_ONCE=0` | suite 绿；未过 −0.05；代码保留 |
 | F5 FIX∥MTE2+关 Preload | parked | ECC | `FIX_MTE2=0` | 仍 507015 L0C；Preload 门控代码保留 |
 | **F3a' BK128 owned-arena** | **3.86** | **−0.88 vs F3b** | `USE_BK128=1` | 3861 µs；nBk=1；`results/F3A_SUMMARY.md` |
+| **F6 MVP split** | e2e | fused 26.8 / N1 101 / N2 107 | `split_stages` off | suite split 绿；launch 税；`results/F6_MVP_SUMMARY.md` |
 | **F6 切分设计** | **done** | — | — | [`SPLIT_KERNEL_PLAN.md`](SPLIT_KERNEL_PLAN.md) |
-| **当前** | **~3.86** | vs P1a **−2.0** | 下表 | 下一刀：F6 OpA/B/C 冲 0.8 |
+| **当前** | **~3.86** Task | vs P1a **−2.0** | 下表 | 下一刀：F6 减 launch / 占用 |
 
 ---
 
@@ -39,7 +40,7 @@
 | F3a' owned-compact | **done** | −0.88 ms；default `USE_BK128=1` |
 | F4 mask-once | **reject** | flat |
 | F5 FIX ECC | **parked** | 关 Preload 仍 507015 |
-| F6 多 kernel 切分 | **design done** | 实现另立项；冲 0.8 主路径 |
+| F6 多 kernel 切分 | **MVP done** | suite split 绿；e2e 慢→off；见 F6_MVP_SUMMARY |
 
 权威 plan：[`NEXT_ITER_PLAN.md`](NEXT_ITER_PLAN.md) · 切分：[`SPLIT_KERNEL_PLAN.md`](SPLIT_KERNEL_PLAN.md)
 

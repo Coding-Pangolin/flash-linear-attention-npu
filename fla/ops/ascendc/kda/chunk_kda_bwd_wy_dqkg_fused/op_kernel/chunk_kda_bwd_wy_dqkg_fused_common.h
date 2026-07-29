@@ -309,8 +309,12 @@ public:
         // Per-core workspace: [core0 slots | core1 slots | ...]. BindCoreWorkspace()
         // rebinds wsF32_/wsT_ after coreIdx_ is known (Cube/Vec Init).
         userWS_ = userWS;
-        f32BytesPerCore_ = static_cast<uint64_t>(NUM_GM_SLOTS) * SlotLayoutF32::TOTAL * sizeof(float);
-        tBytesPerCore_ = static_cast<uint64_t>(NUM_GM_SLOTS) * SlotLayoutT::TOTAL * sizeof(T);
+        numSlots_ = static_cast<uint64_t>(tiling.numSlots > 0 ? tiling.numSlots : NUM_GM_SLOTS);
+        stageId_ = static_cast<uint32_t>(tiling.stageId);
+        taskBegin_ = static_cast<uint64_t>(tiling.taskBegin);
+        taskEnd_ = static_cast<uint64_t>(tiling.taskEnd);
+        f32BytesPerCore_ = numSlots_ * SlotLayoutF32::TOTAL * sizeof(float);
+        tBytesPerCore_ = numSlots_ * SlotLayoutT::TOTAL * sizeof(T);
         wsF32_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(userWS_));
         wsT_.SetGlobalBuffer(reinterpret_cast<__gm__ T *>(userWS_ + f32BytesPerCore_));
 
@@ -328,6 +332,12 @@ public:
         scale_ = tiling.scale;
         stateVFirst_ = tiling.stateVFirst != 0;
         group_ = (h_dim_ == 0) ? 1 : (hv_ / h_dim_);
+        if (taskEnd_ == 0 || taskEnd_ > totalTasks_) {
+            taskEnd_ = totalTasks_;
+        }
+        if (taskBegin_ > taskEnd_) {
+            taskBegin_ = taskEnd_;
+        }
     }
 
     // Offset workspace to this AIC/AIV group's private slot bank.
@@ -344,7 +354,16 @@ public:
     {
         return !(usedCoreNum_ == 0 || totalTasks_ == 0 || kDim_ == 0 || vDim_ == 0 || bt_ == 0 || bt_ > MAX_BT ||
                  kDim_ > MAX_K_TOTAL || vDim_ > MAX_V_TOTAL || h_dim_ == 0 || hv_ == 0 || hv_ < h_dim_ ||
-                 (hv_ % h_dim_) != 0);
+                 (hv_ % h_dim_) != 0 || numSlots_ == 0);
+    }
+
+    // Fused: rolling 2-window banks (0..3). Stage A/B/C: unique slot per head.
+    __aicore__ inline uint32_t SlotOf(uint64_t windowIdx, uint32_t h) const
+    {
+        if (stageId_ == 0) {
+            return static_cast<uint32_t>((windowIdx & 1ULL) * 2ULL) ^ h;
+        }
+        return static_cast<uint32_t>(windowIdx * 2ULL + static_cast<uint64_t>(h));
     }
 
 protected:
@@ -468,7 +487,8 @@ protected:
     uint64_t tBytesPerCore_ = 0;
 
     uint64_t batch_ = 0, t_ = 0, h_dim_ = 0, hv_ = 0, kDim_ = 0, vDim_ = 0, bt_ = 0, numChunks_ = 0, totalTasks_ = 0,
-             usedCoreNum_ = 0, coreIdx_ = 0, group_ = 1;
+             usedCoreNum_ = 0, coreIdx_ = 0, group_ = 1, numSlots_ = NUM_GM_SLOTS, taskBegin_ = 0, taskEnd_ = 0;
+    uint32_t stageId_ = 0;
     bool hasVarlen_ = false;
     bool stateVFirst_ = false;
     float scale_ = 1.0f;

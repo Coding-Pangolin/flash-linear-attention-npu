@@ -30,6 +30,11 @@ TILING_DATA_FIELD_DEF(int64_t, stateVFirst);
 TILING_DATA_FIELD_DEF(int64_t, bk);
 TILING_DATA_FIELD_DEF(int64_t, bv);
 TILING_DATA_FIELD_DEF(float, scale);
+// F6 split: 0=fused, 1=OpA, 2=OpB, 3=OpC. taskEnd exclusive; numSlots=4 fused / hv stage.
+TILING_DATA_FIELD_DEF(int64_t, stageId);
+TILING_DATA_FIELD_DEF(int64_t, taskBegin);
+TILING_DATA_FIELD_DEF(int64_t, taskEnd);
+TILING_DATA_FIELD_DEF(int64_t, numSlots);
 END_TILING_DATA_DEF;
 
 REGISTER_TILING_DATA_CLASS(ChunkKdaBwdWyDqkgFused, ChunkKdaBwdWyDqkgFusedTilingData)

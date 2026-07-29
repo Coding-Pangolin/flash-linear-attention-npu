@@ -6,6 +6,7 @@
 #include "chunk_kda_bwd_wy_dqkg_fused_tiling.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <register/op_impl_registry.h>
 #include "tiling/platform/platform_ascendc.h"
 
@@ -151,18 +152,49 @@ ge::graphStatus Tiling4ChunkKdaBwdWyDqkgFused(gert::TilingContext *context)
     }
 
     const int64_t totalTasks = numChunks * batch;
+    // F6: optional env override (no ACLNN ABI change). Production → Op Attr.
+    //   FLA_WY_DQKG_STAGE=0|1|2|3  FLA_WY_DQKG_TASK_BEGIN=  FLA_WY_DQKG_TASK_END=
+    int64_t stageId = 0;
+    int64_t taskBegin = 0;
+    int64_t taskEnd = totalTasks;
+    if (const char *envStage = std::getenv("FLA_WY_DQKG_STAGE")) {
+        stageId = static_cast<int64_t>(std::strtol(envStage, nullptr, 10));
+    }
+    if (const char *envBegin = std::getenv("FLA_WY_DQKG_TASK_BEGIN")) {
+        taskBegin = static_cast<int64_t>(std::strtol(envBegin, nullptr, 10));
+    }
+    if (const char *envEnd = std::getenv("FLA_WY_DQKG_TASK_END")) {
+        taskEnd = static_cast<int64_t>(std::strtol(envEnd, nullptr, 10));
+    }
+    if (stageId < 0 || stageId > 3) {
+        stageId = 0;
+    }
+    if (taskBegin < 0) {
+        taskBegin = 0;
+    }
+    if (taskEnd < 0 || taskEnd > totalTasks) {
+        taskEnd = totalTasks;
+    }
+    if (taskBegin > taskEnd) {
+        taskBegin = taskEnd;
+    }
+    const int64_t rangeTasks = std::max<int64_t>(taskEnd - taskBegin, (stageId == 0) ? totalTasks : 0);
+    const int64_t schedTasks = (stageId == 0) ? totalTasks : rangeTasks;
+
     const auto ascendcPlatform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
     const uint32_t coreNum = ascendcPlatform.GetCoreNumAic();
     const uint32_t blockDim =
-        static_cast<uint32_t>(std::min<int64_t>(std::max<int64_t>(totalTasks, 1), coreNum));
+        static_cast<uint32_t>(std::min<int64_t>(std::max<int64_t>(schedTasks, 1), coreNum));
     context->SetBlockDim(blockDim == 0 ? 1 : blockDim);
     context->SetTilingKey(1);
 
     const uint64_t usedCore = static_cast<uint64_t>(blockDim == 0 ? 1 : blockDim);
     const int64_t elemBytes = (qDesc->GetDataType() == ge::DT_FLOAT16 || qDesc->GetDataType() == ge::DT_BF16) ? 2 : 4;
     const int64_t slotBytes = SLOT_F32_TOTAL * static_cast<int64_t>(sizeof(float)) + SLOT_T_TOTAL * elemBytes;
-    // One private NUM_GM_SLOTS bank per AIC core — shared WS races corrupt multi-chunk.
-    int64_t wsBytes = static_cast<int64_t>(usedCore) * NUM_GM_SLOTS * slotBytes;
+    // Fused: 4 rolling banks. Stage A/B/C: one unique slot per head (=hv) so OpA can
+    // finish all windows before OpB (no CrossCore across launches).
+    const int64_t numSlots = (stageId == 0) ? NUM_GM_SLOTS : hv;
+    int64_t wsBytes = static_cast<int64_t>(usedCore) * numSlots * slotBytes;
     wsBytes = (wsBytes + WORKSPACE_ALIGN - 1) / WORKSPACE_ALIGN * WORKSPACE_ALIGN;
 
     size_t *workspace = context->GetWorkspaceSizes(1);
@@ -193,6 +225,10 @@ ge::graphStatus Tiling4ChunkKdaBwdWyDqkgFused(gert::TilingContext *context)
     tiling.set_bk(MAX_BK);
     tiling.set_bv(MAX_BV);
     tiling.set_scale(scale);
+    tiling.set_stageId(stageId);
+    tiling.set_taskBegin(stageId == 0 ? 0 : taskBegin);
+    tiling.set_taskEnd(stageId == 0 ? totalTasks : taskEnd);
+    tiling.set_numSlots(numSlots);
 
     tiling.SaveToBuffer(context->GetRawTilingData()->GetData(), context->GetRawTilingData()->GetCapacity());
     context->GetRawTilingData()->SetDataSize(tiling.GetDataSize());

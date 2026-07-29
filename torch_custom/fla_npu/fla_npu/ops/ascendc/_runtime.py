@@ -366,10 +366,12 @@ class _AclnnRuntime:
         device,
         *,
         get_workspace_argtypes: Optional[Sequence[object]] = None,
+        workspace: Optional[object] = None,
     ):
         # aclnn 调用约定是两段式：第一段创建 executor 并返回 workspace 大小，
         # 第二段传入 workspace 和 stream pointer 发起实际执行。workspace 使用
         # 普通 torch NPU tensor 分配，从而跟随目标 device 的 PyTorch allocator。
+        # Optional ``workspace`` reuses a caller-owned buffer (F6 A→B→C shared stage WS).
         get_workspace = self.symbol(f"{name}GetWorkspaceSize")
         launch = self.symbol(name)
         get_workspace.restype = ctypes.c_int
@@ -384,13 +386,21 @@ class _AclnnRuntime:
         if ret != ACL_SUCCESS:
             raise RuntimeError(f"{name}GetWorkspaceSize failed with aclnnStatus={ret}.")
 
-        workspace = None
         workspace_ptr = ctypes.c_void_p()
+        out_workspace = workspace
         if workspace_size.value:
             import torch
 
-            workspace = torch.empty((int(workspace_size.value),), dtype=torch.uint8, device=device)
-            workspace_ptr = ctypes.c_void_p(int(workspace.data_ptr()))
+            if workspace is not None:
+                if int(workspace.numel()) < int(workspace_size.value):
+                    raise RuntimeError(
+                        f"{name}: provided workspace has {int(workspace.numel())} bytes, "
+                        f"need {int(workspace_size.value)}."
+                    )
+                workspace_ptr = ctypes.c_void_p(int(workspace.data_ptr()))
+            else:
+                out_workspace = torch.empty((int(workspace_size.value),), dtype=torch.uint8, device=device)
+                workspace_ptr = ctypes.c_void_p(int(out_workspace.data_ptr()))
 
         ret = launch(
             workspace_ptr,
@@ -400,7 +410,7 @@ class _AclnnRuntime:
         )
         if ret != ACL_SUCCESS:
             raise RuntimeError(f"{name} failed with aclnnStatus={ret}.")
-        return workspace
+        return out_workspace
 
 
 _RUNTIME: Optional[_AclnnRuntime] = None
@@ -438,7 +448,7 @@ def _call_device(outputs: Sequence[object]):
     return device
 
 
-def call_aclnn(name: str, build_args, outputs, *, get_workspace_argtypes=None):
+def call_aclnn(name: str, build_args, outputs, *, get_workspace_argtypes=None, workspace=None):
     aclnn_runtime = runtime()
     outputs_tuple = outputs if isinstance(outputs, tuple) else (outputs,)
     device = _call_device(outputs_tuple)
@@ -451,6 +461,7 @@ def call_aclnn(name: str, build_args, outputs, *, get_workspace_argtypes=None):
                 args,
                 device,
                 get_workspace_argtypes=get_workspace_argtypes,
+                workspace=workspace,
             )
         finally:
             ctx.destroy()

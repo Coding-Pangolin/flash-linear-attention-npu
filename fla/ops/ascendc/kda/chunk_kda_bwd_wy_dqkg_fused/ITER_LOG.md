@@ -16,18 +16,17 @@
 | C0 早期基线 | ~29–32 | — | — | 单 head / 调度未成组 |
 | 双 AIV 半行修好 | ~22.0 | — | — | contig split，无 Set Barrier |
 | C1（I1+I2） | **21.48** | −0.52 vs ~22 | `L1_A_RESIDENT` `STAGE1_L0C_ACCUM` | Cube 仍等 Vec |
-| V1 Gate reuse | 21.40 | −0.07 | `GATE_REUSE_KG_WS` | park k/g |
-| V2 Epilog fold | **16.60** | **−4.8** | `EPILOG_VEC_FOLD` | PR190 WholeReduceSum；去 Get/SetValue |
-| V3 Dual Mask + early | 16.41 | −0.19 | `DUAL_AIV_MASK` `EARLY_MASK` | |
-| V4 Stage2 preload A | （并入） | — | `STAGE2_PRELOAD_A` | Gate 空泡仍大时开 |
-| V5 Stage0 dA L0C | **8.29** | 大段来自 V2 修齐后 | `STAGE0_DA_L0C_ACCUM` | |
-| N1 Gate early Set | 7.82 | −0.28 vs 8.10 | `GATE_EARLY_SET` | dwNeg 后立刻 Set；merge∥Stage2 |
-| N3 Dual Store | （并入 N1） | — | `DUAL_AIV_STORE` | |
-| N2 Mask soft-lead | **7.66** | −0.16 vs 7.82 | `MASK_SOFT_LEAD` | 末 BK：dA→Mask/Set→state |
-| **I5 窗 Prefill** | **7.27** | **−0.39** | `WIN_SOFT_LEAD=1` `PREFILL=2` | suite 绿；`aic_cube≈4.0%` |
-| **当前** | **7.27** | vs C1 **−14.2** | 上表；`L0_AB_DBUF`/`FIX_MTE2`=0 | 仍 Vec-bound |
+| V1–V5 / N1–N3 | **7.66** | vs C1 −13.8 | 见下行宏 | Epilog fold 为大头 |
+| **I5 窗 Prefill** | **7.26** | **−0.40** | `WIN_SOFT_LEAD=1` `PREFILL=2` | suite 绿；复测 7259 µs |
+| I5b Post≻WaitFree | skip | — | — | 推迟 Cube S0(w+2) 会堵 Vec（AIV-bound） |
+| I6 Kg∥Gate 交织 | reject | **+0.06** | `KG_GATE_INTERLEAVE=0` | 7333 µs |
+| I4a FIX∥MTE2 | parked | — | `FIX_MTE2=0` | model FIXP/L0C ECC；已修 evt=14 + outstanding 状态机 |
+| I4b L0 dbuf | parked | — | `L0_AB_DBUF=0` | 与 I4a 同开曾 ECC |
+| Epilog kPark 复用 | reject | **+6** | — | 13348 µs；已回滚 |
+| VS0 每窗一次 | reject | **+0.12** | `VS0_ONCE=0` | 7375 µs |
+| **当前** | **7.26** | vs C1 **−14.2** | 下表 | 仍 Vec-bound；距 0.8 尚远 |
 
-I5 画像：Task Dur **7271 µs**；`aic_cube_ratio≈4.0%`；scalar≈40%；MTE2≈27%。
+I5 画像：`aic_cube_ratio≈4%`；scalar≈40%；MTE2≈27%。
 
 ---
 
@@ -35,18 +34,10 @@ I5 画像：Task Dur **7271 µs**；`aic_cube_ratio≈4.0%`；scalar≈40%；MTE
 
 | 候选 | 裁决 | 原因 |
 |------|------|------|
-| **I5b** Cube Post(w+1) 先于 WaitFree(w)+S0(w+2) | **先做** | 现序在 Post(w) 后立刻 WaitFree，挡住 Post(w+1) |
-| I6 Vec BAR / Exp | I5b 后 | 仍 AIV-bound |
-| I4a/b Fix∥MTE2 / L0 dbuf | 试刀可开 | cube 仍低，预期无感但成本低 |
-
-I5 已落地（对标 isub，非 PR190 Process）：
-
-```text
-Prefill: Stage0(w=0,1) 实灌
-稳态 Vec: Post(w) → Stage0Vec(w+2)
-稳态 Cube: Post(w) → WaitFree(bank w) → Stage0(w+2)
-SetVS0Joined: CrossCoreBarrier（防 Prefill 0x2 skew）
-```
+| 更深跨窗（Cube/Vec 双发 Post） | 高风险下一刀 | 单 Prefill 已吃；需重做 stage 信用 |
+| I6 减 BAR / Exp / partial scalar | 可继续 | 边际；勿破 dual-AIV |
+| I4 FIX∥MTE2 | 修好再开 | Preload/L1-resident 与 outstanding Fix 需专项审计 |
+| PR190 Process 照搬 | 不做 | 无 Prefill |
 
 ---
 
@@ -66,6 +57,8 @@ USE_DUAL_AIV_STORE=1
 USE_MASK_SOFT_LEAD=1
 USE_WIN_SOFT_LEAD=1
 KDA_BWD_PREFILL_WINDOWS=2
+USE_KG_GATE_INTERLEAVE=0
+USE_VS0_ONCE_PER_WINDOW=0
 USE_L0_AB_DBUF=0
 USE_FIX_MTE2_OVERLAP=0
 ```

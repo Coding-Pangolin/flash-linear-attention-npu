@@ -127,8 +127,18 @@ constexpr uint32_t NUM_GM_SLOTS = 4;
 #ifndef USE_L0_AB_DBUF
 #define USE_L0_AB_DBUF 0
 #endif
+// Model-scale still trips FIXP/L0C ECC with overlap; keep off until L1-resident /
+// Preload races are fully audited. State machine (fixMte2Outstanding + evt=14) is fixed.
 #ifndef USE_FIX_MTE2_OVERLAP
 #define USE_FIX_MTE2_OVERLAP 0
+#endif
+// Tried: per-head Kg→Gate. Regressed +0.06ms vs I5 (7333 vs 7271) — keep off.
+#ifndef USE_KG_GATE_INTERLEAVE
+#define USE_KG_GATE_INTERLEAVE 0
+#endif
+// Tried: one V_S0 per window. Regressed +0.12ms (7375 vs 7259) — keep off.
+#ifndef USE_VS0_ONCE_PER_WINDOW
+#define USE_VS0_ONCE_PER_WINDOW 0
 #endif
 
 // Cross-core flags (AIC <-> AIV), raw counting semantics (0x2). Re-used across BK
@@ -430,10 +440,11 @@ __aicore__ inline auto MakeGmBlock(GlobalTensor<Element> &gm, uint64_t baseOffse
 // chunk_bwd_dqkwg's TileGemmDirect / chunk_kda_fwd_intra_sub_chunk's
 // ComputeScoreTile (single-buffer path).
 // ---------------------------------------------------------------------------
-// DirectTileGemm pipeline state (Cube-only). Primed once per Process so the first
-// Wait(FIX_MTE2) under USE_FIX_MTE2_OVERLAP does not hang.
+// DirectTileGemm pipeline state (Cube-only).
+// USE_FIX_MTE2_OVERLAP: after doFix, Set(FIX_MTE2) without Wait; next gemm (any
+// doFix) must Wait before touching L0C/L1 — including L0C-accum tiles (doFix=false).
 struct DirectTileGemmPipeState {
-    bool fixMte2Primed = false;
+    bool fixMte2Outstanding = false;
     uint32_t l0Ping = 0;
 };
 
@@ -507,15 +518,7 @@ __aicore__ inline void DirectTileGemm(Catlass::Arch::Resource<KdaArchTag> &resou
 
     // HardEvent id: avoid Catlass-reserved CrossCore 8/9/10 collision surface.
     constexpr uint16_t evt = 14;
-#if USE_FIX_MTE2_OVERLAP
-    if (pipeState != nullptr && doFix) {
-        if (!pipeState->fixMte2Primed) {
-            SetFlag<HardEvent::FIX_MTE2>(evt);
-            pipeState->fixMte2Primed = true;
-        }
-        WaitFlag<HardEvent::FIX_MTE2>(evt);
-    }
-#endif
+    // MTE2 may overlap prior Fix (different buffers). Drain Fix before L0C reuse.
     copyGmToL1B(tileL1B, blockB);
     SetFlag<HardEvent::MTE2_MTE1>(evt);
     WaitFlag<HardEvent::MTE2_MTE1>(evt);
@@ -524,6 +527,12 @@ __aicore__ inline void DirectTileGemm(Catlass::Arch::Resource<KdaArchTag> &resou
         SetFlag<HardEvent::MTE2_MTE1>(evt);
         WaitFlag<HardEvent::MTE2_MTE1>(evt);
     }
+#if USE_FIX_MTE2_OVERLAP
+    if (pipeState != nullptr && pipeState->fixMte2Outstanding) {
+        WaitFlag<HardEvent::FIX_MTE2>(evt);
+        pipeState->fixMte2Outstanding = false;
+    }
+#endif
     copyL1ToL0B(tileL0B, tileL1B);
     copyL1ToL0A(tileL0A, tileL1A);
     SetFlag<HardEvent::MTE1_M>(evt);
@@ -537,7 +546,9 @@ __aicore__ inline void DirectTileGemm(Catlass::Arch::Resource<KdaArchTag> &resou
         copyL0CToGm(blockC, tL0C);
         SetFlag<HardEvent::FIX_MTE2>(evt);
 #if USE_FIX_MTE2_OVERLAP
-        if (pipeState == nullptr) {
+        if (pipeState != nullptr) {
+            pipeState->fixMte2Outstanding = true; // next gemm / Process end drains
+        } else {
             WaitFlag<HardEvent::FIX_MTE2>(evt);
         }
 #else

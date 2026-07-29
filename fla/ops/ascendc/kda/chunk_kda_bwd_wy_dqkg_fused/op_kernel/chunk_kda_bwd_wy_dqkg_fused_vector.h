@@ -170,8 +170,13 @@ private:
             const uint64_t iHv = hvBase + h;
             Catlass::Arch::CrossCoreWaitFlag(cS0_);
             Stage0Vec(slot, bIdx, iHv, tok0, validRows, nBv);
+#if !USE_VS0_ONCE_PER_WINDOW
             SetVS0Joined();
+#endif
         }
+#if USE_VS0_ONCE_PER_WINDOW
+        SetVS0Joined(); // one 0x2 Set per window (both AIV); Cube Wait once
+#endif
     }
 
     __aicore__ inline void RunWindowPostVec(uint64_t windowIdx, uint64_t bIdx, uint64_t tok0,
@@ -182,6 +187,20 @@ private:
         const uint32_t winSlot = static_cast<uint32_t>((windowIdx & 1ULL) * 2ULL);
 
         for (uint32_t iK = 0; iK < nBk; ++iK) {
+#if USE_KG_GATE_INTERLEAVE
+            // Per-head Kg→Gate: Set V_GATE(h0) while Cube may still be in Stage1(h1).
+            for (uint32_t h = 0; h < headCnt; ++h) {
+                const uint64_t slot = winSlot ^ h;
+                const uint64_t iHv = hvBase + h;
+                const uint64_t iH = iHv / group_;
+                KgVec(slot, bIdx, iHv, iH, tok0, validRows, iK);
+                Catlass::Arch::CrossCoreWaitFlag(cS1_);
+                GateOnlyVec(slot, bIdx, iHv, iH, tok0, localChunk, validRows, nBv, iK);
+#if !USE_GATE_EARLY_SET
+                SetVGateJoined();
+#endif
+            }
+#else
             for (uint32_t h = 0; h < headCnt; ++h) {
                 const uint64_t slot = winSlot ^ h;
                 const uint64_t iHv = hvBase + h;
@@ -198,6 +217,7 @@ private:
                 SetVGateJoined();
 #endif
             }
+#endif
             for (uint32_t h = 0; h < headCnt; ++h) {
                 const uint64_t slot = winSlot ^ h;
                 const uint64_t iHv = hvBase + h;

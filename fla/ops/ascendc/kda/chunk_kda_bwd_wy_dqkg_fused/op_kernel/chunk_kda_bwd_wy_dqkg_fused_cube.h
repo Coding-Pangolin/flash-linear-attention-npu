@@ -99,6 +99,8 @@ public:
 #if USE_WIN_SOFT_LEAD
             // I5 (isub VEC_2WIN): Prefill Stage0×prefill; steady Post(w) then Stage0(w+2).
             // WaitFree only before Stage0 on a reused bank (Store of that bank done).
+            // Note: do NOT delay Stage0(w+2) until after Post(w+1) — that stalls Vec S0V(w+2)
+            // (AIV-bound). Keep Cube Stage0 lead immediately after Post(w).
             constexpr uint64_t kPrefillCap = static_cast<uint64_t>(KDA_BWD_PREFILL_WINDOWS);
             const uint64_t prefill = (nHvWin < kPrefillCap) ? nHvWin : kPrefillCap;
             for (uint64_t w = 0; w < prefill; ++w) {
@@ -143,8 +145,10 @@ public:
             }
         }
 #if USE_FIX_MTE2_OVERLAP
-        if (gemmPipe_.fixMte2Primed) {
-            WaitFlag<HardEvent::FIX_MTE2>(9);
+        if (gemmPipe_.fixMte2Outstanding) {
+            // Must match DirectTileGemm evt (14); id 9 collides with Catlass / hangs drain.
+            WaitFlag<HardEvent::FIX_MTE2>(14);
+            gemmPipe_.fixMte2Outstanding = false;
         }
 #endif
     }
@@ -174,10 +178,15 @@ private:
         const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
         const uint32_t winSlot = static_cast<uint32_t>((windowIdx & 1ULL) * 2ULL);
 
-        // Wait Stage0Vec (dv2/db/dAWs) before any Stage1 — once per head / window.
+        // Wait Stage0Vec before Stage1.
+#if USE_VS0_ONCE_PER_WINDOW
+        Catlass::Arch::CrossCoreWaitFlag(vS0_); // one Wait ↔ one SetVS0Joined per window
+        (void)headCnt;
+#else
         for (uint32_t h = 0; h < headCnt; ++h) {
             Catlass::Arch::CrossCoreWaitFlag(vS0_);
         }
+#endif
 
         for (uint32_t iK = 0; iK < nBk; ++iK) {
             for (uint32_t h = 0; h < headCnt; ++h) {

@@ -27,9 +27,18 @@
 | **Epilog state panel** | **done** | **−1.29** | fold 内 | **5.97 ms**；[K,V] 整面板 CopyStrided |
 | EXP_GN_PARK | reject | **+0.06** | `=0` | 6029 µs；Exp 挪到 Kg 无净收益 |
 | Gate 三路 MTE2 融合 | reject | hang | — | model msprof 挂起；已回滚 |
-| **当前** | **5.97** | vs C1 **−15.5** | 下表 | 仍 Vec-bound；距 0.8 尚远 |
+| **P0 重钉** | **5.91** | — | — | 5905 µs；`results/P0_NEXT_SUMMARY.md` |
+| **P1a Gate MTE2 PP** | **5.84** | **−0.06** | `USE_VEC_MTE2_PP=1` | 5844 µs；AllocEventID 双槽 |
+| P1b Epilog MTE2 PP | reject | **+0.30** | `USE_VEC_MTE2_PP_EPILOG=0` | 6145 µs；代码保留 |
+| **P2 Mask/partial** | **done** | ~0 | Init 预建 mask；DvbPartial 去 GetValue | suite 绿；BAR 修剪无净益已回退 |
+| P3a FIX∥MTE2 reopen | parked | ECC | `FIX_MTE2=0` | suite 绿；model 507015 AICORE；状态机保留 |
+| P3b L0 dbuf | skip | — | `L0_AB_DBUF=0` | P3a 未绿不试 |
+| **P4 soft-pipe** | **opened** | — | — | 见 `P4_SOFTPIPE_PLAN.md`（本轮仅设计） |
+| **当前** | **~5.84** | vs P0 **−0.06** | 下表 | P1a 主贡献；复测噪声 ~5.91–5.94 |
 
-画像（state panel 后）：Task Dur **5971 µs**。
+P0 画像：`aic_cube≈4.3%`；`aiv_scalar≈49.5%`；`aiv_mte2≈20%`；`aiv_vec≈32%`；`wait_id10(Barrier)≈3.0ms`。
+
+下一轮权威 plan：Cursor `wy_dqkg_next_opt`（P1→P2 scalar→P3 I4→P4 soft-pipe）。
 
 ---
 
@@ -37,10 +46,11 @@
 
 | 候选 | 裁决 | 原因 |
 |------|------|------|
-| Gate/Epilog MTE2∥V ping-pong | **next** | PR190 InitVectorEvents；攻 MTE2 |
-| 更深跨窗双发 Post | 高风险 | 需重做 stage 信用 |
-| I4 FIX∥MTE2 | parked | model ECC |
-| PR190 Process 照搬 | 不做 | 无 Prefill |
+| Gate MTE2∥V ping-pong | **done** | −0.06 ms；default on |
+| Epilog MTE2∥V ping-pong | **reject** | +0.30 ms |
+| Mask/partial 去 scalar | **done** | Init 预建 + DvbPartial Brcb；med 持平 |
+| I4 FIX∥MTE2 reopen | **parked** | model 507015；保持 0 |
+| 更深跨窗 soft-pipe | **plan opened** | `P4_SOFTPIPE_PLAN.md` |
 
 ---
 
@@ -60,6 +70,8 @@ USE_DUAL_AIV_STORE=1
 USE_MASK_SOFT_LEAD=1
 USE_WIN_SOFT_LEAD=1
 KDA_BWD_PREFILL_WINDOWS=2
+USE_VEC_MTE2_PP=1
+USE_VEC_MTE2_PP_EPILOG=0
 USE_KG_GATE_INTERLEAVE=0
 USE_VS0_ONCE_PER_WINDOW=0
 USE_L0_AB_DBUF=0

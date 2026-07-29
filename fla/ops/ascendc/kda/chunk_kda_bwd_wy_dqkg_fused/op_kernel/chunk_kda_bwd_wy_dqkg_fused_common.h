@@ -144,6 +144,13 @@ constexpr uint32_t NUM_GM_SLOTS = 4;
 #ifndef USE_EXP_GN_PARK
 #define USE_EXP_GN_PARK 0
 #endif
+// P1: PR190-style MTE2∥V ping-pong on Gate/Epilog loads (AllocEventID 2-slot).
+#ifndef USE_VEC_MTE2_PP
+#define USE_VEC_MTE2_PP 1
+#endif
+#ifndef USE_VEC_MTE2_PP_EPILOG
+#define USE_VEC_MTE2_PP_EPILOG 0
+#endif
 
 // Cross-core flags (AIC <-> AIV), raw counting semantics (0x2). Re-used across BK
 // sub-iterations and across (task,hv) units — Set/Wait counts match because both

@@ -101,7 +101,17 @@ public:
         // Brcb / WholeReduceSum scratch: 8 floats per row.
         pipe_->InitBuffer(brcbBuf_, MAX_BT * 8 * sizeof(float));
         pipe_->InitBuffer(maskBuf_, MAX_BT * ((MAX_BT + 7) / 8) * sizeof(uint8_t));
-        cachedMaskValidRows_ = 0xFFFFFFFFu;
+        // P2a: prebuild mask for full-BT (model hot path); EnsureMask is then a no-op.
+        {
+            LocalTensor<uint8_t> mask = maskBuf_.Get<uint8_t>();
+            BuildStrictLowerMaskPacked(mask, static_cast<uint32_t>(bt_));
+            SetFlag<HardEvent::S_V>(EVT_SCALAR_SV);
+            WaitFlag<HardEvent::S_V>(EVT_SCALAR_SV);
+            cachedMaskValidRows_ = static_cast<uint32_t>(bt_);
+        }
+#if USE_VEC_MTE2_PP
+        InitVecMte2Pp();
+#endif
     }
 
     __aicore__ inline void Process()
@@ -156,6 +166,9 @@ public:
             }
 #endif
         }
+#if USE_VEC_MTE2_PP
+        ReleaseVecMte2Pp();
+#endif
     }
 
 private:
@@ -442,6 +455,71 @@ private:
         WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
     }
 
+#if USE_VEC_MTE2_PP
+    static constexpr uint32_t kVecMte2Pp = 2;
+    __aicore__ inline void InitVecMte2Pp()
+    {
+        for (uint32_t i = 0; i < kVecMte2Pp; ++i) {
+            mte2ToVPp_[i] = static_cast<event_t>(pipe_->AllocEventID<HardEvent::MTE2_V>());
+            vToMte2Pp_[i] = static_cast<event_t>(pipe_->AllocEventID<HardEvent::V_MTE2>());
+            SetFlag<HardEvent::V_MTE2>(vToMte2Pp_[i]);
+        }
+        ppIdx_ = 0;
+        ppInited_ = true;
+    }
+    __aicore__ inline void ReleaseVecMte2Pp()
+    {
+        if (!ppInited_) {
+            return;
+        }
+        for (uint32_t i = 0; i < kVecMte2Pp; ++i) {
+            WaitFlag<HardEvent::V_MTE2>(vToMte2Pp_[i]);
+            pipe_->ReleaseEventID<HardEvent::MTE2_V>(mte2ToVPp_[i]);
+            pipe_->ReleaseEventID<HardEvent::V_MTE2>(vToMte2Pp_[i]);
+        }
+        ppInited_ = false;
+    }
+    // Issue GM→UB copy on ping-pong slot; returns slot for PpAcquire.
+    // GmT must be GlobalTensor / indexed GlobalTensor (not raw __gm__*).
+    template <typename GmT>
+    __aicore__ inline uint32_t PpCopyInF32(LocalTensor<float> dst, GmT src, uint32_t nElem)
+    {
+        const uint32_t idx = ppIdx_;
+        WaitFlag<HardEvent::V_MTE2>(vToMte2Pp_[idx]);
+        DataCopy(dst, src, nElem);
+        SetFlag<HardEvent::MTE2_V>(mte2ToVPp_[idx]);
+        ppIdx_ ^= 1U;
+        return idx;
+    }
+    template <typename GmT>
+    __aicore__ inline uint32_t PpCopyInT(LocalTensor<T> dst, GmT src, uint32_t nElem)
+    {
+        const uint32_t idx = ppIdx_;
+        WaitFlag<HardEvent::V_MTE2>(vToMte2Pp_[idx]);
+        DataCopy(dst, src, nElem);
+        SetFlag<HardEvent::MTE2_V>(mte2ToVPp_[idx]);
+        ppIdx_ ^= 1U;
+        return idx;
+    }
+    // Begin/end around non-DataCopy loads (e.g. CopyStrided).
+    __aicore__ inline uint32_t PpBeginSlot()
+    {
+        const uint32_t idx = ppIdx_;
+        WaitFlag<HardEvent::V_MTE2>(vToMte2Pp_[idx]);
+        return idx;
+    }
+    __aicore__ inline void PpEndSlot(uint32_t idx)
+    {
+        SetFlag<HardEvent::MTE2_V>(mte2ToVPp_[idx]);
+        ppIdx_ ^= 1U;
+    }
+    __aicore__ inline void PpAcquire(uint32_t idx)
+    {
+        WaitFlag<HardEvent::MTE2_V>(mte2ToVPp_[idx]);
+        SetFlag<HardEvent::V_MTE2>(vToMte2Pp_[idx]);
+    }
+#endif
+
     // By value: AscendC `t[offset]` yields a temporary LocalTensor handle.
     __aicore__ inline void Exp2InPlace(LocalTensor<float> t, uint32_t count)
     {
@@ -655,6 +733,7 @@ private:
     }
 
     // Partial-chunk A@dv in UB (Cube Stage0 skips A@dv when validRows < BT).
+    // Vector path: Brcb(A[r,k]) × dv[k,:] + Acc — no GetValue/SetValue scalar sync.
     __aicore__ inline void ComputeDvbPartial(LocalTensor<float> &dvb, uint64_t bIdx, uint64_t iHv, uint64_t tok0,
                                              uint64_t validRows, uint64_t vOff, uint32_t bv)
     {
@@ -668,7 +747,6 @@ private:
         CopyStrided(dvInT, dvIn_, this->HvVOff(bIdx, iHv, tok0, vOff), vDim_, vr, bv);
         SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
         WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
-        // Reuse high arena for fp32 A/dv; dvb is at arena[0].
         LocalTensor<float> aFp = arenaF32_.Get<float>()[static_cast<uint32_t>(bt_) * bv];
         LocalTensor<float> dvFp = aFp[aElems];
         Cast(aFp, aIn, RoundMode::CAST_NONE, aElems);
@@ -677,15 +755,21 @@ private:
         Duplicate(dvb, 0.0f, static_cast<uint32_t>(bt_) * bv);
         PipeBarrier<PIPE_V>();
         LocalTensor<float> rowTmp = dvFp[dvElems];
+        LocalTensor<float> brcbScratch = brcbBuf_.Get<float>();
         // dvb[r,:] += A[r,k] * dv[k,:]
-        for (uint32_t r = 0; r < vr; ++r) {
-            for (uint32_t kk = 0; kk < vr; ++kk) {
-                SetFlag<HardEvent::V_S>(EVT_SCALAR_VS);
-                WaitFlag<HardEvent::V_S>(EVT_SCALAR_VS);
-                const float aik = aFp.GetValue(r * vr + kk);
-                SetFlag<HardEvent::S_V>(EVT_SCALAR_SV);
-                WaitFlag<HardEvent::S_V>(EVT_SCALAR_SV);
-                Muls(rowTmp, dvFp[kk * bv], aik, bv);
+        for (uint32_t kk = 0; kk < vr; ++kk) {
+            LocalTensor<float> dvRow = dvFp[kk * bv];
+            for (uint32_t r = 0; r < vr; ++r) {
+                Brcb(brcbScratch, aFp[r * vr + kk], 1, {1, 8});
+                PipeBarrier<PIPE_V>();
+                for (uint32_t c = 0; c < bv; c += 8) {
+                    const uint32_t n = (c + 8 <= bv) ? 8U : (bv - c);
+                    if (n == 8) {
+                        Mul(rowTmp[c], dvRow[c], brcbScratch, 8);
+                    } else {
+                        Mul(rowTmp[c], dvRow[c], brcbScratch, n);
+                    }
+                }
                 PipeBarrier<PIPE_V>();
                 Add(dvb[r * bv], dvb[r * bv], rowTmp, bv);
                 PipeBarrier<PIPE_V>();
@@ -991,15 +1075,29 @@ private:
 #if USE_GATE_REUSE_KG_WS
         // Load parked k/g + gkWs owned halves (no GM k_/g_ reload).
         if (nr > 0) {
+#if USE_VEC_MTE2_PP
+            const uint32_t sK = PpCopyInF32(kFp[r0 * bk],
+                                            wsF32_[f32Base + SlotLayoutF32::kParkWs + static_cast<uint64_t>(r0) * bk],
+                                            nElem);
+            const uint32_t sG = PpCopyInF32(gFp[r0 * bk],
+                                            wsF32_[f32Base + SlotLayoutF32::gParkWs + static_cast<uint64_t>(r0) * bk],
+                                            nElem);
+            PpAcquire(sK);
+            const uint32_t sGk = PpCopyInF32(
+                gkExp[r0 * bk], wsF32_[f32Base + SlotLayoutF32::gkWs + static_cast<uint64_t>(r0) * bk], nElem);
+            PpAcquire(sG);
+            PpAcquire(sGk);
+#else
             DataCopy(kFp[r0 * bk], wsF32_[f32Base + SlotLayoutF32::kParkWs + static_cast<uint64_t>(r0) * bk],
                      nElem);
             DataCopy(gFp[r0 * bk], wsF32_[f32Base + SlotLayoutF32::gParkWs + static_cast<uint64_t>(r0) * bk],
                      nElem);
             DataCopy(gkExp[r0 * bk], wsF32_[f32Base + SlotLayoutF32::gkWs + static_cast<uint64_t>(r0) * bk],
                      nElem);
+            SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+            WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
+#endif
         }
-        SetFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
-        WaitFlag<HardEvent::MTE2_V>(EVT_MTE2_V);
         LocalTensor<float> kOwned = (nr > 0) ? kFp[r0 * bk] : kFp;
         LocalTensor<float> gOwned = (nr > 0) ? gFp[r0 * bk] : gFp;
         LocalTensor<float> gkOwned = (nr > 0) ? gkExp[r0 * bk] : gkExp;
@@ -1033,8 +1131,15 @@ private:
 
         // gn parked by Kg into dgkWs (pre-exp).
         LocalTensor<float> gnFp = smallBuf_.Get<float>()[MAX_BK];
+#if USE_VEC_MTE2_PP
+        {
+            const uint32_t sGn = PpCopyInF32(gnFp, wsF32_[f32Base + SlotLayoutF32::dgkWs], bk);
+            PpAcquire(sGn);
+        }
+#else
         DataCopy(gnFp, wsF32_[f32Base + SlotLayoutF32::dgkWs], bk);
         SyncMte2ToV();
+#endif
 
         LocalTensor<float> dgkAcc = smallBuf_.Get<float>();
         Duplicate(dgkAcc, 0.0f, bk);
@@ -1046,8 +1151,19 @@ private:
         if (nr > 0) {
 #if USE_STAGE1_L0C_ACCUM
             // Cube already reduced across V-tiles into plane 0.
-            // Keep per-copy MTE2↔V sync — fused triple-copy hung model msprof.
             const uint64_t off0 = static_cast<uint64_t>(r0) * bk;
+#if USE_VEC_MTE2_PP
+            // Soft-lead: Copy(dk)∥… while dq in flight; Mul(dq)∥Copy(dw).
+            const uint32_t sDq = PpCopyInF32(dqOwned, wsF32_[f32Base + SlotLayoutF32::dqSlot + off0], nElem);
+            const uint32_t sDk = PpCopyInF32(dkOwned, wsF32_[f32Base + SlotLayoutF32::dkSlot + off0], nElem);
+            PpAcquire(sDq);
+            const uint32_t sDw = PpCopyInF32(dwOwned, wsF32_[f32Base + SlotLayoutF32::dwSlot + off0], nElem);
+            Mul(dqOwned, dqOwned, gkOwned, nElem);
+            Muls(dqOwned, dqOwned, scale_, nElem);
+            PpAcquire(sDk);
+            PpAcquire(sDw);
+#else
+            // Keep per-copy MTE2↔V sync — fused triple-copy hung model msprof.
             DataCopy(dqOwned, wsF32_[f32Base + SlotLayoutF32::dqSlot + off0], nElem);
             SyncMte2ToV();
             SyncVToMte2();
@@ -1056,6 +1172,9 @@ private:
             SyncVToMte2();
             DataCopy(dwOwned, wsF32_[f32Base + SlotLayoutF32::dwSlot + off0], nElem);
             SyncMte2ToV();
+            Mul(dqOwned, dqOwned, gkOwned, nElem);
+            Muls(dqOwned, dqOwned, scale_, nElem);
+#endif
 #else
             Duplicate(dqOwned, 0.0f, nElem);
             Duplicate(dkOwned, 0.0f, nElem);
@@ -1083,10 +1202,9 @@ private:
                     SyncVToMte2();
                 }
             }
-#endif
-
             Mul(dqOwned, dqOwned, gkOwned, nElem);
             Muls(dqOwned, dqOwned, scale_, nElem);
+#endif
         }
         PipeBarrier<PIPE_V>();
         SyncVToMte3();
@@ -1183,6 +1301,76 @@ private:
 
         // Load owned halves only (dq already stored by Gate — skip re-store).
         if (nr > 0) {
+#if USE_VEC_MTE2_PP && USE_VEC_MTE2_PP_EPILOG
+            LocalTensor<T> kgIn = arenaT_.Get<T>();
+            const uint32_t sDkgb = PpCopyInF32(
+                dkgb[r0 * bk], wsF32_[f32Base + SlotLayoutF32::dkgbWs + static_cast<uint64_t>(r0) * bk], nElem);
+            const uint32_t sKg = PpCopyInT(
+                kgIn, wsT_[tBase + SlotLayoutT::kgWs + static_cast<uint64_t>(r0) * bk], nElem);
+            PpAcquire(sDkgb);
+            PpAcquire(sKg);
+            Cast(kgFp[r0 * bk], kgIn, RoundMode::CAST_NONE, nElem);
+            PipeBarrier<PIPE_V>();
+
+            LocalTensor<T> qIn = arenaT_.Get<T>()[btbk];
+            LocalTensor<T> kIn = arenaT_.Get<T>()[2 * btbk];
+            uint32_t sQ = 0;
+            uint32_t sKstr = 0;
+            if (validOwned > 0) {
+                sQ = PpBeginSlot();
+                CopyStrided(qIn, q_, this->QkOff(bIdx, iH, tok0 + r0, kOff), kDim_, validOwned, bk);
+                PpEndSlot(sQ);
+                sKstr = PpBeginSlot();
+                CopyStrided(kIn, k_, this->QkOff(bIdx, iH, tok0 + r0, kOff), kDim_, validOwned, bk);
+                PpEndSlot(sKstr);
+            }
+            if (validOwned < nr) {
+                if (validOwned > 0) {
+                    PpAcquire(sQ);
+                    PpAcquire(sKstr);
+                }
+                Duplicate(qIn[validOwned * bk], static_cast<T>(0), (nr - validOwned) * bk);
+                Duplicate(kIn[validOwned * bk], static_cast<T>(0), (nr - validOwned) * bk);
+                SetFlag<HardEvent::V_MTE2>(EVT_V_MTE2);
+                WaitFlag<HardEvent::V_MTE2>(EVT_V_MTE2);
+            } else if (validOwned > 0) {
+                // Soft-lead: start dk while q/k still in flight.
+                const uint32_t sDk = PpCopyInF32(
+                    dkWs[r0 * bk],
+                    wsF32_[f32Base + SlotLayoutF32::dkPartialWs + static_cast<uint64_t>(r0) * bk], nElem);
+                PpAcquire(sQ);
+                const uint32_t sGk = PpCopyInF32(
+                    gkWs[r0 * bk], wsF32_[f32Base + SlotLayoutF32::gkWs + static_cast<uint64_t>(r0) * bk],
+                    nElem);
+                PpAcquire(sKstr);
+                const uint32_t sDq = PpCopyInF32(
+                    dqWs[r0 * bk],
+                    wsF32_[f32Base + SlotLayoutF32::dqGatedWs + static_cast<uint64_t>(r0) * bk], nElem);
+                Cast(qFp[r0 * bk], qIn, RoundMode::CAST_NONE, nElem);
+                Cast(kFp[r0 * bk], kIn, RoundMode::CAST_NONE, nElem);
+                PpAcquire(sDk);
+                PpAcquire(sGk);
+                PpAcquire(sDq);
+                PipeBarrier<PIPE_V>();
+            }
+            if (validOwned < nr) {
+                const uint32_t sDk = PpCopyInF32(
+                    dkWs[r0 * bk],
+                    wsF32_[f32Base + SlotLayoutF32::dkPartialWs + static_cast<uint64_t>(r0) * bk], nElem);
+                const uint32_t sGk = PpCopyInF32(
+                    gkWs[r0 * bk], wsF32_[f32Base + SlotLayoutF32::gkWs + static_cast<uint64_t>(r0) * bk],
+                    nElem);
+                PpAcquire(sDk);
+                const uint32_t sDq = PpCopyInF32(
+                    dqWs[r0 * bk],
+                    wsF32_[f32Base + SlotLayoutF32::dqGatedWs + static_cast<uint64_t>(r0) * bk], nElem);
+                Cast(qFp[r0 * bk], qIn, RoundMode::CAST_NONE, nElem);
+                Cast(kFp[r0 * bk], kIn, RoundMode::CAST_NONE, nElem);
+                PpAcquire(sGk);
+                PpAcquire(sDq);
+                PipeBarrier<PIPE_V>();
+            }
+#else
             DataCopy(dkgb[r0 * bk], wsF32_[f32Base + SlotLayoutF32::dkgbWs + static_cast<uint64_t>(r0) * bk],
                      nElem);
             LocalTensor<T> kgIn = arenaT_.Get<T>();
@@ -1213,11 +1401,19 @@ private:
             Cast(qFp[r0 * bk], qIn, RoundMode::CAST_NONE, nElem);
             Cast(kFp[r0 * bk], kIn, RoundMode::CAST_NONE, nElem);
             PipeBarrier<PIPE_V>();
+#endif
         }
 
         LocalTensor<float> dbAcc = dbAccBuf_.Get<float>();
+#if USE_VEC_MTE2_PP && USE_VEC_MTE2_PP_EPILOG
+        {
+            const uint32_t sDb = PpCopyInF32(dbAcc, wsF32_[f32Base + DbMergeOff()], static_cast<uint32_t>(bt_));
+            PpAcquire(sDb);
+        }
+#else
         DataCopy(dbAcc, wsF32_[f32Base + DbMergeOff()], static_cast<uint32_t>(bt_));
         SyncMte2ToV();
+#endif
         if (nr > 0) {
             LocalTensor<float> scratchOwned = scratch[r0 * bk];
             LocalTensor<float> dkgbOwned = dkgb[r0 * bk];
@@ -1248,8 +1444,15 @@ private:
             PipeBarrier<PIPE_V>();
 
             LocalTensor<float> dgkRow = smallBuf_.Get<float>();
+#if USE_VEC_MTE2_PP && USE_VEC_MTE2_PP_EPILOG
+            {
+                const uint32_t sDgk = PpCopyInF32(dgkRow, wsF32_[f32Base + SlotLayoutF32::dgkMergeWs + MAX_BK], bk);
+                PpAcquire(sDgk);
+            }
+#else
             DataCopy(dgkRow, wsF32_[f32Base + SlotLayoutF32::dgkMergeWs + MAX_BK], bk);
             SyncMte2ToV();
+#endif
             if (OwnRow(lastRow)) {
                 Add(qOwned[(lastRow - r0) * bk], qOwned[(lastRow - r0) * bk], dgkRow, bk);
                 PipeBarrier<PIPE_V>();
@@ -1258,8 +1461,16 @@ private:
             Mul(kOwned, kgOwned, dkgbOwned, nElem);
             PipeBarrier<PIPE_V>();
             LocalTensor<float> beta = betaBuf_.Get<float>();
+#if USE_VEC_MTE2_PP && USE_VEC_MTE2_PP_EPILOG
+            {
+                const uint32_t sBeta =
+                    PpCopyInF32(beta, wsF32_[f32Base + SlotLayoutF32::betaWs], static_cast<uint32_t>(bt_));
+                PpAcquire(sBeta);
+            }
+#else
             DataCopy(beta, wsF32_[f32Base + SlotLayoutF32::betaWs], static_cast<uint32_t>(bt_));
             SyncMte2ToV();
+#endif
             LocalTensor<float> betaOwned = beta[r0];
             LocalTensor<float> brcbScratch = brcbBuf_.Get<float>();
             RowBroadcastMulInPlace(kOwned, betaOwned, brcbScratch, nr, bk);
@@ -1279,8 +1490,15 @@ private:
             WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
         } else {
             LocalTensor<float> dgkRow = smallBuf_.Get<float>();
+#if USE_VEC_MTE2_PP && USE_VEC_MTE2_PP_EPILOG
+            {
+                const uint32_t sDgk = PpCopyInF32(dgkRow, wsF32_[f32Base + SlotLayoutF32::dgkMergeWs + MAX_BK], bk);
+                PpAcquire(sDgk);
+            }
+#else
             DataCopy(dgkRow, wsF32_[f32Base + SlotLayoutF32::dgkMergeWs + MAX_BK], bk);
             SyncMte2ToV();
+#endif
         }
 
 #if USE_MASK_SOFT_LEAD
@@ -1291,11 +1509,22 @@ private:
             constexpr uint32_t kDaTmp = 4U * MAX_BT * MAX_BK;
             LocalTensor<float> dAWs = arena[kDaTmp];
             const uint32_t btbt = static_cast<uint32_t>(bt_ * bt_);
+#if USE_VEC_MTE2_PP && USE_VEC_MTE2_PP_EPILOG
+            {
+                const uint32_t sDa = PpCopyInF32(dAWs, wsF32_[f32Base + SlotLayoutF32::dAWs], btbt);
+                LocalTensor<float> delta = arena[kDaTmp + MAX_BT * MAX_BT];
+                const uint32_t sDel = PpCopyInF32(delta, wsF32_[f32Base + SlotLayoutF32::dADeltaWs], btbt);
+                PpAcquire(sDa);
+                PpAcquire(sDel);
+                Add(dAWs, dAWs, delta, btbt);
+            }
+#else
             DataCopy(dAWs, wsF32_[f32Base + SlotLayoutF32::dAWs], btbt);
             LocalTensor<float> delta = arena[kDaTmp + MAX_BT * MAX_BT];
             DataCopy(delta, wsF32_[f32Base + SlotLayoutF32::dADeltaWs], btbt);
             SyncMte2ToV();
             Add(dAWs, dAWs, delta, btbt);
+#endif
             PipeBarrier<PIPE_V>();
             SyncVToMte3();
             DataCopy(wsF32_[f32Base + SlotLayoutF32::dAWs], dAWs, btbt);
@@ -1312,8 +1541,15 @@ private:
         // State + dg store. With MASK_SOFT_LEAD, this overlaps Cube Stage3 AA.
         if (OwnRow(lastRow)) {
             LocalTensor<float> gnExp = smallBuf_.Get<float>()[MAX_BK];
+#if USE_VEC_MTE2_PP && USE_VEC_MTE2_PP_EPILOG
+            {
+                const uint32_t sGn = PpCopyInF32(gnExp, wsF32_[f32Base + SlotLayoutF32::dgkMergeWs], bk);
+                PpAcquire(sGn);
+            }
+#else
             DataCopy(gnExp, wsF32_[f32Base + SlotLayoutF32::dgkMergeWs], bk);
             SyncMte2ToV();
+#endif
 #if !USE_EXP_GN_PARK
             Exp2InPlace(gnExp, bk);
 #endif
@@ -1419,11 +1655,22 @@ private:
 #endif
             LocalTensor<float> dAWs = arenaF32_.Get<float>();
             const uint32_t btbt = static_cast<uint32_t>(bt_ * bt_);
+#if USE_VEC_MTE2_PP && USE_VEC_MTE2_PP_EPILOG
+            {
+                const uint32_t sDa = PpCopyInF32(dAWs, wsF32_[f32Base + SlotLayoutF32::dAWs], btbt);
+                LocalTensor<float> delta = arenaF32_.Get<float>()[btbt];
+                const uint32_t sDel = PpCopyInF32(delta, wsF32_[f32Base + SlotLayoutF32::dADeltaWs], btbt);
+                PpAcquire(sDa);
+                PpAcquire(sDel);
+                Add(dAWs, dAWs, delta, btbt);
+            }
+#else
             DataCopy(dAWs, wsF32_[f32Base + SlotLayoutF32::dAWs], btbt);
             LocalTensor<float> delta = arenaF32_.Get<float>()[btbt];
             DataCopy(delta, wsF32_[f32Base + SlotLayoutF32::dADeltaWs], btbt);
             SyncMte2ToV();
             Add(dAWs, dAWs, delta, btbt);
+#endif
             PipeBarrier<PIPE_V>();
             SyncVToMte3();
             DataCopy(wsF32_[f32Base + SlotLayoutF32::dAWs], dAWs, btbt);
@@ -1646,6 +1893,12 @@ private:
     uint32_t subBlockNum_ = 1;
     uint32_t subBlockIdx_ = 0;
     uint32_t cachedMaskValidRows_ = 0xFFFFFFFFu;
+#if USE_VEC_MTE2_PP
+    event_t mte2ToVPp_[2]{};
+    event_t vToMte2Pp_[2]{};
+    uint32_t ppIdx_ = 0;
+    bool ppInited_ = false;
+#endif
     Catlass::Arch::CrossCoreFlag cS0_{FLAG_C_S0};
     Catlass::Arch::CrossCoreFlag cS1_{FLAG_C_S1};
     Catlass::Arch::CrossCoreFlag vGate_{FLAG_V_GATE};

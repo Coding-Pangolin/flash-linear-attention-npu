@@ -189,6 +189,11 @@ constexpr uint32_t NUM_GM_SLOTS = 4;
 #ifndef USE_MERGE_BARRIER_ONLY
 #define USE_MERGE_BARRIER_ONLY 1
 #endif
+// G1: window-level C_S0 / C_S1 Set+Wait (both heads ready → one CrossCore).
+// Keeps per-head V_GATE/C_S2 sandwich (overlap) and per-head V_S0 (VS0_ONCE rejected).
+#ifndef USE_SYNC_PLAN_V1
+#define USE_SYNC_PLAN_V1 0
+#endif
 // E4: deeper window soft-pipe (see P4_SOFTPIPE_PLAN.md).
 // Trial PostS2→S0(next)→Stage3: suite green but +0.37ms vs E1 — keep off.
 #ifndef USE_WIN_SOFT_LEAD_V2
@@ -217,6 +222,19 @@ constexpr uint8_t FLAG_SLOT_FREE0 = 7;
 constexpr uint8_t FLAG_SLOT_FREE1 = 11;
 constexpr uint8_t FLAG_SLOT_FREE2 = 12;
 constexpr uint8_t FLAG_SLOT_FREE3 = 13;
+
+// G1 WindowSyncPlan (documentation + gate for USE_SYNC_PLAN_V1):
+//   sync0 V_S0     : Vec→Cube after Stage0Vec (still per-head; VS0_ONCE rejected)
+//   sync1 C_S0     : Cube→Vec after Stage0 — V1: once per window
+//   sync2 C_S1     : Cube→Vec after Stage1 — V1: once per window per BK
+//   sync3 V_GATE   : Vec→Cube after Gate   — keep per-head (overlap)
+//   sync4 C_S2     : Cube→Vec after Stage2 — keep per-head
+//   sync5 V_MASK   : Vec→Cube after Mask   — keep per-head (MASK_SOFT_LEAD)
+//   sync6 C_S3     : Cube→Vec after Stage3 — keep per-head
+struct WindowSyncPlanV1 {
+    static constexpr bool kCs0OncePerWindow = (USE_SYNC_PLAN_V1 != 0);
+    static constexpr bool kCs1OncePerWindow = (USE_SYNC_PLAN_V1 != 0);
+};
 
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 using KdaArchTag = Catlass::Arch::Ascend950;

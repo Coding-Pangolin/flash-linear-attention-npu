@@ -343,10 +343,15 @@ private:
     {
         const uint64_t hvBase = windowIdx * 2ULL;
         const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+#if USE_SYNC_PLAN_V1
+        Catlass::Arch::CrossCoreWaitFlag(cS0_);
+#endif
         for (uint32_t h = 0; h < headCnt; ++h) {
             const uint64_t slot = this->SlotOf(windowIdx, h);
             const uint64_t iHv = hvBase + h;
+#if !USE_SYNC_PLAN_V1
             Catlass::Arch::CrossCoreWaitFlag(cS0_);
+#endif
             Stage0Vec(slot, bIdx, iHv, tok0, validRows, nBv);
 #if !USE_VS0_ONCE_PER_WINDOW
             SetVS0Joined();
@@ -363,10 +368,15 @@ private:
         const uint64_t hvBase = windowIdx * 2ULL;
         const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
         const uint32_t winSlot = static_cast<uint32_t>((windowIdx & 1ULL) * 2ULL);
+#if USE_SYNC_PLAN_V1
+        Catlass::Arch::CrossCoreWaitFlag(cS0_);
+#endif
         for (uint32_t h = 0; h < headCnt; ++h) {
             const uint64_t slot = winSlot ^ h;
             const uint64_t iHv = hvBase + h;
+#if !USE_SYNC_PLAN_V1
             Catlass::Arch::CrossCoreWaitFlag(cS0_);
+#endif
             Stage0Vec(slot, bIdx, iHv, tok0, validRows, nBv);
 #if !USE_VS0_ONCE_PER_WINDOW
             SetVS0Joined();
@@ -406,11 +416,16 @@ private:
                 const uint64_t iH = iHv / group_;
                 KgVec(slot, bIdx, iHv, iH, tok0, validRows, iK);
             }
+#if USE_SYNC_PLAN_V1
+            Catlass::Arch::CrossCoreWaitFlag(cS1_);
+#endif
             for (uint32_t h = 0; h < headCnt; ++h) {
                 const uint64_t slot = winSlot ^ h;
                 const uint64_t iHv = hvBase + h;
                 const uint64_t iH = iHv / group_;
+#if !USE_SYNC_PLAN_V1
                 Catlass::Arch::CrossCoreWaitFlag(cS1_);
+#endif
                 GateOnlyVec(slot, bIdx, iHv, iH, tok0, localChunk, validRows, nBv, iK);
 #if !USE_GATE_EARLY_SET
                 SetVGateJoined();

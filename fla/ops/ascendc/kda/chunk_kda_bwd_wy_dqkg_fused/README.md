@@ -32,3 +32,5 @@ dq, dk, dv2, dg, db, dA = ops.npu_chunk_kda_bwd_wy_dqkg_fused(
 - 性能迭代（改造方向 + 落地方案）：[PERF_ITER_PLAN.md](PERF_ITER_PLAN.md)
 - 代码量 + 可行优化方向（含伪代码）：[OPT_DIRECTION.md](OPT_DIRECTION.md)
 - **迭代留档（年表 + 下一刀裁决）**：[ITER_LOG.md](ITER_LOG.md)
+- **G 档迭代 Plan（接 3.86 ms）**：[NEXT_ITER_PLAN_G.md](NEXT_ITER_PLAN_G.md)
+- **改进策略（PR190 / Sim）**：[IMPROVEMENT_STRATEGY.md](IMPROVEMENT_STRATEGY.md)

@@ -26,8 +26,11 @@
 | **F3a' BK128 owned-arena** | **3.86** | **−0.88 vs F3b** | `USE_BK128=1` | 3861 µs；nBk=1；`results/F3A_SUMMARY.md` |
 | **F6 MVP split** | e2e | fused 26.8 / N1 101 / N2 107 | `split_stages` off | suite split 绿；launch 税；`results/F6_MVP_SUMMARY.md` |
 | **F6b multi-task banks** | e2e | fused 20.8 / N1 **41.1** / N2 51.4 | off | 3 launch；bit 对齐；`results/F6B_SUMMARY.md` |
+| **G0 重钉** | **3.79** | — | — | 3789 µs；`results/G0_SUMMARY.md` |
+| G1 SyncPlan 窗级 C_S0/1 | reject | **+0.15** | `USE_SYNC_PLAN_V1=0` | 伤 Prefill/S1∥Gate；代码保留；`results/G1_SUMMARY.md` |
+| G2 FOLD_BAR_SLIM | reject | **+0.01** | `USE_FOLD_BAR_SLIM=0` | flat；`results/G2_SUMMARY.md` |
 | **F6 切分设计** | **done** | — | — | [`SPLIT_KERNEL_PLAN.md`](SPLIT_KERNEL_PLAN.md) |
-| **当前** | **~3.86** Task | vs P1a **−2.0** | 下表 | 下一刀：F6 占用重叠 / fused AIV sync |
+| **当前** | **~3.79** Task | vs P1a **−2.0** | 下表 | 下一刀：**G4 L1 resident** |
 
 ---
 
@@ -39,11 +42,18 @@
 | F3b BV128 | **done** | −0.74 ms |
 | F3a BK128 裸改 | **blocked** | UB；见 F3a' |
 | F3a' owned-compact | **done** | −0.88 ms；default `USE_BK128=1` |
-| F4 mask-once | **reject** | flat |
-| F5 FIX ECC | **parked** | 关 Preload 仍 507015 |
-| F6 多 kernel 切分 | **MVP+F6b** | N1 e2e 101→41；仍 2× fused→off |
+| F4 mask-once | **reject** | flat；改 G3 |
+| F5 FIX ECC | **parked** | 关 Preload 仍 507015 → G7 |
+| F6 多 kernel 切分 | **MVP+F6b** | N1 e2e 101→41；仍 2× fused→off → G6 |
+| **G1 SyncPlan** | **reject** | 窗级 C_S0/1 **+0.15**；nBk=1 已满足 per-head≤1 Set |
+| G2 V-BAR fold | **reject** | FOLD_BAR_SLIM flat +0.01 |
+| G3 MASK_TABLE | queued | 挂有效 sync 刀后 |
+| **G4 WY L1 v2** | **next** | P2a；ND2NZ 主矛盾 |
+| G5 Gate fold v2 | queued | P4 增量审计 |
+| P1b BK 批握手 | **skip** | nBk=1 已吸收 |
 
-权威 plan：[`NEXT_ITER_PLAN.md`](NEXT_ITER_PLAN.md) · 切分：[`SPLIT_KERNEL_PLAN.md`](SPLIT_KERNEL_PLAN.md)
+权威 plan：**[`NEXT_ITER_PLAN_G.md`](NEXT_ITER_PLAN_G.md)** · 策略：[`IMPROVEMENT_STRATEGY.md`](IMPROVEMENT_STRATEGY.md) · 切分：[`SPLIT_KERNEL_PLAN.md`](SPLIT_KERNEL_PLAN.md)  
+（F 档归档：[`NEXT_ITER_PLAN.md`](NEXT_ITER_PLAN.md)）
 
 ---
 
@@ -72,6 +82,7 @@ USE_BK128=1
 USE_MASK_ONCE=0
 USE_EPILOG_STORE_MERGE=0
 USE_FOLD_BAR_SLIM=0
+USE_SYNC_PLAN_V1=0
 USE_WIN_SOFT_LEAD_V2=0
 USE_KG_GATE_INTERLEAVE=0
 USE_VS0_ONCE_PER_WINDOW=0

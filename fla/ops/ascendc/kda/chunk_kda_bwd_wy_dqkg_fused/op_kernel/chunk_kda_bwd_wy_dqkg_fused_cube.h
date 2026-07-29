@@ -305,8 +305,13 @@ private:
             const uint64_t slot = this->SlotOf(windowIdx, h);
             const uint64_t iHv = hvBase + h;
             RunStage0(resource, pipe, slot, bIdx, iHv, tok0, validRows, nBv);
+#if !USE_SYNC_PLAN_V1
             Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS0_);
+#endif
         }
+#if USE_SYNC_PLAN_V1
+        Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS0_);
+#endif
     }
 
     __aicore__ inline void RunWindowStage1Only(Catlass::Arch::Resource<KdaArchTag> &resource,
@@ -329,8 +334,13 @@ private:
                 const uint64_t slot = this->SlotOf(windowIdx, h);
                 const uint64_t iHv = hvBase + h;
                 RunStage1(resource, pipe, slot, bIdx, iHv, tok0, localChunk, validRows, nBv, iK);
+#if !USE_SYNC_PLAN_V1
                 Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS1_);
+#endif
             }
+#if USE_SYNC_PLAN_V1
+            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS1_);
+#endif
         }
     }
 
@@ -381,8 +391,13 @@ private:
             const uint64_t slot = winSlot ^ h;
             const uint64_t iHv = hvBase + h;
             RunStage0(resource, pipe, slot, bIdx, iHv, tok0, validRows, nBv);
+#if !USE_SYNC_PLAN_V1
             Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS0_);
+#endif
         }
+#if USE_SYNC_PLAN_V1
+        Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS0_);
+#endif
     }
 
     // Stage1+Stage2 only (V2 inserts Stage0(next) before Stage3).
@@ -409,8 +424,13 @@ private:
                 const uint64_t slot = winSlot ^ h;
                 const uint64_t iHv = hvBase + h;
                 RunStage1(resource, pipe, slot, bIdx, iHv, tok0, localChunk, validRows, nBv, iK);
+#if !USE_SYNC_PLAN_V1
                 Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS1_);
+#endif
             }
+#if USE_SYNC_PLAN_V1
+            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS1_);
+#endif
             for (uint32_t h = 0; h < headCnt; ++h) {
                 const uint64_t slot = winSlot ^ h;
                 const uint64_t iHv = hvBase + h;

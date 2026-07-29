@@ -106,10 +106,34 @@ public:
             for (uint64_t w = 0; w < prefill; ++w) {
                 RunWindowStage0(resource, gemmPipe_, w, bIdx, tok0, validRows, nBv);
             }
+#if USE_WIN_SOFT_LEAD_V2
+            // P4 §4.1: PostS2(w) → Stage0(w+1 other bank) → Stage3(w).
+            // Cube Stage0(next) || Vec Epilog; then Stage3(w) || Vec Stage0Vec(next).
+            // No I5b: never Post(w+1) before WaitFree for recycled bank.
+            for (uint64_t w = 0; w < nHvWin; ++w) {
+                RunWindowPostThroughS2(resource, gemmPipe_, w, bIdx, tok0, localChunk, validRows, nBv,
+                                       nBk);
+                if (w + 1 < nHvWin) {
+                    const uint64_t wn = w + 1;
+                    if (wn >= 2) {
+                        const uint32_t winSlotN = static_cast<uint32_t>((wn & 1ULL) * 2ULL);
+                        const uint64_t hvBaseN = wn * 2ULL;
+                        const uint32_t headCntN =
+                            (hvBaseN + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBaseN);
+                        for (uint32_t h = 0; h < headCntN; ++h) {
+                            Catlass::Arch::CrossCoreWaitFlag(slotFree_[winSlotN ^ h]);
+                        }
+                    }
+                    RunWindowStage0(resource, gemmPipe_, wn, bIdx, tok0, validRows, nBv);
+                }
+                RunWindowStage3(resource, gemmPipe_, w, bIdx, tok0, validRows);
+            }
+#else
             for (uint64_t w = 0; w < nHvWin; ++w) {
                 RunWindowPost(resource, gemmPipe_, w, bIdx, tok0, localChunk, validRows, nBv, nBk);
                 if (w + prefill < nHvWin) {
                     const uint64_t wn = w + prefill;
+                    // prefill=2 → same bank as w; WaitFree(bank w) before Stage0(w+2).
                     const uint32_t winSlot = static_cast<uint32_t>((w & 1ULL) * 2ULL);
                     const uint64_t hvBase = w * 2ULL;
                     const uint32_t headCnt =
@@ -120,6 +144,7 @@ public:
                     RunWindowStage0(resource, gemmPipe_, wn, bIdx, tok0, validRows, nBv);
                 }
             }
+#endif
 #else
             uint64_t windowIdx = 0;
             for (uint64_t hvBase = 0; hvBase < hv_; hvBase += 2) {
@@ -169,18 +194,18 @@ private:
         }
     }
 
-    __aicore__ inline void RunWindowPost(Catlass::Arch::Resource<KdaArchTag> &resource,
-                                         DirectTileGemmPipeState &pipe, uint64_t windowIdx, uint64_t bIdx,
-                                         uint64_t tok0, uint64_t localChunk, uint64_t validRows, uint32_t nBv,
-                                         uint32_t nBk)
+    // Stage1+Stage2 only (V2 inserts Stage0(next) before Stage3).
+    __aicore__ inline void RunWindowPostThroughS2(Catlass::Arch::Resource<KdaArchTag> &resource,
+                                                  DirectTileGemmPipeState &pipe, uint64_t windowIdx,
+                                                  uint64_t bIdx, uint64_t tok0, uint64_t localChunk,
+                                                  uint64_t validRows, uint32_t nBv, uint32_t nBk)
     {
         const uint64_t hvBase = windowIdx * 2ULL;
         const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
         const uint32_t winSlot = static_cast<uint32_t>((windowIdx & 1ULL) * 2ULL);
 
-        // Wait Stage0Vec before Stage1.
 #if USE_VS0_ONCE_PER_WINDOW
-        Catlass::Arch::CrossCoreWaitFlag(vS0_); // one Wait ↔ one SetVS0Joined per window
+        Catlass::Arch::CrossCoreWaitFlag(vS0_);
         (void)headCnt;
 #else
         for (uint32_t h = 0; h < headCnt; ++h) {
@@ -205,20 +230,16 @@ private:
                 RunStage2(resource, pipe, slot, bIdx, iHv, tok0, validRows, iK);
                 Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS2_);
             }
-#if USE_EARLY_MASK_PER_HEAD
-            if (iK + 1 == nBk) {
-                for (uint32_t h = 0; h < headCnt; ++h) {
-                    const uint64_t slot = winSlot ^ h;
-                    const uint64_t iHv = hvBase + h;
-                    Catlass::Arch::CrossCoreWaitFlag(vMask_);
-                    RunStage3(resource, pipe, slot, bIdx, iHv, tok0, validRows);
-                    Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS3_);
-                }
-            }
-#endif
         }
+    }
 
-#if !USE_EARLY_MASK_PER_HEAD
+    __aicore__ inline void RunWindowStage3(Catlass::Arch::Resource<KdaArchTag> &resource,
+                                           DirectTileGemmPipeState &pipe, uint64_t windowIdx, uint64_t bIdx,
+                                           uint64_t tok0, uint64_t validRows)
+    {
+        const uint64_t hvBase = windowIdx * 2ULL;
+        const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+        const uint32_t winSlot = static_cast<uint32_t>((windowIdx & 1ULL) * 2ULL);
         for (uint32_t h = 0; h < headCnt; ++h) {
             const uint64_t slot = winSlot ^ h;
             const uint64_t iHv = hvBase + h;
@@ -226,7 +247,15 @@ private:
             RunStage3(resource, pipe, slot, bIdx, iHv, tok0, validRows);
             Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS3_);
         }
-#endif
+    }
+
+    __aicore__ inline void RunWindowPost(Catlass::Arch::Resource<KdaArchTag> &resource,
+                                         DirectTileGemmPipeState &pipe, uint64_t windowIdx, uint64_t bIdx,
+                                         uint64_t tok0, uint64_t localChunk, uint64_t validRows, uint32_t nBv,
+                                         uint32_t nBk)
+    {
+        RunWindowPostThroughS2(resource, pipe, windowIdx, bIdx, tok0, localChunk, validRows, nBv, nBk);
+        RunWindowStage3(resource, pipe, windowIdx, bIdx, tok0, validRows);
     }
 
     // ---- Stage0: dASlot[iv] = dv_iv @ v_iv^T ; dvbWs[:,iv] = A @ dv_iv ----

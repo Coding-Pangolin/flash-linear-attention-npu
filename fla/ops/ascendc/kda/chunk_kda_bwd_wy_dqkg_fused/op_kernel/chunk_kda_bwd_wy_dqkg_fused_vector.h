@@ -101,6 +101,10 @@ public:
         // Brcb / WholeReduceSum scratch: 8 floats per row.
         pipe_->InitBuffer(brcbBuf_, MAX_BT * 8 * sizeof(float));
         pipe_->InitBuffer(maskBuf_, MAX_BT * ((MAX_BT + 7) / 8) * sizeof(uint8_t));
+#if USE_MASK_SELECT_SLIM
+        // 8-float Select zero pattern — built once; Stage3 hot path skips Duplicate.
+        pipe_->InitBuffer(zeroSelBuf_, 8 * sizeof(float));
+#endif
         // P2a: prebuild mask for full-BT (model hot path); EnsureMask is then a no-op.
         {
             LocalTensor<uint8_t> mask = maskBuf_.Get<uint8_t>();
@@ -109,6 +113,13 @@ public:
             WaitFlag<HardEvent::S_V>(EVT_SCALAR_SV);
             cachedMaskValidRows_ = static_cast<uint32_t>(bt_);
         }
+#if USE_MASK_SELECT_SLIM
+        {
+            LocalTensor<float> zero = zeroSelBuf_.Get<float>();
+            Duplicate(zero, 0.0f, 8);
+            PipeBarrier<PIPE_V>();
+        }
+#endif
 #if USE_VEC_MTE2_PP
         InitVecMte2Pp();
 #endif
@@ -153,12 +164,24 @@ public:
             for (uint64_t w = 0; w < prefill; ++w) {
                 RunWindowStage0Vec(w, bIdx, tok0, validRows, nBv);
             }
+#if USE_WIN_SOFT_LEAD_V2
+            // Mirror Cube: PostBody(w) → Stage0Vec(w+1) → PostTail(w).
+            // Stage0Vec(next) Wait cS0 while Cube may still be in Stage3(w).
+            for (uint64_t w = 0; w < nHvWin; ++w) {
+                RunWindowPostBodyVec(w, bIdx, tok0, localChunk, validRows, nBv, nBk);
+                if (w + 1 < nHvWin) {
+                    RunWindowStage0Vec(w + 1, bIdx, tok0, validRows, nBv);
+                }
+                RunWindowPostTailVec(w, bIdx, tok0, validRows);
+            }
+#else
             for (uint64_t w = 0; w < nHvWin; ++w) {
                 RunWindowPostVec(w, bIdx, tok0, localChunk, validRows, nBv, nBk);
                 if (w + prefill < nHvWin) {
                     RunWindowStage0Vec(w + prefill, bIdx, tok0, validRows, nBv);
                 }
             }
+#endif
 #else
             for (uint64_t w = 0; w < nHvWin; ++w) {
                 RunWindowStage0Vec(w, bIdx, tok0, validRows, nBv);
@@ -192,8 +215,9 @@ private:
 #endif
     }
 
-    __aicore__ inline void RunWindowPostVec(uint64_t windowIdx, uint64_t bIdx, uint64_t tok0,
-                                            uint64_t localChunk, uint64_t validRows, uint32_t nBv, uint32_t nBk)
+    __aicore__ inline void RunWindowPostBodyVec(uint64_t windowIdx, uint64_t bIdx, uint64_t tok0,
+                                                uint64_t localChunk, uint64_t validRows, uint32_t nBv,
+                                                uint32_t nBk)
     {
         const uint64_t hvBase = windowIdx * 2ULL;
         const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
@@ -254,6 +278,14 @@ private:
             SetVMaskJoined();
         }
 #endif
+    }
+
+    __aicore__ inline void RunWindowPostTailVec(uint64_t windowIdx, uint64_t bIdx, uint64_t tok0,
+                                                uint64_t validRows)
+    {
+        const uint64_t hvBase = windowIdx * 2ULL;
+        const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+        const uint32_t winSlot = static_cast<uint32_t>((windowIdx & 1ULL) * 2ULL);
         for (uint32_t h = 0; h < headCnt; ++h) {
             const uint64_t slot = winSlot ^ h;
             const uint64_t iHv = hvBase + h;
@@ -261,6 +293,13 @@ private:
             Stage3StoreVec(slot, bIdx, iHv, tok0, validRows);
             SetSlotFreeJoined(slot);
         }
+    }
+
+    __aicore__ inline void RunWindowPostVec(uint64_t windowIdx, uint64_t bIdx, uint64_t tok0,
+                                            uint64_t localChunk, uint64_t validRows, uint32_t nBv, uint32_t nBk)
+    {
+        RunWindowPostBodyVec(windowIdx, bIdx, tok0, localChunk, validRows, nBv, nBk);
+        RunWindowPostTailVec(windowIdx, bIdx, tok0, validRows);
     }
 
     // MIX_AIC_1_2: each AIV Sets; Cube Wait once consumes 2 credits.
@@ -624,7 +663,9 @@ private:
             n = half;
         }
         Add(acc, acc, mat, width);
+#if !USE_FOLD_BAR_SLIM
         PipeBarrier<PIPE_V>();
+#endif
     }
 
     // Column-reduce only rows owned by this AIV (contiguous half).
@@ -1234,6 +1275,9 @@ private:
             PipeBarrier<PIPE_V>();
         }
         ColSumAddIntoOwned(dgkAcc, dkGateExp, static_cast<uint32_t>(validRows), bk);
+#if USE_FOLD_BAR_SLIM
+        PipeBarrier<PIPE_V>();
+#endif
 
         // dwNeg first — Cube Stage2 only needs dwNeg/kg. Do not wait on dgk merge.
         if (nr > 0) {
@@ -1424,7 +1468,12 @@ private:
         }
         SyncVToMte3();
         DataCopy(wsF32_[f32Base + DbMergeOff()], dbAcc, static_cast<uint32_t>(bt_));
+#if USE_EPILOG_STORE_MERGE
+        // Overlap dbAcc MTE3 writeback with following V (Mul/Sub); Wait before next MTE2.
+        SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+#else
         SyncMte3ToMte2();
+#endif
 
         const uint32_t lastRow = static_cast<uint32_t>(validRows - 1);
         if (nr > 0) {
@@ -1437,12 +1486,21 @@ private:
             LocalTensor<float> gkOwned = gkWs[r0 * bk];
 
             Mul(kOwned, kOwned, dkOwned, nElem);
+#if USE_FOLD_BAR_SLIM
+            // Independent dsts — one barrier before Sub that reads both.
+            Mul(qOwned, qOwned, dqOwned, nElem);
+            PipeBarrier<PIPE_V>();
+#else
             PipeBarrier<PIPE_V>();
             Mul(qOwned, qOwned, dqOwned, nElem);
             PipeBarrier<PIPE_V>();
+#endif
             Sub(qOwned, qOwned, kOwned, nElem);
             PipeBarrier<PIPE_V>();
 
+#if USE_EPILOG_STORE_MERGE
+            WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+#endif
             LocalTensor<float> dgkRow = smallBuf_.Get<float>();
 #if USE_VEC_MTE2_PP && USE_VEC_MTE2_PP_EPILOG
             {
@@ -1481,14 +1539,22 @@ private:
             Mul(dkgbOwned, dkgbOwned, gkOwned, nElem);
             PipeBarrier<PIPE_V>();
             Add(dkOwned, dkOwned, dkgbOwned, nElem);
+#if USE_EPILOG_STORE_MERGE
+            SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+            WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+#else
             PipeBarrier<PIPE_V>();
             SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
             WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
+#endif
             CopyStridedOutOwned(dk_, this->HvKOff(bIdx, iHv, tok0, kOff), kDim_, dkWs,
                                 static_cast<uint32_t>(validRows), bk);
             SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
             WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
         } else {
+#if USE_EPILOG_STORE_MERGE
+            WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+#endif
             LocalTensor<float> dgkRow = smallBuf_.Get<float>();
 #if USE_VEC_MTE2_PP && USE_VEC_MTE2_PP_EPILOG
             {
@@ -1577,6 +1643,9 @@ private:
                     Mul(hFp, hFp, dhFp, bvbk);
                     PipeBarrier<PIPE_V>();
                     ColSumAddInto(stateAcc, hFp, bv, bk);
+#if USE_FOLD_BAR_SLIM
+                    PipeBarrier<PIPE_V>();
+#endif
                 } else {
 #if USE_EPILOG_VEC_FOLD
                     // !stateVFirst [K,V]: one strided panel load [bk,bv] + RowFoldSum (not 64× row GM).
@@ -1637,7 +1706,9 @@ private:
             Mul(stateAcc, stateAcc, gnExp, bk);
             PipeBarrier<PIPE_V>();
             Add(qFp[lastRow * bk], qFp[lastRow * bk], stateAcc, bk);
+#if !USE_EPILOG_STORE_MERGE
             PipeBarrier<PIPE_V>();
+#endif
         }
         SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
@@ -1753,9 +1824,14 @@ private:
         ColBroadcastMulInPlace(dAOwned, beta, nr, static_cast<uint32_t>(bt_));
 
         LocalTensor<uint8_t> mask = EnsureMask(static_cast<uint32_t>(validRows));
+#if USE_MASK_SELECT_SLIM
+        // ColBroadcastMulInPlace already PipeBarrier'd; reuse Init zero (no Duplicate).
+        LocalTensor<float> zero = zeroSelBuf_.Get<float>();
+#else
         LocalTensor<float> zero = arenaF32_.Get<float>()[btbt];
         Duplicate(zero, 0.0f, 8);
         PipeBarrier<PIPE_V>();
+#endif
         const uint8_t rowBlk = static_cast<uint8_t>((bt_ * sizeof(float)) / 32);
         BinaryRepeatParams repeatParams{1, 0, 1, rowBlk, 0, rowBlk};
         const uint32_t maskBytesPerRow = (static_cast<uint32_t>(bt_) + 7) / 8;
@@ -1766,7 +1842,9 @@ private:
         LocalTensor<T> dAT = arenaT_.Get<T>();
         LocalTensor<T> dATOwned = dAT[r0 * bt_];
         Cast(dATOwned, dAOwned, RoundMode::CAST_RINT, nElem);
+#if !USE_MASK_SELECT_SLIM
         PipeBarrier<PIPE_V>();
+#endif
         SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         DataCopy(wsT_[tBase + SlotLayoutT::dAMaskedWs + static_cast<uint64_t>(r0) * bt_], dATOwned, nElem);
@@ -1783,9 +1861,13 @@ private:
 
         LocalTensor<uint8_t> mask = EnsureMask(static_cast<uint32_t>(validRows));
 
+#if USE_MASK_SELECT_SLIM
+        LocalTensor<float> zero = zeroSelBuf_.Get<float>();
+#else
         LocalTensor<float> zero = arenaF32_.Get<float>()[btbt];
         Duplicate(zero, 0.0f, 8);
         PipeBarrier<PIPE_V>();
+#endif
         const uint8_t rowBlk = static_cast<uint8_t>((bt_ * sizeof(float)) / 32);
         BinaryRepeatParams repeatParams{1, 0, 1, rowBlk, 0, rowBlk};
         Select(dA, mask, zero, dA, SELMODE::VSEL_TENSOR_TENSOR_MODE, static_cast<int32_t>(bt_),
@@ -1794,7 +1876,9 @@ private:
 
         LocalTensor<T> dAT = arenaT_.Get<T>();
         Cast(dAT, dA, RoundMode::CAST_RINT, btbt);
+#if !USE_MASK_SELECT_SLIM
         PipeBarrier<PIPE_V>();
+#endif
         SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         DataCopy(wsT_[tBase + SlotLayoutT::dAMaskedWs], dAT, btbt);
@@ -1831,9 +1915,13 @@ private:
             PipeBarrier<PIPE_V>();
 
             LocalTensor<uint8_t> mask = EnsureMask(static_cast<uint32_t>(validRows));
+#if USE_MASK_SELECT_SLIM
+            LocalTensor<float> zero = zeroSelBuf_.Get<float>();
+#else
             LocalTensor<float> zero = arenaF32_.Get<float>()[btbt];
             Duplicate(zero, 0.0f, 8);
             PipeBarrier<PIPE_V>();
+#endif
             const uint8_t rowBlk = static_cast<uint8_t>((bt_ * sizeof(float)) / 32);
             BinaryRepeatParams repeatParams{1, 0, 1, rowBlk, 0, rowBlk};
             const uint32_t maskBytesPerRow = (static_cast<uint32_t>(bt_) + 7) / 8;
@@ -1862,9 +1950,13 @@ private:
 
         LocalTensor<uint8_t> mask = EnsureMask(static_cast<uint32_t>(validRows));
 
+#if USE_MASK_SELECT_SLIM
+        LocalTensor<float> zero = zeroSelBuf_.Get<float>();
+#else
         LocalTensor<float> zero = arenaF32_.Get<float>()[btbt];
         Duplicate(zero, 0.0f, 8);
         PipeBarrier<PIPE_V>();
+#endif
         const uint8_t rowBlk = static_cast<uint8_t>((bt_ * sizeof(float)) / 32);
         BinaryRepeatParams repeatParams{1, 0, 1, rowBlk, 0, rowBlk};
         Select(dA3, mask, zero, dA3, SELMODE::VSEL_TENSOR_TENSOR_MODE, static_cast<int32_t>(bt_),
@@ -1890,6 +1982,9 @@ private:
 
     TPipe *pipe_ = nullptr;
     TBuf<> arenaF32_, arenaT_, betaBuf_, dbAccBuf_, smallBuf_, brcbBuf_, maskBuf_;
+#if USE_MASK_SELECT_SLIM
+    TBuf<> zeroSelBuf_;
+#endif
     uint32_t subBlockNum_ = 1;
     uint32_t subBlockIdx_ = 0;
     uint32_t cachedMaskValidRows_ = 0xFFFFFFFFu;

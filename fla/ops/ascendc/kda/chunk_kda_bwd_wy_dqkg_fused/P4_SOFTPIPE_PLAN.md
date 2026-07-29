@@ -1,8 +1,8 @@
 # P4 — Deeper soft-pipe sub-plan (ChunkKdaBwdWyDqkgFused)
 
-> Parent: Cursor `wy_dqkg_next_opt` §5  
+> Parent: Cursor `wy_dqkg_next_opt` §5 / `wy_dqkg_epilog_iter` E4  
 > Baseline after P0–P3: **~5.84 ms** (P1a Gate MTE2 PP). Stretch ≤ **0.8 ms**.  
-> Status: **design-only** this round — implement in a dedicated follow-up PR.
+> Status: **E4 trial done** — `USE_WIN_SOFT_LEAD_V2` implemented (PostS2→S0(next bank)→Stage3); suite green; board **+0.37 ms** → macro **0**, code kept.
 
 ## 1. Why P4
 

@@ -151,6 +151,28 @@ constexpr uint32_t NUM_GM_SLOTS = 4;
 #ifndef USE_VEC_MTE2_PP_EPILOG
 #define USE_VEC_MTE2_PP_EPILOG 0
 #endif
+// E1: Init-prebuilt Select zero + fewer PipeBarrier around Stage3 Select.
+#ifndef USE_MASK_SELECT_SLIM
+#define USE_MASK_SELECT_SLIM 1
+#endif
+// E2: merge Epilog V↔MTE3 store syncs (default off until gated).
+#ifndef USE_EPILOG_STORE_MERGE
+#define USE_EPILOG_STORE_MERGE 0
+#endif
+// E3: RowFoldSum / same-chain BAR trim (default off until gated).
+#ifndef USE_FOLD_BAR_SLIM
+#define USE_FOLD_BAR_SLIM 0
+#endif
+// E4: deeper window soft-pipe (see P4_SOFTPIPE_PLAN.md).
+// Trial PostS2→S0(next)→Stage3: suite green but +0.37ms vs E1 — keep off.
+#ifndef USE_WIN_SOFT_LEAD_V2
+#define USE_WIN_SOFT_LEAD_V2 0
+#endif
+// V2 uses prefill=1 so Post-tail(w) can overlap Stage0(w+1) on the other bank.
+#if USE_WIN_SOFT_LEAD_V2
+#undef KDA_BWD_PREFILL_WINDOWS
+#define KDA_BWD_PREFILL_WINDOWS 1
+#endif
 
 // Cross-core flags (AIC <-> AIV), raw counting semantics (0x2). Re-used across BK
 // sub-iterations and across (task,hv) units — Set/Wait counts match because both

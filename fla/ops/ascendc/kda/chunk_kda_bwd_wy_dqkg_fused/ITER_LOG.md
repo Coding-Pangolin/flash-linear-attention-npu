@@ -24,9 +24,10 @@
 | I4b L0 dbuf | parked | — | `L0_AB_DBUF=0` | 与 I4a 同开曾 ECC |
 | Epilog kPark 复用 | reject | **+6** | — | 13348 µs；已回滚 |
 | VS0 每窗一次 | reject | **+0.12** | `VS0_ONCE=0` | 7375 µs |
-| **当前** | **7.26** | vs C1 **−14.2** | 下表 | 仍 Vec-bound；距 0.8 尚远 |
+| **Epilog state panel** | **done** | **−1.29** | fold 内 | **5.97 ms**；[K,V] 整面板 CopyStrided |
+| **当前** | **5.97** | vs C1 **−15.5** | 下表 | 仍 Vec-bound；距 0.8 尚远 |
 
-I5 画像：`aic_cube_ratio≈4%`；scalar≈40%；MTE2≈27%。
+画像（state panel 后）：Task Dur **5971 µs**。
 
 ---
 

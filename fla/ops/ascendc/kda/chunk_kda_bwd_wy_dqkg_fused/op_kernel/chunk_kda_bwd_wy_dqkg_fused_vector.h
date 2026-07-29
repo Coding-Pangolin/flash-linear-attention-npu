@@ -1324,48 +1324,23 @@ private:
                     ColSumAddInto(stateAcc, hFp, bv, bk);
                 } else {
 #if USE_EPILOG_VEC_FOLD
-                    // !stateVFirst: physical [K,V] — load one V-row per K, then PR190-style
-                    // WholeReduceSum → [r*8] → compact → vec Add into aligned stateAcc.
-                    // (Do NOT Add(stateAcc[r],…): r floats may be unaligned → aicore UB fault.)
-                    LocalTensor<T> hRowT = tIn;
-                    LocalTensor<T> dhRowT = tIn[MAX_BV];
-                    LocalTensor<float> hRow = brcbBuf_.Get<float>();
-                    LocalTensor<float> dhRow = brcbBuf_.Get<float>()[MAX_BV];
-                    LocalTensor<float> reduceScratch = scratch; // need >= bk*8; arena scratch is large
-                    for (uint32_t r = 0; r < bk; ++r) {
-                        const uint64_t rowBase =
-                            stateBase + (kOff + static_cast<uint64_t>(r)) * vDim_ + vOff;
-                        this->CopyVectorIn(hRowT, h_, rowBase, bv);
-                        this->CopyVectorIn(dhRowT, dhIn_, rowBase, bv);
-                        SetFlag<HardEvent::MTE2_V>(EVT_STATE_MTE2_V);
-                        WaitFlag<HardEvent::MTE2_V>(EVT_STATE_MTE2_V);
-                        Cast(hRow, hRowT, RoundMode::CAST_NONE, bv);
-                        Cast(dhRow, dhRowT, RoundMode::CAST_NONE, bv);
-                        PipeBarrier<PIPE_V>();
-                        Mul(hRow, hRow, dhRow, bv);
-                        PipeBarrier<PIPE_V>();
-                        if ((bv % 64U) == 0U) {
-                            const uint32_t n64 = bv / 64U;
-                            WholeReduceSum(reduceScratch[r * 8], hRow, 64, static_cast<uint8_t>(n64), 1, 1, 8);
-                        } else {
-                            uint32_t remain = bv;
-                            while (remain > 8) {
-                                const uint32_t calcCnt = remain / 2;
-                                const uint32_t newRemain = remain - calcCnt;
-                                Add(hRow, hRow, hRow[newRemain], calcCnt);
-                                PipeBarrier<PIPE_V>();
-                                remain = newRemain;
-                            }
-                            WholeReduceSum(reduceScratch[r * 8], hRow, static_cast<uint8_t>(remain), 1, 1, 1, 1);
-                        }
-                    }
+                    // !stateVFirst [K,V]: one strided panel load [bk,bv] + RowFoldSum (not 64× row GM).
+                    const uint32_t bkbv = bk * bv;
+                    LocalTensor<T> hPanel = tIn;
+                    LocalTensor<T> dhPanel = tIn[bkbv];
+                    const uint64_t panelBase = stateBase + kOff * vDim_ + vOff;
+                    CopyStrided(hPanel, h_, panelBase, vDim_, bk, bv);
+                    CopyStrided(dhPanel, dhIn_, panelBase, vDim_, bk, bv);
+                    SetFlag<HardEvent::MTE2_V>(EVT_STATE_MTE2_V);
+                    WaitFlag<HardEvent::MTE2_V>(EVT_STATE_MTE2_V);
+                    LocalTensor<float> hFp = arenaF32_.Get<float>();
+                    LocalTensor<float> dhFp = hFp[bkbv];
+                    Cast(hFp, hPanel, RoundMode::CAST_NONE, bkbv);
+                    Cast(dhFp, dhPanel, RoundMode::CAST_NONE, bkbv);
                     PipeBarrier<PIPE_V>();
-                    const uint32_t n64c = ((bv % 64U) == 0U) ? (bv / 64U) : 1U;
-                    WholeReduceSum(reduceScratch, reduceScratch, static_cast<uint8_t>(n64c),
-                                   static_cast<uint8_t>(bk), 1, 1, 1);
+                    Mul(hFp, hFp, dhFp, bkbv);
                     PipeBarrier<PIPE_V>();
-                    Add(stateAcc, stateAcc, reduceScratch, bk);
-                    PipeBarrier<PIPE_V>();
+                    RowFoldSumAddInto(stateAcc, hFp, bk, bv);
 #else
                     LocalTensor<T> hRowT = tIn;
                     LocalTensor<T> dhRowT = tIn[MAX_BV];

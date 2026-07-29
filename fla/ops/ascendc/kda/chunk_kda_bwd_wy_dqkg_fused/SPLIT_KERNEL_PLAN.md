@@ -75,9 +75,10 @@ flowchart LR
 今日 `SlotLayoutF32/T` 按 slot 布局已覆盖中间量。切分后：
 
 - **不可**用「复用 4 rolling slots + 全量 OpA 再 OpB」：OpA 写满窗口后会覆盖尚未被 OpB 消费的中间量。
-- **落地（已实现 MVP）**：
-  - `stageId≠0` 时 `numSlots = HV`（每 head 唯一 slot）；Host 按 `taskBegin/taskEnd` 批处理，保证每核 ≤1 task。
+- **落地（已实现 MVP + F6b）**：
+  - `stageId≠0` 时 `numSlots = hv * tasksPerCore`（每核多 task 银行）；Host 默认可一次 launch 覆盖整段 `taskBegin/taskEnd`。
   - A→B→C **同 stream 顺序**；Python 复用同一 `workspace` torch buffer。
+  - `FLA_WY_DQKG_BATCH_TASKS` 可缩小批以压 WS（回退到 MVP 式多批）。
   - 控制面暂用 env：`FLA_WY_DQKG_STAGE` / `TASK_BEGIN` / `TASK_END`（后续升 Op Attr）。
 - Op 间 **无 CrossCore**；`USE_MASK_SOFT_LEAD` 在 stage 路径关闭（Mask 归 OpC）。
 
@@ -186,10 +187,10 @@ S6  msprof：fused vs split(N=1) vs split(N=2)；记 ITER_LOG
 
 - [x] `SPLIT=0` 行为与今日一致（suite fused 绿）
 - [x] `SPLIT=1 N=1` suite 全绿
-- [x] `SPLIT=1 N=2` model 无 hang；端到端有记录（~107 ms，慢）
+- [x] `SPLIT=1 N=2` model 无 hang；端到端有记录（F6b ~51 ms）
 - [x] `ITER_LOG` 一行：fused / split1 / split2 e2e
 - [ ] DESIGN.md 增补切分契约小节
-- [ ] 性能：e2e ≤ fused×1.15 后再考虑 default
+- [ ] 性能：e2e ≤ fused×1.15 后再考虑 default（F6b 仍 ~2×）
 
 ---
 

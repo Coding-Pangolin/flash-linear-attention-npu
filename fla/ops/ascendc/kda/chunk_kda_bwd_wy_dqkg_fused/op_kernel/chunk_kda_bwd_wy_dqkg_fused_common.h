@@ -357,13 +357,23 @@ public:
                  (hv_ % h_dim_) != 0 || numSlots_ == 0);
     }
 
-    // Fused: rolling 2-window banks (0..3). Stage A/B/C: unique slot per head.
+    // Fused: rolling 2-window banks (0..3).
+    // Stage A/B/C: bank = task ordinal on this core; within bank unique slot per head.
     __aicore__ inline uint32_t SlotOf(uint64_t windowIdx, uint32_t h) const
     {
         if (stageId_ == 0) {
             return static_cast<uint32_t>((windowIdx & 1ULL) * 2ULL) ^ h;
         }
-        return static_cast<uint32_t>(windowIdx * 2ULL + static_cast<uint64_t>(h));
+        return static_cast<uint32_t>(taskBank_ * hv_ + windowIdx * 2ULL + static_cast<uint64_t>(h));
+    }
+
+    __aicore__ inline void SetTaskBank(uint64_t task)
+    {
+        if (usedCoreNum_ == 0) {
+            taskBank_ = 0;
+            return;
+        }
+        taskBank_ = (task - taskBegin_) / usedCoreNum_;
     }
 
 protected:
@@ -487,7 +497,8 @@ protected:
     uint64_t tBytesPerCore_ = 0;
 
     uint64_t batch_ = 0, t_ = 0, h_dim_ = 0, hv_ = 0, kDim_ = 0, vDim_ = 0, bt_ = 0, numChunks_ = 0, totalTasks_ = 0,
-             usedCoreNum_ = 0, coreIdx_ = 0, group_ = 1, numSlots_ = NUM_GM_SLOTS, taskBegin_ = 0, taskEnd_ = 0;
+             usedCoreNum_ = 0, coreIdx_ = 0, group_ = 1, numSlots_ = NUM_GM_SLOTS, taskBegin_ = 0, taskEnd_ = 0,
+             taskBank_ = 0;
     uint32_t stageId_ = 0;
     bool hasVarlen_ = false;
     bool stateVFirst_ = false;

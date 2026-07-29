@@ -1085,8 +1085,13 @@ def npu_chunk_kda_bwd_wy_dqkg_fused(
         "FLA_WY_DQKG_TASK_END": os.environ.get("FLA_WY_DQKG_TASK_END"),
     }
     try:
-        # Batch size ≈ AIC count so each core owns ≤1 task (numSlots=hv).
-        batch_tasks = min(20, max(total_tasks, 1))
+        # F6b: one A→B→C launch covers the whole partition (multi-task banks in WS).
+        # Override with FLA_WY_DQKG_BATCH_TASKS if WS pressure requires smaller batches.
+        batch_env = os.environ.get("FLA_WY_DQKG_BATCH_TASKS")
+        if batch_env is not None and batch_env.strip() != "":
+            batch_tasks = max(1, int(batch_env))
+        else:
+            batch_tasks = max(total_tasks, 1)
         streams = [torch.npu.Stream() for _ in range(n_stream)] if n_stream > 1 else [None]
         # Per-stream WS: concurrent streams must not share stage buffers.
         shared_ws = [None] * n_stream

@@ -30,7 +30,8 @@ TILING_DATA_FIELD_DEF(int64_t, stateVFirst);
 TILING_DATA_FIELD_DEF(int64_t, bk);
 TILING_DATA_FIELD_DEF(int64_t, bv);
 TILING_DATA_FIELD_DEF(float, scale);
-// F6 split: 0=fused, 1=OpA, 2=OpB, 3=OpC. taskEnd exclusive; numSlots=4 fused / hv stage.
+// F6 split: 0=fused, 1=OpA, 2=OpB, 3=OpC. taskEnd exclusive;
+// numSlots=4 fused / (hv * tasksPerCore) stage (F6b multi-task banks).
 TILING_DATA_FIELD_DEF(int64_t, stageId);
 TILING_DATA_FIELD_DEF(int64_t, taskBegin);
 TILING_DATA_FIELD_DEF(int64_t, taskEnd);

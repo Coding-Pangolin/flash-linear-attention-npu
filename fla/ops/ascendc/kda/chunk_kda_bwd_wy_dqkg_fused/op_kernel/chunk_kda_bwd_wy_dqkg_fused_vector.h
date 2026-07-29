@@ -60,6 +60,7 @@ class KdaWyDqkgVector : public KdaWyDqkgBase<T> {
     using Base::taskBegin_;
     using Base::taskEnd_;
     using Base::SlotOf;
+    using Base::SetTaskBank;
     using Base::q_;
     using Base::k_;
     using Base::v_;
@@ -221,6 +222,7 @@ public:
         const uint32_t nBv = this->NumBv();
         const uint32_t nBk = this->NumBk();
         for (uint64_t task = taskBegin_ + coreIdx_; task < taskEnd_; task += usedCoreNum_) {
+            this->SetTaskBank(task);
             uint64_t iB = 0, iChunk = 0;
             this->DecodeChunkTask(task, iB, iChunk);
             uint64_t bos = 0, localT = 0, localChunk = 0, bIdx = 0;
@@ -257,6 +259,7 @@ public:
         const uint32_t nBv = this->NumBv();
         const uint32_t nBk = this->NumBk();
         for (uint64_t task = taskBegin_ + coreIdx_; task < taskEnd_; task += usedCoreNum_) {
+            this->SetTaskBank(task);
             uint64_t iB = 0, iChunk = 0;
             this->DecodeChunkTask(task, iB, iChunk);
             uint64_t bos = 0, localT = 0, localChunk = 0, bIdx = 0;
@@ -300,6 +303,7 @@ public:
     __aicore__ inline void ProcessStageC()
     {
         for (uint64_t task = taskBegin_ + coreIdx_; task < taskEnd_; task += usedCoreNum_) {
+            this->SetTaskBank(task);
             uint64_t iB = 0, iChunk = 0;
             this->DecodeChunkTask(task, iB, iChunk);
             uint64_t bos = 0, localT = 0, localChunk = 0, bIdx = 0;

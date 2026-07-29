@@ -191,9 +191,15 @@ ge::graphStatus Tiling4ChunkKdaBwdWyDqkgFused(gert::TilingContext *context)
     const uint64_t usedCore = static_cast<uint64_t>(blockDim == 0 ? 1 : blockDim);
     const int64_t elemBytes = (qDesc->GetDataType() == ge::DT_FLOAT16 || qDesc->GetDataType() == ge::DT_BF16) ? 2 : 4;
     const int64_t slotBytes = SLOT_F32_TOTAL * static_cast<int64_t>(sizeof(float)) + SLOT_T_TOTAL * elemBytes;
-    // Fused: 4 rolling banks. Stage A/B/C: one unique slot per head (=hv) so OpA can
-    // finish all windows before OpB (no CrossCore across launches).
-    const int64_t numSlots = (stageId == 0) ? NUM_GM_SLOTS : hv;
+    // Fused: 4 rolling banks.
+    // Stage A/B/C (F6b): hv slots per in-flight task on a core so one launch can
+    // cover many tasks without overwriting OpA→OpB intermediates.
+    int64_t numSlots = NUM_GM_SLOTS;
+    if (stageId != 0) {
+        const int64_t tasksPerCore =
+            (schedTasks + static_cast<int64_t>(usedCore) - 1) / static_cast<int64_t>(usedCore);
+        numSlots = hv * std::max<int64_t>(tasksPerCore, 1);
+    }
     int64_t wsBytes = static_cast<int64_t>(usedCore) * numSlots * slotBytes;
     wsBytes = (wsBytes + WORKSPACE_ALIGN - 1) / WORKSPACE_ALIGN * WORKSPACE_ALIGN;
 

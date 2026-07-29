@@ -30,4 +30,5 @@ dq, dk, dv2, dg, db, dA = ops.npu_chunk_kda_bwd_wy_dqkg_fused(
 - 4 GM slot；raw CrossCore `0x2`
 - 当前 Cube 路径为 DirectTileGemm 基线；L1 A resident / L0 dbuf / Fix∥MTE2 为后续性能刀（目标 Task Dur ≤0.8 ms）
 - 性能迭代（改造方向 + 落地方案）：[PERF_ITER_PLAN.md](PERF_ITER_PLAN.md)
+- 代码量 + 可行优化方向（含伪代码）：[OPT_DIRECTION.md](OPT_DIRECTION.md)
 - **迭代留档（年表 + 下一刀裁决）**：[ITER_LOG.md](ITER_LOG.md)

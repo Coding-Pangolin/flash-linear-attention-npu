@@ -70,10 +70,9 @@ constexpr float FP16_MAX = 65504.0f;
 
 // Compile-time tile caps: internal retiling regardless of host bk/bv hints (UB-budget driven).
 constexpr uint32_t MAX_BT = 64;
-constexpr uint32_t MAX_BK = 64;   // K retiled into ceil(K/MAX_BK) tiles (K<=128 -> <=2 tiles)
-// F2: BK=128 blows arena (8*BT*BK); BV=128 OK — arena scales with BK not BV.
+// F3a': BK=128 needs owned-half arena (see results/F3A_ARENA_NOTE.md).
 #ifndef USE_BK128
-#define USE_BK128 0
+#define USE_BK128 1
 #endif
 #ifndef USE_BV128
 #define USE_BV128 1
@@ -83,9 +82,11 @@ constexpr uint32_t MAX_BK = 64;   // K retiled into ceil(K/MAX_BK) tiles (K<=128
 #define USE_MASK_ONCE 0
 #endif
 #if USE_BK128
-constexpr uint32_t MAX_BK_EFF = 128;
+constexpr uint32_t MAX_BK = 128;          // K=128 → nBk=1
+constexpr uint32_t ARENA_BT_ROWS = MAX_BT / 2; // dual-AIV owned half
 #else
-constexpr uint32_t MAX_BK_EFF = MAX_BK;
+constexpr uint32_t MAX_BK = 64;           // K=128 → nBk=2
+constexpr uint32_t ARENA_BT_ROWS = MAX_BT;
 #endif
 #if USE_BV128
 constexpr uint32_t MAX_BV = 128; // V<=128 -> 1 tile
@@ -94,8 +95,11 @@ constexpr uint32_t MAX_BV = 64;  // V<=128 -> 2 tiles; V<=256 -> 4 tiles
 #endif
 constexpr uint32_t MAX_K_TOTAL = 128;
 constexpr uint32_t MAX_V_TOTAL = 256;
-constexpr uint32_t MAX_NBK = (MAX_K_TOTAL + MAX_BK_EFF - 1) / MAX_BK_EFF;
+constexpr uint32_t MAX_NBK = (MAX_K_TOTAL + MAX_BK - 1) / MAX_BK;
 constexpr uint32_t MAX_NBV = (MAX_V_TOTAL + MAX_BV - 1) / MAX_BV;
+// Compact UB panels when BK128 (owned rows only).
+#define USE_OWNED_ARENA USE_BK128
+
 
 constexpr uint32_t NUM_GM_SLOTS = 4;
 

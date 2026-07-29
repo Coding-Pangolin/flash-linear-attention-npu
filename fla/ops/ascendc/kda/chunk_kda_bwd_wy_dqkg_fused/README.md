@@ -1,0 +1,33 @@
+# ChunkKdaBwdWyDqkgFused
+
+对标 Triton `chunk_kda_bwd_kernel_wy_dqkg_fused`。契约见 [DESIGN.md](DESIGN.md)。
+
+## 构建
+
+```bash
+bash build.sh --pkg --soc=ascend910b --ops=chunk_kda_bwd_wy_dqkg_fused
+```
+
+## 测试
+
+```bash
+python fla/ops/ascendc/kda/chunk_kda_bwd_wy_dqkg_fused/test/test_chunk_kda_bwd_wy_dqkg_fused.py
+python torch_custom/fla_npu/test/test_npu_chunk_kda_bwd_wy_dqkg_fused.py
+```
+
+## Python
+
+```python
+from fla_npu.ops import ascendc as ops
+dq, dk, dv2, dg, db, dA = ops.npu_chunk_kda_bwd_wy_dqkg_fused(
+    q, k, v, v_new, g, beta, a, h, dh, do, dv, scale, 64, state_v_first=False
+)
+```
+
+## Stage / 流水
+
+- Stage0 WyV → Stage1 KvAcc（Cube∥Vec kg）→ Stage2 GateWy 三明治 → Stage3 DaFinal
+- 4 GM slot；raw CrossCore `0x2`
+- 当前 Cube 路径为 DirectTileGemm 基线；L1 A resident / L0 dbuf / Fix∥MTE2 为后续性能刀（目标 Task Dur ≤0.8 ms）
+- 性能迭代（改造方向 + 落地方案）：[PERF_ITER_PLAN.md](PERF_ITER_PLAN.md)
+- **迭代留档（年表 + 下一刀裁决）**：[ITER_LOG.md](ITER_LOG.md)

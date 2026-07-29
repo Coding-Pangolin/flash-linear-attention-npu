@@ -128,6 +128,32 @@ _GET_WORKSPACE_ARGTYPES = {
         ctypes.POINTER(ctypes.c_uint64),
         ctypes.POINTER(ctypes.c_void_p),
     ],
+    "aclnnChunkKdaBwdWyDqkgFused": [
+        ctypes.c_void_p,  # q
+        ctypes.c_void_p,  # k
+        ctypes.c_void_p,  # v
+        ctypes.c_void_p,  # vNew
+        ctypes.c_void_p,  # g
+        ctypes.c_void_p,  # beta
+        ctypes.c_void_p,  # a
+        ctypes.c_void_p,  # h
+        ctypes.c_void_p,  # dh
+        ctypes.c_void_p,  # doGrad
+        ctypes.c_void_p,  # dv
+        ctypes.c_void_p,  # cuSeqlensOptional
+        ctypes.c_void_p,  # chunkIndicesOptional
+        ctypes.c_double,  # scale
+        ctypes.c_int64,  # chunkSize
+        ctypes.c_bool,  # stateVFirst
+        ctypes.c_void_p,  # dqOut
+        ctypes.c_void_p,  # dkOut
+        ctypes.c_void_p,  # dv2Out
+        ctypes.c_void_p,  # dgOut
+        ctypes.c_void_p,  # dbOut
+        ctypes.c_void_p,  # dAOut
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.POINTER(ctypes.c_void_p),
+    ],
 }
 
 
@@ -993,6 +1019,72 @@ def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
             ctx.tensor(out, "out"),
         ],
         out,
+    )
+
+
+def npu_chunk_kda_bwd_wy_dqkg_fused(
+    q,
+    k,
+    v,
+    v_new,
+    g,
+    beta,
+    a,
+    h,
+    dh,
+    do,
+    dv,
+    scale,
+    chunk_size,
+    *,
+    state_v_first=False,
+    cu_seqlens=None,
+    chunk_indices=None,
+):
+    """KDA fused bwd: wy + dqkg. BNSD. Returns dq, dk, dv2, dg, db, dA."""
+    import torch
+
+    q_shape = _shape(q)
+    v_shape = _shape(v)
+    batch, h_num, t, k_dim = q_shape
+    hv = int(v_shape[1])
+    v_dim = int(v_shape[3])
+    bt = int(chunk_size)
+    dq = _empty((batch, hv, t, k_dim), q, dtype=torch.float32)
+    dk = _empty((batch, hv, t, k_dim), q, dtype=torch.float32)
+    dv2 = _empty_like(v)
+    dg = _empty((batch, hv, t, k_dim), q, dtype=torch.float32)
+    db = _empty((batch, hv, t), q, dtype=torch.float32)
+    dA = _empty((batch, hv, t, bt), q, dtype=torch.float32)
+    outputs = (dq, dk, dv2, dg, db, dA)
+    return _call_aclnn(
+        "aclnnChunkKdaBwdWyDqkgFused",
+        lambda ctx: [
+            ctx.tensor(q, "q"),
+            ctx.tensor(k, "k"),
+            ctx.tensor(v, "v"),
+            ctx.tensor(v_new, "v_new"),
+            ctx.tensor(g, "g"),
+            ctx.tensor(beta, "beta"),
+            ctx.tensor(a, "a"),
+            ctx.tensor(h, "h"),
+            ctx.tensor(dh, "dh"),
+            ctx.tensor(do, "do"),
+            ctx.tensor(dv, "dv"),
+            ctx.int_array(cu_seqlens),
+            ctx.int_array(chunk_indices),
+            # Must match aclnn ...GetWorkspaceSize(double scale, ...) — c_float mis-ABI zeros dq.
+            ctypes.c_double(float(scale)),
+            ctypes.c_int64(bt),
+            ctypes.c_bool(bool(state_v_first)),
+            ctx.tensor(dq, "dq"),
+            ctx.tensor(dk, "dk"),
+            ctx.tensor(dv2, "dv2"),
+            ctx.tensor(dg, "dg"),
+            ctx.tensor(db, "db"),
+            ctx.tensor(dA, "dA"),
+        ],
+        outputs,
     )
 
 

@@ -1046,6 +1046,7 @@ private:
         if (nr > 0) {
 #if USE_STAGE1_L0C_ACCUM
             // Cube already reduced across V-tiles into plane 0.
+            // Keep per-copy MTE2↔V sync — fused triple-copy hung model msprof.
             const uint64_t off0 = static_cast<uint64_t>(r0) * bk;
             DataCopy(dqOwned, wsF32_[f32Base + SlotLayoutF32::dqSlot + off0], nElem);
             SyncMte2ToV();

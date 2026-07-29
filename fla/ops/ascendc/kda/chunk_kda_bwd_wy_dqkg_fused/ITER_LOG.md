@@ -26,6 +26,7 @@
 | VS0 每窗一次 | reject | **+0.12** | `VS0_ONCE=0` | 7375 µs |
 | **Epilog state panel** | **done** | **−1.29** | fold 内 | **5.97 ms**；[K,V] 整面板 CopyStrided |
 | EXP_GN_PARK | reject | **+0.06** | `=0` | 6029 µs；Exp 挪到 Kg 无净收益 |
+| Gate 三路 MTE2 融合 | reject | hang | — | model msprof 挂起；已回滚 |
 | **当前** | **5.97** | vs C1 **−15.5** | 下表 | 仍 Vec-bound；距 0.8 尚远 |
 
 画像（state panel 后）：Task Dur **5971 µs**。

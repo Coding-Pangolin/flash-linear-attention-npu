@@ -116,6 +116,14 @@ constexpr uint32_t NUM_GM_SLOTS = 4;
 #ifndef USE_MASK_SOFT_LEAD
 #define USE_MASK_SOFT_LEAD 1
 #endif
+// I5: Prefill Stage0 for 2 windows; steady Post(w) then Stage0(w+2).
+// Cube WaitFree only before Stage0 on a reused bank (after Post of that bank).
+#ifndef USE_WIN_SOFT_LEAD
+#define USE_WIN_SOFT_LEAD 1
+#endif
+#ifndef KDA_BWD_PREFILL_WINDOWS
+#define KDA_BWD_PREFILL_WINDOWS 2
+#endif
 #ifndef USE_L0_AB_DBUF
 #define USE_L0_AB_DBUF 0
 #endif

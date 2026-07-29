@@ -24,30 +24,29 @@
 | N1 Gate early Set | 7.82 | −0.28 vs 8.10 | `GATE_EARLY_SET` | dwNeg 后立刻 Set；merge∥Stage2 |
 | N3 Dual Store | （并入 N1） | — | `DUAL_AIV_STORE` | |
 | N2 Mask soft-lead | **7.66** | −0.16 vs 7.82 | `MASK_SOFT_LEAD` | 末 BK：dA→Mask/Set→state |
-| **当前** | **~7.66** | vs C1 **−13.8** | 上表全 1；`L0_AB_DBUF`/`FIX_MTE2`=0 | 仍 Vec-bound |
+| **I5 窗 Prefill** | **7.27** | **−0.39** | `WIN_SOFT_LEAD=1` `PREFILL=2` | suite 绿；`aic_cube≈4.0%` |
+| **当前** | **7.27** | vs C1 **−14.2** | 上表；`L0_AB_DBUF`/`FIX_MTE2`=0 | 仍 Vec-bound |
 
-画像（N2 后）：`aic_cube_ratio≈3.8%`；`wait V_GATE≈2.45ms`；`wait V_MASK≈1.57ms`。
+I5 画像：Task Dur **7271 µs**；`aic_cube_ratio≈4.0%`；scalar≈40%；MTE2≈27%。
 
 ---
 
-## 2. 下一刀裁决（plan × PR190 × isub）
+## 2. 下一刀裁决
 
-| 候选 | 来源 | 裁决 | 原因 |
-|------|------|------|------|
-| **窗 soft-lead Prefill** | plan **I5** + isub [`VEC_2WIN_PIPE.md`](../../../../../VEC_2WIN_PIPE.md) | **先做** | 已远差 0.8ms；4-slot/`slotFree` 骨架在；墙钟仍钉跨窗串行 Stage0–3 |
-| I4a/b Fix∥MTE2 / L0 dbuf | plan I4 | **暂缓** | `aic_cube≈4%`，AIV-bound 时墙钟常无感 |
-| 照搬 PR190 `Process` | ref_pr190 | **不优先** | PR190 窗内仍 stage 串行，**无** 2-win Prefill；已吃完其 Select/WRS/双 AIV |
-| 残余 Vec BAR / Exp | plan I6 | soft-lead 后复测再开 | 边际相对 Prefill 小 |
+| 候选 | 裁决 | 原因 |
+|------|------|------|
+| **I5b** Cube Post(w+1) 先于 WaitFree(w)+S0(w+2) | **先做** | 现序在 Post(w) 后立刻 WaitFree，挡住 Post(w+1) |
+| I6 Vec BAR / Exp | I5b 后 | 仍 AIV-bound |
+| I4a/b Fix∥MTE2 / L0 dbuf | 试刀可开 | cube 仍低，预期无感但成本低 |
 
-**下一刀落地形态（I5）：**
+I5 已落地（对标 isub，非 PR190 Process）：
 
 ```text
-Prefill: w=0,1 的 Stage0（及必要握手）
-稳态:   Store(w) ‖ Stage0(w+2)   # 同 bank：先 Store 再写
-热路径: 仅 C_S* / V_* ；slotFree 只做 Process 书挡
+Prefill: Stage0(w=0,1) 实灌
+稳态 Vec: Post(w) → Stage0Vec(w+2)
+稳态 Cube: Post(w) → WaitFree(bank w) → Stage0(w+2)
+SetVS0Joined: CrossCoreBarrier（防 Prefill 0x2 skew）
 ```
-
-红线：raw `0x2`；空头也握手；Cube/Vec 镜像；禁每窗 `WaitFree`。
 
 ---
 
@@ -65,6 +64,8 @@ USE_STAGE0_DA_L0C_ACCUM=1
 USE_GATE_EARLY_SET=1
 USE_DUAL_AIV_STORE=1
 USE_MASK_SOFT_LEAD=1
+USE_WIN_SOFT_LEAD=1
+KDA_BWD_PREFILL_WINDOWS=2
 USE_L0_AB_DBUF=0
 USE_FIX_MTE2_OVERLAP=0
 ```

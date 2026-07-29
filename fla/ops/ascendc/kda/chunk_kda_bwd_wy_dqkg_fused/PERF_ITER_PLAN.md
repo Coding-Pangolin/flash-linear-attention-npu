@@ -449,7 +449,8 @@ PR7  （可选）I5 preload / soft-lead
 | Vec 刀（V*/N*） | **done** | **~7.66** | vs C1 −13.8 | 见 ITER_LOG | 仍 Vec-bound |
 | I4a Fix∥MTE2 | **parked** | | | 0 | AIV-bound 暂缓 |
 | I4b L0 dbuf | **parked** | | | 0 | 同上 |
-| I5 soft-lead Prefill | **next** | | | | 对标 isub 2-win；冲 0.8 |
+| I5 soft-lead Prefill | **done** | **7.27** | −0.39 | 1 | suite 绿；见 ITER_LOG |
+| I5b Post 优先于 WaitFree | **next** | | | | Cube 重排 |
 | I6 Vec BAR | deferred | | | | Prefill 后复测 |
 
 ---

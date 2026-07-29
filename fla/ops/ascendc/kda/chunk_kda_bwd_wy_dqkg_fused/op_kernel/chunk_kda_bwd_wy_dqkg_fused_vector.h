@@ -6,6 +6,7 @@
  *
  * 2-head stage-grouped window (mirrors Cube Process). Dual AIV splits row work via
  * GetSubBlockIdx(); SetV*Joined keeps Barrier+Set so Cube's single Wait credit matches.
+ * I5 USE_WIN_SOFT_LEAD: Prefill Stage0Vec×prefill; steady Post then Stage0Vec(w+prefill).
  *
  *   Stage0Vec  : wait(FLAG_C_S0); dv2/db from dvbWs; dAWs = sum_v dASlot[v]
  *   KgVec      : (∥ Cube Stage1) k/g → gk/kg ws; park gn in dgkWs (no Wait C_S1)
@@ -108,6 +109,8 @@ public:
         if (!this->ValidShapes()) {
             return;
         }
+        // Process bookend SetFree×4 (isub / I5). Hot-path depth uses C_S*/V_* +
+        // WaitFree before Cube Stage0(w+2) on a reused bank.
         Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
         PipeBarrier<PIPE_MTE3>();
         for (uint32_t s = 0; s < NUM_GM_SLOTS; ++s) {
@@ -116,8 +119,6 @@ public:
 
         const uint32_t nBv = this->NumBv();
         const uint32_t nBk = this->NumBk();
-        // DESIGN §5.1: 2-head stage groups; Kg ∥ Cube Stage1 (no Wait C_S1 before Kg).
-        uint64_t windowIdx = 0;
 
         for (uint64_t task = coreIdx_; task < totalTasks_; task += usedCoreNum_) {
             uint64_t iB = 0, iChunk = 0;
@@ -131,77 +132,106 @@ public:
             }
             const uint64_t validRows = (chunkStart + bt_ <= localT) ? bt_ : (localT - chunkStart);
             const uint64_t tok0 = bos + chunkStart;
-
-            for (uint64_t hvBase = 0; hvBase < hv_; hvBase += 2) {
-                const uint32_t headCnt =
-                    (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
-                const uint32_t winSlot = static_cast<uint32_t>((windowIdx & 1ULL) * 2ULL);
-
-                for (uint32_t h = 0; h < headCnt; ++h) {
-                    const uint64_t slot = winSlot ^ h;
-                    const uint64_t iHv = hvBase + h;
-                    Catlass::Arch::CrossCoreWaitFlag(cS0_);
-                    Stage0Vec(slot, bIdx, iHv, tok0, validRows, nBv);
-                    SetVS0Joined();
-                }
-
-                for (uint32_t iK = 0; iK < nBk; ++iK) {
-                    for (uint32_t h = 0; h < headCnt; ++h) {
-                        const uint64_t slot = winSlot ^ h;
-                        const uint64_t iHv = hvBase + h;
-                        const uint64_t iH = iHv / group_;
-                        KgVec(slot, bIdx, iHv, iH, tok0, validRows, iK);
-                    }
-                    for (uint32_t h = 0; h < headCnt; ++h) {
-                        const uint64_t slot = winSlot ^ h;
-                        const uint64_t iHv = hvBase + h;
-                        const uint64_t iH = iHv / group_;
-                        Catlass::Arch::CrossCoreWaitFlag(cS1_);
-                        GateOnlyVec(slot, bIdx, iHv, iH, tok0, localChunk, validRows, nBv, iK);
-#if !USE_GATE_EARLY_SET
-                        SetVGateJoined();
-#endif
-                    }
-                    for (uint32_t h = 0; h < headCnt; ++h) {
-                        const uint64_t slot = winSlot ^ h;
-                        const uint64_t iHv = hvBase + h;
-                        const uint64_t iH = iHv / group_;
-                        Catlass::Arch::CrossCoreWaitFlag(cS2_);
-                        EpilogVec(slot, bIdx, iHv, iH, tok0, localChunk, validRows, nBv, iK);
-#if USE_EARLY_MASK_PER_HEAD && !USE_MASK_SOFT_LEAD
-                        if (iK + 1 == nBk) {
-                            Stage3MaskVec(slot, bIdx, iHv, validRows);
-                            SetVMaskJoined();
-                        }
-#endif
-                    }
-                }
-
-#if !USE_EARLY_MASK_PER_HEAD && !USE_MASK_SOFT_LEAD
-                for (uint32_t h = 0; h < headCnt; ++h) {
-                    const uint64_t slot = winSlot ^ h;
-                    const uint64_t iHv = hvBase + h;
-                    Stage3MaskVec(slot, bIdx, iHv, validRows);
-                    SetVMaskJoined();
-                }
-#endif
-                for (uint32_t h = 0; h < headCnt; ++h) {
-                    const uint64_t slot = winSlot ^ h;
-                    const uint64_t iHv = hvBase + h;
-                    Catlass::Arch::CrossCoreWaitFlag(cS3_);
-                    Stage3StoreVec(slot, bIdx, iHv, tok0, validRows);
-                    SetSlotFreeJoined(slot);
-                }
-
-                ++windowIdx;
+            const uint64_t nHvWin = (hv_ + 1ULL) / 2ULL;
+            if (nHvWin == 0) {
+                continue;
             }
+
+#if USE_WIN_SOFT_LEAD
+            constexpr uint64_t kPrefillCap = static_cast<uint64_t>(KDA_BWD_PREFILL_WINDOWS);
+            const uint64_t prefill = (nHvWin < kPrefillCap) ? nHvWin : kPrefillCap;
+            for (uint64_t w = 0; w < prefill; ++w) {
+                RunWindowStage0Vec(w, bIdx, tok0, validRows, nBv);
+            }
+            for (uint64_t w = 0; w < nHvWin; ++w) {
+                RunWindowPostVec(w, bIdx, tok0, localChunk, validRows, nBv, nBk);
+                if (w + prefill < nHvWin) {
+                    RunWindowStage0Vec(w + prefill, bIdx, tok0, validRows, nBv);
+                }
+            }
+#else
+            for (uint64_t w = 0; w < nHvWin; ++w) {
+                RunWindowStage0Vec(w, bIdx, tok0, validRows, nBv);
+                RunWindowPostVec(w, bIdx, tok0, localChunk, validRows, nBv, nBk);
+            }
+#endif
         }
     }
 
 private:
-    // MIX_AIC_1_2: each AIV Sets; Cube Wait once consumes 2 credits. No AIV↔AIV
-    // Barrier here — wake at max(AIV0,AIV1). Merge barriers stay where shared WS
-    // must be joined before Sub0 reduces.
+    __aicore__ inline void RunWindowStage0Vec(uint64_t windowIdx, uint64_t bIdx, uint64_t tok0,
+                                              uint64_t validRows, uint32_t nBv)
+    {
+        const uint64_t hvBase = windowIdx * 2ULL;
+        const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+        const uint32_t winSlot = static_cast<uint32_t>((windowIdx & 1ULL) * 2ULL);
+        for (uint32_t h = 0; h < headCnt; ++h) {
+            const uint64_t slot = winSlot ^ h;
+            const uint64_t iHv = hvBase + h;
+            Catlass::Arch::CrossCoreWaitFlag(cS0_);
+            Stage0Vec(slot, bIdx, iHv, tok0, validRows, nBv);
+            SetVS0Joined();
+        }
+    }
+
+    __aicore__ inline void RunWindowPostVec(uint64_t windowIdx, uint64_t bIdx, uint64_t tok0,
+                                            uint64_t localChunk, uint64_t validRows, uint32_t nBv, uint32_t nBk)
+    {
+        const uint64_t hvBase = windowIdx * 2ULL;
+        const uint32_t headCnt = (hvBase + 2 <= hv_) ? 2U : static_cast<uint32_t>(hv_ - hvBase);
+        const uint32_t winSlot = static_cast<uint32_t>((windowIdx & 1ULL) * 2ULL);
+
+        for (uint32_t iK = 0; iK < nBk; ++iK) {
+            for (uint32_t h = 0; h < headCnt; ++h) {
+                const uint64_t slot = winSlot ^ h;
+                const uint64_t iHv = hvBase + h;
+                const uint64_t iH = iHv / group_;
+                KgVec(slot, bIdx, iHv, iH, tok0, validRows, iK);
+            }
+            for (uint32_t h = 0; h < headCnt; ++h) {
+                const uint64_t slot = winSlot ^ h;
+                const uint64_t iHv = hvBase + h;
+                const uint64_t iH = iHv / group_;
+                Catlass::Arch::CrossCoreWaitFlag(cS1_);
+                GateOnlyVec(slot, bIdx, iHv, iH, tok0, localChunk, validRows, nBv, iK);
+#if !USE_GATE_EARLY_SET
+                SetVGateJoined();
+#endif
+            }
+            for (uint32_t h = 0; h < headCnt; ++h) {
+                const uint64_t slot = winSlot ^ h;
+                const uint64_t iHv = hvBase + h;
+                const uint64_t iH = iHv / group_;
+                Catlass::Arch::CrossCoreWaitFlag(cS2_);
+                EpilogVec(slot, bIdx, iHv, iH, tok0, localChunk, validRows, nBv, iK);
+#if USE_EARLY_MASK_PER_HEAD && !USE_MASK_SOFT_LEAD
+                if (iK + 1 == nBk) {
+                    Stage3MaskVec(slot, bIdx, iHv, validRows);
+                    SetVMaskJoined();
+                }
+#endif
+            }
+        }
+
+#if !USE_EARLY_MASK_PER_HEAD && !USE_MASK_SOFT_LEAD
+        for (uint32_t h = 0; h < headCnt; ++h) {
+            const uint64_t slot = winSlot ^ h;
+            const uint64_t iHv = hvBase + h;
+            Stage3MaskVec(slot, bIdx, iHv, validRows);
+            SetVMaskJoined();
+        }
+#endif
+        for (uint32_t h = 0; h < headCnt; ++h) {
+            const uint64_t slot = winSlot ^ h;
+            const uint64_t iHv = hvBase + h;
+            Catlass::Arch::CrossCoreWaitFlag(cS3_);
+            Stage3StoreVec(slot, bIdx, iHv, tok0, validRows);
+            SetSlotFreeJoined(slot);
+        }
+    }
+
+    // MIX_AIC_1_2: each AIV Sets; Cube Wait once consumes 2 credits.
+    // Prefill soft-lead: Barrier before SetVS0 to avoid 0x2 skew (isub §5.1).
     __aicore__ inline void SetVGateJoined()
     {
         PipeBarrier<PIPE_MTE3>();
@@ -209,6 +239,9 @@ private:
     }
     __aicore__ inline void SetVS0Joined()
     {
+#if USE_WIN_SOFT_LEAD
+        Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
+#endif
         PipeBarrier<PIPE_MTE3>();
         Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(vS0_);
     }

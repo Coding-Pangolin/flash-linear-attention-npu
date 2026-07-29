@@ -435,8 +435,6 @@ private:
                 const uint64_t slot = winSlot ^ h;
                 const uint64_t iHv = hvBase + h;
 #if USE_STAGE2_PRELOAD_A && !USE_FIX_MTE2_OVERLAP
-                // F5: Preload into L1 while Fix outstanding races L1A → model ECC.
-                // With FIX∥MTE2, fall back to Stage2 in-gemm A load (no skipLoadA).
                 PreloadAToL1(resource, bIdx, iHv, tok0, validRows);
 #endif
                 Catlass::Arch::CrossCoreWaitFlag(vGate_);
@@ -457,7 +455,7 @@ private:
             const uint64_t slot = winSlot ^ h;
             const uint64_t iHv = hvBase + h;
             Catlass::Arch::CrossCoreWaitFlag(vMask_);
-            RunStage3(resource, pipe, slot, bIdx, iHv, tok0, validRows);
+            RunStage3(resource, pipe, slot, bIdx, iHv, tok0, validRows, /*aResident=*/false);
             Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(cS3_);
         }
     }
@@ -694,9 +692,9 @@ private:
     // ---- Stage2: dADeltaWs = dwNegWs @ kgWs^T ; dkgbWs = A @ dwNegWs ----
 #if USE_STAGE2_PRELOAD_A
     __aicore__ inline void PreloadAToL1(Catlass::Arch::Resource<KdaArchTag> &resource, uint64_t bIdx, uint64_t iHv,
-                                        uint64_t tok0, uint64_t validRows)
+                                        uint64_t tok0, uint64_t validRows, uint32_t l1AByteOff = 0)
     {
-        // Mirror DirectTileGemm L1A placement so Stage2 A@dwNeg can skipLoadA.
+        // Mirror DirectTileGemm L1A placement so Stage2/3 A@* can skipLoadA.
         using LayoutTagA = Catlass::layout::RowMajor;
         using LayoutTagC = Catlass::layout::RowMajor;
         using TileCopy =
@@ -709,7 +707,7 @@ private:
         auto blockA = MakeGmBlock<T, LayoutTagA>(a_, aBase, this->t_, bt_, tok0, 0, validRows, bt_);
         using CopyGmToL1A = typename TileCopy::template CopyGmToL1A<decltype(blockA)>;
 
-        LocalTensor<T> l1A = resource.l1Buf.template GetBufferByByte<T>(0);
+        LocalTensor<T> l1A = resource.l1Buf.template GetBufferByByte<T>(l1AByteOff);
         auto layoutL1A = tla::MakeLayout<T, LayoutTagL1A>(m, k);
         auto tL1A = tla::MakeTensor(l1A, layoutL1A, Catlass::Arch::PositionL1{});
         auto tileL1A = GetTile(tL1A, tla::MakeCoord(0, 0), tla::MakeShape(m, k));
@@ -743,6 +741,7 @@ private:
 
 #if USE_STAGE2_PRELOAD_A && !USE_FIX_MTE2_OVERLAP
         // A already in L1 from PreloadAToL1 — do A@dwNeg first (skipLoadA), then dwNeg@kg.
+        // (V2 Stage3 parks A from GM into high L1; Stage2 keeps proven order.)
         DirectTileGemm<T, RowMajor, T, RowMajor, float>(resource, blockA, blockDwNeg, blockDkgb,
                                                         static_cast<uint32_t>(validRows), bk,
                                                         static_cast<uint32_t>(bt_), &pipe, /*skipLoadA=*/true);
@@ -761,12 +760,13 @@ private:
 
     // ---- Stage3: dA2InterimWs = dAMaskedWs @ A (cast->T) ; dA3Ws = A @ dA2InterimWs ----
     __aicore__ inline void RunStage3(Catlass::Arch::Resource<KdaArchTag> &resource, DirectTileGemmPipeState &pipe,
-                                     uint64_t slot, uint64_t bIdx, uint64_t iHv, uint64_t tok0, uint64_t validRows)
+                                     uint64_t slot, uint64_t bIdx, uint64_t iHv, uint64_t tok0, uint64_t validRows,
+                                     bool aResident = false)
     {
+        (void)aResident;
         const uint64_t f32Base = this->SlotBaseF32(slot);
         const uint64_t tBase = this->SlotBaseT(slot);
         const uint64_t aBase = this->AOff(bIdx, iHv, 0, 0);
-        // Use validRows×validRows (golden) — full BT×BT on partial chunks reads OOB A / garbage.
         const uint32_t vr = static_cast<uint32_t>(validRows);
 
         auto blockMasked =
@@ -774,6 +774,23 @@ private:
         auto blockA1 = MakeGmBlock<T, RowMajor>(a_, aBase, this->t_, bt_, tok0, 0, vr, vr);
         auto blockInterim =
             MakeGmBlock<T, RowMajor>(wsT_, tBase + SlotLayoutT::dA2InterimWs, MAX_BT, MAX_BT, 0, 0, vr, vr);
+
+#if USE_WY_L1_RESIDENT_V2
+        // One GM→L1A ND2NZ of A into high bank; gemm2 skipLoadA. gemm1 still loads A as B.
+        if (validRows >= bt_) {
+            PreloadAToL1(resource, bIdx, iHv, tok0, validRows, L1_A_RESIDENT_OFF);
+            DirectTileGemm<T, RowMajor, T, RowMajor, T>(resource, blockMasked, blockA1, blockInterim, vr, vr, vr,
+                                                        &pipe);
+            auto blockA2 = MakeGmBlock<T, RowMajor>(a_, aBase, this->t_, bt_, tok0, 0, vr, vr);
+            auto blockInterim2 =
+                MakeGmBlock<T, RowMajor>(wsT_, tBase + SlotLayoutT::dA2InterimWs, MAX_BT, MAX_BT, 0, 0, vr, vr);
+            auto blockDa3 =
+                MakeGmBlock<float, RowMajor>(wsF32_, f32Base + SlotLayoutF32::dA3Ws, MAX_BT, MAX_BT, 0, 0, vr, vr);
+            DirectTileGemm<T, RowMajor, T, RowMajor, float>(resource, blockA2, blockInterim2, blockDa3, vr, vr, vr,
+                                                            &pipe, /*skipLoadA=*/true, true, true, L1_A_RESIDENT_OFF);
+            return;
+        }
+#endif
         DirectTileGemm<T, RowMajor, T, RowMajor, T>(resource, blockMasked, blockA1, blockInterim, vr, vr, vr, &pipe);
 
         auto blockA2 = MakeGmBlock<T, RowMajor>(a_, aBase, this->t_, bt_, tok0, 0, vr, vr);

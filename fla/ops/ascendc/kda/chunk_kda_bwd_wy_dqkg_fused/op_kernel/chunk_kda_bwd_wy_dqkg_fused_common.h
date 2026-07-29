@@ -194,6 +194,14 @@ constexpr uint32_t NUM_GM_SLOTS = 4;
 #ifndef USE_SYNC_PLAN_V1
 #define USE_SYNC_PLAN_V1 0
 #endif
+// G4: per-head Stage2→Stage3; park A in high L1; Stage3 gemm2 skipLoadA.
+#ifndef USE_WY_L1_RESIDENT_V2
+#define USE_WY_L1_RESIDENT_V2 0
+#endif
+// Mid-L1 bank for parked A (8KB @ BT=64 bf16); working tiles stay in [0, 32KB).
+#ifndef L1_A_RESIDENT_OFF
+#define L1_A_RESIDENT_OFF (256U * 1024U)
+#endif
 // E4: deeper window soft-pipe (see P4_SOFTPIPE_PLAN.md).
 // Trial PostS2→S0(next)→Stage3: suite green but +0.37ms vs E1 — keep off.
 #ifndef USE_WIN_SOFT_LEAD_V2
@@ -561,7 +569,7 @@ template <typename ElementA, typename LayoutTagA, typename ElementB, typename La
 __aicore__ inline void DirectTileGemm(Catlass::Arch::Resource<KdaArchTag> &resource, BlockA &blockA, BlockB &blockB,
                                       BlockC &blockC, uint32_t m, uint32_t n, uint32_t k,
                                       DirectTileGemmPipeState *pipeState = nullptr, bool skipLoadA = false,
-                                      bool initC = true, bool doFix = true)
+                                      bool initC = true, bool doFix = true, uint32_t l1AByteOff = 0)
 {
     using LayoutTagC = Catlass::layout::RowMajor;
     using TileCopy =
@@ -569,8 +577,8 @@ __aicore__ inline void DirectTileGemm(Catlass::Arch::Resource<KdaArchTag> &resou
                                                LayoutTagC>;
 
     const uint32_t l1ABytes = m * k * sizeof(ElementA);
-    LocalTensor<ElementA> l1A = resource.l1Buf.template GetBufferByByte<ElementA>(0);
-    LocalTensor<ElementB> l1B = resource.l1Buf.template GetBufferByByte<ElementB>(l1ABytes);
+    LocalTensor<ElementA> l1A = resource.l1Buf.template GetBufferByByte<ElementA>(l1AByteOff);
+    LocalTensor<ElementB> l1B = resource.l1Buf.template GetBufferByByte<ElementB>(l1AByteOff + l1ABytes);
 #if USE_L0_AB_DBUF
     const uint32_t l0Bytes = m * k * sizeof(ElementA);
     const uint32_t l0Ping = (pipeState != nullptr) ? (pipeState->l0Ping & 1U) : 0U;

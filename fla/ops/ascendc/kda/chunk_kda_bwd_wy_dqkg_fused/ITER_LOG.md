@@ -29,8 +29,9 @@
 | **G0 重钉** | **3.79** | — | — | 3789 µs；`results/G0_SUMMARY.md` |
 | G1 SyncPlan 窗级 C_S0/1 | reject | **+0.15** | `USE_SYNC_PLAN_V1=0` | 伤 Prefill/S1∥Gate；代码保留；`results/G1_SUMMARY.md` |
 | G2 FOLD_BAR_SLIM | reject | **+0.01** | `USE_FOLD_BAR_SLIM=0` | flat；`results/G2_SUMMARY.md` |
+| G4 WY L1 v2 | reject | +0.13→+0.03 | `USE_WY_L1_RESIDENT_V2=0` | 串 Mask 伤并行；ND2NZ 已低；`results/G4_SUMMARY.md` |
 | **F6 切分设计** | **done** | — | — | [`SPLIT_KERNEL_PLAN.md`](SPLIT_KERNEL_PLAN.md) |
-| **当前** | **~3.79** Task | vs P1a **−2.0** | 下表 | 下一刀：**G4 L1 resident** |
+| **当前** | **~3.79** Task | vs P1a **−2.0** | 下表 | 下一刀：**G5 Gate fold** / WAIT |
 
 ---
 
@@ -48,8 +49,8 @@
 | **G1 SyncPlan** | **reject** | 窗级 C_S0/1 **+0.15**；nBk=1 已满足 per-head≤1 Set |
 | G2 V-BAR fold | **reject** | FOLD_BAR_SLIM flat +0.01 |
 | G3 MASK_TABLE | queued | 挂有效 sync 刀后 |
-| **G4 WY L1 v2** | **next** | P2a；ND2NZ 主矛盾 |
-| G5 Gate fold v2 | queued | P4 增量审计 |
+| **G4 WY L1 v2** | **reject** | 串 Mask +0.13；修调度后 flat；ND2NZ 已 2.8% |
+| **G5 Gate fold v2** | **next** | P4 增量审计 |
 | P1b BK 批握手 | **skip** | nBk=1 已吸收 |
 
 权威 plan：**[`NEXT_ITER_PLAN_G.md`](NEXT_ITER_PLAN_G.md)** · 策略：[`IMPROVEMENT_STRATEGY.md`](IMPROVEMENT_STRATEGY.md) · 切分：[`SPLIT_KERNEL_PLAN.md`](SPLIT_KERNEL_PLAN.md)  

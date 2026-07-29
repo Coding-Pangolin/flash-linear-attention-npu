@@ -868,8 +868,12 @@ private:
             SyncMte3ToMte2();
 #endif
         }
+#if !(USE_MERGE_BARRIER_ONLY && USE_STAGE0_DA_L0C_ACCUM)
+        // Without L0C accum: Sub0 Σ dASlot→dAWs; both AIVs must wait before owned dv2.
+        // With L0C accum + merge-only: no shared write here — skip Join.
         Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
         PipeBarrier<PIPE_MTE3>();
+#endif
 
         for (uint32_t iv = 0; iv < nBv; ++iv) {
             const uint32_t bv = this->BvSize(iv);
@@ -1071,8 +1075,11 @@ private:
         CopyWsRowsOwned(wsF32_, f32Base + SlotLayoutF32::gkWs, gkExp, static_cast<uint32_t>(bt_), bk, bk);
         SetFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
         WaitFlag<HardEvent::MTE3_MTE2>(EVT_MTE3_MTE2);
+#if !USE_MERGE_BARRIER_ONLY
+        // Owned-row parks are lane-private; Gate reads own rows / Sub0 gn locally.
         Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
         PipeBarrier<PIPE_MTE3>();
+#endif
     }
 
     // ==================== Stage2 gate (after Wait C_S1) ====================
@@ -1748,8 +1755,16 @@ private:
             SyncMte3ToMte2();
         }
 
+#if USE_MERGE_BARRIER_ONLY && USE_MASK_SOFT_LEAD
+        // Last BK already Join'd before Stage3MaskVec; skip duplicate trailing Join.
+        if (iK + 1U < this->NumBk()) {
+            Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
+            PipeBarrier<PIPE_MTE3>();
+        }
+#else
         Catlass::Arch::CrossCoreBarrier<0x1, PIPE_MTE3>();
         PipeBarrier<PIPE_MTE3>();
+#endif
     }
 
     // ==================== Stage3: mask, AA, negate+store ====================
@@ -1913,7 +1928,7 @@ private:
             LocalTensor<float> dA3Owned = dA3[r0 * bt_];
             Muls(dA3Owned, dA3Owned, -1.0f, nElem);
             PipeBarrier<PIPE_V>();
-
+#if !USE_MASK_ONCE
             LocalTensor<uint8_t> mask = EnsureMask(static_cast<uint32_t>(validRows));
 #if USE_MASK_SELECT_SLIM
             LocalTensor<float> zero = zeroSelBuf_.Get<float>();
@@ -1928,6 +1943,7 @@ private:
             Select(dA3Owned, mask[r0 * maskBytesPerRow], zero, dA3Owned, SELMODE::VSEL_TENSOR_TENSOR_MODE,
                    static_cast<int32_t>(bt_), static_cast<uint8_t>(nr), repeatParams);
             PipeBarrier<PIPE_V>();
+#endif
 
             SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
             WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
@@ -1947,7 +1963,7 @@ private:
         SyncMte2ToV();
         Muls(dA3, dA3, -1.0f, btbt);
         PipeBarrier<PIPE_V>();
-
+#if !USE_MASK_ONCE
         LocalTensor<uint8_t> mask = EnsureMask(static_cast<uint32_t>(validRows));
 
 #if USE_MASK_SELECT_SLIM
@@ -1962,6 +1978,7 @@ private:
         Select(dA3, mask, zero, dA3, SELMODE::VSEL_TENSOR_TENSOR_MODE, static_cast<int32_t>(bt_),
                static_cast<uint8_t>(bt_), repeatParams);
         PipeBarrier<PIPE_V>();
+#endif
 
         SetFlag<HardEvent::V_MTE3>(EVT_V_MTE3);
         WaitFlag<HardEvent::V_MTE3>(EVT_V_MTE3);

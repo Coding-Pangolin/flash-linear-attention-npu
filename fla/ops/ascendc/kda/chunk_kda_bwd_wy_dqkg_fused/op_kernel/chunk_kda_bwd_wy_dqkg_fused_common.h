@@ -71,13 +71,31 @@ constexpr float FP16_MAX = 65504.0f;
 // Compile-time tile caps: internal retiling regardless of host bk/bv hints (UB-budget driven).
 constexpr uint32_t MAX_BT = 64;
 constexpr uint32_t MAX_BK = 64;   // K retiled into ceil(K/MAX_BK) tiles (K<=128 -> <=2 tiles)
-// V retiled into ceil(V/MAX_BV) tiles. Cap at 64 so AIV UB stays under AtlasA2 192KB:
-// Gate peak needs ~6*BT*BK + 2*BK*BV fp32 plus T scratch; BV=128 overflows.
-constexpr uint32_t MAX_BV = 64;   // V<=128 -> 2 tiles; V<=256 -> 4 tiles
+// F2: BK=128 blows arena (8*BT*BK); BV=128 OK — arena scales with BK not BV.
+#ifndef USE_BK128
+#define USE_BK128 0
+#endif
+#ifndef USE_BV128
+#define USE_BV128 1
+#endif
+// F4: skip Stage3Store secondary Select (trial; dA@A@A may refill upper — gate on suite).
+#ifndef USE_MASK_ONCE
+#define USE_MASK_ONCE 0
+#endif
+#if USE_BK128
+constexpr uint32_t MAX_BK_EFF = 128;
+#else
+constexpr uint32_t MAX_BK_EFF = MAX_BK;
+#endif
+#if USE_BV128
+constexpr uint32_t MAX_BV = 128; // V<=128 -> 1 tile
+#else
+constexpr uint32_t MAX_BV = 64;  // V<=128 -> 2 tiles; V<=256 -> 4 tiles
+#endif
 constexpr uint32_t MAX_K_TOTAL = 128;
 constexpr uint32_t MAX_V_TOTAL = 256;
-constexpr uint32_t MAX_NBK = (MAX_K_TOTAL + MAX_BK - 1) / MAX_BK;   // 2
-constexpr uint32_t MAX_NBV = (MAX_V_TOTAL + MAX_BV - 1) / MAX_BV;   // 4
+constexpr uint32_t MAX_NBK = (MAX_K_TOTAL + MAX_BK_EFF - 1) / MAX_BK_EFF;
+constexpr uint32_t MAX_NBV = (MAX_V_TOTAL + MAX_BV - 1) / MAX_BV;
 
 constexpr uint32_t NUM_GM_SLOTS = 4;
 
@@ -162,6 +180,10 @@ constexpr uint32_t NUM_GM_SLOTS = 4;
 // E3: RowFoldSum / same-chain BAR trim (default off until gated).
 #ifndef USE_FOLD_BAR_SLIM
 #define USE_FOLD_BAR_SLIM 0
+#endif
+// F1: keep AIV↔AIV Join only at merge / shared-WS points (see NEXT_ITER_PLAN).
+#ifndef USE_MERGE_BARRIER_ONLY
+#define USE_MERGE_BARRIER_ONLY 1
 #endif
 // E4: deeper window soft-pipe (see P4_SOFTPIPE_PLAN.md).
 // Trial PostS2→S0(next)→Stage3: suite green but +0.37ms vs E1 — keep off.

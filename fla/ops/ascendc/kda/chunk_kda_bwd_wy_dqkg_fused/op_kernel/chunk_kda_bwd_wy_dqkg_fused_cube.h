@@ -223,7 +223,9 @@ private:
             for (uint32_t h = 0; h < headCnt; ++h) {
                 const uint64_t slot = winSlot ^ h;
                 const uint64_t iHv = hvBase + h;
-#if USE_STAGE2_PRELOAD_A
+#if USE_STAGE2_PRELOAD_A && !USE_FIX_MTE2_OVERLAP
+                // F5: Preload into L1 while Fix outstanding races L1A → model ECC.
+                // With FIX∥MTE2, fall back to Stage2 in-gemm A load (no skipLoadA).
                 PreloadAToL1(resource, bIdx, iHv, tok0, validRows);
 #endif
                 Catlass::Arch::CrossCoreWaitFlag(vGate_);
@@ -528,7 +530,7 @@ private:
         auto blockDaDelta =
             MakeGmBlock<float, RowMajor>(wsF32_, f32Base + SlotLayoutF32::dADeltaWs, MAX_BT, MAX_BT, 0, 0, bt_, bt_);
 
-#if USE_STAGE2_PRELOAD_A
+#if USE_STAGE2_PRELOAD_A && !USE_FIX_MTE2_OVERLAP
         // A already in L1 from PreloadAToL1 — do A@dwNeg first (skipLoadA), then dwNeg@kg.
         DirectTileGemm<T, RowMajor, T, RowMajor, float>(resource, blockA, blockDwNeg, blockDkgb,
                                                         static_cast<uint32_t>(validRows), bk,

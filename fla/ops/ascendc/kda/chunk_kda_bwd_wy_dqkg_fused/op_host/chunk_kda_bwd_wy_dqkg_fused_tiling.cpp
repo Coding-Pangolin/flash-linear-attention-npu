@@ -14,7 +14,7 @@ namespace {
 // Must match op_kernel/chunk_kda_bwd_wy_dqkg_fused_common.h SlotLayout*
 constexpr int64_t MAX_BT = 64;
 constexpr int64_t MAX_BK = 64;
-constexpr int64_t MAX_BV = 64; // must match op_kernel MAX_BV (AIV UB budget)
+constexpr int64_t MAX_BV = 128; // match op_kernel USE_BV128=1
 constexpr int64_t MAX_K_TOTAL = 128;
 constexpr int64_t MAX_V_TOTAL = 256;
 constexpr int64_t MAX_NBV = (MAX_V_TOTAL + MAX_BV - 1) / MAX_BV;

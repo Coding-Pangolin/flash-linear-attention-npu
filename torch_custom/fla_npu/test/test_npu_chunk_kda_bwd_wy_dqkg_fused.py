@@ -7,14 +7,17 @@ import math
 import os
 import sys
 
-import torch
-import torch_npu
-
+# fla_npu before torch_npu (tiling SO / OPP wiring; avoids 561103 / stale OPP).
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
 sys.path.insert(0, os.path.join(REPO, "torch_custom/fla_npu"))
 sys.path.insert(0, os.path.join(REPO, "fla/ops/ascendc/kda/chunk_kda_bwd_wy_dqkg_fused/test"))
 
+import fla_npu  # noqa: E402,F401
 from fla_npu.ops import ascendc as ascendc_ops  # noqa: E402
+
+import torch  # noqa: E402
+import torch_npu  # noqa: E402
+
 from test_chunk_kda_bwd_wy_dqkg_fused import chunk_kda_bwd_wy_dqkg_fused_ref  # noqa: E402
 
 

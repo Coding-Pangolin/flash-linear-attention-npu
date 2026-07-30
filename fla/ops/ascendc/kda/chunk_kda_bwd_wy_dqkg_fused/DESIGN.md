@@ -119,6 +119,6 @@ for task:
 
 - 入口：`__CCE_AICORE__ == 310` → `op_kernel/arch35/*`；否则 910B 父目录源码。
 - Cube：复用父实现（`CATLASS_ARCH=3510` / `Ascend950` + Fixpipe `CopyL0CToDst`）。
-- Vector：MicroAPI **regbase**（`arch35/chunk_kda_bwd_wy_dqkg_fused_regbase.h`）；调度仍遵守 §5.1。
+- Vector：**当前复用父目录 classic AscendC**（arch35 薄 include）。MicroAPI regbase 曾在板端触发 AICore **507015**，`regbase.h` 保留待掩码 Load 验证后再开。
 - Host tiling 共用；CMake 在 `ascend950` 下加 `Ascend950PR_9599`。
-- 验收：950 **编译通过**；精度/性能在 950 板上另验（本仓库 910B 机仅保证 910B suite）。
+- 验收：950 编译通过 + 板端精度 suite；性能另记。详见 [`ASCEND950_TEST_GUIDE.md`](ASCEND950_TEST_GUIDE.md)。

@@ -1,7 +1,8 @@
 # Ascend950（A5）测试指南 — ChunkKdaBwdWyDqkgFused
 
-本算子在 `__CCE_AICORE__ == 310` 时走 `op_kernel/arch35/`（MicroAPI **regbase** vector + 共用 Cube/tiling）。  
-本文给出 **950 板端** 的编译、精度、性能步骤；910B 回归可作对照。
+本算子在 `__CCE_AICORE__ == 310` 时走 `op_kernel/arch35/`（Cube/`ArchTag=Ascend950`；**vector 当前复用 910B classic 实现**）。  
+MicroAPI regbase 曾在板端触发 **AICore 507015**，已回退；`arch35/*_regbase.h` 保留待重做。  
+本文给出 **950 板端** 的编译、精度、性能步骤。
 
 ## 0. 环境前提
 
@@ -27,7 +28,16 @@ unset ASCEND_CUSTOM_OPP_PATH
 unset FLA_WY_DQKG_STAGE FLA_WY_DQKG_TASK_BEGIN FLA_WY_DQKG_TASK_END
 ```
 
-**重要**：先 `import fla_npu`，再 `import torch_npu`（tiling SO / 561103）。测脚本已按此顺序。
+**重要**：先 `import fla_npu`，再 `import torch_npu`（tiling SO / 561103）。`test_npu_chunk_kda_bwd_wy_dqkg_fused.py` 已按此顺序。
+
+装好 950 wheel 后，**不要**再手动 `unset ASCEND_CUSTOM_OPP_PATH` 之后只设 `FLA_NPU_OPP_PATH` 却忘了让 `import fla_npu` 生效——`fla_npu` 会根据 `FLA_NPU_OPP_PATH` 自动前置 `ASCEND_CUSTOM_OPP_PATH`。推荐：
+
+```bash
+unset ASCEND_CUSTOM_OPP_PATH   # 清掉脏路径
+# 装 wheel 后通常无需手设 FLA_NPU_OPP_PATH；若要用 site-packages 内 OPP：
+# export FLA_NPU_OPP_PATH="$(python -c 'import site; print(site.getsitepackages()[0]+"/fla_npu/opp/vendors/fla_npu_transformer")')"
+python -c "import fla_npu; import os; print(os.environ.get('ASCEND_CUSTOM_OPP_PATH','<unset>'))"
+```
 
 ---
 
@@ -73,8 +83,12 @@ python fla/ops/ascendc/kda/chunk_kda_bwd_wy_dqkg_fused/test/test_chunk_kda_bwd_w
 ### 2.2 判据与排障
 
 - Golden：与 Triton `chunk_kda_bwd_kernel_wy_dqkg_fused` cube-faithful（DESIGN）；**禁止**收窄 range / 无依据放宽阈值。
+- **AICore 507015**（`copy_between_host_and_device` / PTA ERR00100）：设备侧 kernel 已异常，`.cpu()` 时才爆。处理：
+  1. 确认装的是**本分支重新编的 950 wheel**（vector 已回退 classic）。
+  2. `import fla_npu` 先于 `torch_npu`；清掉脏 `ASCEND_CUSTOM_OPP_PATH`。
+  3. `dmesg` / `msnpureport` 看 Aicore exception；勿在 device 已挂时连续跑。
 - 失败时：先确认装的是 **950** wheel（非 910b），再关 `split_stages`、缩小 T 二分 Stage。
-- 若仅 910B 机：精度测的是父目录 vector，**不能**代替 950 regbase 精度验收。
+- 若仅 910B 机：精度测的是父目录 vector，**不能**代替 950 板验收。
 
 ---
 

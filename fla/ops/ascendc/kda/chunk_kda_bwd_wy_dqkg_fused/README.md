@@ -5,9 +5,19 @@
 ## 构建
 
 ```bash
-bash build.sh --pkg --soc=ascend910b --ops=chunk_kda_bwd_wy_dqkg_fused
+# 方式 A（推荐）：一键 wheel
+FLA_NPU_SOC=ascend910b FLA_NPU_OPS=chunk_kda_bwd_wy_dqkg_fused \
+  python -m pip wheel --no-build-isolation --no-deps . -w dist
+
+# Ascend950 / A5（arch35 regbase vector；本机无 950 卡时仅编译门禁）
+FLA_NPU_SOC=ascend950 FLA_NPU_OPS=chunk_kda_bwd_wy_dqkg_fused \
+  python -m pip wheel --no-build-isolation --no-deps . -w dist_950
 ```
 
+备选：`bash build.sh --pkg --soc=ascend910b --ops=chunk_kda_bwd_wy_dqkg_fused`
+
+A5 双路径说明见 [`op_kernel/arch35/README.md`](op_kernel/arch35/README.md)。  
+**Ascend950 板端精度 + 性能测试步骤**：[`ASCEND950_TEST_GUIDE.md`](ASCEND950_TEST_GUIDE.md)。
 ## 测试
 
 ```bash

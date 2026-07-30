@@ -12,12 +12,19 @@
  * Inputs : q,k,v,v_new,g,beta,A(=Akk),h,dh,do,dv (+ cu_seqlens, chunk_indices)
  * Outputs: dq(fp32),dk(fp32),dv2,dg(fp32),db(fp32),dA(fp32)
  *
- * A5 (arch35 / Ascend950) compiles from the same source via CATLASS_ARCH.
+ * Dual-path: Ascend950 (__CCE_AICORE__==310) → arch35/ (regbase vector);
+ *            910B / else → parent *_common/_cube/_vector.h.
  */
 
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+#include "arch35/chunk_kda_bwd_wy_dqkg_fused_common.h"
+#include "arch35/chunk_kda_bwd_wy_dqkg_fused_cube.h"
+#include "arch35/chunk_kda_bwd_wy_dqkg_fused_vector.h"
+#else
 #include "chunk_kda_bwd_wy_dqkg_fused_common.h"
 #include "chunk_kda_bwd_wy_dqkg_fused_cube.h"
 #include "chunk_kda_bwd_wy_dqkg_fused_vector.h"
+#endif
 
 extern "C" __global__ __aicore__ void chunk_kda_bwd_wy_dqkg_fused(
     GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR vNew, GM_ADDR g, GM_ADDR beta, GM_ADDR a, GM_ADDR h, GM_ADDR dh,

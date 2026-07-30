@@ -114,3 +114,11 @@ for task:
 | `USE_FIX_MTE2_OVERLAP` | 0 | Fix∥下一 tile MTE2（`DirectTileGemmPipeState`） |
 
 精度路径：I1/I2 已门禁 default on（suite PASS；model Task Dur ~**21.5 ms** vs ~22.0 ms 基线，Δ≤−0.05）。硬目标 0.8 ms 以板端 med 为准。
+
+## 7. Ascend950 / arch35
+
+- 入口：`__CCE_AICORE__ == 310` → `op_kernel/arch35/*`；否则 910B 父目录源码。
+- Cube：复用父实现（`CATLASS_ARCH=3510` / `Ascend950` + Fixpipe `CopyL0CToDst`）。
+- Vector：MicroAPI **regbase**（`arch35/chunk_kda_bwd_wy_dqkg_fused_regbase.h`）；调度仍遵守 §5.1。
+- Host tiling 共用；CMake 在 `ascend950` 下加 `Ascend950PR_9599`。
+- 验收：950 **编译通过**；精度/性能在 950 板上另验（本仓库 910B 机仅保证 910B suite）。

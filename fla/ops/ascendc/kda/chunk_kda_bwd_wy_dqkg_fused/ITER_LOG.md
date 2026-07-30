@@ -31,6 +31,7 @@
 | G2 FOLD_BAR_SLIM | reject | **+0.01** | `USE_FOLD_BAR_SLIM=0` | flat；`results/G2_SUMMARY.md` |
 | G4 WY L1 v2 | reject | +0.13→+0.03 | `USE_WY_L1_RESIDENT_V2=0` | 串 Mask 伤并行；ND2NZ 已低；`results/G4_SUMMARY.md` |
 | **F6 切分设计** | **done** | — | — | [`SPLIT_KERNEL_PLAN.md`](SPLIT_KERNEL_PLAN.md) |
+| **A5 regbase** | **compile** | — | arch35 dual-path | MicroAPI vector；910B suite 绿 + Task Dur **3793 µs**（vs G0 3789，无劣化）；950 板精度/性能见 [`ASCEND950_TEST_GUIDE.md`](ASCEND950_TEST_GUIDE.md) |
 | **当前** | **~3.79** Task | vs P1a **−2.0** | 下表 | 下一刀：**G5 Gate fold** / WAIT |
 
 ---
@@ -84,6 +85,7 @@ USE_MASK_ONCE=0
 USE_EPILOG_STORE_MERGE=0
 USE_FOLD_BAR_SLIM=0
 USE_SYNC_PLAN_V1=0
+USE_WY_L1_RESIDENT_V2=0
 USE_WIN_SOFT_LEAD_V2=0
 USE_KG_GATE_INTERLEAVE=0
 USE_VS0_ONCE_PER_WINDOW=0

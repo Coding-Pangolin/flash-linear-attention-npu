@@ -235,15 +235,17 @@ public:
         if (rowEnd > mActual) {
             rowEnd = mActual;
         }
+        uint32_t pingpongFlag = isPing ? 0 : pongBaseEvent;
         if (rowBegin >= mActual) {
-            if (waitWsFromMte3) {
-                uint32_t pingpongFlag = isPing ? 0 : pongBaseEvent;
-                AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(
-                    EVENT_ID0 + pingpongFlag);
-                AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(
-                    EVENT_ID0 + pingpongFlag);
-            }
             Arch::CrossCoreWaitFlag(cube1Done);
+            // A zero-row AIV lane still owns the EVENT0 hand-off consumed by V2.
+            if (waitWsFromMte3) {
+                AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID0 + pingpongFlag);
+                AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID0 + pingpongFlag);
+            } else if (storeFinalState && isFinalState) {
+                AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID0 + pingpongFlag);
+                AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID0 + pingpongFlag);
+            }
             Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(vec1Done);
             return;
         }
@@ -251,7 +253,6 @@ public:
 
         AscendC::GlobalTensor<GElementInput> gInputThisSubBlock = gInput;
 
-        uint32_t pingpongFlag = isPing ? 0 : pongBaseEvent;
         AscendC::LocalTensor<UElementInput> uUbTensor = isPing ? uUbTensor_ping : uUbTensor_pong;
         AscendC::LocalTensor<float> wsUbTensor = isPing ? wsUbTensor_ping : wsUbTensor_pong;
         AscendC::LocalTensor<float> gUbTensor = isPing ? gUbTensor_ping : gUbTensor_pong;

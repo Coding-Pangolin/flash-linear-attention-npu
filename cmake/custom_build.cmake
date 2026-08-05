@@ -959,6 +959,7 @@ install(DIRECTORY ${OPBASE_SOURCE_PATH}/pkg_inc/op_common/atvoss
 )
 install(DIRECTORY ${OPBASE_SOURCE_PATH}/pkg_inc/op_common/op_kernel
         DESTINATION ${IMPL_INSTALL_DIR}/ascendc/common
+        OPTIONAL
 )
 
 foreach (op_dir ${OP_DIR_LIST})

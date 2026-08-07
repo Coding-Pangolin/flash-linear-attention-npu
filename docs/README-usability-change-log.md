@@ -2,7 +2,7 @@
 
 > 协作方式：每确认一个修改点 → 记入本表 → 确认下一个 → 最后一次性实施。
 > 优先级说明：P0 = 事实性错误 / 会让用户操作失败；P1 = 核心需求缺失；P2 = 易用性增强。
-> **状态总览（2026-08-07 14:30）**：21 点已全部实施并提交；PR #280 评审意见 10 条已全部修订并登记（见文末"## G. PR #280 评审意见修订"）。分支 `20260806_204500_docs-README-usability`（基于最新 main `ac46f1c3`，含 PR #274），已推送至 origin（Coding-Pangolin）。
+> **状态总览（2026-08-07 15:00）**：21 点已全部实施并提交；PR #280 评审意见 10 条已全部修订并登记（见文末"## G. PR #280 评审意见修订"）；复审追加 3 条已修订并登记（见"## H. 第二轮修订"）。分支 `20260806_204500_docs-README-usability`（基于最新 main `ac46f1c3`，含 PR #274），已推送至 origin（Coding-Pangolin）。
 > 口径：PR #274 已合入 main（`ac46f1c3`）。下文凡涉及"增量构建移除、`import fla_npu` 即加载、`scripts/check_install_workflows.py`、卸载说明、shell 环境钩子"等，均为 #274 在 main 上已有的内容；本次 PR 的增量是文档修正与新章节，与 #274 语义兼容（冲突合并时保留 #274 侧内容 + 叠加本次修正）。
 
 ---
@@ -214,13 +214,13 @@ PR #280 上 reviewer 共提出 10 条行内意见，已逐条修订并登记如�
 
 - **原状**：Step 1 写死"推荐社区版 8.5.2"，下载链接指向 8.5.2 具体版本页。
 - **意见**：① 要求 8.5.2 以后版本，推荐使用最新社区稳定版本；② 更换成稳定版本链接。
-- **实际改法**：文案改为"推荐使用最新的社区稳定版本（不低于 8.5.2，如需使用更新版本请参考 `check_npu_env.py` 支持的 CANN / torch_npu 版本组合）"；下载链接改为社区 CANN 下载总入口 `https://www.hiascend.com/developer/download/community`，并在其中选择最新的稳定版本。
+- **实际改法**：文案改为"推荐使用最新的社区稳定版本（不低于 8.5.2，如需使用更新版本请参考 `check_npu_env.py` 支持的 CANN / torch_npu 版本组合）"；下载链接改为社区 CANN 下载总入口 `https://www.hiascend.com/developer/download/community`，并在其中选择最新的稳定版本。**第二轮修订（2026-08-07）**：按 reviewer 提供的稳定版链接，改为 `https://www.hiascend.com/zh/cann/download?versionId=752&ids=d803%2Ch0501%2Ch0601%2Ch0703`（已实测可访问，为最新稳定版下载页）。
 
 ### 意见 3（README Step 1）：修正 A3 写死的问题
 
 - **原状**：安装命令写死 `./Ascend-cann-A3*run`，A2/A5 用户照抄会失败。
 - **意见**：A3 写死的需要修正。
-- **实际改法**：改为 `./Ascend-cann-<机器型号>*run`，注释说明"toolkit 与机型对应的 ops 包都必须安装，`<机器型号>` 请替换为实际机型对应的包前缀"，并给出 A3 → `Ascend-cann-A3*run`、A2 → `Ascend-cann-910b*run`、A5 → `Ascend-cann-950*run` 示例（已对照昇腾社区 CANN 官方 run 包命名核实）。
+- **实际改法**：改为 `./Ascend-cann-<机器型号>*run`，注释说明"toolkit 与机型对应的 ops 包都必须安装，`<机器型号>` 请替换为实际机型对应的包前缀"，并给出 A3 → `Ascend-cann-A3*run`、A2 → `Ascend-cann-910b*run`、A5 → `Ascend-cann-950*run` 示例（已对照昇腾社区 CANN 官方 run 包命名核实）。**第二轮修订（2026-08-07）**：按 reviewer 意见改为 ops 通配符——ops 包统一用 `./Ascend-cann-*-ops*.run`（社区 ops 包命名格式 `Ascend-cann-<chip_type>-ops_<version>_linux-<arch>.run`，如 `Ascend-cann-A3-ops*.run` / `Ascend-cann-910b-ops*.run` / `Ascend-cann-950-ops*.run`），用户无需再手动替换机器型号。
 
 ### 意见 4（README Step 2）：`--build-only` 环境不全补充 + 优先推荐完整预检
 
@@ -257,3 +257,27 @@ PR #280 上 reviewer 共提出 10 条行内意见，已逐条修订并登记如�
 - **原状**：未说明如何确认新编的 wheel 确实由最新修改的源码编译。
 - **意见**：怎么确定新编的版本是最新修改的源码编译的（比如开 debug 日志确定走的版本），需要找个方案。
 - **实际改法**：在 `docs/developer-guide.md` 新增"如何确认新构建的 wheel 来自最新源码"章节，给出三种方式：方式 1 核对 wheel 文件名与版本号（构建日志文件名 → `pip show` / `importlib.metadata` 核对）；方式 2 确认实际加载的 OPP 路径（`import fla_npu` 后打印 `fla_npu.__file__` 与 `FLA_NPU_OP_API_LIB` / `ASCEND_CUSTOM_OPP_PATH` 环境变量，确认指向新 wheel 内嵌 OPP）；方式 3 修改后强制覆盖安装（`--force-reinstall`，或临时打印标记确认后移除）。
+
+---
+
+## H. 第二轮修订（2026-08-07）
+
+PR #280 复审后 reviewer 追加 3 条要求，已修订并登记如下。
+
+### 修订 H1：稳定版链接按 reviewer 提供链接替换
+
+- **原状**：Step 1 下载链接为社区下载总入口 `https://www.hiascend.com/developer/download/community`。
+- **意见**：reviewer 在行内评论给出社区稳定版具体链接。
+- **实际改法**：替换为 reviewer 提供的 `https://www.hiascend.com/zh/cann/download?versionId=752&ids=d803%2Ch0501%2Ch0601%2Ch0703`（已实测可访问），文案标注"最新稳定版"。同步更新意见 1/2 登记。
+
+### 修订 H2：A3 写死改为 ops 通配符
+
+- **原状**：安装命令为 `./Ascend-cann-<机器型号>*run`，仍需用户手动替换机型前缀。
+- **意见**：改成 ops 的通配符，参考社区上包的格式。
+- **实际改法**：ops 包改为 `./Ascend-cann-*-ops*.run`（社区 ops 包命名格式 `Ascend-cann-<chip_type>-ops_<version>_linux-<arch>.run`），注释给出 A3/A2/A5 对应 `Ascend-cann-A3-ops*.run` / `Ascend-cann-910b-ops*.run` / `Ascend-cann-950-ops*.run` 示例，用户无需手动替换机器型号。同步更新意见 3 登记。
+
+### 修订 H3：开发者指引在 README 只留入口，场景导航并入独立文档
+
+- **原状**：README"开发者指引"章节仍保留 6 条场景导航列表（单独编译单算子 / 一键编包 / 增加新算子 / 测试单算子 / 端到端验证 / 确认 wheel 来源）。
+- **意见**：开发者的也拆分出一个文档。
+- **实际改法**：README"开发者指引"精简为一行入口链接指向 `docs/developer-guide.md`；在 `docs/developer-guide.md` 开头补充场景目录（6 个锚点链接），独立文档自含完整导航，与迁移指南并列于 README"维护文档"。

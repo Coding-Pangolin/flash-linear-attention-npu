@@ -33,18 +33,19 @@ npu-smi info
 
 首先需安装 CANN 开发包，提供 NPU 算子运行所需的底层驱动与工具链。
 推荐使用最新的社区稳定版本（不低于 8.5.2，如需使用更新版本请参考 `check_npu_env.py` 支持的 CANN / torch_npu 版本组合），总共需要下载 2 个 run 包。这里以 A3 机器为例（即需要下载 A3-ops 与 toolkit），A2 / A5 机器请下载对应的 ops 与 toolkit 包。
-下载地址为社区 CANN 下载总入口
-[https://www.hiascend.com/developer/download/community](https://www.hiascend.com/developer/download/community)
-在其中选择最新的稳定版本，找到与你当前机器对应的包
+下载地址为社区 CANN 下载页（最新稳定版）
+[https://www.hiascend.com/zh/cann/download?versionId=752&ids=d803%2Ch0501%2Ch0601%2Ch0703](https://www.hiascend.com/zh/cann/download?versionId=752&ids=d803%2Ch0501%2Ch0601%2Ch0703)
+在其中找到与你当前机器对应的包
 
 ```
 # 设置需要安装的路径（请替换为实际安装路径）
 export INSTALL_PATH=/usr/local/Ascend
 
-# toolkit 与机型对应的 ops 包都必须安装，<机器型号> 请替换为实际机型对应的包前缀
-# 例如 A3 机器对应 Ascend-cann-A3*run，A2 机器对应 Ascend-cann-910b*run，A5 机器对应 Ascend-cann-950*run
+# toolkit 与机型对应的 ops 包都必须安装；ops 包命名格式为
+# Ascend-cann-<chip_type>-ops_<version>_linux-<arch>.run，例如 A3 机器对应
+# Ascend-cann-A3-ops*.run，A2 机器对应 Ascend-cann-910b-ops*.run，A5 机器对应 Ascend-cann-950-ops*.run
 ./Ascend-cann-toolkit*run --install-path=$INSTALL_PATH --full  --quiet
-./Ascend-cann-<机器型号>*run --install-path=$INSTALL_PATH --install --quiet
+./Ascend-cann-*-ops*.run --install-path=$INSTALL_PATH --install --quiet
 source $INSTALL_PATH/ascend-toolkit/set_env.sh
 ```
 
@@ -214,14 +215,9 @@ Python wheel 加单算子 run 包时，将 `--base-mode` 设为 `skeleton`。该
 
 ## 开发者指引
 
-开发相关操作按场景拆分，详见[开发者指南](docs/developer-guide.md)：
+开发者相关操作（单独编译单算子、一键编包、增加新算子、测试单算子、端到端验证、确认 wheel 来自最新源码）按场景拆分为独立文档：
 
-- **单独编译单算子**：`bash build.sh --pkg --soc=<soc> --vendor_name=fla_npu --ops=<op>` 构建 run 包，覆盖已安装 wheel 中对应算子的 OPP 产物。
-- **一键编包单算子 / 全量 wheel**：仓库根目录 `pip wheel` 全量构建，自动清理中间产物。
-- **增加一个新算子**：目录结构、`torch_custom` 下新增 Python 接口的完整链路。
-- **测试单算子**：`test.sh --op <算子名>`。
-- **端到端 Example/ST 验证**：`python examples/flash_gated_delta_rule.py`。
-- **确认 wheel 来自最新源码**：核对构建产物文件名 / 版本号、确认实际加载的 OPP 路径（`FLA_NPU_OP_API_LIB`）、修改后强制覆盖安装。
+- [开发者指南](docs/developer-guide.md)
 
 旧版本（v26.6.0 及更早）用户升级与兼容迁移见[兼容与迁移指南](docs/migration-guide.md)。
 

@@ -28,7 +28,7 @@
 - **状态**：已实施
 - **涉及**：`README.md` Step 4（原 `is_legacy_torch_ops_loaded()` + `hasattr(torch_npu.ops, 'chunk_fwd_o')` 验证）
 - **依据（实测）**：`torch_npu.ops` 兼容入口行为随 wheel 版本而异——**当前仓库源码（PR #274 后）** 下 `torch_npu.ops` 属性不存在，旧命令抛 `AttributeError`；**fzy 安装的旧 wheel（26.7.0.dev0，2026-07-13 构建）** 导入 `fla_npu.ops.ascendc` 时自动调用 `install_torch_npu_ops_compat()`，`hasattr` 返回 `True`。
-- **实际改法**：验证命令改为 `python -c "import fla_npu; print('ok')"` + `python scripts/check_packaged_wheel_api.py`；Step 4 新增两个 bullet 区分新旧 wheel 行为：新版默认不注册 `torch_npu.ops.*`，旧命令抛 `AttributeError` 属预期行为、不要用它验证新版，需要时先显式调用 `install_torch_npu_ops_compat()`；旧版（2026-07 之前的中间版本）导入即自动挂载、`hasattr` 返回 `True`，属旧版行为、不代表新 wheel。合并冲突时，Step 4 同时保留 #274 已加入的"卸载说明"（`pip uninstall flash-linear-attention-npu` 与 RECORD 无残留说明）及 `scripts/check_install_workflows.py` 看护脚本用法，与本次修正的验证命令共存。
+- **实际改法**：验证命令改为 `python -c "import fla_npu; print('ok')"` + `python scripts/check_packaged_wheel_api.py`；Step 4 新增两个 bullet 区分新旧 wheel 行为：新版默认不注册 `torch_npu.ops.*`，旧命令抛 `AttributeError` 属预期行为、不要用它验证新版，需要时先显式调用 `install_torch_npu_ops_compat()`；旧版（2026-07 之前的中间版本）导入即自动挂载、`hasattr` 返回 `True`，属旧版行为、不代表新 wheel。**实测补充（2026-08-07）**：`install_torch_npu_ops_compat()` 的调用必须先导入子模块——`import fla_npu` 后直接写 `fla_npu.ops.ascendc.install_torch_npu_ops_compat()` 会报 `AttributeError: module 'fla_npu' has no attribute 'ops'`（顶层 `__init__.py` 不自动导入 `ops`），必须 `from fla_npu.ops import ascendc`（或 `import fla_npu.ops.ascendc`）后再调用；已按此修正 Step 4 说明，给出可复制的 Python 片段。合并冲突时，Step 4 同时保留 #274 已加入的"卸载说明"（`pip uninstall flash-linear-attention-npu` 与 RECORD 无残留说明）及 `scripts/check_install_workflows.py` 看护脚本用法，与本次修正的验证命令共存。
 
 ### 修改点 #4（P1）：安装命令使用精确文件名并强制覆盖同版本号
 
@@ -49,7 +49,7 @@
 - **状态**：已实施
 - **涉及**：`README.md` 新增 `## 开发者指引 > ### 从旧版本升级（v26.6.0 及更早 → 最新）`（置于 Step 4 之后）
 - **依据**：用户需求 #2/#3——`torch.ops.npu.*` 只支持到 v26.6.0，后续需 `fla_npu.ops.ascendc`；升级用户需要知道旧版与新版的构建、验证、兼容入口行为差异。
-- **实际改法**：5 步——卸载旧包并清理残留（含 `custom_aclnn_extension_lib*.so` / 自定义 `libopapi.so`）→ 安装新版本 wheel → 迁移调用（旧→新对照表：`torch.ops.npu.npu_chunk_fwd_o` → `from fla_npu.ops.ascendc import chunk_fwd_o` 等）→ 验证（`check_packaged_wheel_api.py` + `test.sh --op gdn_fwd_o`）→ 迁移期临时兼容（`install_torch_npu_ops_compat()` / `load_legacy_torch_ops()`，注明 legacy 需 `FLA_NPU_BUILD_LEGACY_EXTENSION=1`，新代码勿用 legacy）。章节末尾新增"旧版本（≤ v26.6.0）与新版的主要行为差异"四项：
+- **实际改法**：5 步——卸载旧包并清理残留（含 `custom_aclnn_extension_lib*.so` / 自定义 `libopapi.so`）→ 安装新版本 wheel → 迁移调用（旧→新对照表：`torch.ops.npu.npu_chunk_fwd_o` → `from fla_npu.ops.ascendc import chunk_fwd_o` 等）→ 验证（`check_packaged_wheel_api.py` + `test.sh --op gdn_fwd_o`）→ 迁移期临时兼容（`install_torch_npu_ops_compat()` / `load_legacy_torch_ops()`，注明 legacy 需 `FLA_NPU_BUILD_LEGACY_EXTENSION=1`，新代码勿用 legacy；**实测补充（2026-08-07）**：调用 `fla_npu.ops.ascendc.install_torch_npu_ops_compat()` 前必须先 `from fla_npu.ops import ascendc`，`import fla_npu` 后直接全限定名调用会报 `AttributeError`，已修正描述）。章节末尾新增"旧版本（≤ v26.6.0）与新版的主要行为差异"四项：
   - **B1 构建环境变量**：旧版支持 `FLA_NPU_INCREMENTAL_BUILD`（增量构建）、`FLA_NPU_OPS`（单算子 wheel）、`FLA_NPU_SKIP_RUN_BUILD` / `FLA_NPU_SKIP_RUN_INSTALL`（run 包控制）；新版（PR #274 起）全部移除，统一全量构建（自动清理 `build/`/`build_out/`/`output/` 中间产物），单算子定位改用 `bash build.sh --pkg --soc=<soc> --vendor_name=fla_npu --ops=<op>` 构建 run 包，旧脚本中的 `FLA_NPU_INCREMENTAL_BUILD=1` / `FLA_NPU_OPS=...` 需要删除。
   - **B2 验证方式**：旧版 Step 4 的 `fla_npu.is_legacy_torch_ops_loaded()` 与 `hasattr(torch_npu.ops, ...)` 在新版不再适用；统一改用 `python -c "import fla_npu; print('ok')"` + `python scripts/check_packaged_wheel_api.py`。
   - **B3 `torch_npu.ops` 挂载行为**：旧版 wheel（2026-07 之前的中间版本）导入 `fla_npu.ops.ascendc` 即自动挂载 `torch_npu.ops.*`；新版（PR #274 后构建）默认不挂载，迁移期需显式调用 `install_torch_npu_ops_compat()`。
@@ -194,6 +194,7 @@
 | `scripts/check_install_workflows.py` | 已随 PR #274 合入 main（修改点 #15 引用了其用法） |
 | `FLA_NPU_OPP_PATH` 环境变量 | `fla_npu/__init__.py`、`install_opp.py` 中真实支持（修改点 #13） |
 | `install_torch_npu_ops_compat()` / `load_legacy_torch_ops()` | `fla_npu/ops/ascendc/__init__.py`、`fla_npu/__init__.py` 中真实存在（#3/#6） |
+| `install_torch_npu_ops_compat()` 调用方式（fzy 实测） | `from fla_npu.ops import ascendc` 后调用可挂载 `torch_npu.ops`；`import fla_npu` 后全限定名调用报 `AttributeError`，已按正确写法修正 Step 4（#3） |
 | `_GET_WORKSPACE_ARGTYPES` / `BACKWARD_OPS` / `MUTATED_ARGUMENTS` | 代码中真实存在（修改点 #14） |
 | AGENTS.md 代码围栏修复 | `git diff` 确认删除多余 ```（#17） |
 | 新增文档链接目标 | 全部有效 |

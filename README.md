@@ -169,7 +169,17 @@ python scripts/check_packaged_wheel_api.py
 
 `import fla_npu` 成功即表示 wheel 与内嵌 OPP 加载正常。`torch_npu.ops.*` 兼容入口的行为随 wheel 版本不同：
 
-- **新版 wheel（从当前仓库源码构建，PR #274 之后）**：默认**不**注册 `torch_npu.ops.*` 兼容入口，`torch_npu.ops` 属性本身不存在，旧版验证命令 `hasattr(torch_npu.ops, 'chunk_fwd_o')` 会抛 `AttributeError` 而非返回 `False`——这是预期行为，不要用它来验证新版安装；需要该兼容入口时，先显式调用 `fla_npu.ops.ascendc.install_torch_npu_ops_compat()` 再使用。
+- **新版 wheel（从当前仓库源码构建，PR #274 之后）**：默认**不**注册 `torch_npu.ops.*` 兼容入口，`torch_npu.ops` 属性本身不存在，旧版验证命令 `hasattr(torch_npu.ops, 'chunk_fwd_o')` 会抛 `AttributeError` 而非返回 `False`——这是预期行为，不要用它来验证新版安装。需要该兼容入口时，先导入子模块再显式调用 `install_torch_npu_ops_compat()`：
+
+  ```python
+  from fla_npu.ops import ascendc
+  import torch_npu
+
+  ascendc.install_torch_npu_ops_compat()
+  hasattr(torch_npu.ops, "chunk_fwd_o")  # True
+  ```
+
+  注意：`import fla_npu` 后直接写 `fla_npu.ops.ascendc.install_torch_npu_ops_compat()` 会报 `AttributeError: module 'fla_npu' has no attribute 'ops'`，因为 `fla_npu` 顶层不自动导入 `ops` 子模块，必须先执行 `from fla_npu.ops import ascendc`（或 `import fla_npu.ops.ascendc`）。
 - **旧版 wheel（2026-07 之前的中间版本）**：导入 `fla_npu.ops.ascendc` 时会**自动**注册 `torch_npu.ops.*`，`hasattr(...)` 返回 `True`，属旧版行为，不代表新 wheel 的行为。
 
 `torch.ops.npu.*` 是旧版本（≤ v26.6.0）的调用方式，后续版本不再支持，新代码请使用 `fla_npu.ops.ascendc` 下的稳定 Python 入口。
@@ -241,7 +251,7 @@ Python wheel 加单算子 run 包时，将 `--base-mode` 设为 `skeleton`。该
    ```
 5. **迁移期临时兼容**：存量代码暂未迁移完成时，可显式开启兼容路径（详见 `torch_custom/fla_npu/README.md` 的 legacy 章节）：
 
-   - `fla_npu.ops.ascendc.install_torch_npu_ops_compat()`：将 Python wrapper 挂到 `torch_npu.ops.*`；
+   - 先导入子模块再调用 `fla_npu.ops.ascendc.install_torch_npu_ops_compat()`：将 Python wrapper 挂到 `torch_npu.ops.*`（注意 `import fla_npu` 后不能直接写 `fla_npu.ops.ascendc.xxx`，需先 `from fla_npu.ops import ascendc`）；
    - `fla_npu.load_legacy_torch_ops()`：兼容旧 `torch.ops.npu.*`，需用 `FLA_NPU_BUILD_LEGACY_EXTENSION=1` 额外构建 legacy extension。
 
    新代码请勿使用 legacy 路径。

@@ -24,17 +24,17 @@ npu-smi info
 确认机器类型后，按目标芯片选择后续构建参数（`--soc` / `FLA_NPU_SOC`）：
 
 | 产品 | `--soc` / `FLA_NPU_SOC` |
-|---|---|
-| A2 | `ascend910b` |
-| A3 | `ascend910_93` |
-| A5 | `ascend950` |
+| ---- | --------------------------- |
+| A2   | `ascend910b`              |
+| A3   | `ascend910_93`            |
+| A5   | `ascend950`               |
 
 ### Step 1. 部署 CANN 开发环境
 
 首先需安装 CANN 开发包，提供 NPU 算子运行所需的底层驱动与工具链。
 推荐社区版 8.5.2，总共需要下载 2 个 run 包。这里以 A3 机器为例（即需要下载 A3-ops 与 toolkit），A2 / A5 机器请下载对应的 ops 与 toolkit 包。
 下载地址为
-[https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.5.2](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.5.2)
+[https://www.hiascend.com/developer/download/community/result?module=cann&amp;cann=8.5.2](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.5.2)
 需要找到与你当前机器对应的包
 
 ```
@@ -60,7 +60,13 @@ python -m pip install -r requirements.txt
 python scripts/check_npu_env.py --build-only
 ```
 
-`--build-only` 预检只检查构建纯 Python wheel 所需的环境（Python / bash / CANN），不会检查 `torch`、`torch_npu`、`torchnpugen`、`triton-ascend` 等 torch 系依赖；这些依赖需要按 CANN 与 Python 版本自行匹配安装，缺失或版本不匹配时，请在构建前先安装正确版本。预检通过后再生成 wheel：
+`--build-only` 预检只检查构建纯 Python wheel 所需的环境（Python / bash / CANN），不会检查 `torch`、`torch_npu`、`torchnpugen`、`triton-ascend` 等 torch 系依赖。要判断 torch 系依赖是否完整、版本是否匹配，请运行完整预检（不带 `--build-only`）：
+
+```sh
+python scripts/check_npu_env.py
+```
+
+完整预检会检查 `torch` / `torch_npu` / `triton-ascend` 是否可导入、版本下限与 NPU 可用性（`torch.npu.is_available()`）；在无 NPU 卡的纯构建环境里，`is_available()` 为 `False` 且该检查会报 `FAIL`，属预期现象——此时若只需产出 wheel 构建，用 `--build-only` 即可。torch 系依赖缺失或版本不匹配时，`pip wheel` 会在构建或打包阶段报错，请按 CANN 与 Python 版本匹配的列表先行安装。预检通过后再生成 wheel：
 
 ```sh
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -81,10 +87,10 @@ FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w d
 
 方式 A 编译可用环境变量：
 
-| 环境变量 | 可选范围 | 作用 / 建议 | 默认 |
-|---|---|---|---|
-| `FLA_NPU_SOC` | `ascend910b` / `ascend910_93` / `ascend950` | 目标芯片；按实际运行机器选择 | `ascend910b` |
-| `FLA_NPU_DISABLE_LOCAL_VERSION` | `TRUE` / `FALSE` | wheel 版本号不追加 SOC/torch/ABI 本地版本；内部统一发版需要固定版本号时可设 `TRUE`，日常构建建议保持 `FALSE` 以区分产物兼容范围 | `FALSE` |
+| 环境变量                          | 可选范围                                          | 作用 / 建议                                                                                                                        | 默认           |
+| --------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| `FLA_NPU_SOC`                   | `ascend910b` / `ascend910_93` / `ascend950` | 目标芯片；按实际运行机器选择                                                                                                       | `ascend910b` |
+| `FLA_NPU_DISABLE_LOCAL_VERSION` | `TRUE` / `FALSE`                              | wheel 版本号不追加 SOC/torch/ABI 本地版本；内部统一发版需要固定版本号时可设`TRUE`，日常构建建议保持 `FALSE` 以区分产物兼容范围 | `FALSE`      |
 
 布尔变量设为 `TRUE` 时也接受 `1`、`YES`、`ON`；未设置或其他值按 `FALSE` 处理。
 
@@ -115,12 +121,15 @@ WHEEL_PATH="dist/<准确wheel文件名>.whl"
 python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
 ```
 
+> 重新构建的 wheel 版本号与已安装的旧 wheel 可能相同（如本地 dev 版本 `26.7.0.dev0`）。版本号相同时，不带 `--force-reinstall` 的 `pip install` 会认为"已是最新版本"而跳过，导致实际仍是旧代码。上面的命令已带 `--force-reinstall` 强制覆盖；若想先清理再装，可先执行 `python -m pip uninstall -y flash-linear-attention-npu`。
+
 方式 A wheel 不安装或执行 shell 环境钩子。无论使用系统 Python、Conda、venv
 还是 Docker，每次进入新的 shell 后都需要先按 Step 1 手工 source CANN 的
 `set_env.sh`。调用 `fla_npu.ops.ascendc` 算子时会在当前 Python 进程内定位并加载
 wheel 内嵌 OPP；wheel 通过绝对路径加载 `libcust_opapi.so`，不会再生成或加载
 可能覆盖 CANN 运行库的自定义 `libopapi.so`。如果旧版 run 包曾在 wheel 中遗留该别名，
 新 runtime 会在首次加载 OPP 时删除它；目录不可写时会给出明确的手工清理提示。
+
 #### 方式 B 产物安装
 
 先确认方式 A 的完整 wheel 已经安装到当前 Python 环境，然后安装 run 包。安装器会在覆盖前列出当前 run 包携带的算子，并标出安装后的算子状态：`WARNING` 表示安装后不可用，包括不在当前 run 包范围内但会受局部 `libcust_opapi.so`、tiling so、proto so 整体替换影响的算子，以及当前 run 包内但 aclnn ABI 修改或删除的算子；`NOTICE` 表示新增或无法完整确认的 ABI，需要确认当前 Python wheel 是否已有对应 wrapper；`OK` 表示当前 run 包内且 aclnn ABI 一致的算子。`op_api/include/aclnnop` 中新增、删除、修改的 aclnn ABI 头文件会合并显示到对应算子的状态原因里；删除只按当前 run 包携带的算子范围判断，非 `--quiet` 模式只在状态表后确认一次。
@@ -158,7 +167,12 @@ python -c "import fla_npu; print('ok')"
 python scripts/check_packaged_wheel_api.py
 ```
 
-`import fla_npu` 成功即表示 wheel 与内嵌 OPP 加载正常。`torch_npu.ops.*` 兼容入口默认不注册，`hasattr(torch_npu.ops, 'chunk_fwd_o')` 为 `False` 属预期行为；需要时显式调用 `fla_npu.ops.ascendc.install_torch_npu_ops_compat()`。`torch.ops.npu.*` 是旧版本（≤ v26.6.0）的调用方式，后续版本不再支持，新代码请使用 `fla_npu.ops.ascendc` 下的稳定 Python 入口。
+`import fla_npu` 成功即表示 wheel 与内嵌 OPP 加载正常。`torch_npu.ops.*` 兼容入口的行为随 wheel 版本不同：
+
+- **新版 wheel（从当前仓库源码构建，PR #274 之后）**：默认**不**注册 `torch_npu.ops.*` 兼容入口，`torch_npu.ops` 属性本身不存在，旧版验证命令 `hasattr(torch_npu.ops, 'chunk_fwd_o')` 会抛 `AttributeError` 而非返回 `False`——这是预期行为，不要用它来验证新版安装；需要该兼容入口时，先显式调用 `fla_npu.ops.ascendc.install_torch_npu_ops_compat()` 再使用。
+- **旧版 wheel（2026-07 之前的中间版本）**：导入 `fla_npu.ops.ascendc` 时会**自动**注册 `torch_npu.ops.*`，`hasattr(...)` 返回 `True`，属旧版行为，不代表新 wheel 的行为。
+
+`torch.ops.npu.*` 是旧版本（≤ v26.6.0）的调用方式，后续版本不再支持，新代码请使用 `fla_npu.ops.ascendc` 下的稳定 Python 入口。
 
 上述检查通过后，可运行一个真实算子的冒烟测试，确认算子可被调用：
 
@@ -212,28 +226,32 @@ Python wheel 加单算子 run 包时，将 `--base-mode` 设为 `skeleton`。该
    ```
 
    若旧 wheel / legacy extension 在 `site-packages` 遗留了 `custom_aclnn_extension_lib*.so`、`fla_npu/` 或自定义 `libopapi.so`，请手工确认后删除。
-
 2. **安装新版本 wheel**：见上文 Step 3 / Step 4。
-
 3. **迁移代码调用**：将旧入口替换为 `fla_npu.ops.ascendc` 下对应接口，例如：
 
-   | 旧（≤ v26.6.0） | 新 |
-   |---|---|
-   | `torch.ops.npu.npu_chunk_fwd_o(...)` | `from fla_npu.ops.ascendc import chunk_fwd_o; chunk_fwd_o(...)` |
+   | 旧（≤ v26.6.0）                                        | 新                                                                    |
+   | ------------------------------------------------------- | --------------------------------------------------------------------- |
+   | `torch.ops.npu.npu_chunk_fwd_o(...)`                  | `from fla_npu.ops.ascendc import chunk_fwd_o; chunk_fwd_o(...)`     |
    | `torch_npu.ops.npu_chunk_gated_delta_rule_fwd_h(...)` | `from fla_npu.ops.ascendc import chunk_gated_delta_rule_fwd_h; ...` |
-
 4. **验证**：
 
    ```sh
    python scripts/check_packaged_wheel_api.py
    cd torch_custom/fla_npu/test && bash test.sh --device 0 --op gdn_fwd_o
    ```
-
 5. **迁移期临时兼容**：存量代码暂未迁移完成时，可显式开启兼容路径（详见 `torch_custom/fla_npu/README.md` 的 legacy 章节）：
+
    - `fla_npu.ops.ascendc.install_torch_npu_ops_compat()`：将 Python wrapper 挂到 `torch_npu.ops.*`；
    - `fla_npu.load_legacy_torch_ops()`：兼容旧 `torch.ops.npu.*`，需用 `FLA_NPU_BUILD_LEGACY_EXTENSION=1` 额外构建 legacy extension。
 
    新代码请勿使用 legacy 路径。
+
+**旧版本（≤ v26.6.0）与新版的主要行为差异**：
+
+- **构建环境变量**：旧版支持 `FLA_NPU_INCREMENTAL_BUILD`（复用 `build/` 的增量构建）、`FLA_NPU_OPS`（只构建指定算子的 wheel）、`FLA_NPU_SKIP_RUN_BUILD` / `FLA_NPU_SKIP_RUN_INSTALL`（跳过 run 包编译或内嵌）；新版（PR #274 起）已移除这些变量，统一走全量构建（自动清理 `build/`、`build_out/`、`output/` 中间产物），单算子定位改用 `bash build.sh --pkg --soc=<soc> --vendor_name=fla_npu --ops=<op>` 构建 run 包，旧脚本中的 `FLA_NPU_INCREMENTAL_BUILD=1` / `FLA_NPU_OPS=...` 需要删除。
+- **安装验证命令**：旧版 Step 4 用 `fla_npu.is_legacy_torch_ops_loaded()` 和 `hasattr(torch_npu.ops, 'chunk_fwd_o')` 验证，新版不再适用（见 Step 4 说明）；统一改用 `python -c "import fla_npu; print('ok')"` + `python scripts/check_packaged_wheel_api.py`。
+- **`torch_npu.ops` 挂载行为**：旧版 wheel（2026-07 之前的中间版本）导入 `fla_npu.ops.ascendc` 即自动挂载 `torch_npu.ops.*`；新版（PR #274 之后构建）默认不挂载，迁移期需显式调用 `install_torch_npu_ops_compat()`。
+- **`test.sh` 算子名**：`recompute_wu_fwd` 在新版统一为 `recompute_w_u_fwd`。
 
 ### 在 torch_custom 新增 Python 接口
 
@@ -269,7 +287,6 @@ bash test.sh --device 0 --op causal_conv1d   # 单个 AscendC 测试任务
 - `gdn_fwd_h`
 - `recompute_w_u_fwd`
 
-
 ### 算子调用方式参考
 
 推荐通过 `fla_npu.ops.ascendc` 或 `fla_npu.ops.triton` 导入对应算子；具体入参可参考 `torch_custom/fla_npu/test` 下的对应算子测试脚本。
@@ -301,7 +318,9 @@ NPU CI 的 Example/ST 用例由 [`ci/example_st_cases.json`](ci/example_st_cases
 NPU CI 维护说明见 [`docs/Fla-npu仓CI部署教程.md`](docs/Fla-npu仓CI部署教程.md)。
 
 ## 🔍目录结构
+
 关键目录如下：
+
 ```
 ├── cmake                              # 项目工程编译目录
 ├── common                             # 项目公共头文件和公共源码

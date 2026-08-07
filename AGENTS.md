@@ -139,7 +139,6 @@ FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w d
 ```sh
 bash build.sh --soc=ascend910b --pkg --vendor_name=fla_npu --ops=chunk_fwd_o
 ```
-```
 
 分开编 OPP run 包和 `torch_custom` 适配时：
 

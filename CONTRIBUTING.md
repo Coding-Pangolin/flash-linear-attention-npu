@@ -89,7 +89,7 @@
   - `torch_custom/fla_npu/fla_npu/ops/ascendc/__init__.py` 的 `_ASCENDC_OPS` 注册（需要时同步 `BACKWARD_OPS` 正反向映射与 `MUTATED_ARGUMENTS` mutation 契约）；
   - `torch_custom/fla_npu/test/test_npu_<op>.py` 单算子测试并接入 `test.sh`。
 - **默认调用路径**：新增算子与测试默认使用 `fla_npu.ops.ascendc`，新代码不要默认依赖 legacy 路径（legacy 路径仅用于兼容性验证，且需要 `FLA_NPU_BUILD_LEGACY_EXTENSION=1` 额外构建）。
-- 具体接入步骤见根 README 的"在 torch_custom 新增 Python 接口"与 `torch_custom/fla_npu/README.md`。
+- 具体接入步骤见[开发者指南](docs/developer-guide.md)的场景 3 与 `torch_custom/fla_npu/README.md`。
 
 ### 文档纠错
 

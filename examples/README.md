@@ -42,7 +42,7 @@ python examples/flash_gated_delta_rule.py
 
 ### add_example
 
-参考 `add_example/README.md` 与 `add_example/examples/test_aclnn_add_example.cpp`，以 `add_example` 为模板实现自定义 Ascend C 算子，并接入本仓 `torch_custom/fla_npu` 的 Python 接口（新增接口步骤见根 README 的"在 torch_custom 新增 Python 接口"）。
+参考 `add_example/README.md` 与 `add_example/examples/test_aclnn_add_example.cpp`，以 `add_example` 为模板实现自定义 Ascend C 算子，并接入本仓 `torch_custom/fla_npu` 的 Python 接口（新增接口步骤见[开发者指南](../docs/developer-guide.md)的场景 3）。
 
 ### fast_kernel_launch_example
 

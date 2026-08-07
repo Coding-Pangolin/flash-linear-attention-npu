@@ -216,7 +216,7 @@ legacy 路径会生成或使用：
 
 这些兼容路径不会默认使能。`torch.ops.npu` legacy extension 会重新绑定 PyTorch、Python、C++ ABI 和 torch_npu dispatcher 行为，因此只用于历史接口兼容或专项验证。新增算子默认不要以 legacy extension 作为唯一调用方式。
 
-`torch.ops.npu.*` / `torch_npu.ops.*` 只支持到 v26.6.0，从旧版本迁移到最新版本的完整步骤见[根 README 的"从旧版本升级"章节](../../README.md)。新代码请勿使用 legacy 路径。
+`torch.ops.npu.*` / `torch_npu.ops.*` 只支持到 v26.6.0，从旧版本迁移到最新版本的完整步骤见[兼容与迁移指南](../../docs/migration-guide.md)。新代码请勿使用 legacy 路径。
 
 ## 测试要求
 

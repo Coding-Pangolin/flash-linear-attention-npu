@@ -2,7 +2,7 @@
 
 > 协作方式：每确认一个修改点 → 记入本表 → 确认下一个 → 最后一次性实施。
 > 优先级说明：P0 = 事实性错误 / 会让用户操作失败；P1 = 核心需求缺失；P2 = 易用性增强。
-> **状态总览（2026-08-07 10:33）**：21 点已全部实施并提交。分支 `20260806_204500_docs-README-usability`（基于最新 main `ac46f1c3`，含 PR #274），已推送至 origin（Coding-Pangolin）。整改记录（ref_pr190 vs 0806 双版本对比）中的 A1/A2/A3/B1/B2/B3 已并入对应修改点（#1/#3/#6/#17），不再以文末"补充"形式单独列出。
+> **状态总览（2026-08-07 14:30）**：21 点已全部实施并提交；PR #280 评审意见 10 条已全部修订并登记（见文末"## G. PR #280 评审意见修订"）。分支 `20260806_204500_docs-README-usability`（基于最新 main `ac46f1c3`，含 PR #274），已推送至 origin（Coding-Pangolin）。
 > 口径：PR #274 已合入 main（`ac46f1c3`）。下文凡涉及"增量构建移除、`import fla_npu` 即加载、`scripts/check_install_workflows.py`、卸载说明、shell 环境钩子"等，均为 #274 在 main 上已有的内容；本次 PR 的增量是文档修正与新章节，与 #274 语义兼容（冲突合并时保留 #274 侧内容 + 叠加本次修正）。
 
 ---
@@ -184,22 +184,76 @@
 
 ## 实施后可实测项验证结果
 
-| 验证项 | 结果 |
-|---|---|
-| `python scripts/check_npu_env.py --build-only`（缺 torch） | 通过，`EXIT=0`，跳过 torch 系检查（印证 #1） |
-| 完整预检 `python scripts/check_npu_env.py`（fzy 环境） | 可检查 torch/torch_npu/triton-ascend 与 `is_available()`（#1） |
-| Step 4 新旧 wheel 行为（fzy 实测） | 旧 wheel（26.7.0.dev0）`hasattr` 返回 `True`；新版源码行为为抛 `AttributeError`（#3） |
-| `bash test.sh --device 0 --op gdn_fwd_o --mode dry-run` | 正常打印命令（印证 #8/#9） |
-| `bash build.sh --help` | `--pkg/--soc/--ops/--vendor_name` 参数存在 |
-| `scripts/check_install_workflows.py` | 已随 PR #274 合入 main（修改点 #15 引用了其用法） |
-| `FLA_NPU_OPP_PATH` 环境变量 | `fla_npu/__init__.py`、`install_opp.py` 中真实支持（修改点 #13） |
-| `install_torch_npu_ops_compat()` / `load_legacy_torch_ops()` | `fla_npu/ops/ascendc/__init__.py`、`fla_npu/__init__.py` 中真实存在（#3/#6） |
-| `install_torch_npu_ops_compat()` 调用方式（fzy 实测） | `from fla_npu.ops import ascendc` 后调用可挂载 `torch_npu.ops`；`import fla_npu` 后全限定名调用报 `AttributeError`，已按正确写法修正 Step 4（#3） |
-| `_GET_WORKSPACE_ARGTYPES` / `BACKWARD_OPS` / `MUTATED_ARGUMENTS` | 代码中真实存在（修改点 #14） |
-| AGENTS.md 代码围栏修复 | `git diff` 确认删除多余 ```（#17） |
-| 新增文档链接目标 | 全部有效 |
-| 残留校验（`FLA_NPU_INCREMENTAL_BUILD` / `FLA_NPU_OPS` / `mc2` / `../docs/zh` 等） | 本次改动文档中无残留 |
-| `git diff --check` | 通过 |
-| PR 冲突检查（compare API） | 分支基于 `ac46f1c3`（main），无冲突 |
+| 验证项                                                                                    | 结果                                                                                                                                                      |
+| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `python scripts/check_npu_env.py --build-only`（缺 torch）                              | 通过，`EXIT=0`，跳过 torch 系检查（印证 #1）                                                                                                            |
+| 完整预检`python scripts/check_npu_env.py`（fzy 环境）                                   | 可检查 torch/torch_npu/triton-ascend 与`is_available()`（#1）                                                                                           |
+| Step 4 新旧 wheel 行为（fzy 实测）                                                        | 旧 wheel（26.7.0.dev0）`hasattr` 返回 `True`；新版源码行为为抛 `AttributeError`（#3）                                                               |
+| `bash test.sh --device 0 --op gdn_fwd_o --mode dry-run`                                 | 正常打印命令（印证#8/#9）                                                                                                                                 |
+| `bash build.sh --help`                                                                  | `--pkg/--soc/--ops/--vendor_name` 参数存在                                                                                                              |
+| `scripts/check_install_workflows.py`                                                    | 已随 PR#274 合入 main（修改点 #15 引用了其用法）                                                                                                          |
+| `FLA_NPU_OPP_PATH` 环境变量                                                             | `fla_npu/__init__.py`、`install_opp.py` 中真实支持（修改点 #13）                                                                                      |
+| `install_torch_npu_ops_compat()` / `load_legacy_torch_ops()`                          | `fla_npu/ops/ascendc/__init__.py`、`fla_npu/__init__.py` 中真实存在（#3/#6）                                                                          |
+| `install_torch_npu_ops_compat()` 调用方式（fzy 实测）                                   | `from fla_npu.ops import ascendc` 后调用可挂载 `torch_npu.ops`；`import fla_npu` 后全限定名调用报 `AttributeError`，已按正确写法修正 Step 4（#3） |
+| `_GET_WORKSPACE_ARGTYPES` / `BACKWARD_OPS` / `MUTATED_ARGUMENTS`                    | 代码中真实存在（修改点#14）                                                                                                                               |
+| AGENTS.md 代码围栏修复                                                                    | `git diff` 确认删除多余 ```（#17）                                                                                                                      |
+| 新增文档链接目标                                                                          | 全部有效                                                                                                                                                  |
+| 残留校验（`FLA_NPU_INCREMENTAL_BUILD` / `FLA_NPU_OPS` / `mc2` / `../docs/zh` 等） | 本次改动文档中无残留                                                                                                                                      |
+| `git diff --check`                                                                      | 通过                                                                                                                                                      |
+| PR 冲突检查（compare API）                                                                | 分支基于`ac46f1c3`（main），无冲突                                                                                                                      |
 
 **未实测**：需要真实 NPU + torch 环境才能执行的算子冒烟（`bash test.sh --device 0 --op gdn_fwd_o` 实际执行），本机缺 torch 环境，未执行。
+
+---
+
+## G. PR #280 评审意见修订（2026-08-07）
+
+PR #280 上 reviewer 共提出 10 条行内意见，已逐条修订并登记如下。
+
+### 意见 1/2（README Step 1）：CANN 版本推荐改最新稳定版 + 稳定链接
+
+- **原状**：Step 1 写死"推荐社区版 8.5.2"，下载链接指向 8.5.2 具体版本页。
+- **意见**：① 要求 8.5.2 以后版本，推荐使用最新社区稳定版本；② 更换成稳定版本链接。
+- **实际改法**：文案改为"推荐使用最新的社区稳定版本（不低于 8.5.2，如需使用更新版本请参考 `check_npu_env.py` 支持的 CANN / torch_npu 版本组合）"；下载链接改为社区 CANN 下载总入口 `https://www.hiascend.com/developer/download/community`，并在其中选择最新的稳定版本。
+
+### 意见 3（README Step 1）：修正 A3 写死的问题
+
+- **原状**：安装命令写死 `./Ascend-cann-A3*run`，A2/A5 用户照抄会失败。
+- **意见**：A3 写死的需要修正。
+- **实际改法**：改为 `./Ascend-cann-<机器型号>*run`，注释说明"toolkit 与机型对应的 ops 包都必须安装，`<机器型号>` 请替换为实际机型对应的包前缀"，并给出 A3 → `Ascend-cann-A3*run`、A2 → `Ascend-cann-910b*run`、A5 → `Ascend-cann-950*run` 示例（已对照昇腾社区 CANN 官方 run 包命名核实）。
+
+### 意见 4（README Step 2）：`--build-only` 环境不全补充 + 优先推荐完整预检
+
+- **原状**：仅说明 `--build-only` 不检查 torch 系依赖。
+- **意见**：① `--build-only` 检查的环境可能不全（CMake 等组件未检查），通过也可能不能正常编译，需补充支持的版本；② 优先建议用户用同时检测执行与编译的（不带 `--build-only`）。
+- **实际改法**：改为"**建议优先使用完整预检（不带 `--build-only`）**"开头；补充说明 `--build-only` 不覆盖 `CMake`、编译器（`g++` / `bisheng`）、Python 头文件、`ninja` 等编译组件，检查通过不代表一定可以编译，缺失的编译组件会在 `pip wheel` 阶段才暴露。
+
+### 意见 5（README Step 4）：去掉 PR 号，改描述 v26.6.0 后不维护兼容接口
+
+- **原状**：Step 4 兼容入口说明写"新版 wheel（从当前仓库源码构建，PR #274 之后）"。
+- **意见**：不应该显示写 PR 号，增加描述 v26.6.0 后不维护旧版本的兼容接口。
+- **实际改法**：README 正文不再出现 PR 号；Step 4 改为"`torch.ops.npu.*` / `torch_npu.ops.*` 是旧版本（v26.6.0 及更早）的调用方式，**v26.6.0 之后不再维护旧版本兼容接口**，新代码请使用 `fla_npu.ops.ascendc` 下的稳定 Python 入口"，兼容细节（`install_torch_npu_ops_compat()` / `load_legacy_torch_ops()` 用法、`hasattr` 版本差异）移入新文档。
+
+### 意见 6/10（README Step 4）：兼容性内容拆分到独立文档
+
+- **原状**：Step 4 用大段篇幅说明 `torch_npu.ops.*` 兼容入口的新旧行为差异；方案 B / legacy 说明分散在主流程。
+- **意见**：① README 主要写主流程，兼容性的篇幅太大，单起一个文档更合适；② 方案 B 是 legacy 路径，legacy 路径都单独放，引导用户用新方式。
+- **实际改法**：新建 `docs/migration-guide.md`（兼容与迁移指南），收纳：调用方式演进对照表、从旧版本升级完整步骤、迁移期临时兼容（`install_torch_npu_ops_compat()` / `load_legacy_torch_ops()` 及 legacy 构建命令）、新旧版本行为差异、`hasattr(torch_npu.ops, ...)` 版本差异注意事项。README Step 4 与"开发者指引"只保留主流程 + 指向该文档的链接。
+
+### 意见 7（README Step 4）：冒烟测试用算子名
+
+- **原状**：冒烟测试 `bash test.sh --device 0 --op gdn_fwd_o` 未说明 `--op` 参数含义。
+- **意见**：冒烟测试可以保留，但应该用算子名。
+- **实际改法**：补充说明"`--op` 后跟算子名，`gdn_fwd_o` 为示例"。
+
+### 意见 8（README 开发者指引）：开发者部分分场景拆分 + 单起 md
+
+- **原状**："开发者指引"下按文档章节堆叠：从旧版本升级、在 torch_custom 新增接口、测试单算子、算子调用方式参考、端到端验证。
+- **意见**：开发者下面分为多个场景区分——单独编译单算子（`bash build.sh` 方式、一键编包单算子）、增加一个算子的方式（目录结构、torch_custom），尽量对开发者透明，单起一个 md。
+- **实际改法**：新建 `docs/developer-guide.md`（开发者指南），按场景拆分：场景 1 单独编译单算子（run 包）、场景 2 一键编包单算子、场景 3 增加一个新算子（目录结构 + torch_custom）、场景 4 测试单算子、场景 5 端到端 Example/ST 验证。README"开发者指引"精简为场景导航列表 + 链接。
+
+### 意见 9（README 开发者指引）：如何确认新编版本来自最新源码
+
+- **原状**：未说明如何确认新编的 wheel 确实由最新修改的源码编译。
+- **意见**：怎么确定新编的版本是最新修改的源码编译的（比如开 debug 日志确定走的版本），需要找个方案。
+- **实际改法**：在 `docs/developer-guide.md` 新增"如何确认新构建的 wheel 来自最新源码"章节，给出三种方式：方式 1 核对 wheel 文件名与版本号（构建日志文件名 → `pip show` / `importlib.metadata` 核对）；方式 2 确认实际加载的 OPP 路径（`import fla_npu` 后打印 `fla_npu.__file__` 与 `FLA_NPU_OP_API_LIB` / `ASCEND_CUSTOM_OPP_PATH` 环境变量，确认指向新 wheel 内嵌 OPP）；方式 3 修改后强制覆盖安装（`--force-reinstall`，或临时打印标记确认后移除）。

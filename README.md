@@ -32,17 +32,19 @@ npu-smi info
 ### Step 1. 部署 CANN 开发环境
 
 首先需安装 CANN 开发包，提供 NPU 算子运行所需的底层驱动与工具链。
-推荐社区版 8.5.2，总共需要下载 2 个 run 包。这里以 A3 机器为例（即需要下载 A3-ops 与 toolkit），A2 / A5 机器请下载对应的 ops 与 toolkit 包。
-下载地址为
-[https://www.hiascend.com/developer/download/community/result?module=cann&amp;cann=8.5.2](https://www.hiascend.com/developer/download/community/result?module=cann&cann=8.5.2)
-需要找到与你当前机器对应的包
+推荐使用最新的社区稳定版本（不低于 8.5.2，如需使用更新版本请参考 `check_npu_env.py` 支持的 CANN / torch_npu 版本组合），总共需要下载 2 个 run 包。这里以 A3 机器为例（即需要下载 A3-ops 与 toolkit），A2 / A5 机器请下载对应的 ops 与 toolkit 包。
+下载地址为社区 CANN 下载总入口
+[https://www.hiascend.com/developer/download/community](https://www.hiascend.com/developer/download/community)
+在其中选择最新的稳定版本，找到与你当前机器对应的包
 
 ```
 # 设置需要安装的路径（请替换为实际安装路径）
 export INSTALL_PATH=/usr/local/Ascend
 
+# toolkit 与机型对应的 ops 包都必须安装，<机器型号> 请替换为实际机型对应的包前缀
+# 例如 A3 机器对应 Ascend-cann-A3*run，A2 机器对应 Ascend-cann-910b*run，A5 机器对应 Ascend-cann-950*run
 ./Ascend-cann-toolkit*run --install-path=$INSTALL_PATH --full  --quiet
-./Ascend-cann-A3*run --install-path=$INSTALL_PATH --install --quiet
+./Ascend-cann-<机器型号>*run --install-path=$INSTALL_PATH --install --quiet
 source $INSTALL_PATH/ascend-toolkit/set_env.sh
 ```
 
@@ -60,7 +62,7 @@ python -m pip install -r requirements.txt
 python scripts/check_npu_env.py --build-only
 ```
 
-`--build-only` 预检只检查构建纯 Python wheel 所需的环境（Python / bash / CANN），不会检查 `torch`、`torch_npu`、`torchnpugen`、`triton-ascend` 等 torch 系依赖。要判断 torch 系依赖是否完整、版本是否匹配，请运行完整预检（不带 `--build-only`）：
+**建议优先使用完整预检（不带 `--build-only`）**，它会同时检测运行与编译环境。`--build-only` 预检只做最小检查（Python / bash / CANN 环境变量），不会检查 `torch`、`torch_npu`、`torchnpugen`、`triton-ascend` 等 torch 系依赖，也不覆盖 `CMake`、编译器（`g++` / `bisheng`）、Python 头文件、`ninja` 等编译组件——**检查通过不代表一定可以编译**，缺失的编译组件会在 `pip wheel` 阶段才暴露。要判断 torch 系依赖是否完整、版本是否匹配，请运行完整预检：
 
 ```sh
 python scripts/check_npu_env.py
@@ -167,24 +169,11 @@ python -c "import fla_npu; print('ok')"
 python scripts/check_packaged_wheel_api.py
 ```
 
-`import fla_npu` 成功即表示 wheel 与内嵌 OPP 加载正常。`torch_npu.ops.*` 兼容入口的行为随 wheel 版本不同：
+`import fla_npu` 成功即表示 wheel 与内嵌 OPP 加载正常。推荐使用 `fla_npu.ops.ascendc` 稳定 Python 入口调用算子。
 
-- **新版 wheel（从当前仓库源码构建，PR #274 之后）**：默认**不**注册 `torch_npu.ops.*` 兼容入口，`torch_npu.ops` 属性本身不存在，旧版验证命令 `hasattr(torch_npu.ops, 'chunk_fwd_o')` 会抛 `AttributeError` 而非返回 `False`——这是预期行为，不要用它来验证新版安装。需要该兼容入口时，先导入子模块再显式调用 `install_torch_npu_ops_compat()`：
+`torch.ops.npu.*` / `torch_npu.ops.*` 是旧版本（v26.6.0 及更早）的调用方式，**v26.6.0 之后不再维护旧版本兼容接口**，新代码请使用 `fla_npu.ops.ascendc` 下的稳定 Python 入口。迁移期如需临时兼容（`install_torch_npu_ops_compat()` / `load_legacy_torch_ops()`）及其注意事项（如 `hasattr(torch_npu.ops, ...)` 的版本差异），见[兼容与迁移指南](docs/migration-guide.md)。
 
-  ```python
-  from fla_npu.ops import ascendc
-  import torch_npu
-
-  ascendc.install_torch_npu_ops_compat()
-  hasattr(torch_npu.ops, "chunk_fwd_o")  # True
-  ```
-
-  注意：`import fla_npu` 后直接写 `fla_npu.ops.ascendc.install_torch_npu_ops_compat()` 会报 `AttributeError: module 'fla_npu' has no attribute 'ops'`，因为 `fla_npu` 顶层不自动导入 `ops` 子模块，必须先执行 `from fla_npu.ops import ascendc`（或 `import fla_npu.ops.ascendc`）。
-- **旧版 wheel（2026-07 之前的中间版本）**：导入 `fla_npu.ops.ascendc` 时会**自动**注册 `torch_npu.ops.*`，`hasattr(...)` 返回 `True`，属旧版行为，不代表新 wheel 的行为。
-
-`torch.ops.npu.*` 是旧版本（≤ v26.6.0）的调用方式，后续版本不再支持，新代码请使用 `fla_npu.ops.ascendc` 下的稳定 Python 入口。
-
-上述检查通过后，可运行一个真实算子的冒烟测试，确认算子可被调用：
+上述检查通过后，可运行一个真实算子的冒烟测试，确认算子可被调用（`--op` 后跟算子名，`gdn_fwd_o` 为示例）：
 
 ```sh
 cd torch_custom/fla_npu/test
@@ -225,107 +214,22 @@ Python wheel 加单算子 run 包时，将 `--base-mode` 设为 `skeleton`。该
 
 ## 开发者指引
 
-### 从旧版本升级（v26.6.0 及更早 → 最新）
+开发相关操作按场景拆分，详见[开发者指南](docs/developer-guide.md)：
 
-`torch.ops.npu.*` / `torch_npu.ops.*` 是旧版本（v26.6.0 及更早）的默认调用方式，依赖 PyTorch / torch_npu dispatcher ABI；**v26.6.0 之后不再默认支持**，统一使用 `fla_npu.ops.ascendc` 稳定 Python 入口。升级步骤：
+- **单独编译单算子**：`bash build.sh --pkg --soc=<soc> --vendor_name=fla_npu --ops=<op>` 构建 run 包，覆盖已安装 wheel 中对应算子的 OPP 产物。
+- **一键编包单算子 / 全量 wheel**：仓库根目录 `pip wheel` 全量构建，自动清理中间产物。
+- **增加一个新算子**：目录结构、`torch_custom` 下新增 Python 接口的完整链路。
+- **测试单算子**：`test.sh --op <算子名>`。
+- **端到端 Example/ST 验证**：`python examples/flash_gated_delta_rule.py`。
+- **确认 wheel 来自最新源码**：核对构建产物文件名 / 版本号、确认实际加载的 OPP 路径（`FLA_NPU_OP_API_LIB`）、修改后强制覆盖安装。
 
-1. **卸载旧包并清理残留**：
-
-   ```sh
-   python -m pip uninstall -y flash-linear-attention-npu
-   ```
-
-   若旧 wheel / legacy extension 在 `site-packages` 遗留了 `custom_aclnn_extension_lib*.so`、`fla_npu/` 或自定义 `libopapi.so`，请手工确认后删除。
-2. **安装新版本 wheel**：见上文 Step 3 / Step 4。
-3. **迁移代码调用**：将旧入口替换为 `fla_npu.ops.ascendc` 下对应接口，例如：
-
-   | 旧（≤ v26.6.0）                                        | 新                                                                    |
-   | ------------------------------------------------------- | --------------------------------------------------------------------- |
-   | `torch.ops.npu.npu_chunk_fwd_o(...)`                  | `from fla_npu.ops.ascendc import chunk_fwd_o; chunk_fwd_o(...)`     |
-   | `torch_npu.ops.npu_chunk_gated_delta_rule_fwd_h(...)` | `from fla_npu.ops.ascendc import chunk_gated_delta_rule_fwd_h; ...` |
-4. **验证**：
-
-   ```sh
-   python scripts/check_packaged_wheel_api.py
-   cd torch_custom/fla_npu/test && bash test.sh --device 0 --op gdn_fwd_o
-   ```
-5. **迁移期临时兼容**：存量代码暂未迁移完成时，可显式开启兼容路径（详见 `torch_custom/fla_npu/README.md` 的 legacy 章节）：
-
-   - 先导入子模块再调用 `fla_npu.ops.ascendc.install_torch_npu_ops_compat()`：将 Python wrapper 挂到 `torch_npu.ops.*`（注意 `import fla_npu` 后不能直接写 `fla_npu.ops.ascendc.xxx`，需先 `from fla_npu.ops import ascendc`）；
-   - `fla_npu.load_legacy_torch_ops()`：兼容旧 `torch.ops.npu.*`，需用 `FLA_NPU_BUILD_LEGACY_EXTENSION=1` 额外构建 legacy extension。
-
-   新代码请勿使用 legacy 路径。
-
-**旧版本（≤ v26.6.0）与新版的主要行为差异**：
-
-- **构建环境变量**：旧版支持 `FLA_NPU_INCREMENTAL_BUILD`（复用 `build/` 的增量构建）、`FLA_NPU_OPS`（只构建指定算子的 wheel）、`FLA_NPU_SKIP_RUN_BUILD` / `FLA_NPU_SKIP_RUN_INSTALL`（跳过 run 包编译或内嵌）；新版（PR #274 起）已移除这些变量，统一走全量构建（自动清理 `build/`、`build_out/`、`output/` 中间产物），单算子定位改用 `bash build.sh --pkg --soc=<soc> --vendor_name=fla_npu --ops=<op>` 构建 run 包，旧脚本中的 `FLA_NPU_INCREMENTAL_BUILD=1` / `FLA_NPU_OPS=...` 需要删除。
-- **安装验证命令**：旧版 Step 4 用 `fla_npu.is_legacy_torch_ops_loaded()` 和 `hasattr(torch_npu.ops, 'chunk_fwd_o')` 验证，新版不再适用（见 Step 4 说明）；统一改用 `python -c "import fla_npu; print('ok')"` + `python scripts/check_packaged_wheel_api.py`。
-- **`torch_npu.ops` 挂载行为**：旧版 wheel（2026-07 之前的中间版本）导入 `fla_npu.ops.ascendc` 即自动挂载 `torch_npu.ops.*`；新版（PR #274 之后构建）默认不挂载，迁移期需显式调用 `install_torch_npu_ops_compat()`。
-- **`test.sh` 算子名**：`recompute_wu_fwd` 在新版统一为 `recompute_w_u_fwd`。
-
-### 在 torch_custom 新增 Python 接口
-
-为已有 Ascend C 算子新增 Python 调用接口，核心链路：
-
-1. 在 `torch_custom/fla_npu/fla_npu/ops/ascendc/_aclnn_ctypes.py` 中按 `aclnn_xxx.h` 签名新增 `npu_xxx(...)` wrapper。
-2. 在 `torch_custom/fla_npu/fla_npu/ops/ascendc/__init__.py` 的 `_ASCENDC_OPS` 注册算子名，注册后自动导出 `npu_xxx` 及去掉 `npu_` 前缀的短名。
-3. 新增测试 `torch_custom/fla_npu/test/test_npu_<op>.py` 并接入 `test.sh`。
-4. 重新构建 wheel / run 包并安装验证。
-
-详细步骤（含示例骨架、特殊参数、正反向绑定、mutation 契约）见 [`torch_custom/fla_npu/README.md`](torch_custom/fla_npu/README.md)。
-
-### 测试单算子
-
-```sh
-# 运行测试
-cd torch_custom/fla_npu/test
-bash test.sh --device 0                      # 全量测试
-bash test.sh --device 0 --op causal_conv1d   # 单个 AscendC 测试任务
-```
-
-`--op` 当前仅覆盖 `test.sh` 已接入的 AscendC 测试任务，可选值：
-
-- `prepare_wy_repr_bwd_full`
-- `chunk_gated_delta_rule_bwd_dhu`
-- `chunk_bwd_dv_local`
-- `causal_conv1d`
-- `chunk_local_cumsum`
-- `chunk_scaled_dot_kkt`
-- `prepare_wy_repr_bwd_da`
-- `chunk_bwd_dqkwg`
-- `gdn_fwd_o`
-- `gdn_fwd_h`
-- `recompute_w_u_fwd`
-
-### 算子调用方式参考
-
-推荐通过 `fla_npu.ops.ascendc` 或 `fla_npu.ops.triton` 导入对应算子；具体入参可参考 `torch_custom/fla_npu/test` 下的对应算子测试脚本。
-
-例如：
-
-```python
-import torch
-import fla_npu
-from fla_npu.ops.ascendc import chunk_bwd_dv_local
-
-dv = chunk_bwd_dv_local(...)
-```
-
-### 端到端 Example/ST 验证
-
-完成安装后，可以一键运行 GDN 模块。该示例会组装 GDN 相关前向/反向算子，覆盖 AscendC 和 Triton 调用链：
-
-```sh
-python examples/flash_gated_delta_rule.py
-```
-
-NPU CI 的 Example/ST 用例由 [`ci/example_st_cases.json`](ci/example_st_cases.json) 管理。当前默认启用 `case1_current_default`，shape 与上面的直接运行默认值一致；后续 GVA、`Vdim=256` 等泛化场景可以在该文件中新增用例，显式填写 `B`、`T`、`chunk_size`、`query_head`、`value_head`、`Kdim`、`Vdim` 等 shape 字段，以及 `gate_source`、`gate_function`、`initial_state`、`output_final_state`、`qk_l2norm` 等行为字段。
-
-当前端到端 Example/ST 已支持 `gate_source=g`；`gk` / `g+gk` 先作为用例 schema 预留，待 NPU fwd_h 路径支持后再启用。
+旧版本（v26.6.0 及更早）用户升级与兼容迁移见[兼容与迁移指南](docs/migration-guide.md)。
 
 ## 维护文档
 
-NPU CI 维护说明见 [`docs/Fla-npu仓CI部署教程.md`](docs/Fla-npu仓CI部署教程.md)。
+- NPU CI 维护说明见 [`docs/Fla-npu仓CI部署教程.md`](docs/Fla-npu仓CI部署教程.md)。
+- 旧版本用户升级与兼容迁移见 [`docs/migration-guide.md`](docs/migration-guide.md)。
+- 开发者分场景指南见 [`docs/developer-guide.md`](docs/developer-guide.md)。
 
 ## 🔍目录结构
 
@@ -358,6 +262,7 @@ NPU CI 维护说明见 [`docs/Fla-npu仓CI部署教程.md`](docs/Fla-npu仓CI部
 ├── examples                           # 端到端算子开发和调用示例
 │   └── flash_gated_delta_rule.py      # 完整GDN接入调用示例
 ├── scripts                            # 脚本目录，包含算子构建相关配置文件
+├── docs                               # 文档目录（兼容迁移指南、开发者指南等）
 ├── tests                              # 测试工程目录
 ├── gdn-verify.sh                      # GDN 一键验证脚本
 ├── CMakeLists.txt

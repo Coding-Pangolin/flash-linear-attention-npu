@@ -76,6 +76,8 @@ dv = chunk_bwd_dv_local(...)
 
 ## 场景 4：测试单算子
 
+使用者快速验证安装可参见根 [README](../README.md) Step 4 的冒烟测试；本场景面向开发调试，运行全量或单个算子的测试任务：
+
 ```sh
 # 运行测试
 cd torch_custom/fla_npu/test
@@ -99,7 +101,7 @@ bash test.sh --device 0 --op causal_conv1d   # 单个 AscendC 测试任务
 
 ## 场景 5：端到端 Example/ST 验证
 
-完成安装后，可以一键运行 GDN 模块。该示例会组装 GDN 相关前向/反向算子，覆盖 AscendC 和 Triton 调用链：
+使用者快速验证可参见根 [README](../README.md) Step 4 的端到端示例；本场景面向开发调试与新增 CI 用例。完成安装后，可以一键运行 GDN 模块。该示例会组装 GDN 相关前向/反向算子，覆盖 AscendC 和 Triton 调用链：
 
 ```sh
 python examples/flash_gated_delta_rule.py

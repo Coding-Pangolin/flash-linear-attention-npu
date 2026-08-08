@@ -32,7 +32,7 @@ npu-smi info
 ### Step 1. 部署 CANN 开发环境
 
 首先需安装 CANN 开发包，提供 NPU 算子运行所需的底层驱动与工具链。
-推荐使用最新的社区稳定版本（不低于 8.5.2，如需使用更新版本请参考 `check_npu_env.py` 支持的 CANN / torch_npu 版本组合），总共需要下载 2 个 run 包。这里以 A3 机器为例（即需要下载 A3-ops 与 toolkit），A2 / A5 机器请下载对应的 ops 与 toolkit 包。
+推荐使用最新的社区稳定版本（不低于 8.5.2，如需使用更新版本请参考 `check_npu_env.py` 支持的 CANN / torch_npu 版本组合），总共需要下载 2 个 run 包。
 下载地址为社区 CANN 下载页（最新稳定版）
 [https://www.hiascend.com/zh/cann/download?versionId=752&ids=d803%2Ch0501%2Ch0601%2Ch0703](https://www.hiascend.com/zh/cann/download?versionId=752&ids=d803%2Ch0501%2Ch0601%2Ch0703)
 在其中找到与你当前机器对应的包
@@ -42,8 +42,8 @@ npu-smi info
 export INSTALL_PATH=/usr/local/Ascend
 
 # toolkit 与机型对应的 ops 包都必须安装；ops 包命名格式为
-# Ascend-cann-<chip_type>-ops_<version>_linux-<arch>.run，例如 A3 机器对应
-# Ascend-cann-A3-ops*.run，A2 机器对应 Ascend-cann-910b-ops*.run，A5 机器对应 Ascend-cann-950-ops*.run
+# Ascend-cann-<chip_type>-ops_<version>_linux-<arch>.run，
+# 例如 A3 机器对应 Ascend-cann-A3-ops*.run，A2 机器对应 Ascend-cann-910b-ops*.run，A5 机器对应 Ascend-cann-950-ops*.run
 ./Ascend-cann-toolkit*run --install-path=$INSTALL_PATH --full  --quiet
 ./Ascend-cann-*-ops*.run --install-path=$INSTALL_PATH --install --quiet
 source $INSTALL_PATH/ascend-toolkit/set_env.sh
@@ -124,7 +124,7 @@ WHEEL_PATH="dist/<准确wheel文件名>.whl"
 python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
 ```
 
-> 重新构建的 wheel 版本号与已安装的旧 wheel 可能相同（如本地 dev 版本 `26.7.0.dev0`）。版本号相同时，不带 `--force-reinstall` 的 `pip install` 会认为"已是最新版本"而跳过，导致实际仍是旧代码。上面的命令已带 `--force-reinstall` 强制覆盖；若想先清理再装，可先执行 `python -m pip uninstall -y flash-linear-attention-npu`。
+> 重新构建的 wheel 版本号与已安装的旧 wheel 可能相同。版本号相同时，不带 `--force-reinstall` 的 `pip install` 会认为"已是最新版本"而跳过，导致实际仍是旧代码。上面的命令已带 `--force-reinstall` 强制覆盖；若想先清理再装，可先执行 `python -m pip uninstall -y flash-linear-attention-npu`。
 
 方式 A wheel 不安装或执行 shell 环境钩子。无论使用系统 Python、Conda、venv
 还是 Docker，每次进入新的 shell 后都需要先按 Step 1 手工 source CANN 的
@@ -174,11 +174,17 @@ python scripts/check_packaged_wheel_api.py
 
 `torch.ops.npu.*` / `torch_npu.ops.*` 是旧版本（v26.6.0 及更早）的调用方式，**v26.6.0 之后不再维护旧版本兼容接口**，新代码请使用 `fla_npu.ops.ascendc` 下的稳定 Python 入口。迁移期如需临时兼容（`install_torch_npu_ops_compat()` / `load_legacy_torch_ops()`）及其注意事项（如 `hasattr(torch_npu.ops, ...)` 的版本差异），见[兼容与迁移指南](docs/migration-guide.md)。
 
-上述检查通过后，可运行一个真实算子的冒烟测试，确认算子可被调用（`--op` 后跟算子名，`gdn_fwd_o` 为示例）：
+上述检查通过后，可运行一个真实算子的冒烟测试，确认算子可被调用（`--op` 后跟算子名，`causal_conv1d` 为示例）：
 
 ```sh
 cd torch_custom/fla_npu/test
-bash test.sh --device 0 --op gdn_fwd_o
+bash test.sh --device 0 --op causal_conv1d
+```
+
+可选的端到端验证：一键运行 GDN 模块示例，组装 GDN 相关前向/反向算子，覆盖 AscendC 与 Triton 调用链：
+
+```sh
+python examples/flash_gated_delta_rule.py
 ```
 
 不再使用时，按 distribution 名卸载：
@@ -215,7 +221,7 @@ Python wheel 加单算子 run 包时，将 `--base-mode` 设为 `skeleton`。该
 
 ## 开发者指引
 
-开发者相关操作（单独编译单算子、一键编包、增加新算子、测试单算子、端到端验证、确认 wheel 来自最新源码）按场景拆分为独立文档：
+开发者相关操作（单独编译单算子、一键编包、增加新算子、确认 wheel 来自最新源码）按场景拆分为独立文档；测试单算子和端到端验证见上文 Step 4：
 
 - [开发者指南](docs/developer-guide.md)
 

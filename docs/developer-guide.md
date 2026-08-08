@@ -167,11 +167,21 @@ python scripts/verify_libcust_opapi_md5.py --run-package build_out/fla-npu-fla_n
 
 # 或显式指定编译产物路径
 python scripts/verify_libcust_opapi_md5.py --built-lib build/libcust_opapi.so
+
+# 加 --python：同时比对 Python wrapper（.py 源码打包进 wheel 时是纯拷贝，
+# 与 libcust_opapi.so 同源；只改 wrapper 源码后也需重装 wheel）
+python scripts/verify_libcust_opapi_md5.py --python
 ```
 
 脚本输出运行时加载的 `libcust_opapi.so` 路径与 md5、编译产物路径与 md5，并给出
 `[OK]`（一致，新安装的 OPP 生效）或 `[FAIL]`（不一致，当前加载的是旧 OPP，
-需要重新安装新 wheel / run 包）结论。
+需要重新安装新 wheel / run 包）结论。`--python` 模式会把 `fla_npu/__init__.py`、
+`ops/ascendc/__init__.py`、`_aclnn_ctypes.py`、`_runtime.py` 的已安装文件与
+`torch_custom/fla_npu/fla_npu/` 下源码逐个比对 md5，任一不一致即报 `[FAIL]`。
+
+> 注意：Python wrapper 的 md5 只反映 `libcust_opapi.so` 之外的 Python 侧改动。
+> 只改 Python wrapper 时 OPP 的 md5 不变（仍需用 `--python` 确认 wrapper 已更新）；
+> 只改 C++ 算子时 wrapper 的 md5 不变（用不带 `--python` 的默认模式确认）。
 
 ### 方式 3：修改后强制覆盖安装
 

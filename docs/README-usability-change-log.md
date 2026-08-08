@@ -358,6 +358,7 @@ reviewer 在 `docs/developer-guide.md`（3 条）与 `README.md`（1 条）新�
 
 - **评论**：`docs/developer-guide.md:120`「这里提供的方式一、方式二似乎并不能，我们能不能改造一下方式二，提供一个脚本，打印出调用到的 libcust_opapi.so 和编译出的 libcust_opapi.so，看 md5 值是否一样」。
 - **实际改法**：新增脚本 `scripts/verify_libcust_opapi_md5.py`——导入 `fla_npu` 后读取 `FLA_NPU_OP_API_LIB` 得到运行时实际加载的 `libcust_opapi.so`，与编译产物（默认 `build/libcust_opapi.so`，或 `--built-lib <path>` 指定，或 `--run-package <path>` 自动提取 Makeself run 包内的同名库）比对 md5，输出两边路径 + md5 并给出 `[OK]`（一致）或 `[FAIL]`（不一致，需重装 wheel / run 包）结论。文档方式 2 改为该脚本用法，替换原"打印环境变量"的内联片段。**已实测**：对本地 `build_out/fla-npu-fla_npu_linux-aarch64.run` 提取后 md5 与 `build/libcust_opapi.so` 一致，输出 `[OK]`。
+- **第二轮修订（2026-08-08，扩展 `--python`）**：按用户"Python wrapper 能否用类似方式区分"补充 Python wrapper 对比——脚本新增 `--python` 开关，把已安装的 `fla_npu/__init__.py`、`ops/ascendc/__init__.py`、`_aclnn_ctypes.py`、`_runtime.py` 与 `torch_custom/fla_npu/fla_npu/` 下源码逐个比对 md5（打包时 `.py` 为纯拷贝，源码改动会如实反映到已安装文件），任一不一致即报 `[FAIL]`。文档同步补充 `--python` 用法与"只改 wrapper / 只改 C++ 时各自用哪种模式"的说明。**已实测**：隔离 venv 安装完整 wheel 后 `--python` 全部 `[OK]`；临时修改源码后正确检出 `[FAIL]`（退出码 1），恢复后 `[OK]`（退出码 0）。
 
 ### 修订 K4（README Step 4）：恢复"测试单算子 / 算子调用方式 / 端到端验证"三节
 

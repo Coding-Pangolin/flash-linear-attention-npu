@@ -2,7 +2,7 @@
 
 > 协作方式：每确认一个修改点 → 记入本表 → 确认下一个 → 最后一次性实施。
 > 优先级说明：P0 = 事实性错误 / 会让用户操作失败；P1 = 核心需求缺失；P2 = 易用性增强。
-> **状态总览（2026-08-08 15:00）**：21 点已全部实施并提交；PR #280 评审意见 10 条已修订（G 轮）；复审 3 条已修订（H 轮）；行内【review】评论 5 条已修订（I 轮）。分支 `20260806_204500_docs-README-usability`（基于最新 main `ac46f1c3`，含 PR #274），已推送至 origin（Coding-Pangolin）。
+> **状态总览（2026-08-08 16:20）**：21 点已全部实施并提交；PR #280 评审意见 10 条已修订（G 轮）；复审 3 条已修订（H 轮）；行内【review】评论 5 条已修订（I 轮）；预检相关 2 条已修订（J 轮）；新增 4 条已修订（K 轮）。分支 `20260806_204500_docs-README-usability`（基于最新 main `ac46f1c3`，含 PR #274），已推送至 origin（Coding-Pangolin）。
 > 口径：PR #274 已合入 main（`ac46f1c3`）。下文凡涉及"增量构建移除、`import fla_npu` 即加载、`scripts/check_install_workflows.py`、卸载说明、shell 环境钩子"等，均为 #274 在 main 上已有的内容；本次 PR 的增量是文档修正与新章节，与 #274 语义兼容（冲突合并时保留 #274 侧内容 + 叠加本次修正）。
 
 ---
@@ -336,3 +336,30 @@ reviewer 在 Step 2 预检处新增 2 条【review】评论（同一处），已
   - Python 头文件（CI 镜像安装 `python3-dev`）；
   - `setuptools` >= 70.1 / `wheel` / `packaging` / `psutil`（`pyproject.toml` `[build-system] requires`，构建时自动安装；评论日志实测版本 setuptools 83.0.0、wheel 0.47.0、packaging 26.3、psutil 7.2.2）。
 - **实际改法**：在预检命令后新增依赖组件版本表格（上述组件 + 版本要求 + 说明），并注明"预检不覆盖编译链上的工具链与构建依赖，这些组件缺失时会在 `pip wheel` 阶段才报错"。
+
+---
+
+## K. 第五轮修订（2026-08-08，PR #280 行内【review】评论 4 条）
+
+reviewer 在 `docs/developer-guide.md`（3 条）与 `README.md`（1 条）新增 4 条【review】行内评论，已最小化修订并登记如下。
+
+### 修订 K1（developer-guide 场景 3.1）：算子实现给出参考的目录结构
+
+- **评论**：`docs/developer-guide.md:47`「算子实现给出参考的目录结构」。
+- **实际改法**：场景 3.1 在目录作用表后新增以 `gdn` 模块下 `chunk_fwd_o` 为示例的参考目录树（`fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_fwd_o/` 下的 `CMakeLists.txt`、`op_host/`（def / tiling / op_api 的 aclnn 头与实现）、`op_kernel/`（kernel 实现与结构体）），以及对应 Python 调用侧文件（`_aclnn_ctypes.py` wrapper、`__init__.py` 注册、`test/test_npu_chunk_fwd_o.py`），并注明新算子文件均可参考 `fla/ops/ascendc/gdn/` 下已有算子补齐。
+
+### 修订 K2（developer-guide 场景 2）：修正"一键编包单算子"为全量 wheel 编包
+
+- **评论**：`docs/developer-guide.md:35`「这里一键编包还是编译整包的指令，不是编译单算子的指令，确定一下单算子能否通过一键编包支持」。
+- **探索结论**：`pip wheel` 底层走 `setup.py` 的 `_build_run_package()`，该函数调用 `bash build.sh --soc --pkg --vendor_name=fla_npu` **不带 `--ops`**，即一次编译全部已注册算子并打包成一个 wheel，**当前不支持只挑单个算子**。
+- **实际改法**：场景 2 标题改为"一键编包（全量 wheel）"，正文明确"`pip wheel` 当前只支持全量编包、不支持单算子"，需要单算子 run 包时用场景 1 的 `bash build.sh --pkg ... --ops=<op>`；只改 Python wrapper 时可单独 `cd torch_custom/fla_npu && python3 setup.py bdist_wheel`。
+
+### 修订 K3（developer-guide"确认 wheel 来源"方式 2）：新增 md5 比对脚本
+
+- **评论**：`docs/developer-guide.md:120`「这里提供的方式一、方式二似乎并不能，我们能不能改造一下方式二，提供一个脚本，打印出调用到的 libcust_opapi.so 和编译出的 libcust_opapi.so，看 md5 值是否一样」。
+- **实际改法**：新增脚本 `scripts/verify_libcust_opapi_md5.py`——导入 `fla_npu` 后读取 `FLA_NPU_OP_API_LIB` 得到运行时实际加载的 `libcust_opapi.so`，与编译产物（默认 `build/libcust_opapi.so`，或 `--built-lib <path>` 指定，或 `--run-package <path>` 自动提取 Makeself run 包内的同名库）比对 md5，输出两边路径 + md5 并给出 `[OK]`（一致）或 `[FAIL]`（不一致，需重装 wheel / run 包）结论。文档方式 2 改为该脚本用法，替换原"打印环境变量"的内联片段。**已实测**：对本地 `build_out/fla-npu-fla_npu_linux-aarch64.run` 提取后 md5 与 `build/libcust_opapi.so` 一致，输出 `[OK]`。
+
+### 修订 K4（README Step 4）：恢复"测试单算子 / 算子调用方式 / 端到端验证"三节
+
+- **评论**：`README.md:184`「这里测试单算子，算子调用方式和端到端验证先恢复PR修改前即可，然后算子调用方式涉及到旧接口指引跳转到升级接口的文档」。
+- **实际改法**：README Step 4 恢复 PR 修改前的完整三节——`#### 测试单算子`（全量/单个命令 + `--op` 可选值 11 个，与 `test.sh` 逐条核对一致）、`#### 算子调用方式参考`（`fla_npu.ops.ascendc` / `.triton` 导入示例；末尾"使用旧版 `torch.ops.npu.*` / `torch_npu.ops.*` 的存量代码如何迁移"跳转 [兼容与迁移指南](migration-guide.md)）、`#### 端到端 Example/ST 验证`（`python examples/flash_gated_delta_rule.py` + CI 用例 schema 说明）；原"冒烟测试 + 可选的端到端验证"两个短小节删除。`docs/developer-guide.md` 场景 4/5 同步精简为引用 README Step 4（场景 4 只保留 `--mode dry-run` 开发调试选项，场景 5 只保留新增 CI 用例的 schema 说明），避免两份文档维护重复内容。

@@ -186,18 +186,63 @@ python scripts/check_packaged_wheel_api.py
 
 `torch.ops.npu.*` / `torch_npu.ops.*` 是旧版本（v26.6.0 及更早）的调用方式，**v26.6.0 之后不再维护旧版本兼容接口**，新代码请使用 `fla_npu.ops.ascendc` 下的稳定 Python 入口。迁移期如需临时兼容（`install_torch_npu_ops_compat()` / `load_legacy_torch_ops()`）及其注意事项（如 `hasattr(torch_npu.ops, ...)` 的版本差异），见[兼容与迁移指南](docs/migration-guide.md)。
 
-上述检查通过后，可运行一个真实算子的冒烟测试，确认算子可被调用（`--op` 后跟算子名，`causal_conv1d` 为示例）：
+#### 测试单算子
 
 ```sh
+# 运行测试
 cd torch_custom/fla_npu/test
-bash test.sh --device 0 --op causal_conv1d
+bash test.sh --device 0                      # 全量测试
+bash test.sh --device 0 --op causal_conv1d   # 单个 AscendC 测试任务
 ```
 
-可选的端到端验证：一键运行 GDN 模块示例，组装 GDN 相关前向/反向算子，覆盖 AscendC 与 Triton 调用链：
+`--op` 当前仅覆盖 `test.sh` 已接入的 AscendC 测试任务，可选值：
+
+- `prepare_wy_repr_bwd_full`
+- `chunk_gated_delta_rule_bwd_dhu`
+- `chunk_bwd_dv_local`
+- `causal_conv1d`
+- `prepare_wy_repr_bwd_da`
+- `chunk_bwd_dqkwg`
+- `gdn_fwd_o`
+- `gdn_fwd_h`
+- `recompute_w_u_fwd`
+- `chunk_local_cumsum`
+- `chunk_scaled_dot_kkt`
+
+#### 算子调用方式参考
+
+推荐通过 `fla_npu.ops.ascendc` 或 `fla_npu.ops.triton` 导入对应算子；具体入参可参考
+`torch_custom/fla_npu/test` 下的对应算子测试脚本。
+
+例如：
+
+```python
+import torch
+import fla_npu
+from fla_npu.ops.ascendc import chunk_bwd_dv_local
+
+dv = chunk_bwd_dv_local(...)
+```
+
+使用旧版 `torch.ops.npu.*` / `torch_npu.ops.*` 的存量代码如何迁移到新调用方式，见
+[兼容与迁移指南](docs/migration-guide.md)。
+
+#### 端到端 Example/ST 验证
+
+完成安装后，可以一键运行 GDN 模块。该示例会组装 GDN 相关前向/反向算子，覆盖 AscendC 和 Triton 调用链：
 
 ```sh
 python examples/flash_gated_delta_rule.py
 ```
+
+NPU CI 的 Example/ST 用例由 [`ci/example_st_cases.json`](ci/example_st_cases.json) 管理。
+当前默认启用 `case1_current_default`，shape 与上面的直接运行默认值一致；后续 GVA、`Vdim=256`
+等泛化场景可以在该文件中新增用例，显式填写 `B`、`T`、`chunk_size`、`query_head`、
+`value_head`、`Kdim`、`Vdim` 等 shape 字段，以及 `gate_source`、`gate_function`、
+`initial_state`、`output_final_state`、`qk_l2norm` 等行为字段。
+
+当前端到端 Example/ST 已支持 `gate_source=g`；`gk` / `g+gk` 先作为用例 schema 预留，待
+NPU fwd_h 路径支持后再启用。
 
 不再使用时，按 distribution 名卸载：
 

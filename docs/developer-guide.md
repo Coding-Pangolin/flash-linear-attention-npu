@@ -3,7 +3,7 @@
 本文档面向在 `flash-linear-attention-npu` 仓库内进行开发的开发者，按场景拆分为：单独编译单算子、增加新算子、测试单算子、端到端验证，以及如何确认 wheel 来自最新源码。
 
 - [场景 1：单独编译单算子（run 包）](#场景-1单独编译单算子run-包)
-- [场景 2：一键编包单算子](#场景-2一键编包单算子)
+- [场景 2：一键编包（全量 wheel）](#场景-2一键编包全量-wheel)
 - [场景 3：增加一个新算子（目录结构 + torch_custom）](#场景-3增加一个新算子目录结构--torch_custom)
 - [场景 4：测试单算子](#场景-4测试单算子)
 - [场景 5：端到端 Example/ST 验证](#场景-5端到端-examplest-验证)
@@ -25,7 +25,7 @@ cd torch_custom/fla_npu
 python3 setup.py bdist_wheel
 ```
 
-## 场景 2：一键编包单算子
+## 场景 2：一键编包（全量 wheel）
 
 在仓库根目录用 `pip wheel` 全量构建 wheel，构建流程会清理上一轮 `build/`、`build_out/`
 和 `output/` 中间产物，不依赖 Git diff 或旧 CMake 状态决定编译范围：
@@ -34,7 +34,10 @@ python3 setup.py bdist_wheel
 FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w dist
 ```
 
-单算子定位请使用场景 1 的 `bash build.sh --pkg ... --ops=<op>` 方式构建 run 包。
+`pip wheel` 当前只支持**全量**编包（一次编译全部已注册算子并打包成一个 wheel），
+不支持只挑单个算子编包。需要单独编译一个或多个算子的 run 包时，请使用场景 1 的
+`bash build.sh --pkg ... --ops=<op>` 方式；如果只改了 Python wrapper，也可以在
+`torch_custom/fla_npu` 下单独执行 `python3 setup.py bdist_wheel` 重新生成 Python wheel。
 
 ## 场景 3：增加一个新算子（目录结构 + torch_custom）
 
@@ -48,6 +51,35 @@ FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w d
 | `torch_custom/fla_npu/fla_npu/ops/ascendc/_aclnn_ctypes.py` | Python ctypes wrapper |
 | `torch_custom/fla_npu/fla_npu/ops/ascendc/__init__.py` | `_ASCENDC_OPS` 注册 |
 | `torch_custom/fla_npu/test/test_npu_<op>.py` | 算子测试脚本 |
+
+以 `gdn` 模块下的 `chunk_fwd_o` 算子为例，参考目录结构如下：
+
+```
+fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_fwd_o/
+├── CMakeLists.txt                  # 算子的编译目标声明
+├── op_host/                        # host 侧：算子注册 + tiling + aclnn 接口
+│   ├── chunk_fwd_o_def.cpp         # 算子定义（proto 注册）
+│   ├── chunk_fwd_o_tiling.cpp      # tiling 计算
+│   ├── chunk_fwd_o_tiling.h
+│   └── op_api/
+│       ├── aclnn_chunk_fwd_o.h     # aclnn 接口头（clang-format 风格签名）
+│       └── aclnn_chunk_fwd_o.cpp
+└── op_kernel/                      # kernel 侧：Ascend C 算子实现
+    ├── chunk_fwd_o.cpp
+    └── chunk_fwd_o_struct.h
+```
+
+对应的 Python 调用侧文件：
+
+```
+torch_custom/fla_npu/fla_npu/ops/ascendc/
+├── _aclnn_ctypes.py                # 新增 npu_chunk_fwd_o(...) ctypes wrapper
+└── __init__.py                     # _ASCENDC_OPS 中注册 chunk_fwd_o
+torch_custom/fla_npu/test/
+└── test_npu_chunk_fwd_o.py         # 新增算子测试脚本
+```
+
+新算子的 host / kernel 文件均可参考 `fla/ops/ascendc/gdn/` 下已有算子的对应文件补齐。
 
 ### 3.2 为已有 Ascend C 算子新增 Python 调用接口
 
@@ -76,45 +108,25 @@ dv = chunk_bwd_dv_local(...)
 
 ## 场景 4：测试单算子
 
-使用者快速验证安装可参见根 [README](../README.md) Step 4 的冒烟测试；本场景面向开发调试，运行全量或单个算子的测试任务：
+测试命令与 `--op` 可选值已在根 [README](../README.md) Step 4 的"测试单算子"节完整列出；
+本场景仅补充开发调试时可用的选项：
 
 ```sh
-# 运行测试
 cd torch_custom/fla_npu/test
-bash test.sh --device 0                      # 全量测试
-bash test.sh --device 0 --op causal_conv1d   # 单个 AscendC 测试任务
+bash test.sh --device 0 --mode dry-run   # 只打印将执行的命令，不真正运行
 ```
-
-`--op` 当前仅覆盖 `test.sh` 已接入的 AscendC 测试任务，可选值：
-
-- `prepare_wy_repr_bwd_full`
-- `chunk_gated_delta_rule_bwd_dhu`
-- `chunk_bwd_dv_local`
-- `causal_conv1d`
-- `chunk_local_cumsum`
-- `chunk_scaled_dot_kkt`
-- `prepare_wy_repr_bwd_da`
-- `chunk_bwd_dqkwg`
-- `gdn_fwd_o`
-- `gdn_fwd_h`
-- `recompute_w_u_fwd`
 
 ## 场景 5：端到端 Example/ST 验证
 
-使用者快速验证可参见根 [README](../README.md) Step 4 的端到端示例；本场景面向开发调试与新增 CI 用例。完成安装后，可以一键运行 GDN 模块。该示例会组装 GDN 相关前向/反向算子，覆盖 AscendC 和 Triton 调用链：
+运行方式见根 [README](../README.md) Step 4 的"端到端 Example/ST 验证"节；
+本场景面向在 [`ci/example_st_cases.json`](../ci/example_st_cases.json) 中新增 CI 用例的开发者：
 
-```sh
-python examples/flash_gated_delta_rule.py
-```
-
-NPU CI 的 Example/ST 用例由 [`ci/example_st_cases.json`](../ci/example_st_cases.json) 管理。
-当前默认启用 `case1_current_default`，shape 与上面的直接运行默认值一致；后续 GVA、`Vdim=256`
-等泛化场景可以在该文件中新增用例，显式填写 `B`、`T`、`chunk_size`、`query_head`、
-`value_head`、`Kdim`、`Vdim` 等 shape 字段，以及 `gate_source`、`gate_function`、
-`initial_state`、`output_final_state`、`qk_l2norm` 等行为字段。
-
-当前端到端 Example/ST 已支持 `gate_source=g`；`gk` / `g+gk` 先作为用例 schema 预留，待
-NPU fwd_h 路径支持后再启用。
+- 当前默认启用 `case1_current_default`，shape 与直接运行默认值一致；
+- 新增用例需显式填写 `B`、`T`、`chunk_size`、`query_head`、`value_head`、`Kdim`、
+  `Vdim` 等 shape 字段，以及 `gate_source`、`gate_function`、`initial_state`、
+  `output_final_state`、`qk_l2norm` 等行为字段；
+- 当前已支持 `gate_source=g`；`gk` / `g+gk` 先作为用例 schema 预留，待 NPU fwd_h
+  路径支持后再启用。
 
 ## 如何确认新构建的 wheel 来自最新源码
 
@@ -136,26 +148,27 @@ python -c "from importlib.metadata import version; print(version('flash-linear-a
 构建产物文件名包含 SOC / ABI 本地版本标签（见 `scripts/fla_npu_artifacts.py`），
 `pip show` / `importlib.metadata` 的版本应与 `dist/` 下新产物的版本一致。
 
-### 方式 2：确认实际加载的 OPP 路径
+### 方式 2：比对运行时加载与最新编译的 `libcust_opapi.so` 的 md5
 
 `import fla_npu` 会在 Python 进程内定位并加载 wheel 内嵌 OPP，并把实际加载的
 `libcust_opapi.so` 路径写入环境变量 `FLA_NPU_OP_API_LIB`（同时把 vendor 目录注入
-`ASCEND_CUSTOM_OPP_PATH`）。可打印这些值，确认走的是新安装的 wheel 而非旧路径：
+`ASCEND_CUSTOM_OPP_PATH`）。可使用 md5 比对脚本直接判断运行时加载的
+`libcust_opapi.so` 是否与最新编译产物一致：
 
 ```sh
-python - <<'EOF'
-import fla_npu
-import os
+# 不带参数：自动与 build/ 下的编译产物对比
+python scripts/verify_libcust_opapi_md5.py
 
-print("module file:   ", fla_npu.__file__)
-print("op api lib:    ", os.environ.get("FLA_NPU_OP_API_LIB"))
-print("custom opp:    ", os.environ.get("ASCEND_CUSTOM_OPP_PATH"))
-EOF
+# 新编了 run 包：与 run 包内的 libcust_opapi.so 对比（自动提取）
+python scripts/verify_libcust_opapi_md5.py --run-package build_out/fla-npu-fla_npu_linux-aarch64.run
+
+# 或显式指定编译产物路径
+python scripts/verify_libcust_opapi_md5.py --built-lib build/libcust_opapi.so
 ```
 
-`FLA_NPU_OP_API_LIB` 应指向新 wheel 内 `site-packages/fla_npu/opp/.../libcust_opapi.so`。
-结合 Step 4 的 `python scripts/check_packaged_wheel_api.py`，可确认公开 API 与 OPP 布局为
-新产物。
+脚本输出运行时加载的 `libcust_opapi.so` 路径与 md5、编译产物路径与 md5，并给出
+`[OK]`（一致，新安装的 OPP 生效）或 `[FAIL]`（不一致，当前加载的是旧 OPP，
+需要重新安装新 wheel / run 包）结论。
 
 ### 方式 3：修改后强制覆盖安装
 

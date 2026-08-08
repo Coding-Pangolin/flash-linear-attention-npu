@@ -10,16 +10,24 @@
 
 """Verify that the running fla_npu really loads freshly built artifacts.
 
-Two kinds of artifacts are compared between what ``import fla_npu`` actually
+Three kinds of artifacts are compared between what ``import fla_npu`` actually
 loads at runtime and the freshly built/staged copies:
 
 1. OPP library: ``libcust_opapi.so``
-   - runtime: from ``FLA_NPU_OP_API_LIB``, set during ``import fla_npu``;
+   - runtime: resolved by mirroring fla_npu's own search order (see
+     ``_resolve_runtime_lib``), without importing/loading fla_npu, so no CANN
+     environment is required to run this script;
    - built:   ``build/libcust_opapi.so`` by default, or ``--built-lib`` /
      ``--run-package`` (extracted from a Makeself run package).
-2. Python wrapper: the core ``.py`` files under the installed package
+2. Kernel binaries: the ``*.o`` NPU kernels under
+   ``op_impl/ai_core/tbe/kernel/``.  These are what actually runs on the NPU;
+   a kernel-only source change does not alter ``libcust_opapi.so``, so without
+   this comparison the script would not notice a stale kernel.  Compared by
+   default against ``build/lib/fla_npu/opp/vendors/.../kernel``; disable with
+   ``--no-kernel``.
+3. Python wrapper: the core ``.py`` files under the installed package
    (``fla_npu/__init__.py``, ``ops/ascendc/*.py``), compared against the
-   sources under ``torch_custom/fla_npu/fla_npu/``.
+   sources under ``torch_custom/fla_npu/fla_npu/``.  Opt-in via ``--python``.
 
 If both sides are found, it reports whether their md5 match.  ``[OK]`` means
 the running wheel is exactly the one freshly built; ``[FAIL]`` means a stale
@@ -30,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -110,11 +119,82 @@ def _find_built_lib(repo_root: Path, built_lib: str | None, run_package: str | N
     return next((path for path in candidates if path.exists()), None)
 
 
+def _installed_fla_npu_root() -> Path | None:
+    """Locate the installed fla_npu package directory without importing it.
+
+    ``importlib.util.find_spec`` returns the module spec without executing
+    ``fla_npu/__init__.py``, so no CANN library is loaded and no CANN
+    environment is required.
+    """
+    spec = importlib.util.find_spec("fla_npu")
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    return Path(next(iter(spec.submodule_search_locations))).resolve()
+
+
+def _resolve_runtime_lib() -> Path | None:
+    """Resolve the libcust_opapi.so that ``import fla_npu`` would load.
+
+    Mirrors ``fla_npu/__init__.py`` (``_candidate_opp_roots`` +
+    ``_resolve_vendor_dir``) without actually loading anything:
+
+    1. ``FLA_NPU_OPP_PATH`` (external-OPP debug override), if set;
+    2. the OPP embedded inside the installed package (site-packages/fla_npu/opp);
+    3. ``ASCEND_CUSTOM_OPP_PATH`` / ``ASCEND_OPP_PATH`` from the CANN env.
+
+    The first root containing ``op_api/lib/libcust_opapi.so`` (directly, under
+    ``vendors/fla_npu_transformer``, or as a single vendor) wins.
+    """
+    candidates: list[Path] = []
+    override = os.environ.get("FLA_NPU_OPP_PATH", "").strip()
+    if override:
+        candidates.append(Path(override).expanduser())
+
+    installed_root = _installed_fla_npu_root()
+    if installed_root is not None:
+        candidates.append(installed_root / "opp")
+
+    for env_name in ("ASCEND_CUSTOM_OPP_PATH", "ASCEND_OPP_PATH"):
+        for part in os.environ.get(env_name, "").split(os.pathsep):
+            if part:
+                candidates.append(Path(part).expanduser())
+
+    seen: set[Path] = set()
+    for root in candidates:
+        root = root.resolve()
+        if root in seen:
+            continue
+        seen.add(root)
+
+        direct = root / "op_api" / "lib" / "libcust_opapi.so"
+        if direct.exists():
+            return direct
+
+        vendors_root = root / "vendors"
+        vendor_dir = vendors_root / "fla_npu_transformer"
+        lib = vendor_dir / "op_api" / "lib" / "libcust_opapi.so"
+        if lib.exists():
+            return lib
+
+        if vendors_root.exists():
+            vendor_dirs = [
+                path
+                for path in vendors_root.iterdir()
+                if path.is_dir() and (path / "op_api" / "lib" / "libcust_opapi.so").exists()
+            ]
+            if len(vendor_dirs) == 1:
+                return vendor_dirs[0] / "op_api" / "lib" / "libcust_opapi.so"
+
+    return None
+
+
 def _check_opp_lib(repo_root: Path, built_lib: str | None, run_package: str | None) -> bool:
-    loaded_env = os.environ.get("FLA_NPU_OP_API_LIB")
-    loaded_lib = Path(loaded_env) if loaded_env else None
-    if loaded_lib is None or not loaded_lib.exists():
-        print(f"[FAIL] runtime libcust_opapi.so not found (FLA_NPU_OP_API_LIB={loaded_env!r})")
+    loaded_lib = _resolve_runtime_lib()
+    if loaded_lib is None:
+        print(
+            "[FAIL] runtime libcust_opapi.so not found; "
+            "fla_npu is not installed or no OPP root is resolvable."
+        )
         return False
 
     loaded_md5 = _md5(loaded_lib)
@@ -143,11 +223,110 @@ def _check_opp_lib(repo_root: Path, built_lib: str | None, run_package: str | No
     return False
 
 
+def _kernel_dir_from_lib(lib_path: Path) -> Path | None:
+    """Derive the kernel ``.o`` root from a libcust_opapi.so path.
+
+    Inside a vendor OPP the layout is::
+
+        .../vendors/fla_npu_transformer/op_api/lib/libcust_opapi.so
+        .../vendors/fla_npu_transformer/op_impl/ai_core/tbe/kernel/<soc>/<op>/*.o
+    """
+    kernel = lib_path.parents[2] / "op_impl" / "ai_core" / "tbe" / "kernel"
+    return kernel if kernel.is_dir() else None
+
+
+def _collect_kernel_objects(root: Path) -> dict[str, str]:
+    """Map ``soc/op/name.o`` -> md5 for every ``*.o`` under a kernel root."""
+    objs: dict[str, str] = {}
+    for path in root.rglob("*.o"):
+        objs[str(path.relative_to(root))] = _md5(path)
+    return objs
+
+
+MAX_KERNEL_DIFF_PRINT = 20
+
+
+def _check_kernel_o(repo_root: Path, built_kernel: str | None = None) -> bool:
+    """Compare the runtime embedded OPP kernel ``.o`` files with the freshly built ones.
+
+    Kernel ``.o`` files are what actually run on the NPU and are not part of
+    ``libcust_opapi.so``, so a kernel-only source change can only be detected
+    through them.
+    """
+    loaded_lib = _resolve_runtime_lib()
+    runtime_root = _kernel_dir_from_lib(loaded_lib) if loaded_lib else None
+    if runtime_root is None:
+        print("[WARN] runtime OPP kernel dir not found; kernel .o comparison skipped.")
+        return True
+
+    built_root = (
+        Path(built_kernel).resolve()
+        if built_kernel
+        else repo_root
+        / "build"
+        / "lib"
+        / "fla_npu"
+        / "opp"
+        / "vendors"
+        / "fla_npu_transformer"
+        / "op_impl"
+        / "ai_core"
+        / "tbe"
+        / "kernel"
+    )
+    if not built_root.is_dir():
+        print(f"[WARN] freshly built kernel dir not found: {built_root}; kernel .o comparison skipped.")
+        return True
+
+    runtime_objs = _collect_kernel_objects(runtime_root)
+    built_objs = _collect_kernel_objects(built_root)
+    print(f"runtime kernel: {runtime_root} ({len(runtime_objs)} .o)")
+    print(f"built   kernel: {built_root} ({len(built_objs)} .o)")
+
+    problems: list[str] = []
+    n_diff = 0
+    n_missing = 0
+    for rel in sorted(set(runtime_objs) | set(built_objs)):
+        in_runtime = rel in runtime_objs
+        in_built = rel in built_objs
+        if in_runtime and in_built:
+            if runtime_objs[rel] != built_objs[rel]:
+                n_diff += 1
+                if n_diff <= MAX_KERNEL_DIFF_PRINT:
+                    problems.append(
+                        f"[DIFF] {rel}\n"
+                        f"  runtime md5: {runtime_objs[rel]}\n"
+                        f"  built   md5: {built_objs[rel]}"
+                    )
+        else:
+            n_missing += 1
+            side = "runtime side" if in_runtime else "built side"
+            if n_missing <= MAX_KERNEL_DIFF_PRINT:
+                problems.append(f"[MISSING] {rel} (only on {side})")
+
+    for line in problems:
+        print(line)
+    tail = len(problems) - MAX_KERNEL_DIFF_PRINT
+    if tail > 0:
+        print(f"  ... and {tail} more")
+
+    if n_diff == 0 and n_missing == 0:
+        print(f"[OK] all {len(runtime_objs)} kernel .o files match the freshly built OPP.")
+        return True
+    print(
+        f"[FAIL] {n_diff} kernel .o differ, {n_missing} present on one side only; "
+        "the running wheel still uses an older kernel. "
+        "Reinstall the new wheel/run package."
+    )
+    return False
+
+
 def _check_python_wrapper(repo_root: Path) -> bool:
     """Compare installed wrapper .py files against their sources."""
-    import fla_npu
-
-    installed_root = Path(fla_npu.__file__).resolve().parent
+    installed_root = _installed_fla_npu_root()
+    if installed_root is None:
+        print("[WARN] installed fla_npu package not found; wrapper comparison skipped.", file=sys.stderr)
+        return True
     source_root = repo_root / "torch_custom" / "fla_npu" / "fla_npu"
     if not source_root.exists():
         print(f"[WARN] wrapper source dir not found: {source_root}", file=sys.stderr)
@@ -205,14 +384,25 @@ def main() -> int:
         action="store_true",
         help="Also compare the installed Python wrapper files against the current sources.",
     )
+    parser.add_argument(
+        "--no-kernel",
+        action="store_true",
+        help="Skip the kernel .o comparison (kernel .o are compared by default).",
+    )
+    parser.add_argument(
+        "--built-kernel",
+        default=None,
+        help="Path to the freshly built kernel .o root. Defaults to the one staged under build/.",
+    )
     args = parser.parse_args()
 
-    # Import first so OPP env vars and module paths are set up.
-    import fla_npu  # noqa: F401
-
+    # No fla_npu import here: the script is purely file-based md5 comparison,
+    # so it works without a sourced CANN environment or a loadable fla_npu.
     repo_root = Path(__file__).resolve().parents[1]
 
     results = [_check_opp_lib(repo_root, args.built_lib, args.run_package)]
+    if not args.no_kernel:
+        results.append(_check_kernel_o(repo_root, args.built_kernel))
     if args.python:
         results.append(_check_python_wrapper(repo_root))
 

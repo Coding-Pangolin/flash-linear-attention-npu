@@ -138,35 +138,56 @@ bash test.sh --device 0 --mode dry-run   # 只打印将执行的命令，不真�
 
 ### 比对运行时加载与最新编译产物的 md5
 
-`import fla_npu` 会在 Python 进程内定位并加载 wheel 内嵌 OPP，并把实际加载的
+`import fla_npu` 时会在 Python 进程内定位并加载 wheel 内嵌 OPP，并把实际加载的
 `libcust_opapi.so` 路径写入环境变量 `FLA_NPU_OP_API_LIB`（同时把 vendor 目录注入
-`ASCEND_CUSTOM_OPP_PATH`）。可使用 md5 比对脚本直接判断运行时加载的
-`libcust_opapi.so` 是否与最新编译产物一致：
+`ASCEND_CUSTOM_OPP_PATH`）。md5 比对脚本**无需导入 fla_npu、也无需先 source CANN
+环境**——它直接按 fla_npu 相同的候选顺序解析"运行时将加载的 `libcust_opapi.so`"
+（`FLA_NPU_OPP_PATH` → 已安装包内嵌 OPP → `ASCEND_CUSTOM_OPP_PATH` →
+`ASCEND_OPP_PATH`），只做纯文件 md5 比对。脚本默认对比两部分：
+
+- `libcust_opapi.so`（host 侧 aclnn 接口库）；
+- kernel `.o`（NPU 上实际执行的算子二进制，位于
+  `op_impl/ai_core/tbe/kernel/`）。kernel 改动**不会**改变
+  `libcust_opapi.so` 的 md5，因此默认就会比对该目录，避免只改 kernel 时漏检。
 
 ```sh
-# 不带参数：自动与 build/ 下的编译产物对比
+# 不带参数：自动与 build/ 下的编译产物对比（libcust_opapi.so + 全部 kernel .o）
 python scripts/verify_libcust_opapi_md5.py
 
 # 新编了 run 包：与 run 包内的 libcust_opapi.so 对比（自动提取）
 python scripts/verify_libcust_opapi_md5.py --run-package build_out/fla-npu-fla_npu_linux-aarch64.run
 
-# 或显式指定编译产物路径
+# 或显式指定编译产物路径（lib 与 kernel 均可单独指定）
 python scripts/verify_libcust_opapi_md5.py --built-lib build/libcust_opapi.so
+python scripts/verify_libcust_opapi_md5.py --built-kernel build/lib/fla_npu/opp/vendors/fla_npu_transformer/op_impl/ai_core/tbe/kernel
+
+# 只比对 libcust_opapi.so，跳过 kernel .o 对比
+python scripts/verify_libcust_opapi_md5.py --no-kernel
 
 # 加 --python：同时比对 Python wrapper（.py 源码打包进 wheel 时是纯拷贝，
 # 与 libcust_opapi.so 同源；只改 wrapper 源码后也需重装 wheel）
 python scripts/verify_libcust_opapi_md5.py --python
 ```
 
-脚本输出运行时加载的 `libcust_opapi.so` 路径与 md5、编译产物路径与 md5，并给出
-`[OK]`（一致，新安装的 OPP 生效）或 `[FAIL]`（不一致，当前加载的是旧 OPP，
-需要重新安装新 wheel / run 包）结论。`--python` 模式会把 `fla_npu/__init__.py`、
-`ops/ascendc/__init__.py`、`_aclnn_ctypes.py`、`_runtime.py` 的已安装文件与
-`torch_custom/fla_npu/fla_npu/` 下源码逐个比对 md5，任一不一致即报 `[FAIL]`。
+脚本输出运行时加载与编译产物的路径与 md5，并给出 `[OK]`（一致，新安装的 OPP
+生效）或 `[FAIL]`（不一致，当前加载的是旧 OPP，需要重新安装新 wheel / run 包）
+结论。kernel `.o` 全量共约 85 个、10 MB，md5 比对耗时不足 0.1 秒；不一致时脚本
+列出 diff 的算子目录与文件（如 `ascend910b/chunk_fwd_o/ChunkFwdO_*.o`）。
+`--python` 模式会把 `fla_npu/__init__.py`、`ops/ascendc/__init__.py`、
+`_aclnn_ctypes.py`、`_runtime.py` 的已安装文件与 `torch_custom/fla_npu/fla_npu/`
+下源码逐个比对 md5，任一不一致即报 `[FAIL]`。
 
-> 注意：Python wrapper 的 md5 只反映 `libcust_opapi.so` 之外的 Python 侧改动。
-> 只改 Python wrapper 时 OPP 的 md5 不变（仍需用 `--python` 确认 wrapper 已更新）；
-> 只改 C++ 算子时 wrapper 的 md5 不变（用不带 `--python` 的默认模式确认）。
+脚本自身测试位于 `tests/test_verify_libcust_opapi_md5.py`，用临时目录模拟
+vendor OPP 布局（fake lib / kernel / wrapper），不依赖真实安装或 CANN 环境：
+
+```sh
+python -m unittest tests.test_verify_libcust_opapi_md5 -v
+```
+
+> 注意：三类产物的 md5 相互独立，各自只反映对应侧的改动。
+> 只改 kernel 源码 → `libcust_opapi.so` md5 不变、kernel `.o` md5 变（默认模式检出）；
+> 只改 host 侧算子定义/tiling → 两者都变；
+> 只改 Python wrapper → OPP 侧 md5 都不变，需加 `--python` 确认 wrapper 已更新。
 
 ### 辅助确认：临时打印标记
 

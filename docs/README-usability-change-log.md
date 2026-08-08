@@ -381,3 +381,54 @@ reviewer 在 `README.md` 与 `docs/developer-guide.md` 新增 2 条【review】�
 
 - **评论**：`docs/developer-guide.md:138`「方式一和方式三实际无效，可以直接去除，就保留我们的md5脚本和建议用户增加打印确定即可」。
 - **实际改法**：章节重构为——章节开头简介后直接进入"比对运行时加载与最新编译产物的 md5"（原方式 2 升级为主方法，含 `--python` 用法与只改 wrapper / 只改 C++ 的适用说明）；原方式 1（核对 wheel 文件名与版本号）与方式 3（修改后强制覆盖安装）删除；方式 3 中的"临时打印标记"建议保留，改为独立小节"辅助确认：临时打印标记"。
+
+---
+
+## M. 第七轮修订（2026-08-08，md5 脚本新增 kernel `.o` 默认比对）
+
+针对"只改 kernel 编译后脚本能否检出"的问题做了实测与脚本增强。
+
+### 实测结论：只改 kernel，`libcust_opapi.so` md5 不变
+
+在 `fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_fwd_o/op_kernel/chunk_fwd_o.cpp` 加入真实进入二进制的逻辑改动（`ChunkFwdODispatch` 内新增 `if (tilingData->dataType == 42) return;`，运行时读取值不会被优化掉、实际不命中、不影响功能），完整 `pip wheel` 重新编译后：
+
+- `libcust_opapi.so` md5 **不变**（`240beb28...`）——host 侧 aclnn 接口库不包含 kernel 二进制；
+- `chunk_fwd_o` 的 4 个 kernel `.o`（`ChunkFwdO_*.o`，位于 `op_impl/ai_core/tbe/kernel/ascend910b/chunk_fwd_o/`）md5 **全部变化**——kernel `.o` 才是 NPU 上实际执行的二进制，其文件名哈希仅由参数结构决定、不随源码内容变化，但内容 md5 会变。
+
+因此只改 kernel 时，原先只对比 `libcust_opapi.so` 的 md5 脚本无法检出"改动未生效"，需要额外对比 kernel `.o`。
+
+### 修改 M1（scripts/verify_libcust_opapi_md5.py）：默认新增 kernel `.o` 全量比对
+
+- **实际改法**：脚本新增 `_check_kernel_o()`——运行时侧推导内嵌 OPP 的 kernel 根目录（`lib` 的 `parents[2]/op_impl/ai_core/tbe/kernel`），build 侧默认取 `build/lib/fla_npu/opp/vendors/fla_npu_transformer/op_impl/ai_core/tbe/kernel`，两侧递归收集全部 `*.o` 按相对路径逐文件比对 md5，输出 `[DIFF]`（md5 不一致，含两侧 md5）与 `[MISSING]`（单侧存在）清单（超出 20 条折叠），任一不一致报 `[FAIL]`。**默认执行**（不要求额外参数），可用 `--no-kernel` 跳过；`--run-package` / `--built-lib` 场景若 build 侧 kernel 目录不存在则打印 `[WARN]` 跳过，不影响整体结论。
+- **性能实测**：kernel `.o` 共 85 个、总大小约 10 MB，全量 md5 比对约 0.03 秒，远小于编译耗时，可放心默认开启。
+- **端到端实测**：改 kernel 编译后、未重装时运行脚本 → lib 侧 `[OK]`、kernel 侧 `[FAIL]`（准确列出 `ascend910b/chunk_fwd_o/ChunkFwdO_*.o` 4 个 DIFF），退出码 1；安装新 wheel 后 → 两侧均 `[OK]`，退出码 0。
+
+### 修改 M2（developer-guide"确认 wheel 来源"）：文档同步默认 kernel 比对
+
+- **实际改法**：`docs/developer-guide.md` 该节改为说明脚本默认对比两部分（`libcust_opapi.so` + 全部 kernel `.o`），补充 `--no-kernel` 用法、kernel `.o` 规模与耗时、以及三类产物 md5 相互独立的注意点（只改 kernel → 仅 kernel 侧变；只改 host → 两者变；只改 wrapper → 需 `--python`）。
+
+### 修改 M3（scripts/verify_libcust_opapi_md5.py）：不再依赖 import fla_npu / CANN 环境，可直接运行
+
+- **问题**：原脚本在 `main()` 里 `import fla_npu` 以获取 `FLA_NPU_OP_API_LIB`。而 `import fla_npu` 会触发 `fla_npu/__init__.py` 的 `load_ascendc_opapi_libraries()`，用 `ctypes.CDLL` 真实加载 `libcust_opapi.so`，依赖 CANN 的 `libprofapi.so` / `libopapi_math.so`。未 source CANN `set_env.sh` 时 `LD_LIBRARY_PATH` 缺 CANN `lib64`，脚本直接抛 `OSError`，每次使用都要先 source，影响易用性。
+- **实际改法**：脚本改为**纯文件 md5 比对，不再导入或加载 fla_npu**。新增 `_installed_fla_npu_root()`（用 `importlib.util.find_spec` 定位已安装包目录，不执行 `__init__.py`）与 `_resolve_runtime_lib()`（复刻 `fla_npu` 的 `_candidate_opp_roots` + `_resolve_vendor_dir` 查找顺序：`FLA_NPU_OPP_PATH` → 已安装包内嵌 OPP → `ASCEND_CUSTOM_OPP_PATH` → `ASCEND_OPP_PATH`，首个含 `op_api/lib/libcust_opapi.so` 的 root 胜出）。`_check_opp_lib` / `_check_kernel_o` / `_check_python_wrapper` 均改用该解析结果。
+- **已实测**：`env -i` 清空全部环境变量后直接运行脚本 → lib / kernel / wrapper 全部 `[OK]`，退出码 0；`FLA_NPU_OPP_PATH` 指向外部 build 产物时正确解析到 build 侧；未安装 fla_npu 的 Python（系统 python）下也能运行并给出差异结论。
+- **顺带修正**：kernel 对比 `[MISSING]` 单侧存在时"only on X side"标记方向写反，已改为 runtime 独有标 `runtime side`、build 独有标 `built side`。
+
+### 修改 M4（scripts/verify_libcust_opapi_md5.py）：新增 `--built-kernel` 参数
+
+- **实际改法**：kernel `.o` 的 build 侧目录原先硬编码为 `build/lib/fla_npu/opp/vendors/.../kernel`，不利于自定义构建目录与测试隔离。新增 `--built-kernel <path>` 参数显式指定 build 侧 kernel 根目录（默认仍为上述硬编码路径，行为不变）。
+
+### 修改 M5（tests/test_verify_libcust_opapi_md5.py）：新增脚本测试用例
+
+- **实际改法**：新增 `tests/test_verify_libcust_opapi_md5.py`，沿用仓库 `unittest` 风格（不引入 pytest），用临时目录构造最小 vendor OPP（`op_api/lib/libcust_opapi.so` + `op_impl/.../kernel/ascend910b/sample/*.o`）与最小已安装 fla_npu 包（`opp/` + wrapper `.py`），在干净子进程（仅 `PATH`/`HOME` + 测试所需变量）中运行脚本并断言退出码与输出。覆盖以下用例：
+  - 默认完整对比（lib + kernel）一致 → `[OK]`，退出码 0；
+  - 只改 kernel（lib 相同、kernel `.o` 内容不同）→ lib `[OK]`、kernel `[FAIL]`，退出码 1；
+  - 只改 lib → `[FAIL]`，退出码 1；
+  - `--no-kernel` 跳过 kernel 对比 → 退出码 0；
+  - kernel `.o` 仅 build 侧存在 → `[MISSING] ... (only on built side)`，退出码 1；
+  - `--python` wrapper 一致 → `[OK]`；篡改 installed `__init__.py` → `[FAIL]`；
+  - `FLA_NPU_OPP_PATH` 优先于已安装包内嵌 OPP；
+  - 无可解析 OPP → `[FAIL] runtime libcust_opapi.so not found`，退出码 1；
+  - `--help` 列出全部参数。
+- **测试结果**：10 个用例全部通过（`python -m unittest tests.test_verify_libcust_opapi_md5 -v`）。测试过程中发现并修复了测试自身的两个问题：`--built-lib` 路径拼错（少了 `vendors/fla_npu_transformer` 中间层）、wrapper 一致用例需从真实源码复制文件而非空内容。
+- **文档同步**：`docs/developer-guide.md` 该节补充 `--built-kernel` 用法与测试入口。

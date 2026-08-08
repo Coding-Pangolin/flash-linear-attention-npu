@@ -312,3 +312,27 @@ reviewer 在 README 中新增 5 条【review】行内评论，已最小化修订
 
 - **评论**：`README.md:223`「这里测试单算子和端到端测试需要确定下放哪里更合适」。
 - **实际改法**：确定归属为"使用者快速验证放主流程、开发者全量测试放开发者文档"——README Step 4 冒烟测试后新增"可选的端到端验证"小节（`python examples/flash_gated_delta_rule.py`）；README"开发者指引"场景描述去掉"测试单算子、端到端验证"，改为注明"测试单算子和端到端验证见上文 Step 4"；`docs/developer-guide.md` 场景 4/5 开头补充"使用者快速验证见根 README Step 4，本场景面向开发调试/新增用例"。
+
+---
+
+## J. 第四轮修订（2026-08-08，PR #280 行内【review】评论 2 条）
+
+reviewer 在 Step 2 预检处新增 2 条【review】评论（同一处），已修订并登记如下。
+
+### 修订 J1（README Step 2）：预检命令直接用完整预检，`--build-only` 作为补充场景
+
+- **评论**：`README.md:66`「这里虽然建议优先使用，但是上面给的操作还是带了--build_only，我的意思是直接在给出的命令中就指明直接用完整预检，而不是文字描述，然后后面再补充使用--build_only适用的情况」。
+- **实际改法**：Step 2 预检主命令由 `python scripts/check_npu_env.py --build-only` 改为 `python scripts/check_npu_env.py`（完整预检），并说明完整预检同时检测运行与编译环境（`torch` / `torch_npu` / `triton-ascend` 可导入、版本下限、`torch.npu.is_available()`）；随后补充 `--build-only` 的适用场景（无 NPU 卡的纯构建环境，`is_available()` 报 `FAIL` 属预期时跳过 torch 系检查）。
+
+### 修订 J2（README Step 2）：补充预检未覆盖的编译链依赖组件版本
+
+- **评论**：`README.md:66`「这里是需要你去搞清楚剩余的一些依赖的版本，你通过新的环境去探索一下我们预检没覆盖的依赖组件的版本」（附一段构建日志：隔离 venv 中安装 build dependencies 的实际版本）。
+- **探索结论**：预检脚本只检查 Python / bash / CANN 环境变量与 torch 系依赖，不检查实际编译链组件。经查源码确认版本要求：
+  - `cmake` >= 3.16（`CMakeLists.txt` 第 12 行 `cmake_minimum_required`）；
+  - `gcc` / `g++` >= 7.3（`install_deps.sh` `install_gcc`）；
+  - `bisheng` >= 8.5（CANN toolkit 自带，`version.cmake` `set_build_dependencies(bisheng-compiler ">=8.5")`，`build.sh` 编译前强校验）；
+  - `make`（CMake 默认构建后端；CI 镜像亦安装 `ninja-build`，二选一）；
+  - `patch`（`install_deps.sh` `install_patch`；CI 镜像亦安装）；
+  - Python 头文件（CI 镜像安装 `python3-dev`）；
+  - `setuptools` >= 70.1 / `wheel` / `packaging` / `psutil`（`pyproject.toml` `[build-system] requires`，构建时自动安装；评论日志实测版本 setuptools 83.0.0、wheel 0.47.0、packaging 26.3、psutil 7.2.2）。
+- **实际改法**：在预检命令后新增依赖组件版本表格（上述组件 + 版本要求 + 说明），并注明"预检不覆盖编译链上的工具链与构建依赖，这些组件缺失时会在 `pip wheel` 阶段才报错"。

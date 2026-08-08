@@ -60,16 +60,28 @@ source $INSTALL_PATH/ascend-toolkit/set_env.sh
 ```sh
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 python -m pip install -r requirements.txt
-python scripts/check_npu_env.py --build-only
-```
-
-**建议优先使用完整预检（不带 `--build-only`）**，它会同时检测运行与编译环境。`--build-only` 预检只做最小检查（Python / bash / CANN 环境变量），不会检查 `torch`、`torch_npu`、`torchnpugen`、`triton-ascend` 等 torch 系依赖，也不覆盖 `CMake`、编译器（`g++` / `bisheng`）、Python 头文件、`ninja` 等编译组件——**检查通过不代表一定可以编译**，缺失的编译组件会在 `pip wheel` 阶段才暴露。要判断 torch 系依赖是否完整、版本是否匹配，请运行完整预检：
-
-```sh
 python scripts/check_npu_env.py
 ```
 
-完整预检会检查 `torch` / `torch_npu` / `triton-ascend` 是否可导入、版本下限与 NPU 可用性（`torch.npu.is_available()`）；在无 NPU 卡的纯构建环境里，`is_available()` 为 `False` 且该检查会报 `FAIL`，属预期现象——此时若只需产出 wheel 构建，用 `--build-only` 即可。torch 系依赖缺失或版本不匹配时，`pip wheel` 会在构建或打包阶段报错，请按 CANN 与 Python 版本匹配的列表先行安装。预检通过后再生成 wheel：
+完整预检会同时检测运行与编译环境，检查 `torch` / `torch_npu` / `triton-ascend` 是否可导入、版本下限与 NPU 可用性（`torch.npu.is_available()`）；torch 系依赖缺失或版本不匹配时，`pip wheel` 会在构建或打包阶段报错，请按 CANN 与 Python 版本匹配的列表先行安装。在无 NPU 卡的纯构建环境里，`is_available()` 为 `False` 且该检查会报 `FAIL`，属预期现象——此时若只需产出 wheel 构建，可用 `--build-only` 跳过 torch 系检查：
+
+```sh
+python scripts/check_npu_env.py --build-only
+```
+
+预检不覆盖编译链上的工具链与构建依赖，这些组件缺失时会在 `pip wheel` 阶段才报错：
+
+| 组件 | 版本要求 | 说明 |
+| ---- | ------- | ---- |
+| `cmake` | >= 3.16 | 项目 `CMakeLists.txt` 的最低要求 |
+| `gcc` / `g++` | >= 7.3 | host 侧编译 |
+| `bisheng` | >= 8.5（CANN 自带） | 昇腾 kernel 编译工具，随 CANN toolkit 安装 |
+| `make` | 任意 | CMake 构建后端（CI 亦安装 `ninja-build`，二选一即可） |
+| `patch` | 任意 | run 包打包与构建需要 |
+| Python 头文件 | 与解释器匹配 | Ubuntu / Debian 对应 `python3-dev` |
+| `setuptools` / `wheel` / `packaging` / `psutil` | `setuptools>=70.1`，其余任意 | `pyproject.toml` 声明的构建依赖，构建时自动安装 |
+
+预检通过后再生成 wheel：
 
 ```sh
 source /usr/local/Ascend/ascend-toolkit/set_env.sh

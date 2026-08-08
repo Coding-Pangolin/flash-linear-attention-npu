@@ -346,7 +346,7 @@ reviewer 在 `docs/developer-guide.md`（3 条）与 `README.md`（1 条）新�
 ### 修订 K1（developer-guide 场景 3.1）：算子实现给出参考的目录结构
 
 - **评论**：`docs/developer-guide.md:47`「算子实现给出参考的目录结构」。
-- **实际改法**：场景 3.1 在目录作用表后新增以 `gdn` 模块下 `chunk_fwd_o` 为示例的参考目录树（`fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_fwd_o/` 下的 `CMakeLists.txt`、`op_host/`（def / tiling / op_api 的 aclnn 头与实现）、`op_kernel/`（kernel 实现与结构体）），以及对应 Python 调用侧文件（`_aclnn_ctypes.py` wrapper、`__init__.py` 注册、`test/test_npu_chunk_fwd_o.py`），并注明新算子文件均可参考 `fla/ops/ascendc/gdn/` 下已有算子补齐。
+- **实际改法**：场景 3.1 在目录作用表后新增以 `gdn` 模块下**反向算子** `chunk_bwd_dv_local` 为示例的参考目录树（`fla/ops/ascendc/gdn/chunk_gdn_bwd/chunk_bwd_dv_local/` 下的 `CMakeLists.txt`、`op_host/`（def / tiling / tiling_processor / op_api 的 aclnn 头与实现）、`op_kernel/`（kernel 实现与 cube / vector / common 结构体头）），以及对应 Python 调用侧文件（`_aclnn_ctypes.py` wrapper、`__init__.py` 注册、`test/test_npu_chunk_bwd_dv_local.py`），并注明新算子文件均可参考 `fla/ops/ascendc/gdn/` 下已有算子补齐。**第二轮修订（2026-08-08）**：按用户要求示例由前向算子 `chunk_fwd_o` 改为反向算子 `chunk_bwd_dv_local`。
 
 ### 修订 K2（developer-guide 场景 2）：修正"一键编包单算子"为全量 wheel 编包
 

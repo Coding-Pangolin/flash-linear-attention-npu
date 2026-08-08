@@ -52,31 +52,34 @@ FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w d
 | `torch_custom/fla_npu/fla_npu/ops/ascendc/__init__.py` | `_ASCENDC_OPS` 注册 |
 | `torch_custom/fla_npu/test/test_npu_<op>.py` | 算子测试脚本 |
 
-以 `gdn` 模块下的 `chunk_fwd_o` 算子为例，参考目录结构如下：
+以 `gdn` 模块下的反向算子 `chunk_bwd_dv_local` 为例，参考目录结构如下：
 
 ```
-fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_fwd_o/
+fla/ops/ascendc/gdn/chunk_gdn_bwd/chunk_bwd_dv_local/
 ├── CMakeLists.txt                  # 算子的编译目标声明
 ├── op_host/                        # host 侧：算子注册 + tiling + aclnn 接口
-│   ├── chunk_fwd_o_def.cpp         # 算子定义（proto 注册）
-│   ├── chunk_fwd_o_tiling.cpp      # tiling 计算
-│   ├── chunk_fwd_o_tiling.h
+│   ├── chunk_bwd_dv_local_def.cpp  # 算子定义（proto 注册）
+│   ├── chunk_bwd_dv_local_tiling.cpp  # tiling 计算
+│   ├── chunk_bwd_dv_local_tiling_processor.h
 │   └── op_api/
-│       ├── aclnn_chunk_fwd_o.h     # aclnn 接口头（clang-format 风格签名）
-│       └── aclnn_chunk_fwd_o.cpp
+│       ├── aclnn_chunk_bwd_dv_local.h   # aclnn 接口头（clang-format 风格签名）
+│       └── aclnn_chunk_bwd_dv_local.cpp
 └── op_kernel/                      # kernel 侧：Ascend C 算子实现
-    ├── chunk_fwd_o.cpp
-    └── chunk_fwd_o_struct.h
+    ├── chunk_bwd_dv_local.cpp
+    ├── chunk_bwd_dv_local_struct.h
+    ├── chunk_bwd_dv_local_cube.h   # cube 侧实现
+    ├── chunk_bwd_dv_local_vector.h # vector 侧实现
+    └── chunk_bwd_dv_local_common.h
 ```
 
 对应的 Python 调用侧文件：
 
 ```
 torch_custom/fla_npu/fla_npu/ops/ascendc/
-├── _aclnn_ctypes.py                # 新增 npu_chunk_fwd_o(...) ctypes wrapper
-└── __init__.py                     # _ASCENDC_OPS 中注册 chunk_fwd_o
+├── _aclnn_ctypes.py                # 新增 npu_chunk_bwd_dv_local(...) ctypes wrapper
+└── __init__.py                     # _ASCENDC_OPS 中注册 chunk_bwd_dv_local
 torch_custom/fla_npu/test/
-└── test_npu_chunk_fwd_o.py         # 新增算子测试脚本
+└── test_npu_chunk_bwd_dv_local.py  # 新增算子测试脚本
 ```
 
 新算子的 host / kernel 文件均可参考 `fla/ops/ascendc/gdn/` 下已有算子的对应文件补齐。

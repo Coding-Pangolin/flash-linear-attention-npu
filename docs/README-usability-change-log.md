@@ -2,7 +2,7 @@
 
 > 协作方式：每确认一个修改点 → 记入本表 → 确认下一个 → 最后一次性实施。
 > 优先级说明：P0 = 事实性错误 / 会让用户操作失败；P1 = 核心需求缺失；P2 = 易用性增强。
-> **状态总览（2026-08-08 16:20）**：21 点已全部实施并提交；PR #280 评审意见 10 条已修订（G 轮）；复审 3 条已修订（H 轮）；行内【review】评论 5 条已修订（I 轮）；预检相关 2 条已修订（J 轮）；新增 4 条已修订（K 轮）。分支 `20260806_204500_docs-README-usability`（基于最新 main `ac46f1c3`，含 PR #274），已推送至 origin（Coding-Pangolin）。
+> **状态总览（2026-08-08 17:00）**：21 点已全部实施并提交；PR #280 评审意见 10 条已修订（G 轮）；复审 3 条已修订（H 轮）；行内【review】评论 5 条已修订（I 轮）；预检相关 2 条已修订（J 轮）；新增 4 条已修订（K 轮）；新增 2 条已修订（L 轮）。分支 `20260806_204500_docs-README-usability`（基于最新 main `ac46f1c3`，含 PR #274），已推送至 origin（Coding-Pangolin）。
 > 口径：PR #274 已合入 main（`ac46f1c3`）。下文凡涉及"增量构建移除、`import fla_npu` 即加载、`scripts/check_install_workflows.py`、卸载说明、shell 环境钩子"等，均为 #274 在 main 上已有的内容；本次 PR 的增量是文档修正与新章节，与 #274 语义兼容（冲突合并时保留 #274 侧内容 + 叠加本次修正）。
 
 ---
@@ -364,3 +364,20 @@ reviewer 在 `docs/developer-guide.md`（3 条）与 `README.md`（1 条）新�
 
 - **评论**：`README.md:184`「这里测试单算子，算子调用方式和端到端验证先恢复PR修改前即可，然后算子调用方式涉及到旧接口指引跳转到升级接口的文档」。
 - **实际改法**：README Step 4 恢复 PR 修改前的完整三节——`#### 测试单算子`（全量/单个命令 + `--op` 可选值 11 个，与 `test.sh` 逐条核对一致）、`#### 算子调用方式参考`（`fla_npu.ops.ascendc` / `.triton` 导入示例；末尾"使用旧版 `torch.ops.npu.*` / `torch_npu.ops.*` 的存量代码如何迁移"跳转 [兼容与迁移指南](migration-guide.md)）、`#### 端到端 Example/ST 验证`（`python examples/flash_gated_delta_rule.py` + CI 用例 schema 说明）；原"冒烟测试 + 可选的端到端验证"两个短小节删除。`docs/developer-guide.md` 场景 4/5 同步精简为引用 README Step 4（场景 4 只保留 `--mode dry-run` 开发调试选项，场景 5 只保留新增 CI 用例的 schema 说明），避免两份文档维护重复内容。
+
+---
+
+## L. 第六轮修订（2026-08-08，PR #280 行内【review】评论 2 条）
+
+reviewer 在 `README.md` 与 `docs/developer-guide.md` 新增 2 条【review】行内评论，已最小化修订并登记如下。
+
+### 修订 L1（README Step 4）：端到端 Example/ST 验证节精简，CI 用例细节移回开发者文档
+
+- **评论**：`README.md:252`「端到端验证为什么新增了这么多内容，这部分不属于这一节吧，之前为什么有这么多内容，前面的commit是不是直接把这块移除了」。
+- **核对结论**：K4 恢复的三节内容取自 `origin/main`（PR 修改前）原文，其中端到端节的 `example_st_cases.json` 管理、`gate_source` 预留说明本就是修改前 README 的原文，并非本次新增。但 reviewer 认为这些 CI 用例 schema 细节不属于"端到端验证"这一使用者向小节。
+- **实际改法**：README Step 4 端到端节精简为仅保留核心的"一键运行 GDN 模块示例"（`python examples/flash_gated_delta_rule.py`），删除 `example_st_cases.json` 管理、case1 默认值、GVA/`Vdim` 泛化、`gate_source` 预留等 CI 用例 schema 细节，改为一句指向[开发者指南](developer-guide.md) 场景 5 的指引。这些细节在 developer-guide 场景 5 已有完整内容，信息不丢失。
+
+### 修订 L2（developer-guide"确认 wheel 来源"）：删除方式 1 与方式 3，只保留 md5 脚本与打印确认
+
+- **评论**：`docs/developer-guide.md:138`「方式一和方式三实际无效，可以直接去除，就保留我们的md5脚本和建议用户增加打印确定即可」。
+- **实际改法**：章节重构为——章节开头简介后直接进入"比对运行时加载与最新编译产物的 md5"（原方式 2 升级为主方法，含 `--python` 用法与只改 wrapper / 只改 C++ 的适用说明）；原方式 1（核对 wheel 文件名与版本号）与方式 3（修改后强制覆盖安装）删除；方式 3 中的"临时打印标记"建议保留，改为独立小节"辅助确认：临时打印标记"。

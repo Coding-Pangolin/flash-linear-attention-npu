@@ -235,14 +235,8 @@ dv = chunk_bwd_dv_local(...)
 python examples/flash_gated_delta_rule.py
 ```
 
-NPU CI 的 Example/ST 用例由 [`ci/example_st_cases.json`](ci/example_st_cases.json) 管理。
-当前默认启用 `case1_current_default`，shape 与上面的直接运行默认值一致；后续 GVA、`Vdim=256`
-等泛化场景可以在该文件中新增用例，显式填写 `B`、`T`、`chunk_size`、`query_head`、
-`value_head`、`Kdim`、`Vdim` 等 shape 字段，以及 `gate_source`、`gate_function`、
-`initial_state`、`output_final_state`、`qk_l2norm` 等行为字段。
-
-当前端到端 Example/ST 已支持 `gate_source=g`；`gk` / `g+gk` 先作为用例 schema 预留，待
-NPU fwd_h 路径支持后再启用。
+在 CI 中新增 / 调整端到端 Example/ST 用例（shape、`gate_source` 等字段）见
+[开发者指南](docs/developer-guide.md) 场景 5。
 
 不再使用时，按 distribution 名卸载：
 

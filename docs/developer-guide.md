@@ -134,24 +134,9 @@ bash test.sh --device 0 --mode dry-run   # 只打印将执行的命令，不真�
 ## 如何确认新构建的 wheel 来自最新源码
 
 重新构建后，需要确认实际安装的 wheel 确实来自最新修改的源码，避免因版本号相同被
-`pip` 跳过（详见根 README Step 3）。推荐以下几种方式组合验证：
+`pip` 跳过（详见根 README Step 3）。推荐使用 md5 比对脚本确认：
 
-### 方式 1：核对 wheel 文件名与版本号
-
-```sh
-# 构建时记录产物文件名（构建日志会输出准确文件名，勿用通配符）
-FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w dist
-ls -la dist/
-
-# 安装后核对实际加载的版本
-python -m pip show flash-linear-attention-npu
-python -c "from importlib.metadata import version; print(version('flash-linear-attention-npu'))"
-```
-
-构建产物文件名包含 SOC / ABI 本地版本标签（见 `scripts/fla_npu_artifacts.py`），
-`pip show` / `importlib.metadata` 的版本应与 `dist/` 下新产物的版本一致。
-
-### 方式 2：比对运行时加载与最新编译的 `libcust_opapi.so` 的 md5
+### 比对运行时加载与最新编译产物的 md5
 
 `import fla_npu` 会在 Python 进程内定位并加载 wheel 内嵌 OPP，并把实际加载的
 `libcust_opapi.so` 路径写入环境变量 `FLA_NPU_OP_API_LIB`（同时把 vendor 目录注入
@@ -183,15 +168,7 @@ python scripts/verify_libcust_opapi_md5.py --python
 > 只改 Python wrapper 时 OPP 的 md5 不变（仍需用 `--python` 确认 wrapper 已更新）；
 > 只改 C++ 算子时 wrapper 的 md5 不变（用不带 `--python` 的默认模式确认）。
 
-### 方式 3：修改后强制覆盖安装
+### 辅助确认：临时打印标记
 
-本地 dev 版本（如 `26.7.0.dev0`）重新构建后版本号可能不变，不带 `--force-reinstall` 的
-`pip install` 会认为"已是最新版本"而跳过，导致实际仍是旧代码。务必使用强制覆盖：
-
-```sh
-WHEEL_PATH="dist/<新产物的准确wheel文件名>.whl"
-python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
-```
-
-如需进一步确认安装的是新代码，可在源码修改处临时打印标记（如 `print("[DEBUG] new build")`
-或查看 `__pycache__` 的时间戳），确认输出后移除。
+如需进一步确认实际执行的代码来自新源码，可在源码修改处临时打印标记
+（如 `print("[DEBUG] new build")`，或查看 `__pycache__` 的时间戳），确认输出后移除。

@@ -11,7 +11,7 @@
 
 ## 场景 1：单独编译单算子（run 包）
 
-当已经安装了完整 wheel（方式 A），只需快速替换少量算子的 Ascend C 产物时使用。
+当已经安装了完整 wheel，只需快速替换少量算子的 Ascend C 产物时使用。
 `--ops=op1,op2,...` 只会生成指定算子的 run 包；run 包安装时会把当前 run 包里的
 `packages/vendors/fla_npu_transformer` 合并覆盖到当前 Python 环境已安装的
 `site-packages/fla_npu/opp/vendors/fla_npu_transformer`，从而更新 `aclnn`、tiling、kernel 和相关配置。
@@ -24,6 +24,35 @@ bash build.sh --soc=ascend910b --pkg --vendor_name=fla_npu --ops=chunk_fwd_o
 cd torch_custom/fla_npu
 python3 setup.py bdist_wheel
 ```
+
+### 安装 run 包
+
+先确认完整 wheel 已经安装到当前 Python 环境，然后安装 run 包。安装器会在覆盖前
+列出当前 run 包携带的算子，并标出安装后的算子状态：`WARNING` 表示安装后不可用，
+包括不在当前 run 包范围内但会受局部 `libcust_opapi.so`、tiling so、proto so 整体
+替换影响的算子，以及当前 run 包内但 aclnn ABI 修改或删除的算子；`NOTICE` 表示新增
+或无法完整确认的 ABI，需要确认当前 Python wheel 是否已有对应 wrapper；`OK` 表示当前
+run 包内且 aclnn ABI 一致的算子。`op_api/include/aclnnop` 中新增、删除、修改的 aclnn
+ABI 头文件会合并显示到对应算子的状态原因里；删除只按当前 run 包携带的算子范围判断，
+非 `--quiet` 模式只在状态表后确认一次。
+
+```sh
+# 覆盖当前 Python 环境中 flash-linear-attention-npu wheel 内嵌的 OPP
+./build_out/fla-npu-*.run --install
+# 或等价写法
+./build_out/fla-npu-*.run --full
+
+# 如果 Python wrapper 也有修改，再安装单独编译出的 wheel（路径替换为实际产物文件名）
+WHEEL_PATH="torch_custom/fla_npu/dist/<准确wheel文件名>.whl"
+python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
+```
+
+run 包覆盖完成后会重写幂等的 `set_env.bash`，并把实际 OPP 文件清单刷新到 wheel
+的 `RECORD`。因此重复覆盖同一个 run 包不会累积环境变量或文件记录，后续
+`pip --force-reinstall` 也能先清理 run 包增加的文件，再安装新 wheel。
+
+> 常规使用者推荐直接用根 README Step 2 / Step 3 的一键编包 + wheel 安装主流程；
+> 本场景仅在需要快速替换单个算子产物时使用。
 
 ## 场景 2：一键编包（全量 wheel）
 

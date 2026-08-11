@@ -432,3 +432,33 @@ reviewer 在 `README.md` 与 `docs/developer-guide.md` 新增 2 条【review】�
   - `--help` 列出全部参数。
 - **测试结果**：10 个用例全部通过（`python -m unittest tests.test_verify_libcust_opapi_md5 -v`）。测试过程中发现并修复了测试自身的两个问题：`--built-lib` 路径拼错（少了 `vendors/fla_npu_transformer` 中间层）、wrapper 一致用例需从真实源码复制文件而非空内容。
 - **文档同步**：`docs/developer-guide.md` 该节补充 `--built-kernel` 用法与测试入口。
+
+---
+
+## N. 第八轮修订（2026-08-11）
+
+本轮完成两项改动：`check_npu_env.py` 预检补充 cmake / setuptools 版本检测；README 方式 B 从主文档迁移到开发者指南。
+
+### 修改 N1（scripts/check_npu_env.py）：预检补充 cmake / setuptools 版本检测
+
+- **背景**：PR #280 评论要求"把预检没覆盖的工具链依赖也加上，分析怎么判断这些依赖"（README Step 2 表格列出 `cmake` / `gcc` / `bisheng` / `make` / `patch` / Python 头 / `setuptools` 等，但 `check_npu_env.py` 此前不检测）。本轮先落地 cmake 与 setuptools 两项，用实测确定最小版本。
+- **实测确定最小版本**：
+  - **cmake**：`CMakeLists.txt` 声明 `cmake_minimum_required(VERSION 3.16)`，低于 3.16 的版本会被 CMake 自身拒绝启动；`install_deps.sh` 亦以 `req_ver="3.16.0"` 检查。项目用到的 CMake 特性（`cmake_parse_arguments` 3.5+、`target_link_options` 3.13+）均不高于 3.16。**结论：cmake >= 3.16 均可支持。**
+  - **setuptools**：`pyproject.toml` 声明 `setuptools>=70.1`；实测 setuptools 69.5.1 **没有** `setuptools.command.bdist_wheel`（`setup.py` 回退链第二步依赖它），80.9.0 有；setuptools 70.x 起在 `setuptools.command.bdist_wheel` 内置 bdist_wheel（不再依赖独立 `wheel` 包）。**结论：setuptools >= 70.1 均可支持。**
+- **实际改法**：新增 `_check_cmake_version()`（`shutil.which` 定位 cmake，`cmake --version` 解析版本，`>=3.16` 校验，缺失/无法解析版本时 `[FAIL]`）与 `_check_setuptools_version()`（`importlib.metadata.version` 取版本，`>=70.1` 校验）。两者在 CANN 环境检查之后、torch 系检查之前执行。
+- **已实测**：
+  - cmake 4.3.1 + setuptools 80.9.0 → 均 `[OK]`；
+  - setuptools 69.5.1 → `[FAIL] setuptools>=70.1 is required, got 69.5.1`；
+  - 模拟 cmake 3.10.2 → `[FAIL] cmake>=3.16 is required`；模拟 3.16.0 → `[OK]`（边界正确）；
+  - `shutil.which` 找不到 cmake → `[FAIL] cmake not found`。
+- **文档同步**：README Step 2 工具链表格保持不变（`cmake >= 3.16`、`setuptools>=70.1` 与脚本一致）；表格下方预检说明补一句"cmake / setuptools 已纳入预检，其余组件缺失时仍在 `pip wheel` 阶段报错"。
+
+### 修改 N2（README.md）：方式 B 从主 README 迁移到开发者指南
+
+- **背景**：用户要求"README 的方式 B 不要存在于主 README，应引导用户使用最新方式（一键编包全量 wheel + 安装），可移动到其他合适位置作必要时的参考"。
+- **实际改法**：
+  - Step 2：删除"方式 B：【备选】单独编译算子 run 包和 Python wheel"整节（含 `bash build.sh --pkg ... --ops=` 与 `cd torch_custom/fla_npu && python3 setup.py bdist_wheel`），改为一行引用块"需要单独编译一个或多个算子 run 包的开发者场景，见开发者指南场景 1"；"方式 A：【推荐】源码一键编译并生成 wheel"标题改为"【推荐】源码一键编译并生成 wheel"，"方式 A 编译可用环境变量"改为"编译可用环境变量"。
+  - Step 3：删除"方式 A 产物安装" / "方式 B 产物安装"两个小节标题与 run 包安装细节（安装器算子状态 `WARNING` / `NOTICE` / `OK` 说明、`./build_out/fla-npu-*.run --install` / `--full`、run 包覆盖后重写 `set_env.bash` 与 `RECORD`），保留 wheel 安装主流程与通用 runtime 加载说明（`import fla_npu` 定位 OPP、`fla_npu.ops.ascendc` 查找顺序），末尾加引用块"已安装完整 wheel 后如需用单算子 run 包快速替换部分算子产物（含安装器算子状态说明），见开发者指南场景 1"。
+  - Step 4：验证命令说明由"安装后两种方式均可用以下命令验证"改为"安装后可用以下命令验证"。
+- **同步迁移**：`docs/developer-guide.md` 场景 1 补充"安装 run 包"小节，承接原 README 方式 B 的完整安装细节（安装器算子状态说明、`--install` / `--full` 命令、Python wrapper wheel 重装、`set_env.bash` / `RECORD` 行为），并加一句"常规使用者推荐直接用根 README Step 2 / Step 3 的一键编包 + wheel 安装主流程；本场景仅在需要快速替换单个算子产物时使用"。
+- **引用一致性检查**：README / developer-guide / migration-guide 中"方式 A / 方式 B"字样已全部清除或改写；migration-guide 的 Step 引用与 run 包描述不受影响。

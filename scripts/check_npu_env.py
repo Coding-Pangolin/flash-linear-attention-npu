@@ -8,6 +8,7 @@ import importlib.util
 import os
 import re
 import shutil
+import subprocess
 import sys
 from importlib import metadata
 from typing import Optional, Tuple
@@ -19,6 +20,12 @@ MIN_PYTHON = (3, 9)
 MIN_TORCH = "2.6.0"
 MIN_TRITON_ASCEND = "3.2.0"
 MIN_TRITON_ASCEND_A5 = "3.2.1"
+
+# Toolchain and build dependencies checked in addition to the torch-related
+# checks. Values mirror CMakeLists.txt (cmake_minimum_required) and
+# pyproject.toml ([build-system] requires).
+MIN_CMAKE = "3.16"
+MIN_SETUPTOOLS = "70.1"
 TORCH_NPU_GDN_FIX_MINIMUMS = {
     "2.7.1": "2.7.1.post5",
     "2.8.0": "2.8.0.post5",
@@ -156,6 +163,49 @@ def _check_triton_ascend_a5_compat(failures: list[str], actual: str) -> None:
         )
 
 
+def _check_cmake_version(failures: list[str]) -> None:
+    """Check the CMake version against the project's minimum requirement.
+
+    The lower bound comes from ``cmake_minimum_required(VERSION 3.16)`` in
+    ``CMakeLists.txt`` (mirrored by ``install_deps.sh``), so any version
+    >= MIN_CMAKE is supported.
+    """
+    cmake = shutil.which("cmake")
+    if cmake is None:
+        _fail(failures, f"cmake not found (cmake>={MIN_CMAKE} is required)")
+        return
+    try:
+        output = subprocess.run(
+            [cmake, "--version"], capture_output=True, text=True, timeout=10
+        ).stdout
+    except OSError as exc:
+        _fail(failures, f"cmake: cannot run {cmake}: {exc}")
+        return
+    match = re.search(r"cmake version ([\d.]+)", output)
+    if not match:
+        _fail(failures, f"cmake: cannot parse version from: {output.strip()!r}")
+        return
+    actual = match.group(1)
+    _ok(f"cmake: {cmake} (version {actual})")
+    _check_min_version(failures, "cmake", actual, MIN_CMAKE)
+
+
+def _check_setuptools_version(failures: list[str]) -> None:
+    """Check the setuptools version against the build-system requirement.
+
+    ``pyproject.toml`` declares ``setuptools>=70.1`` because setuptools only
+    ships ``setuptools.command.bdist_wheel`` (used by setup.py as a fallback)
+    from 70.x onward, so any version >= MIN_SETUPTOOLS is supported.
+    """
+    try:
+        actual = metadata.version("setuptools")
+    except Exception as exc:
+        _fail(failures, f"setuptools: cannot determine version: {exc}")
+        return
+    _ok(f"setuptools version: {actual}")
+    _check_min_version(failures, "setuptools", actual, MIN_SETUPTOOLS)
+
+
 def _detect_cann_version() -> str:
     candidates = []
     for env_name in ("ASCEND_HOME_PATH", "ASCEND_OPP_PATH"):
@@ -232,6 +282,9 @@ def main() -> int:
         _ok(f"CANN version: {_detect_cann_version()}")
     else:
         _fail(failures, "ASCEND_HOME_PATH or ASCEND_OPP_PATH must be set")
+
+    _check_cmake_version(failures)
+    _check_setuptools_version(failures)
 
     check_runtime = not args.build_only or args.legacy_extension
     if not check_runtime:

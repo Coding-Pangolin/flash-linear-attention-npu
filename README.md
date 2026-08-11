@@ -53,7 +53,7 @@ source $INSTALL_PATH/ascend-toolkit/set_env.sh
 
 ### Step 2. 编译
 
-#### 方式 A：【推荐】源码一键编译并生成 wheel
+#### 【推荐】源码一键编译并生成 wheel
 
 在已完成 CANN、PyTorch、torch-npu、torchnpugen、triton-ascend 环境准备后，推荐直接在仓库根目录生成单 wheel。默认目标芯片为 `ascend910b`，A3/A5 机器需要显式指定 `FLA_NPU_SOC`。本仓不会自动安装 `torch`、`torch_npu`、`torchnpugen` 或 `triton-ascend`，因为这些包必须和 CANN、Python、`torch_npu` 可用版本匹配；在新的 conda 环境中请先安装匹配依赖，再执行预检：
 
@@ -69,7 +69,7 @@ python scripts/check_npu_env.py
 python scripts/check_npu_env.py --build-only
 ```
 
-预检不覆盖编译链上的工具链与构建依赖，这些组件缺失时会在 `pip wheel` 阶段才报错：
+预检覆盖编译链上的 `cmake` 与 `setuptools` 版本要求（低于 `3.16` / `70.1` 会报 `FAIL`）。其余工具链与构建依赖未纳入预检，这些组件缺失时会在 `pip wheel` 阶段才报错：
 
 | 组件 | 版本要求 | 说明 |
 | ---- | ------- | ---- |
@@ -100,7 +100,7 @@ FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w d
 的 wheel，因此安装时必须传入本轮构建生成的准确文件名，并使用 Step 3 的强制覆盖
 命令，避免通配符选中旧产物。
 
-方式 A 编译可用环境变量：
+编译可用环境变量：
 
 | 环境变量                          | 可选范围                                          | 作用 / 建议                                                                                                                        | 默认           |
 | --------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------- |
@@ -109,24 +109,12 @@ FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w d
 
 布尔变量设为 `TRUE` 时也接受 `1`、`YES`、`ON`；未设置或其他值按 `FALSE` 处理。
 
-#### 方式 B：【备选】单独编译算子 run 包和 Python wheel
-
-只有在已经安装方式 A 的完整 wheel、但需要快速替换少量算子的 Ascend C 产物时，才建议使用该方式。`--ops=op1,op2,...` 只会生成指定算子的 run 包；run 包安装时会把当前 run 包里的 `packages/vendors/fla_npu_transformer` 合并覆盖到当前 Python 环境已安装的 `site-packages/fla_npu/opp/vendors/fla_npu_transformer`，从而更新 `aclnn`、tiling、kernel 和相关配置。
-
-```sh
-# 编译一个或多个算子 run 包，--soc 需指定为当前机器芯片类型 {ascend910b/ascend910_93/ascend950}
-bash build.sh --soc=ascend910b --pkg --vendor_name=fla_npu --ops=chunk_fwd_o
-
-# 如果 Python wrapper 也有修改，再单独编译 Python runtime wheel
-cd torch_custom/fla_npu
-python3 setup.py bdist_wheel
-```
+> 需要单独编译一个或多个算子 run 包的开发者场景（如已安装完整 wheel 后快速替换少量算子的
+> Ascend C 产物），见[开发者指南](docs/developer-guide.md) 场景 1。
 
 ### Step 3. 安装
 
-#### 方式 A 产物安装
-
-方式 A 产物可以来自本地源码一键编译，也可以直接使用 [Release v26.6.0](https://github.com/flashserve/flash-linear-attention-npu/releases/tag/v26.6.0) 提供的官方验证 wheel。下载或构建完成后执行：
+产物可以来自本地源码一键编译，也可以直接使用 [Release v26.6.0](https://github.com/flashserve/flash-linear-attention-npu/releases/tag/v26.6.0) 提供的官方验证 wheel。下载或构建完成后执行：
 
 ```sh
 # 将 WHEEL_PATH 设置为实际 wheel 文件路径：
@@ -138,31 +126,12 @@ python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
 
 > 重新构建的 wheel 版本号与已安装的旧 wheel 可能相同。版本号相同时，不带 `--force-reinstall` 的 `pip install` 会认为"已是最新版本"而跳过，导致实际仍是旧代码。上面的命令已带 `--force-reinstall` 强制覆盖；若想先清理再装，可先执行 `python -m pip uninstall -y flash-linear-attention-npu`。
 
-方式 A wheel 不安装或执行 shell 环境钩子。无论使用系统 Python、Conda、venv
+wheel 不安装或执行 shell 环境钩子。无论使用系统 Python、Conda、venv
 还是 Docker，每次进入新的 shell 后都需要先按 Step 1 手工 source CANN 的
 `set_env.sh`。调用 `fla_npu.ops.ascendc` 算子时会在当前 Python 进程内定位并加载
 wheel 内嵌 OPP；wheel 通过绝对路径加载 `libcust_opapi.so`，不会再生成或加载
 可能覆盖 CANN 运行库的自定义 `libopapi.so`。如果旧版 run 包曾在 wheel 中遗留该别名，
 新 runtime 会在首次加载 OPP 时删除它；目录不可写时会给出明确的手工清理提示。
-
-#### 方式 B 产物安装
-
-先确认方式 A 的完整 wheel 已经安装到当前 Python 环境，然后安装 run 包。安装器会在覆盖前列出当前 run 包携带的算子，并标出安装后的算子状态：`WARNING` 表示安装后不可用，包括不在当前 run 包范围内但会受局部 `libcust_opapi.so`、tiling so、proto so 整体替换影响的算子，以及当前 run 包内但 aclnn ABI 修改或删除的算子；`NOTICE` 表示新增或无法完整确认的 ABI，需要确认当前 Python wheel 是否已有对应 wrapper；`OK` 表示当前 run 包内且 aclnn ABI 一致的算子。`op_api/include/aclnnop` 中新增、删除、修改的 aclnn ABI 头文件会合并显示到对应算子的状态原因里；删除只按当前 run 包携带的算子范围判断，非 `--quiet` 模式只在状态表后确认一次。
-
-```sh
-# 覆盖当前 Python 环境中 flash-linear-attention-npu wheel 内嵌的 OPP
-./build_out/fla-npu-*.run --install
-# 或等价写法
-./build_out/fla-npu-*.run --full
-
-# 如果 Python wrapper 也有修改，再安装单独编译出的 wheel（路径替换为实际产物文件名）
-WHEEL_PATH="torch_custom/fla_npu/dist/<准确wheel文件名>.whl"
-python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
-```
-
-run 包覆盖完成后会重写幂等的 `set_env.bash`，并把实际 OPP 文件清单刷新到 wheel
-的 `RECORD`。因此重复覆盖同一个 run 包不会累积环境变量或文件记录，后续
-`pip --force-reinstall` 也能先清理 run 包增加的文件，再安装新 wheel。
 
 `import fla_npu` 会定位 OPP 并加载 `libcust_opapi.so`。执行前必须先 source CANN
 的 `set_env.sh`；CANN 环境未初始化、OPP 不完整或动态库加载失败时，import 会直接
@@ -173,9 +142,12 @@ run 包覆盖完成后会重写幂等的 `set_env.bash`，并把实际 OPP 文�
 
 `fla_npu.ops.ascendc` 调用会优先使用 wheel 内嵌 OPP，找不到时会继续从 `FLA_NPU_OPP_PATH`、`ASCEND_CUSTOM_OPP_PATH` 和 `ASCEND_OPP_PATH` 查找已安装 OPP。外部 OPP 的 `op_api/lib` 目录同样不得包含自定义 `libopapi.so`；runtime 会先尝试删除旧版本遗留的别名，目录不可写时再明确报错并要求手工清理。
 
+> 已安装完整 wheel 后，如需用单算子 run 包快速替换部分算子的 Ascend C 产物（含安装器
+> 的算子状态说明），见[开发者指南](docs/developer-guide.md) 场景 1。
+
 ### Step 4. 测试安装成功
 
-安装后两种方式均可用以下命令验证：
+安装后可用以下命令验证：
 
 ```sh
 python -c "import fla_npu; print('ok')"

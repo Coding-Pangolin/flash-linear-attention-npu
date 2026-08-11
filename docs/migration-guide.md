@@ -4,10 +4,10 @@
 
 ## 背景：调用方式演进
 
-| 版本 | 默认调用方式 | 说明 |
-| --- | --- | --- |
-| v26.6.0 及更早 | `torch.ops.npu.*` / `torch_npu.ops.*` | 依赖 PyTorch / torch_npu dispatcher ABI |
-| v26.6.0 之后 | `fla_npu.ops.ascendc` 稳定 Python 入口 | 通过 Python ctypes 直调 `libcust_opapi.so`，不再依赖 dispatcher ABI |
+| 版本           | 默认调用方式                              | 说明                                                                 |
+| -------------- | ----------------------------------------- | -------------------------------------------------------------------- |
+| v26.6.0 及更早 | `torch.ops.npu.*` / `torch_npu.ops.*` | 依赖 PyTorch / torch_npu dispatcher ABI                              |
+| v26.6.0 之后   | `fla_npu.ops.ascendc` 稳定 Python 入口  | 通过 Python ctypes 直调`libcust_opapi.so`，不再依赖 dispatcher ABI |
 
 **v26.6.0 之后不再维护旧版本兼容接口**。`torch.ops.npu.*` / `torch_npu.ops.*` 仅作为迁移期临时兼容能力保留，不推荐新增代码使用，也不会默认使能。
 
@@ -20,16 +20,13 @@
    ```
 
    若旧 wheel / legacy extension 在 `site-packages` 遗留了 `custom_aclnn_extension_lib*.so`、`fla_npu/` 或自定义 `libopapi.so`，请手工确认后删除。
-
 2. **安装新版本 wheel**：见根 [README](../README.md) 的 Step 3 / Step 4。
-
 3. **迁移代码调用**：将旧入口替换为 `fla_npu.ops.ascendc` 下对应接口，例如：
 
-   | 旧（≤ v26.6.0） | 新 |
-   | --- | --- |
-   | `torch.ops.npu.npu_chunk_fwd_o(...)` | `from fla_npu.ops.ascendc import chunk_fwd_o; chunk_fwd_o(...)` |
+   | 旧（≤ v26.6.0）                                        | 新                                                                    |
+   | ------------------------------------------------------- | --------------------------------------------------------------------- |
+   | `torch.ops.npu.npu_chunk_fwd_o(...)`                  | `from fla_npu.ops.ascendc import chunk_fwd_o; chunk_fwd_o(...)`     |
    | `torch_npu.ops.npu_chunk_gated_delta_rule_fwd_h(...)` | `from fla_npu.ops.ascendc import chunk_gated_delta_rule_fwd_h; ...` |
-
 4. **验证**：
 
    ```sh

@@ -480,3 +480,47 @@ reviewer 在 `README.md` 与 `docs/developer-guide.md` 新增 2 条【review】�
   - 模拟 gcc/g++ 7.2.0 → `[FAIL] gcc>=7.3 is required`；模拟 7.3.0 → `[OK]`（边界正确）；
   - make / ninja 均缺失 → `[FAIL] make not found`；模拟 bisheng 存在 → `[OK]`。
 - **文档同步**：README Step 2 工具链表格移除 `patch` 行，`Python 头文件` 改为"仅 legacy 构建需要"，`bisheng` 版本要求改为"随 CANN（无独立版本判断）"，`make` 说明补"CMake 默认 Unix Makefiles 生成器后端（ninja 亦可）"，build-system 行说明补"`--no-build-isolation` 构建时需本机已装"；预检说明改为"覆盖 cmake、gcc/g++、setuptools 版本要求，make / bisheng 存在性检查，wheel / packaging / psutil 导入检查"。
+
+## O. 第九轮修订（2026-08-11）：处理 PR #280 新增 8 条 review 评论
+
+本轮按 PR #280 新增的 8 条行内 review 评论逐条判断合理性后做最小化改动。
+
+### 修改 O1（torch_custom/fla_npu/test/test.sh + README 测试节）：修复 PYTHONPATH 遮蔽已安装 wheel OPP
+
+- **评论（3757854004）**：`test.sh` 第 21 行无条件 `export PYTHONPATH=<源码树>:...`，`import fla_npu` 会命中源码树 `torch_custom/fla_npu/fla_npu`（其 OPP 目录只有 `README.txt` 骨架，无 `libcust_opapi.so`），遮蔽已安装 wheel 的内嵌 OPP，导致按 README 构建安装后首个验证命令失败。**合理。**
+- **实际改法**：test.sh 改为仅当源码树 `fla_npu/opp/vendors/fla_npu_transformer/op_api/lib/libcust_opapi.so` 存在时才 prepend 源码路径；只安装 wheel 的用户直接运行 test.sh 即用已安装 OPP。README 测试节补一句行为说明。
+- **附带说明**：部分用例（`chunk_bwd_dv_local` / `prepare_wy_repr_bwd_full` / `recompute_w_u_fwd`）精度比对依赖内部 `ct` 模块（不随 CANN / requirements 提供），全量测试时 `ModuleNotFoundError` 属预期；README 注明单算子冒烟建议选 `gdn_fwd_o` 等不依赖 `ct` 的用例。
+
+### 修改 O2（requirements.txt）：补充 ml_dtypes
+
+- **评论（3757854192）**：`test_fwd_o.py` / `test_fwd_h.py` 顶层 `import ml_dtypes`，但 requirements.txt 未包含；按 README 安装后跑测试必失败（实测补装 ml_dtypes==0.5.4 后 PASS）。**合理。**
+- **实际改法**：requirements.txt 追加 `ml_dtypes`。
+
+### 修改 O3（setup.py）：根 wheel 补充 fla_npu.ops.triton.triton_core 子包
+
+- **评论（3757854293）**：根 `setup.py` 的 `find_packages(where=torch_custom/fla_npu)` 不会扫描位于仓库根 `fla/ops/triton/triton_core` 的源码，而 `torch_custom/fla_npu/setup.py` 已通过 `TRITON_CORE_PACKAGE` / `package_dir` 映射包含它，根 setup.py 未同步，导致按 README 构建的 wheel 缺该子包，`from fla_npu.ops.triton import ...` 直接 `ModuleNotFoundError`。**合理。**
+- **实际改法**：根 setup.py 新增 `TRITON_CORE_PACKAGE` / `TRITON_CORE_SOURCE` 常量与 `_find_packages()` / `_find_package_dir()` 帮助函数，setup() 的 packages / package_dir 改用它们（逻辑与 torch_custom/fla_npu/setup.py 一致）。已验证 `_find_packages()` 返回含 `fla_npu.ops.triton.triton_core` 且映射正确；`tests/test_wheel_environment.py` 8 个用例全部通过。
+
+### 修改 O4（README Step 1）：ops 包安装后增加核对手段
+
+- **评论（3757854436）**：实测 A2(910B3) 误装 `Ascend-cann-910-ops`（旧 910 芯片包）后原生 matmul 全挂（错误码 561103），排障成本高；README 虽给出正确命名示例，但无安装后核对手段。**合理。**
+- **实际改法**：Step 1 安装命令后增加核对示例——`grep package_name $ASCEND_OPP_PATH/../aarch64-linux/ascend_ops_install.info` 应显示对应芯片的 ops 包名。
+
+### 修改 O5（scripts/check_npu_env.py + README）：triton-ascend 按 CANN 版本分层
+
+- **评论（3757854541）**：预检只要求 `triton-ascend>=3.2.0`，但实测 3.2.0 在 CANN 9.1.0 上 JIT 编译 `npu_utils.cpp` 失败（`rt.h` 缺 `RT_LIMIT_TYPE_SIMT_WARP_STACK_SIZE`）；CI `ci/9.0.0/Dockerfile`（CANN 9.1.0-beta.1）实际用 3.2.1。**合理。**
+- **实际改法**：新增 `MIN_TRITON_ASCEND_CANN9 = "3.2.1"` 与 `_check_triton_ascend_cann_compat()`，解析 `_detect_cann_version()` 返回的 CANN major 版本：9.x 要求 triton-ascend >= 3.2.1，8.x 维持 >= 3.2.0。README Step 2 预检说明补版本匹配提示。已实测：CANN 9.1.0 + 3.2.0 FAIL、+ 3.2.1 PASS、CANN 8.3 + 3.2.0 PASS。
+
+### 修改 O6（scripts/check_npu_env.py）：_detect_cann_version 优先读 OPP、过滤驱动版本
+
+- **评论（3757861181）**：`_detect_cann_version()` 在部分安装布局下读到驱动版本文件而非 CANN 版本（实测输出 `version=25.5.1`，实际 CANN 9.1.0）。**合理。**
+- **实际改法**：重写 `_detect_cann_version()`：优先读 `ASCEND_OPP_PATH` 下的 `version.info`（权威 CANN 版本，如 `Version=8.3.0.1.200` / `Version=9.1.0-beta.1`），过滤含 `driver` 的行，`ASCEND_HOME_PATH` 作为兜底。已用本机真实 CANN 8.3.RC1 / 9.1.0-beta.1 安装目录实测正确。
+
+### 修改 O7（README + developer-guide）：工具链依赖表移出主 README
+
+- **评论（3757865945）**：依赖表格不应放在主 README，应放开发者文档。**合理。**
+- **实际改法**：README Step 2 表格整体移除，压缩为一句指引（预检覆盖项 + 指向开发者指南）；完整表格移入 `docs/developer-guide.md` 场景 2 新增的"工具链依赖表"小节。
+
+### 评论 O8（未改动，回复澄清）：FLA_NPU_OPS 已移除
+
+- **评论（3757737653）**：建议用 `FLA_NPU_OPS` 环境变量控制一键编包时编译单算子并实测补充到文档。**不成立**——`FLA_NPU_OPS` 已在 PR #274 从 setup.py 移除（`tests/test_wheel_environment.py` 有守卫断言其不得出现），当前 `pip wheel` 只支持全量编包。单算子场景走 developer-guide 场景 1 的 `bash build.sh --pkg ... --ops=<op>` run 包方式；场景 2 现有"只支持全量编包"表述正确，无需改动。已在评论下回复说明。

@@ -49,6 +49,15 @@ export INSTALL_PATH=/usr/local/Ascend
 source $INSTALL_PATH/ascend-toolkit/set_env.sh
 ```
 
+安装后建议核对一下 ops 包确实装对了（装错 ops 包通常要到跑算子时才暴露，报错也不直观）。
+以 A2（910B）机器为例，`ascend_ops_install.info` 中的 `package_name` 应显示
+`Ascend-cann-910b-ops`：
+
+```sh
+grep package_name $ASCEND_OPP_PATH/../aarch64-linux/ascend_ops_install.info
+# 期望输出（A2 机器）：package_name=Ascend-cann-910b-ops
+```
+
 > 若 CANN 安装在自定义路径，请将 `INSTALL_PATH` 设置为实际安装路径，并 source 实际路径下对应的 `set_env.sh`（上述 `/usr/local/Ascend` 仅为默认安装路径）。每次进入新的 shell（含 Docker / Conda / venv）后，都需要重新 source `set_env.sh` 才能正常编译与运行。
 
 ### Step 2. 编译
@@ -69,16 +78,9 @@ python scripts/check_npu_env.py
 python scripts/check_npu_env.py --build-only
 ```
 
-预检覆盖编译链上的 `cmake`、`gcc`/`g++`、`setuptools` 版本要求，`make` / `bisheng` 存在性检查，以及 `wheel` / `packaging` / `psutil`（`--no-build-isolation` 构建时需本机已装）的导入检查。其余组件未纳入预检，缺失时会在 `pip wheel` 阶段才报错：
+预检覆盖编译链上的 `cmake`、`gcc`/`g++`、`setuptools` 版本要求，`make` / `bisheng` 存在性检查，以及 `wheel` / `packaging` / `psutil`（`--no-build-isolation` 构建时需本机已装）的导入检查。其余组件未纳入预检，缺失时会在 `pip wheel` 阶段才报错。各组件的最低版本要求与详细说明见[开发者指南](../docs/developer-guide.md) 场景 2 的工具链依赖表。
 
-| 组件 | 版本要求 | 说明 |
-| ---- | ------- | ---- |
-| `cmake` | >= 3.16 | 项目 `CMakeLists.txt` 的最低要求 |
-| `gcc` / `g++` | >= 7.3 | host 侧编译 |
-| `make` | 任意 | CMake 默认 `Unix Makefiles` 生成器后端（`ninja` 亦可） |
-| `bisheng` | 随 CANN（无独立版本判断） | 昇腾 kernel 编译工具，随 CANN toolkit 安装并在 source 后进入 PATH |
-| Python 头文件 | 与解释器匹配 | 仅 `FLA_NPU_BUILD_LEGACY_EXTENSION=1` 编译 legacy C++ 扩展时需要；默认 wheel 构建不需要 |
-| `setuptools` / `wheel` / `packaging` / `psutil` | `setuptools>=70.1`，其余任意 | `pyproject.toml` 声明的构建依赖；`--no-build-isolation` 构建时需本机已装 |
+> `triton-ascend` 与 CANN 版本需要匹配：CANN 8.x 使用 `>=3.2.0` 即可；CANN 9.x（9.0.0+）因 Ascend Triton 后端 JIT 编译 `npu_utils.cpp` 依赖更新的 `rt.h` 头文件，需要 **`>=3.2.1`**（3.2.0 在 CANN 9.1.0 上会编译失败）。预检会按检测到的 CANN 版本自动校验 `triton-ascend` 是否满足对应下限。
 
 预检通过后再生成 wheel：
 
@@ -165,6 +167,16 @@ cd torch_custom/fla_npu/test
 bash test.sh --device 0                      # 全量测试
 bash test.sh --device 0 --op causal_conv1d   # 单个 AscendC 测试任务
 ```
+
+`test.sh` 仅在**源码树已内建 OPP**（`fla_npu/opp/vendors/fla_npu_transformer` 下存在
+`libcust_opapi.so`）时才把源码目录 prepend 到 `PYTHONPATH`；按 Step 2/3 只安装了 wheel
+的用户直接运行即可，测试会使用已安装 wheel 的内嵌 OPP，不会被源码树骨架 OPP 遮蔽。
+
+> 部分用例（`chunk_bwd_dv_local` / `prepare_wy_repr_bwd_full` / `recompute_w_u_fwd`）的
+> 精度比对依赖内部 `ct` 模块（`ct.single` / `ct.dual` / `ct.isclose`），该模块不随 CANN
+> 或 `requirements.txt` 提供。全新环境运行全量 `test.sh` 时，这些用例会因
+> `ModuleNotFoundError: No module named 'ct'` 失败，属预期现象；单算子冒烟建议选择
+> `gdn_fwd_o` 等不依赖 `ct` 的用例。每个用例默认超时 300s。
 
 `--op` 当前仅覆盖 `test.sh` 已接入的 AscendC 测试任务，可选值：
 

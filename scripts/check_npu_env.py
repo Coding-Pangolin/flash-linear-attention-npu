@@ -20,6 +20,9 @@ MIN_PYTHON = (3, 9)
 MIN_TORCH = "2.6.0"
 MIN_TRITON_ASCEND = "3.2.0"
 MIN_TRITON_ASCEND_A5 = "3.2.1"
+# CANN 9.x (9.0.0+) requires triton-ascend >= 3.2.1: 3.2.0 fails to JIT-compile
+# triton/backends/ascend/npu_utils.cpp on CANN 9.1.0 (RT_LIMIT_TYPE_SIMT_WARP_STACK_SIZE).
+MIN_TRITON_ASCEND_CANN9 = "3.2.1"
 
 # Toolchain and build dependencies checked in addition to the torch-related
 # checks. Values mirror CMakeLists.txt (cmake_minimum_required),
@@ -161,6 +164,29 @@ def _check_triton_ascend_a5_compat(failures: list[str], actual: str) -> None:
             failures,
             f"triton-ascend>={MIN_TRITON_ASCEND_A5} is required for FLA_NPU_SOC={soc}; got {actual}. "
             "triton-ascend 3.2.0 can crash on the A5 Triton runtime.",
+        )
+
+
+def _check_triton_ascend_cann_compat(failures: list[str], actual: str) -> None:
+    """CANN 9.x needs triton-ascend >= 3.2.1.
+
+    3.2.0 is the generic lower bound, but on CANN 9.0.0+ the Ascend Triton
+    backend JIT-compiles npu_utils.cpp against newer rt.h headers and fails
+    (e.g. RT_LIMIT_TYPE_SIMT_WARP_STACK_SIZE), so raise the floor for CANN 9.x.
+    """
+    cann = _detect_cann_version()
+    cann_match = re.search(r"(\d+\.\d+)", cann)
+    if not cann_match:
+        return
+    if int(cann_match.group(1).split(".")[0]) < 9:
+        return
+    actual_version = _version_obj(actual)
+    if actual_version is None or actual_version < Version(MIN_TRITON_ASCEND_CANN9):
+        _fail(
+            failures,
+            f"triton-ascend>={MIN_TRITON_ASCEND_CANN9} is required for CANN {cann_match.group(1)} "
+            f"(detected); got {actual}. triton-ascend 3.2.0 fails to JIT-compile "
+            "npu_utils.cpp on CANN 9.x.",
         )
 
 
@@ -308,12 +334,24 @@ def _tool_version(tool: str, pattern: str) -> Optional[str]:
 
 
 def _detect_cann_version() -> str:
-    candidates = []
-    for env_name in ("ASCEND_HOME_PATH", "ASCEND_OPP_PATH"):
-        value = os.getenv(env_name)
-        if not value:
-            continue
-        path = os.path.abspath(value)
+    # The OPP install dir's version.info is the authoritative CANN version
+    # (e.g. "Version=8.3.0.1.200" or "Version=9.1.0-beta.1"). ASCEND_HOME_PATH
+    # can resolve to driver install files whose version is not the CANN
+    # version (e.g. "version=25.5.1"), so it is only consulted after the OPP
+    # dir, and driver-version-like values are skipped.
+    opp = os.getenv("ASCEND_OPP_PATH")
+    candidates: list[str] = []
+    if opp:
+        path = os.path.abspath(opp)
+        candidates.extend(
+            [
+                os.path.join(path, "version.info"),
+                os.path.join(os.path.dirname(path), "version.info"),
+            ]
+        )
+    home = os.getenv("ASCEND_HOME_PATH")
+    if home:
+        path = os.path.abspath(home)
         candidates.extend(
             [
                 os.path.join(path, "version.info"),
@@ -328,15 +366,21 @@ def _detect_cann_version() -> str:
             continue
         try:
             with open(candidate, "r", encoding="utf-8", errors="ignore") as file:
-                for line in file:
-                    stripped = line.strip()
-                    lower = stripped.lower()
-                    if "version" in lower and "=" in stripped:
-                        return stripped
-                    if lower.startswith("version"):
-                        return stripped
+                lines = [line.strip() for line in file]
         except OSError:
             continue
+        for line in lines:
+            if "driver" in line.lower():
+                continue
+            key, _, value = line.partition("=")
+            if key.strip().lower() == "version" and value.strip():
+                return line
+        for line in lines:
+            if "driver" in line.lower():
+                continue
+            key, _, value = line.partition("=")
+            if key.strip().lower() == "version_dir" and value.strip():
+                return line
     return "<unknown>"
 
 
@@ -436,6 +480,7 @@ def main() -> int:
         if triton_ascend_version:
             _ok(f"triton-ascend version: {triton_ascend_version}")
             _check_min_version(failures, "triton-ascend", triton_ascend_version, MIN_TRITON_ASCEND)
+            _check_triton_ascend_cann_compat(failures, triton_ascend_version)
             _check_triton_ascend_a5_compat(failures, triton_ascend_version)
         elif triton is not None:
             _fail(failures, "triton is importable, but triton-ascend distribution was not found")

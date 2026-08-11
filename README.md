@@ -69,16 +69,15 @@ python scripts/check_npu_env.py
 python scripts/check_npu_env.py --build-only
 ```
 
-预检覆盖编译链上的 `cmake` 与 `setuptools` 版本要求（低于 `3.16` / `70.1` 会报 `FAIL`）。其余工具链与构建依赖未纳入预检，这些组件缺失时会在 `pip wheel` 阶段才报错：
+预检覆盖编译链上的 `cmake`、`gcc`/`g++`、`setuptools` 版本要求与 `make` / `bisheng` 存在性检查。其余组件未纳入预检，缺失时会在 `pip wheel` 阶段才报错：
 
 | 组件 | 版本要求 | 说明 |
 | ---- | ------- | ---- |
 | `cmake` | >= 3.16 | 项目 `CMakeLists.txt` 的最低要求 |
 | `gcc` / `g++` | >= 7.3 | host 侧编译 |
-| `bisheng` | >= 8.5（CANN 自带） | 昇腾 kernel 编译工具，随 CANN toolkit 安装 |
-| `make` | 任意 | CMake 构建后端（CI 亦安装 `ninja-build`，二选一即可） |
-| `patch` | 任意 | run 包打包与构建需要 |
-| Python 头文件 | 与解释器匹配 | Ubuntu / Debian 对应 `python3-dev` |
+| `make` | 任意 | CMake 默认 `Unix Makefiles` 生成器后端（`ninja` 亦可） |
+| `bisheng` | 随 CANN（无独立版本判断） | 昇腾 kernel 编译工具，随 CANN toolkit 安装并在 source 后进入 PATH |
+| Python 头文件 | 与解释器匹配 | 仅 `FLA_NPU_BUILD_LEGACY_EXTENSION=1` 编译 legacy C++ 扩展时需要；默认 wheel 构建不需要 |
 | `setuptools` / `wheel` / `packaging` / `psutil` | `setuptools>=70.1`，其余任意 | `pyproject.toml` 声明的构建依赖，构建时自动安装 |
 
 预检通过后再生成 wheel：

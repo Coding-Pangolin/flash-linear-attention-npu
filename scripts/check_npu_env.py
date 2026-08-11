@@ -22,9 +22,10 @@ MIN_TRITON_ASCEND = "3.2.0"
 MIN_TRITON_ASCEND_A5 = "3.2.1"
 
 # Toolchain and build dependencies checked in addition to the torch-related
-# checks. Values mirror CMakeLists.txt (cmake_minimum_required) and
-# pyproject.toml ([build-system] requires).
+# checks. Values mirror CMakeLists.txt (cmake_minimum_required),
+# install_deps.sh (gcc) and pyproject.toml ([build-system] requires).
 MIN_CMAKE = "3.16"
+MIN_GCC = "7.3"
 MIN_SETUPTOOLS = "70.1"
 TORCH_NPU_GDN_FIX_MINIMUMS = {
     "2.7.1": "2.7.1.post5",
@@ -206,6 +207,82 @@ def _check_setuptools_version(failures: list[str]) -> None:
     _check_min_version(failures, "setuptools", actual, MIN_SETUPTOOLS)
 
 
+def _check_gcc_version(failures: list[str]) -> None:
+    """Check the host C/C++ compiler version against install_deps.sh.
+
+    ``install_deps.sh`` requires gcc/g++ >= 7.3.0; host-side C++ code in
+    build.sh and the Ascend C host wrapper are compiled with it.
+    """
+    gcc = shutil.which("gcc")
+    if gcc is None:
+        _fail(failures, f"gcc not found (gcc>={MIN_GCC} is required)")
+    else:
+        _ok(f"gcc: {gcc}")
+        actual = _tool_version(gcc, r"(\d+\.\d+\.\d+)")
+        if actual:
+            _check_min_version(failures, "gcc", actual, MIN_GCC)
+        else:
+            _fail(failures, "gcc: cannot parse version")
+
+    gxx = shutil.which("g++")
+    if gxx is None:
+        _fail(failures, f"g++ not found (g++>={MIN_GCC} is required)")
+    else:
+        _ok(f"g++: {gxx}")
+        actual = _tool_version(gxx, r"(\d+\.\d+\.\d+)")
+        if actual:
+            _check_min_version(failures, "g++", actual, MIN_GCC)
+        else:
+            _fail(failures, "g++: cannot parse version")
+
+
+def _check_make_exists(failures: list[str]) -> None:
+    """Check that a CMake build backend is available.
+
+    The build uses CMake's default ``Unix Makefiles`` generator (ninja is an
+    alternative, so either make or ninja is sufficient).
+    """
+    make = shutil.which("make")
+    ninja = shutil.which("ninja")
+    if make:
+        _ok(f"make: {make}")
+    elif ninja:
+        _ok(f"make not found; ninja: {ninja}")
+    else:
+        _fail(failures, "make not found (nor ninja as a CMake build backend)")
+
+
+def _check_bisheng_exists(failures: list[str]) -> None:
+    """Check that the Ascend C kernel compiler (bisheng) is available.
+
+    bisheng is shipped with the CANN toolkit and exported to PATH by the CANN
+    ``setenv.bash``; build.sh fails if ``which bisheng`` is empty. Its
+    ``--version`` reports a clang version, not a CANN component version, so we
+    only check presence, not a minimum version.
+    """
+    bisheng = shutil.which("bisheng")
+    if bisheng:
+        _ok(f"bisheng: {bisheng}")
+    else:
+        _fail(
+            failures,
+            "bisheng not found. It is shipped with the CANN toolkit and should be "
+            "on PATH after sourcing the CANN set_env.sh/setenv.bash.",
+        )
+
+
+def _tool_version(tool: str, pattern: str) -> Optional[str]:
+    """Run ``tool --version`` and return the first regex match group, or None."""
+    try:
+        output = subprocess.run(
+            [tool, "--version"], capture_output=True, text=True, timeout=10
+        ).stdout
+    except OSError:
+        return None
+    match = re.search(pattern, output)
+    return match.group(1) if match else None
+
+
 def _detect_cann_version() -> str:
     candidates = []
     for env_name in ("ASCEND_HOME_PATH", "ASCEND_OPP_PATH"):
@@ -284,6 +361,9 @@ def main() -> int:
         _fail(failures, "ASCEND_HOME_PATH or ASCEND_OPP_PATH must be set")
 
     _check_cmake_version(failures)
+    _check_gcc_version(failures)
+    _check_make_exists(failures)
+    _check_bisheng_exists(failures)
     _check_setuptools_version(failures)
 
     check_runtime = not args.build_only or args.legacy_extension

@@ -472,10 +472,11 @@ reviewer 在 `README.md` 与 `docs/developer-guide.md` 新增 2 条【review】�
   - `bisheng`：真实依赖（kernel 编译）。`build.sh` 用 `which bisheng` 定位、缺失即报错退出；但 `bisheng --version` 输出的是 clang 版本（实测 15.0.5），**无法**解析出 CANN 组件版本，故只做存在性检查，版本要求 `>=8.5` 是 CANN 组件版本（`version.cmake` 声明）而非 bisheng 自身可判断的版本。
   - `patch`：**并非硬依赖**。全仓库主构建流程（setup.py / build.sh / pip wheel）均未调用外部 `patch` 命令；`scripts/package/common/sh/install_common_parser.sh` 中的 `install_patch` 是 shell 函数名，非 `patch` 命令。**已从 README 表格移除。**
   - Python 头文件：仅 `FLA_NPU_BUILD_LEGACY_EXTENSION=1` 编译 legacy C++ 扩展时需要（`setup.py` 的 `_build_torch_extension_inplace` 与 `torch_custom/fla_npu/setup.py` 的 `_setup_legacy_extension`），默认 wheel 构建不需要。**表格说明改为"仅 legacy 构建需要"。**
-  - `setuptools` / `wheel` / `packaging` / `psutil`：均为 pyproject build-system 声明（构建期自动安装），其中 setuptools 有版本下限 70.1（上一轮已纳入）。
-- **实际改法**：`check_npu_env.py` 新增 `_check_gcc_version()`（gcc / g++ 分别 `--version` 解析 `x.y.z` 并 `>=7.3` 校验）、`_check_make_exists()`（make 或 ninja 任一存在即可）、`_check_bisheng_exists()`（仅存在性，缺失时提示随 CANN 安装并 source 环境）、`_tool_version()`（通用 `tool --version` 正则解析帮助函数）。cmake 检查复用了 `_tool_version` 的解析思路。均在 CANN 环境检查之后执行。
+  - `setuptools` / `wheel` / `packaging` / `psutil`：均为 pyproject build-system 声明。README 推荐 `pip wheel --no-build-isolation`，故这些包需本机已装。其中 setuptools 有版本下限 70.1（上一轮已纳入），wheel / packaging / psutil 无版本下限，仅需存在。
+  - 附注：PR 评论附带 CI 构建日志显示隔离环境实际安装 `cmake<4,>=3.16` 与 `patch-ng==1.19.1`——前者是 CI 对 CMake 的安全版本上界（项目本身 `cmake_minimum_required` 无上界），后者是 Python 库（patch-ng，非外部 `patch` 命令），均非项目声明的硬约束。
+- **实际改法**：`check_npu_env.py` 新增 `_check_gcc_version()`（gcc / g++ 分别 `--version` 解析 `x.y.z` 并 `>=7.3` 校验）、`_check_make_exists()`（make 或 ninja 任一存在即可）、`_check_bisheng_exists()`（仅存在性，缺失时提示随 CANN 安装并 source 环境）、`_check_build_system_deps()`（importlib 导入 wheel / packaging / psutil 确认存在）、`_tool_version()`（通用 `tool --version` 正则解析帮助函数）。cmake 检查复用了 `_tool_version` 的解析思路。均在 CANN 环境检查之后执行。
 - **已实测**：
-  - 本机（cmake 4.3.1、gcc 11.4.0、make 4.3、无 bisheng）→ cmake / gcc / g++ / make `[OK]`，bisheng `[FAIL]`（预期，未 source CANN）；
+  - 本机（cmake 4.3.1、gcc 11.4.0、make 4.3、wheel 0.45.1、packaging 25.0、psutil 7.1.3、无 bisheng）→ cmake / gcc / g++ / make / setuptools / wheel / packaging / psutil `[OK]`，bisheng `[FAIL]`（预期，未 source CANN）；
   - 模拟 gcc/g++ 7.2.0 → `[FAIL] gcc>=7.3 is required`；模拟 7.3.0 → `[OK]`（边界正确）；
   - make / ninja 均缺失 → `[FAIL] make not found`；模拟 bisheng 存在 → `[OK]`。
-- **文档同步**：README Step 2 工具链表格移除 `patch` 行，`Python 头文件` 改为"仅 legacy 构建需要"，`bisheng` 版本要求改为"随 CANN（无独立版本判断）"，`make` 说明补"CMake 默认 Unix Makefiles 生成器后端（ninja 亦可）"；预检说明改为"覆盖 cmake、gcc/g++、setuptools 版本要求与 make / bisheng 存在性检查"。
+- **文档同步**：README Step 2 工具链表格移除 `patch` 行，`Python 头文件` 改为"仅 legacy 构建需要"，`bisheng` 版本要求改为"随 CANN（无独立版本判断）"，`make` 说明补"CMake 默认 Unix Makefiles 生成器后端（ninja 亦可）"，build-system 行说明补"`--no-build-isolation` 构建时需本机已装"；预检说明改为"覆盖 cmake、gcc/g++、setuptools 版本要求，make / bisheng 存在性检查，wheel / packaging / psutil 导入检查"。

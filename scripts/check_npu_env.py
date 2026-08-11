@@ -207,6 +207,30 @@ def _check_setuptools_version(failures: list[str]) -> None:
     _check_min_version(failures, "setuptools", actual, MIN_SETUPTOOLS)
 
 
+def _check_build_system_deps(failures: list[str]) -> None:
+    """Check the other pyproject build-system dependencies are importable.
+
+    The README build flow runs ``pip wheel --no-build-isolation``, so the
+    build-system packages declared in ``pyproject.toml`` (wheel, packaging,
+    psutil) must already be installed in the current interpreter. setuptools is
+    checked separately with a version bound; the remaining three have no
+    minimum version.
+    """
+    for module_name in ("wheel", "packaging", "psutil"):
+        try:
+            module = importlib.import_module(module_name)
+            _ok(
+                f"{module_name} version: "
+                f"{getattr(module, '__version__', '<unknown>')}"
+            )
+        except Exception as exc:
+            _fail(
+                failures,
+                f"{module_name} not importable (pyproject build-system requires "
+                f"it when using --no-build-isolation): {exc}",
+            )
+
+
 def _check_gcc_version(failures: list[str]) -> None:
     """Check the host C/C++ compiler version against install_deps.sh.
 
@@ -365,6 +389,7 @@ def main() -> int:
     _check_make_exists(failures)
     _check_bisheng_exists(failures)
     _check_setuptools_version(failures)
+    _check_build_system_deps(failures)
 
     check_runtime = not args.build_only or args.legacy_extension
     if not check_runtime:

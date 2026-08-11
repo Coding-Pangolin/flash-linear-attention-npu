@@ -133,6 +133,13 @@ FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w d
 FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w dist
 ```
 
+只重编部分算子的 Ascend C 产物时，可用 `FLA_NPU_OPS` 指定算子（逗号分隔）走单算子 wheel 构建（`setup.py` 会透传给 `build.sh --ops=<op>`）：
+
+```sh
+FLA_NPU_SOC=ascend910b FLA_NPU_OPS=chunk_fwd_o,chunk_bwd_dv_local \
+  python -m pip wheel --no-build-isolation --no-deps . -w dist
+```
+
 只构建部分算子用于定位时，显式构建单算子 run 包；该产物不能替代完整 wheel
 的全量重编（`--soc` 需指定为实际芯片类型）：
 

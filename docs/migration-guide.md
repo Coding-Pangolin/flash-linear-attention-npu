@@ -76,7 +76,7 @@ PyTorch、Python、C++ ABI 和 torch_npu dispatcher 行为，因此只用于历�
 
 ## 新旧版本行为差异
 
-- **构建环境变量**：旧版支持 `FLA_NPU_INCREMENTAL_BUILD`（复用 `build/` 的增量构建）、`FLA_NPU_OPS`（只构建指定算子的 wheel）、`FLA_NPU_SKIP_RUN_BUILD` / `FLA_NPU_SKIP_RUN_INSTALL`（跳过 run 包编译或内嵌）；新版已移除这些变量，统一走全量构建（自动清理 `build/`、`build_out/`、`output/` 中间产物），单算子定位改用 `bash build.sh --pkg --soc=<soc> --vendor_name=fla_npu --ops=<op>` 构建 run 包，旧脚本中的 `FLA_NPU_INCREMENTAL_BUILD=1` / `FLA_NPU_OPS=...` 需要删除。
+- **构建环境变量**：旧版支持 `FLA_NPU_INCREMENTAL_BUILD`（复用 `build/` 的增量构建）、`FLA_NPU_OPS`（只构建指定算子的 wheel）、`FLA_NPU_SKIP_RUN_BUILD` / `FLA_NPU_SKIP_RUN_INSTALL`（跳过 run 包编译或内嵌）；新版保留了 `FLA_NPU_OPS`（`setup.py` 会透传给 `build.sh --ops=<op>`），但移除了 `FLA_NPU_INCREMENTAL_BUILD` / `FLA_NPU_SKIP_RUN_BUILD` / `FLA_NPU_SKIP_RUN_INSTALL`，统一走全量构建（自动清理 `build/`、`build_out/`、`output/` 中间产物）。单算子定位可直接用 `bash build.sh --pkg --soc=<soc> --vendor_name=fla_npu --ops=<op>` 构建 run 包，或在编译 wheel 时设 `FLA_NPU_OPS=<op>`；旧脚本中的 `FLA_NPU_INCREMENTAL_BUILD=1` 需要删除。
 - **安装验证命令**：旧版用 `fla_npu.is_legacy_torch_ops_loaded()` 和 `hasattr(torch_npu.ops, 'chunk_fwd_o')` 验证，新版不再适用（见根 README 的 Step 4 说明）；统一改用 `python -c "import fla_npu; print('ok')"` + `python scripts/check_packaged_wheel_api.py`。
 - **`torch_npu.ops` 挂载行为**：旧版 wheel（2026-07 之前的中间版本）导入 `fla_npu.ops.ascendc` 即自动挂载 `torch_npu.ops.*`；新版 wheel 默认不挂载，迁移期需显式调用 `install_torch_npu_ops_compat()`。
 - **`test.sh` 算子名**：`recompute_wu_fwd` 在新版统一为 `recompute_w_u_fwd`。

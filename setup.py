@@ -326,6 +326,7 @@ def _install_run_package(run_file, install_path):
 
 def _build_run_package():
     soc = os.getenv("FLA_NPU_SOC", DEFAULT_SOC)
+    ops_filter = os.getenv("FLA_NPU_OPS", "").strip()
     build_out = REPO_ROOT / "build_out"
     if build_out.exists():
         shutil.rmtree(build_out)
@@ -336,6 +337,8 @@ def _build_run_package():
         "--pkg",
         f"--vendor_name={DEFAULT_VENDOR_NAME}",
     ]
+    if ops_filter:
+        cmd.append(f"--ops={ops_filter}")
     _run(cmd, REPO_ROOT)
 
     return _find_single_run_package()

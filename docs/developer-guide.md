@@ -63,10 +63,18 @@ run 包覆盖完成后会重写幂等的 `set_env.bash`，并把实际 OPP 文�
 FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w dist
 ```
 
-`pip wheel` 当前只支持**全量**编包（一次编译全部已注册算子并打包成一个 wheel），
-不支持只挑单个算子编包。需要单独编译一个或多个算子的 run 包时，请使用场景 1 的
-`bash build.sh --pkg ... --ops=<op>` 方式；如果只改了 Python wrapper，也可以在
-`torch_custom/fla_npu` 下单独执行 `python3 setup.py bdist_wheel` 重新生成 Python wheel。
+`pip wheel` 默认**全量**编包（一次编译全部已注册算子并打包成一个 wheel）；设置 `FLA_NPU_OPS=<op>` 环境变量可以只编译指定算子并打成 wheel：
+
+```sh
+FLA_NPU_SOC=ascend910b FLA_NPU_OPS=chunk_fwd_o,chunk_bwd_dv_local \
+  python -m pip wheel --no-build-isolation --no-deps . -w dist
+```
+
+`FLA_NPU_OPS` 会透传给 `build.sh --ops=<op>`（算子名用逗号分隔）。适合已安装完整
+wheel 后快速替换少量算子的 Ascend C 产物；未设置时全量构建。需要单独编译一个或多个
+算子的 run 包时，请使用场景 1 的 `bash build.sh --pkg ... --ops=<op>` 方式；如果只改了
+Python wrapper，也可以在 `torch_custom/fla_npu` 下单独执行 `python3 setup.py bdist_wheel`
+重新生成 Python wheel。
 
 ### 工具链依赖表
 

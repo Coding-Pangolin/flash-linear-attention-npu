@@ -18,10 +18,11 @@
 
 ### 修改点 #2（P0）：移除已废弃的增量构建描述
 
-- **状态**：已实施
+- **状态**：已实施（后续依据用户结论回滚 `FLA_NPU_OPS` 保留，见修改点 #2 补充）
 - **涉及**：`README.md` Step 2 方式 A（原"真增量构建"段落 + 环境变量表 `FLA_NPU_INCREMENTAL_BUILD` / `FLA_NPU_OPS` 两行）
-- **依据**：PR #274 移除这两个开关，改为全量重建；只定位单算子用 `bash build.sh --ops=<op>`。
+- **依据**：PR #274 移除增量构建开关，改为全量重建；只定位单算子用 `bash build.sh --ops=<op>`。
 - **实际改法**：环境变量表删除 `FLA_NPU_INCREMENTAL_BUILD`、`FLA_NPU_OPS` 两行。PR #274 在 setup.py 中**一并移除了 `FLA_NPU_SKIP_RUN_BUILD` / `FLA_NPU_SKIP_RUN_INSTALL`**（`tests/test_wheel_environment.py` 有守卫断言二者不得出现在 setup.py），因此这两行也随 #274 删除；最终环境变量表仅保留 `FLA_NPU_SOC` / `FLA_NPU_DISABLE_LOCAL_VERSION`（与 ac46 一致）。合并冲突时，"全量构建"段落采用 #274 在 main 上已有的版本（含"清理 `build/`/`build_out/`/`output/` 中间产物"及"dist 下可能多版本 wheel、需用准确文件名"的提示），不再自行改写。
+- **修改点 #2 补充（后续回滚）**：经实测确认 PR #274 移除了 `FLA_NPU_OPS` 属于错误移除（该变量支持"已装完整 wheel 后快速替换少量算子 Ascend C 产物"的单算子 wheel 构建），应保留。已在 `setup.py` `_build_run_package()` 恢复 `FLA_NPU_OPS` 读取并透传 `build.sh --ops=<op>`；README 环境变量表加回 `FLA_NPU_OPS` 行；`tests/test_wheel_environment.py` 守卫由 `assertNotIn("FLA_NPU_OPS")` 改为新增 `test_package_build_supports_single_op_filter` 断言其存在；`FLA_NPU_INCREMENTAL_BUILD` / `FLA_NPU_SKIP_RUN_BUILD` / `FLA_NPU_SKIP_RUN_INSTALL` 维持移除。
 
 ### 修改点 #3（P0）：修正 Step 4 验证命令，区分新旧 wheel 行为（含 A2）
 
@@ -50,7 +51,7 @@
 - **涉及**：`README.md` 新增 `## 开发者指引 > ### 从旧版本升级（v26.6.0 及更早 → 最新）`（置于 Step 4 之后）
 - **依据**：用户需求 #2/#3——`torch.ops.npu.*` 只支持到 v26.6.0，后续需 `fla_npu.ops.ascendc`；升级用户需要知道旧版与新版的构建、验证、兼容入口行为差异。
 - **实际改法**：5 步——卸载旧包并清理残留（含 `custom_aclnn_extension_lib*.so` / 自定义 `libopapi.so`）→ 安装新版本 wheel → 迁移调用（旧→新对照表：`torch.ops.npu.npu_chunk_fwd_o` → `from fla_npu.ops.ascendc import chunk_fwd_o` 等）→ 验证（`check_packaged_wheel_api.py` + `test.sh --op gdn_fwd_o`）→ 迁移期临时兼容（`install_torch_npu_ops_compat()` / `load_legacy_torch_ops()`，注明 legacy 需 `FLA_NPU_BUILD_LEGACY_EXTENSION=1`，新代码勿用 legacy；**实测补充（2026-08-07）**：调用 `fla_npu.ops.ascendc.install_torch_npu_ops_compat()` 前必须先 `from fla_npu.ops import ascendc`，`import fla_npu` 后直接全限定名调用会报 `AttributeError`，已修正描述）。章节末尾新增"旧版本（≤ v26.6.0）与新版的主要行为差异"四项：
-  - **B1 构建环境变量**：旧版支持 `FLA_NPU_INCREMENTAL_BUILD`（增量构建）、`FLA_NPU_OPS`（单算子 wheel）、`FLA_NPU_SKIP_RUN_BUILD` / `FLA_NPU_SKIP_RUN_INSTALL`（run 包控制）；新版（PR #274 起）全部移除，统一全量构建（自动清理 `build/`/`build_out/`/`output/` 中间产物），单算子定位改用 `bash build.sh --pkg --soc=<soc> --vendor_name=fla_npu --ops=<op>` 构建 run 包，旧脚本中的 `FLA_NPU_INCREMENTAL_BUILD=1` / `FLA_NPU_OPS=...` 需要删除。
+  - **B1 构建环境变量**：旧版支持 `FLA_NPU_INCREMENTAL_BUILD`（增量构建）、`FLA_NPU_OPS`（单算子 wheel）、`FLA_NPU_SKIP_RUN_BUILD` / `FLA_NPU_SKIP_RUN_INSTALL`（run 包控制）；新版（PR #274 起）移除了 `FLA_NPU_INCREMENTAL_BUILD` / `FLA_NPU_SKIP_RUN_BUILD` / `FLA_NPU_SKIP_RUN_INSTALL`，统一全量构建（自动清理 `build/`/`build_out/`/`output/` 中间产物），单算子定位改用 `bash build.sh --pkg --soc=<soc> --vendor_name=fla_npu --ops=<op>` 构建 run 包，旧脚本中的 `FLA_NPU_INCREMENTAL_BUILD=1` 需要删除；`FLA_NPU_OPS`（单算子 wheel）经确认 #274 属错误移除，已恢复保留（`setup.py` 透传 `build.sh --ops=<op>`）。
   - **B2 验证方式**：旧版 Step 4 的 `fla_npu.is_legacy_torch_ops_loaded()` 与 `hasattr(torch_npu.ops, ...)` 在新版不再适用；统一改用 `python -c "import fla_npu; print('ok')"` + `python scripts/check_packaged_wheel_api.py`。
   - **B3 `torch_npu.ops` 挂载行为**：旧版 wheel（2026-07 之前的中间版本）导入 `fla_npu.ops.ascendc` 即自动挂载 `torch_npu.ops.*`；新版（PR #274 后构建）默认不挂载，迁移期需显式调用 `install_torch_npu_ops_compat()`。
   - **`test.sh` 算子名**：`recompute_wu_fwd` 在新版统一为 `recompute_w_u_fwd`。
@@ -135,10 +136,11 @@
 
 ### 修改点 #17（P2）：移除增量构建命令并修复多余代码围栏（含 A3）
 
-- **状态**：已实施
+- **状态**：已实施（后续依据用户结论回滚部分，见修改点 #17 补充）
 - **涉及**：`AGENTS.md` "构建命令"（原 `FLA_NPU_INCREMENTAL_BUILD` / `FLA_NPU_OPS` 两条命令）
 - **依据**：与根 README 修改点 #2 一致（PR #274 已合入 main）；实测发现"单算子 run 包命令"代码块后多出一个 ``` 围栏，导致后续 markdown 渲染异常。
 - **实际改法**：删除两条增量/单算子 wheel 构建命令，改为"源码或适配修改后仍执行完整 wheel 构建；构建流程会清理上一轮 `build/`、`build_out/`、`output/` 中间产物，不再支持增量构建。只定位单算子时，用 `bash build.sh --pkg --soc=<soc> --vendor_name=fla_npu --ops=<op>` 构建单算子 run 包"（单算子产物不能替代完整 wheel 的全量重编），并给出示例命令；同时删除构建命令后多余的 ``` 代码围栏，修复 markdown 渲染。
+- **修改点 #17 补充（后续回滚）**：因 `FLA_NPU_OPS` 判定为错误移除并恢复保留，`AGENTS.md` 在"完整 wheel 构建"命令后补回 `FLA_NPU_OPS` 单算子 wheel 构建示例（`FLA_NPU_OPS=<op> python -m pip wheel ...`）。
 
 ### 修改点 #18（P2）：`set_env.sh` 硬编码补自定义路径提示
 
@@ -198,7 +200,7 @@
 | `_GET_WORKSPACE_ARGTYPES` / `BACKWARD_OPS` / `MUTATED_ARGUMENTS`                    | 代码中真实存在（修改点#14）                                                                                                                               |
 | AGENTS.md 代码围栏修复                                                                    | `git diff` 确认删除多余 ```（#17）                                                                                                                      |
 | 新增文档链接目标                                                                          | 全部有效                                                                                                                                                  |
-| 残留校验（`FLA_NPU_INCREMENTAL_BUILD` / `FLA_NPU_OPS` / `mc2` / `../docs/zh` 等） | 本次改动文档中无残留                                                                                                                                      |
+| 残留校验（`FLA_NPU_INCREMENTAL_BUILD` / `FLA_NPU_SKIP_RUN_BUILD` / `FLA_NPU_SKIP_RUN_INSTALL` / `mc2` / `../docs/zh` 等） | 本次改动文档中无残留；`FLA_NPU_OPS` 为恢复保留项（见修改点 #2/#17 补充） |
 | `git diff --check`                                                                      | 通过                                                                                                                                                      |
 | PR 冲突检查（compare API）                                                                | 分支基于`ac46f1c3`（main），无冲突                                                                                                                      |
 
@@ -521,6 +523,7 @@ reviewer 在 `README.md` 与 `docs/developer-guide.md` 新增 2 条【review】�
 - **评论（3757865945）**：依赖表格不应放在主 README，应放开发者文档。**合理。**
 - **实际改法**：README Step 2 表格整体移除，压缩为一句指引（预检覆盖项 + 指向开发者指南）；完整表格移入 `docs/developer-guide.md` 场景 2 新增的"工具链依赖表"小节。
 
-### 评论 O8（未改动，回复澄清）：FLA_NPU_OPS 已移除
+### 评论 O8（结论后续被推翻）：FLA_NPU_OPS 应保留
 
-- **评论（3757737653）**：建议用 `FLA_NPU_OPS` 环境变量控制一键编包时编译单算子并实测补充到文档。**不成立**——`FLA_NPU_OPS` 已在 PR #274 从 setup.py 移除（`tests/test_wheel_environment.py` 有守卫断言其不得出现），当前 `pip wheel` 只支持全量编包。单算子场景走 developer-guide 场景 1 的 `bash build.sh --pkg ... --ops=<op>` run 包方式；场景 2 现有"只支持全量编包"表述正确，无需改动。已在评论下回复说明。
+- **评论（3757737653）**：建议用 `FLA_NPU_OPS` 环境变量控制一键编包时编译单算子并实测补充到文档。当时判断**不成立**——`FLA_NPU_OPS` 在 PR #274 从 setup.py 移除（`tests/test_wheel_environment.py` 有守卫断言其不得出现），`pip wheel` 只支持全量编包，单算子场景走 developer-guide 场景 1 的 `bash build.sh --pkg ... --ops=<op>` run 包方式，并已在评论下回复说明。
+- **后续用户结论（覆盖 O8）**：PR #274 移除 `FLA_NPU_OPS` 属于**错误移除，应保留**。已据此恢复：`setup.py` `_build_run_package()` 恢复读取 `FLA_NPU_OPS` 并透传 `build.sh --ops=<op>`；README 环境变量表加回 `FLA_NPU_OPS` 行；developer-guide 场景 2 补充 `FLA_NPU_OPS` 单算子 wheel 用法；`tests/test_wheel_environment.py` 移除 `assertNotIn("FLA_NPU_OPS")` 并新增 `test_package_build_supports_single_op_filter` 断言其存在；migration-guide 差异表同步更新。

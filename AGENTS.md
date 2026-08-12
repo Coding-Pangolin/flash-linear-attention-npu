@@ -47,6 +47,10 @@
 4. **实现信息内聚**：L0 输入、输出和属性只承载不可由现有语义信息推导的数据。shape、平台能力、模板选择、tile、任务划分和 workspace 等实现信息应由 host tiling 推导，并通过 tiling data、workspace 或编译期模板参数传给 kernel，不得编码成冗余 L0 入参。
 5. **设计前置确认**：新增或修改 L0 原型、拆分或融合 L0、增加 V2 L0，或确需保留多条 L0 路径时，必须在实现、文档和测试变更前向 `@weinachuan` 提交设计并取得明确确认。设计说明至少包含修改前后的调用图和原型、复用现有 L0 不可行的原因、信息推导方案、泛化与性能影响、ABI 影响，以及旧路径迁移或删除计划；默认方案是只保留一套 L0 路径。
 
+### KDA 私有 L0 优化授权
+
+针对当前 `ChunkKdaFwd` 性能优化任务，`@weinachuan` 已明确授权调整私有 L0 原型、kernel 阶段边界、融合关系、workspace、L1/UB/L0A/L0B/L0C 分配、MMAD 次数、流水和调度策略。不得用静态测试固化某一种私有实现结构。唯一必须保持的是 `aclnnChunkKdaFwd` 的 L2 ABI、已支持的功能范围与语义，以及 `fla_npu.ops.ascendc.chunk_kda_fwd` 的接口与行为。具有独立公开入口的算子可以优化内部实现，但不得连带修改其公开接口；如确需改变任一公开接口，仍须另行取得明确确认。
+
 ## 关键目录
 
 - `fla/ops/ascendc/`：Ascend C 算子实现。
@@ -83,6 +87,13 @@ from fla_npu.ops.triton import chunk_local_cumsum
 修改 `torch_custom/fla_npu/fla_npu/ops/ascendc/_runtime.py`、`_aclnn_ctypes.py`、`torch_custom/fla_npu/setup.py` 或根目录 `setup.py` 时，必须同步检查 `docs/agents/torch-npu-decoupled-architecture.md`。涉及依赖确定阶段、版本或能力门禁、SOC/host/CANN 兼容范围、多卡 device guard、stream 感知、异步 launch 保活、正反向绑定、ACL 私有 format 透传、OPP wheel 安装位置或 legacy `torch_npu` 兼容路径的行为变化时，文档必须一起更新。
 
 ctypes 算子如果会通过 data pointer 修改输入 tensor，必须在公共 wrapper 中显式维护 alias/mutation 契约：列出 mutated args，处理 eager autograd 版本计数，明确被修改状态的 grad 限制，并补充 mutation 测试。未增加 `torch.library` mutation schema、FakeTensor 和 `opcheck` 前，不得宣称该 mutable 路径支持 `torch.compile`、functionalization 或 `torch.export`；需要完整图编译支持时优先提供纯 Python custom-op 适配或返回新状态的 functional API，不得为此退回 PyTorch C++ extension。
+
+## ctypes aclnn ABI 一致性红线
+
+1. `torch_custom/fla_npu/fla_npu/ops/ascendc/_aclnn_ctypes.py` 中显式声明的 `GetWorkspaceSize` 参数类型，必须逐项对照对应 `aclnn*GetWorkspaceSize` 原型，严格保持输入、可选输入、属性、输出、`workspaceSize` 和 `executor` 的数量、顺序与 C 类型一致。每一项必须用行内注释标明对应参数名，禁止仅凭相邻算子、旧版本或参数总数推测。
+2. wrapper 构造的实参数量和顺序必须与参数类型表去掉末尾 `workspaceSize`、`executor` 后完全一致。新增或修改显式参数类型时，必须补充不依赖 NPU 的 ABI 契约测试，同时断言完整类型序列、wrapper 实参数量和逐项 ctypes 类型；不能只依赖上板执行发现 `ctypes.ArgumentError`。
+3. `_aclnn_ctypes.py`、`_runtime.py` 等共享适配文件中的无关算子条目不得随当前算子重构被删除、重排或改型。修改共享 ABI 表后必须检查聚焦 diff，并运行所有 ctypes ABI 契约测试；PR 的验证范围不能只覆盖当前功能算子。
+4. 修改 aclnn C++ 原型时，必须在同一变更中同步 Python ctypes 类型表、wrapper 实参、schema、公开文档和 ABI 测试。仅修改 Python 适配但不改变公开 C++ 原型时，也必须明确说明 ABI 不变，并以对应原型作为修复依据。
 
 ## 算子开发交付 checklist
 

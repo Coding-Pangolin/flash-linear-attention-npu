@@ -259,6 +259,7 @@ public:
         bool storeFinalState,
         bool waitWsFromMte3,
         bool isPing,
+        bool cube1AlreadyWaited,
         bool useDirectFp32Ub,
         uint64_t directUbFreeFlagBegin,
         uint64_t directUbReadyFlagBegin
@@ -278,22 +279,23 @@ public:
         if (rowEnd > mActual) {
             rowEnd = mActual;
         }
+        uint32_t pingpongFlag = isPing ? 0 : pongBaseEvent;
         if (rowBegin >= mActual) {
-            if (waitWsFromMte3) {
-                uint32_t pingpongFlag = isPing ? 0 : pongBaseEvent;
-                AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(
-                    EVENT_ID0 + pingpongFlag);
-                AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(
-                    EVENT_ID0 + pingpongFlag);
-            }
             if (useDirectFp32Ub) {
                 uint32_t directUbSlot = isPing ? 0 : 1;
                 AscendC::CrossCoreWaitFlag<0x4, PIPE_V>(
                     directUbReadyFlagBegin + directUbSlot);
                 AscendC::CrossCoreSetFlag<0x4, PIPE_V>(
                     directUbFreeFlagBegin + directUbSlot);
-            } else {
+            } else if (!cube1AlreadyWaited) {
                 Arch::CrossCoreWaitFlag(cube1Done);
+            }
+            // A zero-row AIV lane still owns the EVENT0 hand-off consumed by V2.
+            if (waitWsFromMte3) {
+                AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(
+                    EVENT_ID0 + pingpongFlag);
+                AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(
+                    EVENT_ID0 + pingpongFlag);
             }
             Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(vec1Done);
             return;
@@ -302,7 +304,6 @@ public:
 
         AscendC::GlobalTensor<GElementInput> gInputThisSubBlock = gInput;
 
-        uint32_t pingpongFlag = isPing ? 0 : pongBaseEvent;
         AscendC::LocalTensor<UElementInput> uUbTensor = isPing ? uUbTensor_ping : uUbTensor_pong;
         AscendC::LocalTensor<float> wsUbTensor = isPing ? wsUbTensor_ping : wsUbTensor_pong;
         AscendC::LocalTensor<float> gUbTensor = isPing ? gUbTensor_ping : gUbTensor_pong;
@@ -346,7 +347,9 @@ public:
                 AscendC::CrossCoreWaitFlag<0x4, PIPE_V>(
                     directUbReadyFlagBegin + directUbSlot);
             } else {
-                Arch::CrossCoreWaitFlag(cube1Done);
+                if (!cube1AlreadyWaited) {
+                    Arch::CrossCoreWaitFlag(cube1Done);
+                }
                 AscendC::DataCopy(wsUbTensor, wsInputThisSubBlock, mActualThisSubBlock * nvActual);
                 AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(EVENT_ID0 + pingpongFlag);
                 AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(EVENT_ID0 + pingpongFlag);
@@ -426,7 +429,9 @@ public:
         } else {
             AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID3 + pingpongFlag);
         }
-        Arch::CrossCoreWaitFlag(cube1Done);
+        if (!cube1AlreadyWaited) {
+            Arch::CrossCoreWaitFlag(cube1Done);
+        }
 
         uint32_t mActualPadded = (mActual + NZ_BLOCK_SIZE - 1) / NZ_BLOCK_SIZE * NZ_BLOCK_SIZE;
         bool waitWsThisTileFromMte3 = waitWsFromMte3;

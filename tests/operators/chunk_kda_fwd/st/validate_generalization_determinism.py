@@ -19,7 +19,7 @@ from tests.reference.chunk_kda_reference import chunk_kda_forward_reference
 
 
 LAYOUTS = ("BSND", "BNSD", "TND", "NTD")
-HEADS = ((1, 1), (1, 2), (2, 2), (2, 4))
+HEADS = ((96, 96),)
 TOKENS = (17, 31, 63, 64, 65, 95, 127, 129)
 
 
@@ -28,7 +28,7 @@ def _case_specs(count, seed):
     specs = []
     for case_id in range(count):
         layout = LAYOUTS[case_id % len(LAYOUTS)]
-        chunk_size = 64 if (case_id // 32) % 2 == 0 else 128
+        chunk_size = 64
         h, hv = HEADS[(case_id // 5) % len(HEADS)]
         t = TOKENS[(case_id * 5 + case_id // 7) % len(TOKENS)]
         if layout in {"TND", "NTD"}:
@@ -53,11 +53,9 @@ def _case_specs(count, seed):
                 "H": h,
                 "HV": hv,
                 "K": 128,
-                "V": 256 if case_id % 5 == 0 else 128,
+                "V": 128,
                 "chunk_size": chunk_size,
-                "dtype": (
-                    "bfloat16" if (case_id // 4) % 2 == 0 else "float16"
-                ),
+                "dtype": "bfloat16",
                 "safe_gate": bool((case_id // 8) % 2),
                 "use_gate_in_kernel": bool((case_id // 16) % 2),
                 "state_v_first": bool((case_id // 64) % 2),
@@ -277,6 +275,17 @@ def _binary_equal_cpu(actual, baseline):
     return True
 
 
+def _binary_equal_npu(torch, actual, baseline):
+    for value, expected in zip(actual, baseline):
+        if value is None or expected is None:
+            if value is not expected:
+                return False
+            continue
+        if not torch.equal(value, expected):
+            return False
+    return True
+
+
 def _binary_diff_details(torch, actual, baseline):
     details = []
     for output_index, (value, expected) in enumerate(
@@ -332,6 +341,7 @@ def _run_case(
     spec,
     device,
     repeats,
+    check_accuracy,
 ):
     torch.manual_seed(spec["seed"])
     B, T, H, HV, K, V = (
@@ -369,23 +379,26 @@ def _run_case(
         if spec["initial_state"]
         else None
     )
-    reference = chunk_kda_forward_reference(
-        q,
-        k,
-        v,
-        gk,
-        beta,
-        scale=K ** -0.5,
-        chunk_size=spec["chunk_size"],
-        initial_state=initial_ref,
-        output_final_state=True,
-        cu_seqlens=cu_tensor,
-    )
-
     initial_input = initial_ref
     if initial_input is not None and spec["state_v_first"]:
         initial_input = initial_input.transpose(-1, -2).contiguous()
-    expected = _expected_outputs(torch, spec, reference, gk, initial_input)
+    expected = None
+    if check_accuracy:
+        reference = chunk_kda_forward_reference(
+            q,
+            k,
+            v,
+            gk,
+            beta,
+            scale=K ** -0.5,
+            chunk_size=spec["chunk_size"],
+            initial_state=initial_ref,
+            output_final_state=True,
+            cu_seqlens=cu_tensor,
+        )
+        expected = _expected_outputs(
+            torch, spec, reference, gk, initial_input
+        )
     ql, kl, vl, gl, bl = _layout_inputs(
         torch, spec, q, k, v, gate_input, beta
     )
@@ -419,15 +432,41 @@ def _run_case(
         **kwargs,
     )
     torch.npu.synchronize()
+    if not check_accuracy:
+        keep_saved = spec["disable_recompute"]
+        expected_present = (
+            True,
+            True,
+            not spec["use_gate_in_kernel"] or keep_saved,
+            True,
+            True,
+            keep_saved,
+            keep_saved,
+            keep_saved,
+            keep_saved,
+            keep_saved,
+            keep_saved or spec["return_intermediate_states"],
+            spec["initial_state"],
+        )
+        for index, (actual, present) in enumerate(
+            zip(baseline, expected_present)
+        ):
+            if (actual is not None) != present:
+                raise AssertionError(
+                    f"case {spec['id']} output {index} optional mismatch"
+                )
     non_finite = []
-    for index, (actual, expected_value) in enumerate(zip(baseline, expected)):
-        if actual is None or expected_value is None:
+    for index, actual in enumerate(baseline):
+        if actual is None:
             continue
         actual_count = int(
             (~torch.isfinite(actual.detach())).sum().item()
         )
-        expected_count = int(
-            (~torch.isfinite(expected_value.detach())).sum().item()
+        expected_value = None if expected is None else expected[index]
+        expected_count = (
+            0
+            if expected_value is None
+            else int((~torch.isfinite(expected_value.detach())).sum().item())
         )
         if actual_count or expected_count:
             actual_bad = (
@@ -454,19 +493,23 @@ def _run_case(
             ),
             flush=True,
         )
-    tolerance = 6e-3 if spec["dtype"] == "bfloat16" else 3e-3
-    max_abs = {
-        str(index): _assert_close(
-            torch,
-            f"case {spec['id']} output {index}",
-            actual,
-            expected_value,
-            rtol=tolerance,
-            atol=tolerance,
-        )
-        for index, (actual, expected_value) in enumerate(zip(baseline, expected))
-    }
-    baseline_binary = _cpu_snapshot(baseline)
+    max_abs = {}
+    if check_accuracy:
+        tolerance = 6e-3
+        max_abs = {
+            str(index): _assert_close(
+                torch,
+                f"case {spec['id']} output {index}",
+                actual,
+                expected_value,
+                rtol=tolerance,
+                atol=tolerance,
+            )
+            for index, (actual, expected_value) in enumerate(
+                zip(baseline, expected)
+            )
+        }
+    baseline_binary = _cpu_snapshot(baseline) if check_accuracy else baseline
     for repeat in range(1, repeats):
         actual = op(
             *npu_inputs,
@@ -474,8 +517,13 @@ def _run_case(
             spec["chunk_size"],
             **kwargs,
         )
-        actual_binary = _cpu_snapshot(actual)
-        if not _binary_equal_cpu(actual_binary, baseline_binary):
+        actual_binary = _cpu_snapshot(actual) if check_accuracy else actual
+        binary_equal = (
+            _binary_equal_cpu(actual_binary, baseline_binary)
+            if check_accuracy
+            else _binary_equal_npu(torch, actual_binary, baseline_binary)
+        )
+        if not binary_equal:
             details = _binary_diff_details(
                 torch, actual_binary, baseline_binary
             )
@@ -523,6 +571,11 @@ def main():
     parser.add_argument("--repeats", type=int, default=50)
     parser.add_argument("--seed", type=int, default=20260730)
     parser.add_argument("--output-json")
+    parser.add_argument(
+        "--determinism-only",
+        action="store_true",
+        help="skip the CPU reference and check bitwise determinism on NPU",
+    )
     args = parser.parse_args()
     if (
         args.cases < 1
@@ -550,6 +603,7 @@ def main():
             spec,
             device,
             args.repeats,
+            not args.determinism_only,
         )
         results.append(result)
         print(

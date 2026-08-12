@@ -121,10 +121,14 @@
     ],
     "route_case_ids": [
       "chunk_kda_fwd_main_accuracy",
-      "chunk_kda_fwd_performance"
+      "chunk_kda_fwd_performance",
+      "chunk_kda_fwd_h96_t8k_model_performance",
+      "chunk_kda_fwd_h96_t16k_model_performance"
     ],
     "performance_case_ids": [
-      "chunk_kda_fwd_performance"
+      "chunk_kda_fwd_performance",
+      "chunk_kda_fwd_h96_t8k_model_performance",
+      "chunk_kda_fwd_h96_t16k_model_performance"
     ],
     "legacy_regression_case_ids": [
       "legacy_chunk128_backend_0000",
@@ -666,6 +670,120 @@
         "requirement": "KdaGateCumsum 与完整 ChunkKdaFwd 总耗时不回退于 3.6 ms 基线"
       },
       "seed": 2029
+    },
+    {
+      "id": "chunk_kda_fwd_h96_t8k_model_performance",
+      "tags": [
+        "performance",
+        "route",
+        "model_target"
+      ],
+      "shape": {
+        "B": 1,
+        "H_k": 96,
+        "H_v": 96,
+        "T": 8192,
+        "K": 128,
+        "V": 128,
+        "chunk_size": 64,
+        "N_c": 128
+      },
+      "dtype": {
+        "q_k_v": "bfloat16",
+        "g_beta_state": "float32",
+        "beta": "bfloat16"
+      },
+      "layout": "BSND",
+      "attrs": {
+        "layout": "BSND",
+        "scale": 0.0883883476,
+        "chunk_size": 64,
+        "output_final_state": true,
+        "disable_recompute": false,
+        "return_intermediate_states": false,
+        "safe_gate": true,
+        "lower_bound": -5.0,
+        "use_gate_in_kernel": true,
+        "use_qk_l2norm_in_kernel": true,
+        "use_beta_sigmoid_in_kernel": true
+      },
+      "optional_inputs": {
+        "initial_state": null,
+        "A_log": "present",
+        "dt_bias": "present",
+        "cu_seqlens": null,
+        "chunk_indices": null
+      },
+      "soc": [
+        "ascend950"
+      ],
+      "run_on": [
+        "ascendc"
+      ],
+      "reference": "fla_org_flash_linear_attention_chunk_kda",
+      "expect": {
+        "return_code": "ACLNN_SUCCESS",
+        "metric": "msopprof",
+        "requirement": "H96/T8K 模型正向功能通过；与同提交 T16K 成对回归并接近线性缩放；MFU > 0.3 或 MBU > 0.9 任一满足"
+      },
+      "seed": 2040
+    },
+    {
+      "id": "chunk_kda_fwd_h96_t16k_model_performance",
+      "tags": [
+        "performance",
+        "route",
+        "model_target"
+      ],
+      "shape": {
+        "B": 1,
+        "H_k": 96,
+        "H_v": 96,
+        "T": 16384,
+        "K": 128,
+        "V": 128,
+        "chunk_size": 64,
+        "N_c": 256
+      },
+      "dtype": {
+        "q_k_v": "bfloat16",
+        "g_beta_state": "float32",
+        "beta": "bfloat16"
+      },
+      "layout": "BSND",
+      "attrs": {
+        "layout": "BSND",
+        "scale": 0.0883883476,
+        "chunk_size": 64,
+        "output_final_state": true,
+        "disable_recompute": false,
+        "return_intermediate_states": false,
+        "safe_gate": true,
+        "lower_bound": -5.0,
+        "use_gate_in_kernel": true,
+        "use_qk_l2norm_in_kernel": true,
+        "use_beta_sigmoid_in_kernel": true
+      },
+      "optional_inputs": {
+        "initial_state": null,
+        "A_log": "present",
+        "dt_bias": "present",
+        "cu_seqlens": null,
+        "chunk_indices": null
+      },
+      "soc": [
+        "ascend950"
+      ],
+      "run_on": [
+        "ascendc"
+      ],
+      "reference": "fla_org_flash_linear_attention_chunk_kda",
+      "expect": {
+        "return_code": "ACLNN_SUCCESS",
+        "metric": "msopprof",
+        "requirement": "H96/T16K 模型正向功能通过；与同提交 T8K 成对回归并接近线性缩放；MFU > 0.3 或 MBU > 0.9 任一满足"
+      },
+      "seed": 2041
     },
     {
       "id": "chunk_kda_fwd_negative_contract",

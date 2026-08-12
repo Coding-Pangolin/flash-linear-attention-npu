@@ -29,9 +29,9 @@
 #include "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp"
 #endif
 
-#include "fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/chunk_kda_fwd_prepare_kernel.hpp"
-#include "fla/ops/ascendc/kda/chunk_kda_fwd_post_wu/op_kernel/chunk_kda_fwd_post_wu_kernel.hpp"
-#include "fla/ops/ascendc/kda/chunk_kda_fwd_finalize/op_kernel/chunk_kda_fwd_finalize_kernel.hpp"
+#include "fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/chunk_kda_fwd_post_wu.h"
+#include "fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/chunk_kda_fwd_prepare.h"
+#include "fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/chunk_kda_fwd_finalize.h"
 
 namespace ascend_ops::ChunkKdaFwdDirect {
 namespace {
@@ -57,6 +57,9 @@ struct DirectKdaTilingData {
     bool outputFinalState;
     bool isVarLen;
     bool safeGate;
+    bool inputSequenceMajor;
+    bool fusePostWu;
+    bool skipPostWu;
     int64_t prepareUsedCoreNum;
     int64_t prepareQgScaledOffset;
     int64_t prepareWSeedOffset;
@@ -151,7 +154,8 @@ uint64_t AlignUp(uint64_t value)
 template <bool SAFE_GATE, typename T>
 __global__ __aicore__ void ChunkKdaPrepareDirectKernel(
     GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR gk, GM_ADDR beta, GM_ADDR initialState,
-    GM_ADDR aqk, GM_ADDR akk, GM_ADDR qg, GM_ADDR workspace, DirectKdaTilingData tiling)
+    GM_ADDR aqk, GM_ADDR akk, GM_ADDR qg, GM_ADDR kg,
+    GM_ADDR workspace, DirectKdaTilingData tiling)
 {
     KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_2);
     AscendC::SetSysWorkspaceForce(workspace);
@@ -165,7 +169,7 @@ __global__ __aicore__ void ChunkKdaPrepareDirectKernel(
         userWorkspace + tiling.prepareQgScaledOffset,
         userWorkspace + tiling.prepareWSeedOffset,
         userWorkspace + tiling.prepareUSeedOffset,
-        userWorkspace, tiling, pipe);
+        kg, userWorkspace, tiling, pipe);
 }
 
 template <typename T>
@@ -279,7 +283,7 @@ void LaunchStages(
         (GM_ADDR)initialState.value().data_ptr() : nullptr;
     ChunkKdaPrepareDirectKernel<SAFE_GATE, T><<<blockDim, nullptr, stream>>>(
         ptr(q), ptr(k), ptr(v), ptr(gk), ptr(beta), initialPtr,
-        ptr(outputs.aqk), ptr(outputs.akk), ptr(outputs.qg),
+        ptr(outputs.aqk), ptr(outputs.akk), ptr(outputs.qg), ptr(outputs.kg),
         (GM_ADDR)workspace.Get(), tiling);
     ChunkKdaPostWuDirectKernel<T><<<blockDim, nullptr, stream>>>(
         ptr(q), ptr(k), ptr(v), ptr(gk), ptr(beta), initialPtr,
@@ -465,6 +469,9 @@ ChunkKdaFwdDirectNpu(
     tiling.outputFinalState = outputFinalState;
     tiling.isVarLen = false;
     tiling.safeGate = safeGate;
+    tiling.inputSequenceMajor = false;
+    tiling.fusePostWu = false;
+    tiling.skipPostWu = false;
     tiling.prepareUsedCoreNum = static_cast<int64_t>(blockDim);
     tiling.prepareQgScaledOffset = static_cast<int64_t>(qgScaledOffset);
     tiling.prepareWSeedOffset = static_cast<int64_t>(wSeedOffset);

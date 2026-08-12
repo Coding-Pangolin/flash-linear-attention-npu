@@ -161,6 +161,7 @@ private:
 
     // 预计算的 Nd2NzParams 模板（减少 scalar 开销）
     Nd2NzParams scratchToL1Params_;    // scratch GM → L1 slot（MatmulToSlot 等使用）
+    Nd2NzParams diagLoadParams_;       // 对角块 GM → L1（LoadInputTile 使用）
     Nd2NzParams fullLoadParams_;       // 整矩阵 GM → L1（MCH 最后一轮使用）
     int64_t layoutMode_;
     GlobalTensor<int64_t> cuSeqlensGM_;
@@ -237,7 +238,17 @@ __aicore__ inline void SolveTriCube<MATRIX_SIZE, T>::Init(
     scratchToL1Params_.dstNzC0Stride = MATRIX_SIZE;
     scratchToL1Params_.dstNzMatrixStride = 0;
 
-    // 2. 整矩阵 GM → L1（MCH 最后一轮使用）
+    // 2. 对角块 GM → L1（LoadInputTile 使用）
+    diagLoadParams_.nValue = FRAC;
+    diagLoadParams_.dValue = FRAC;
+    diagLoadParams_.srcDValue = static_cast<uint32_t>(rowStride_);
+    diagLoadParams_.srcNdMatrixStride = FRAC * static_cast<int32_t>(rowStride_) + FRAC;
+    diagLoadParams_.dstNzNStride = 1;
+    diagLoadParams_.dstNzC0Stride = FRAC;
+    diagLoadParams_.dstNzMatrixStride = (NUM_FRACS + 1) * FRAC_LEN;
+    // diagLoadParams_.ndNum 在运行时设置
+
+    // 3. 整矩阵 GM → L1（MCH 最后一轮使用）
     fullLoadParams_.ndNum = 1;
     fullLoadParams_.srcDValue = static_cast<uint32_t>(rowStride_);
     fullLoadParams_.srcNdMatrixStride = 0;
@@ -774,27 +785,39 @@ __aicore__ inline void SolveTriCube<MATRIX_SIZE, T>::LoadDiagonalBlocksToL0B(
 template <int MATRIX_SIZE, typename T>
 __aicore__ inline void SolveTriCube<MATRIX_SIZE, T>::LoadInputTile(int64_t gmOffset, int64_t validSize)
 {
-    // MCH 路径：基础 DataCopy 逐对角 16x16 搬入 L1(NZ)，对齐 A5 实现，避免 Nd2Nz
-    // 连续布局且 MATRIX_SIZE==16 时可一次搬完整 fractal；尾块按有效行裁剪，其余靠 ClearSlot 补零
+    // MCH 路径：批量搬运所有对角 fractals
+    // 使用 Nd2Nz 的 ndNum + srcNdMatrixStride 一次性搬运所有对角块
     ClearSlot(SLOT_INPUT);
     PipeBarrier<PIPE_MTE2>();
 
-    LocalTensor<T> dstBase = l1_[SLOT_INPUT * L1_SLOT_ELEMS];
-    bool contiguous = (rowStride_ == MATRIX_SIZE);
-    if (contiguous && MATRIX_SIZE == FRAC && validSize == FRAC) {
-        DataCopy(dstBase, inputGM_[gmOffset], DataCopyParams(1, 16, 0, 0));
-    } else {
-        uint16_t srcBlkStride = static_cast<uint16_t>(rowStride_ / FRAC - 1);
-        int32_t numDiagFracs = (static_cast<int32_t>(validSize) + FRAC - 1) / FRAC;
-        for (int32_t i = 0; i < numDiagFracs; ++i) {
-            int32_t rowsLeft = static_cast<int32_t>(validSize) - i * FRAC;
-            uint16_t rows = static_cast<uint16_t>(rowsLeft >= FRAC ? FRAC : rowsLeft);
-            int64_t srcOffset = static_cast<int64_t>(i) * (FRAC * rowStride_ + FRAC);
-            // NZ 对角块间距：(NUM_FRACS + 1) * FRAC_LEN == MATRIX_SIZE * FRAC + FRAC_LEN
-            int64_t dstOffset = static_cast<int64_t>(i) * (MATRIX_SIZE * FRAC + FRAC_LEN);
-            DataCopy(dstBase[dstOffset], inputGM_[gmOffset + srcOffset],
-                     DataCopyParams(rows, 1, srcBlkStride, 0));
-        }
+    int32_t fullDiagFracs = static_cast<int32_t>(validSize) / FRAC;
+    int32_t tailSize = static_cast<int32_t>(validSize) % FRAC;
+
+    if (fullDiagFracs > 0) {
+        // 使用预计算的参数模板批量搬运完整的 16x16 对角块。
+        diagLoadParams_.ndNum = fullDiagFracs;
+        DataCopy(l1_[SLOT_INPUT * L1_SLOT_ELEMS], inputGM_[gmOffset], diagLoadParams_);
+    }
+
+    if (tailSize > 0) {
+        // 尾部对角块只搬运实际有效区域。若仍按 16x16 搬运，最后一个
+        // TND 序列会越过输入末尾读取，并把相邻显存中的 NaN 带入矩阵求逆。
+        Nd2NzParams tailParams;
+        tailParams.ndNum = 1;
+        tailParams.nValue = tailSize;
+        tailParams.dValue = tailSize;
+        tailParams.srcDValue = static_cast<uint32_t>(rowStride_);
+        tailParams.srcNdMatrixStride = 0;
+        tailParams.dstNzNStride = 1;
+        tailParams.dstNzC0Stride = FRAC;
+        tailParams.dstNzMatrixStride = 0;
+
+        int32_t tailSrcOffset = fullDiagFracs * (FRAC * static_cast<int32_t>(rowStride_) + FRAC);
+        int32_t tailDstOffset = fullDiagFracs * (NUM_FRACS + 1) * FRAC_LEN;
+        DataCopy(
+            l1_[SLOT_INPUT * L1_SLOT_ELEMS + tailDstOffset],
+            inputGM_[gmOffset + tailSrcOffset],
+            tailParams);
     }
     SetFlag<HardEvent::MTE2_MTE1>(EVT_MTE2_MTE1);
     WaitFlag<HardEvent::MTE2_MTE1>(EVT_MTE2_MTE1);

@@ -160,7 +160,8 @@ public:
         bool isFinalState,
         bool storeFinalState,
         bool useInitialState,
-        bool isPing
+        bool isPing,
+        bool cube2AlreadyWaited
     )
     {
         static constexpr uint32_t ROW_TILE = 16;
@@ -176,7 +177,9 @@ public:
             rowEnd = mActual;
         }
         if (rowBegin >= mActual) {
-            Arch::CrossCoreWaitFlag(cube2Done);
+            if (!cube2AlreadyWaited) {
+                Arch::CrossCoreWaitFlag(cube2Done);
+            }
             return;
         }
 
@@ -193,7 +196,7 @@ public:
         AscendC::LocalTensor<float> glastUbTensor = isPing ? glastUbTensor_ping : glastUbTensor_pong;
         AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(EVENT_ID0 + pingpongFlag);
         AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(EVENT_ID2 + pingpongFlag);
-        bool useFp32Recurrence = storeFinalState && std::is_same<FinalStateElement, float>::value &&
+        bool useFp32StateUpdate = storeFinalState && std::is_same<FinalStateElement, float>::value &&
                                  (!isInitialState || useInitialState);
 
         float muls = 1.0f;
@@ -241,7 +244,7 @@ public:
                 AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID2 + pingpongFlag);
             }
             if constexpr (std::is_same<FinalStateElement, float>::value) {
-                if (useFp32Recurrence) {
+                if (useFp32StateUpdate) {
                     if (isInitialState) {
                         AscendC::DataCopy(calcUbTensor, initialState[rowBegin * outputStride],
                                           mActualThisSubBlock * nActual);
@@ -260,7 +263,7 @@ public:
             AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(EVENT_ID2 + pingpongFlag);
             AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(EVENT_ID2 + pingpongFlag);
 
-            if (!useFp32Recurrence) {
+            if (!useFp32StateUpdate) {
                 AscendC::Cast(calcUbTensor, hUbTensor, AscendC::RoundMode::CAST_NONE,
                               mActualThisSubBlock * nActual);
                 AscendC::PipeBarrier<PIPE_V>();
@@ -302,7 +305,9 @@ public:
                 AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID1 + pingpongFlag);
             }
 
-            Arch::CrossCoreWaitFlag(cube2Done);
+            if (!cube2AlreadyWaited) {
+                Arch::CrossCoreWaitFlag(cube2Done);
+            }
 
             if constexpr (kGated) {
                 AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID1 + pingpongFlag);
@@ -364,7 +369,9 @@ public:
             return;
         }
 
-        Arch::CrossCoreWaitFlag(cube2Done);
+        if (!cube2AlreadyWaited) {
+            Arch::CrossCoreWaitFlag(cube2Done);
+        }
 
         bool waitHFromV = storeFinalState && isInitialState && std::is_same<FinalStateElement, float>::value;
         bool waitUpdateFromMte3 = false;
@@ -387,7 +394,7 @@ public:
                 AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID2 + pingpongFlag);
             }
             if constexpr (std::is_same<FinalStateElement, float>::value) {
-                if (useFp32Recurrence) {
+                if (useFp32StateUpdate) {
                     if (isInitialState) {
                         CopyGmToUb(calcUbTensor, initialState[rowStart * outputStride],
                                    rowsThisTile, nActual, outputStride);
@@ -405,7 +412,7 @@ public:
             AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(EVENT_ID2 + pingpongFlag);
             AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(EVENT_ID2 + pingpongFlag);
 
-            if (!useFp32Recurrence) {
+            if (!useFp32StateUpdate) {
                 AscendC::Cast(calcUbTensor, hUbTensor, AscendC::RoundMode::CAST_NONE, rowsThisTile * nActual);
                 AscendC::PipeBarrier<PIPE_V>();
             }

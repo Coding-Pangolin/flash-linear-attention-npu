@@ -1,3 +1,4 @@
+import glob
 import importlib
 from importlib import metadata as importlib_metadata
 import importlib.util
@@ -484,6 +485,20 @@ def _stage_run_package(run_file, opp_root):
     print(f"[fla-npu build] Embedded OPP staged at {vendor_dir}")
 
 
+def _cleanup_build_residuals():
+    """Remove setuptools egg-info artifacts from the repo root.
+
+    Building a wheel from the source root leaves ``*.egg-info`` directories
+    behind. When the repo root is on ``sys.path`` (e.g. the CANN set_env.sh
+    appends a trailing ``:`` to PYTHONPATH, which makes Python add the current
+    directory), those stale metadata dirs shadow the real installed
+    distribution: ``pip show`` reports the source root as Location and
+    ``pip install --force-reinstall`` fails to uninstall the previous build.
+    """
+    for egg_info in glob.glob(str(REPO_ROOT / "*.egg-info")):
+        shutil.rmtree(egg_info, ignore_errors=True)
+
+
 def _build_torch_extension_inplace():
     for so_file in FLA_NPU_PACKAGE_DIR.glob("custom_aclnn_extension_lib*.so"):
         so_file.unlink()
@@ -565,6 +580,10 @@ if _bdist_wheel is not None:
             build_tag = get_wheel_build_tag(REPO_ROOT)
             if build_tag:
                 self.build_number = build_tag
+
+        def run(self):
+            super().run()
+            _cleanup_build_residuals()
 
     CMDCLASS["bdist_wheel"] = FlaNpuBdistWheel
 

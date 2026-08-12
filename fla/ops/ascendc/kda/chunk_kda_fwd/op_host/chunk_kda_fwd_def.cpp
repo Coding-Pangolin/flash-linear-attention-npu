@@ -75,6 +75,20 @@ public:
         this->Attr("lower_bound").AttrType(OPTIONAL).Float(-5.0);
         this->Attr("use_gate_in_kernel").AttrType(REQUIRED).Bool(false);
         this->Attr("state_v_first").AttrType(OPTIONAL).Bool(false);
+
+        OpAICoreConfig config;
+        config.DynamicCompileStaticFlag(true)
+            .DynamicFormatFlag(true)
+            .DynamicRankSupportFlag(true)
+            .DynamicShapeSupportFlag(true)
+            .NeedCheckSupportFlag(false)
+            .PrecisionReduceFlag(true)
+            .ExtendCfgInfo("prebuildPattern.value", "Opaque")
+            .ExtendCfgInfo("coreType.value", "AiCore")
+            .ExtendCfgInfo("aclnnSupport.value", "support_aclnn");
+        this->AICore().AddConfig("ascend910b", config);
+        this->AICore().AddConfig("ascend910_93", config);
+        this->AICore().AddConfig("ascend950", config);
     }
 };
 

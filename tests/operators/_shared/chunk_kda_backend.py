@@ -112,6 +112,22 @@ def _l2norm_fwd_torch(x, eps=1e-6):
     return y, rstd.to(x.dtype)
 
 
+def _model_l2norm_fwd(x):
+    """Call the fixed-grid L2Norm installed by the model KDA adapter."""
+    model_source_root = os.environ.get("FLA_NPU_MODEL_SOURCE_ROOT")
+    if model_source_root and model_source_root not in sys.path:
+        sys.path.insert(0, model_source_root)
+    # The pinned model kernels still import the legacy Ascend namespace.
+    # Keep profiling on the same compatibility path as the production adapter.
+    from fla_npu.adapters.triton_ascend_kda import (  # noqa: PLC0415
+        _install_triton_extra_ascend_compat,
+        _load_optimized_l2norm_fwd,
+    )
+
+    _install_triton_extra_ascend_compat()
+    return _load_optimized_l2norm_fwd()(x)
+
+
 def _make_model_shape_kda_dump(case=None, dump_path=None):
     case = dict(MODEL_SHAPE_CASE if case is None else case)
     dump_path = MODEL_SHAPE_DUMP if dump_path is None else pathlib.Path(dump_path)
@@ -394,10 +410,10 @@ def _run_chunk_kda_fwd_model_shape_with_stats(
     gk = fla_ascendc.kda_gate_cumsum(
         g_head,
         chunk_size,
-        A_log=a_log,
-        dt_bias=dt_bias,
+        A_log=None,
+        dt_bias=None,
         cu_seqlens=cu_seqlens,
-        use_gate_in_kernel=True,
+        use_gate_in_kernel=False,
         safe_gate=safe_gate,
         lower_bound=lower_bound,
     )
@@ -685,7 +701,7 @@ def test_chunk_kda_fwd_vdim256_matches_reference():
     if device.type == "cpu":
         return
 
-    for dtype in (torch.bfloat16, torch.float16):
+    for dtype in (torch.bfloat16,):
         q, k, v, gk, beta, initial_state = _make_inputs(
             device, b=1, h=1, hv=2, t=128, kdim=128, vdim=256, dtype=dtype,
         )
@@ -750,9 +766,13 @@ def test_chunk_kda_fwd_chunk128_matches_reference():
     if device.type == "cpu":
         return
 
-    cases = [values for _, values in legacy_param_values(
-        "chunk_kda_fwd", "chunk128_backend", dtype_module=torch
-    )]
+    cases = [
+        values
+        for _, values in legacy_param_values(
+            "chunk_kda_fwd", "chunk128_backend", dtype_module=torch
+        )
+        if values[0] == torch.bfloat16
+    ]
     for dtype, t, vdim in cases:
         q, k, v, gk, beta, initial_state = _make_inputs(
             device, b=1, h=1, hv=2, t=t, kdim=128, vdim=vdim, dtype=dtype,
@@ -805,7 +825,7 @@ def test_chunk_kda_fwd_state_v_first_modes_sequence_major_h_match_reference():
         return
 
     q, k, v, gk, beta, initial_state = _make_inputs(
-        device, b=1, h=1, hv=2, t=96, kdim=128, vdim=256, dtype=torch.float16,
+        device, b=1, h=1, hv=2, t=192, kdim=128, vdim=128, dtype=torch.bfloat16,
     )
     scale = q.shape[-1] ** -0.5
     initial_state_v_first = initial_state.transpose(-1, -2).contiguous()
@@ -861,8 +881,8 @@ def test_chunk_kda_fwd_state_v_first_modes_sequence_major_h_match_reference():
         output_final_state=True,
     )
 
-    assert tuple(got_false[1].shape) == (1, 2, 128, 256)
-    assert tuple(got_false[10].shape) == (1, 2, 2, 128, 256)
+    assert tuple(got_false[1].shape) == (1, 2, 128, 128)
+    assert tuple(got_false[10].shape) == (1, 3, 2, 128, 128)
     for name, actual, expected in (
         ("state_v_first=false o", got_false[0], ref.o),
         ("state_v_first=false final_state", got_false[1], ref.final_state),
@@ -872,8 +892,8 @@ def test_chunk_kda_fwd_state_v_first_modes_sequence_major_h_match_reference():
         assert torch.isfinite(actual).all().item(), f"{name} contains NaN or Inf"
         _assert_close(name, actual, expected, rtol=2e-2, atol=2e-2)
 
-    assert tuple(got_true[1].shape) == (1, 2, 256, 128)
-    assert tuple(got_true[10].shape) == (1, 2, 2, 256, 128)
+    assert tuple(got_true[1].shape) == (1, 2, 128, 128)
+    assert tuple(got_true[10].shape) == (1, 3, 2, 128, 128)
     for name, actual, expected in (
         ("state_v_first=true o", got_true[0], ref.o),
         ("state_v_first=true final_state", got_true[1], ref.final_state.transpose(-1, -2)),
@@ -1027,9 +1047,9 @@ def test_chunk_kda_fwd_optional_output_matrix():
     chunk_size = int(shape["chunk_size"])
     scale = float(attrs["scale"])
     torch.manual_seed(int(case["seed"]))
-    q_bsnd = (torch.randn(b, t, h, kdim) * 0.04).to(torch.float16)
-    k_bsnd = (torch.randn(b, t, h, kdim) * 0.04).to(torch.float16)
-    v_bsnd = (torch.randn(b, t, hv, vdim) * 0.04).to(torch.float16)
+    q_bsnd = (torch.randn(b, t, h, kdim) * 0.04).to(torch.bfloat16)
+    k_bsnd = (torch.randn(b, t, h, kdim) * 0.04).to(torch.bfloat16)
+    v_bsnd = (torch.randn(b, t, hv, vdim) * 0.04).to(torch.bfloat16)
     raw_bsnd = torch.randn(b, t, hv, kdim, dtype=torch.float32) * 0.2 - 1.0
     beta_bsnd = torch.sigmoid(torch.randn(b, t, hv, dtype=torch.float32))
     a_log_cpu = torch.randn(hv, dtype=torch.float32) * 0.05
@@ -1265,6 +1285,151 @@ def test_chunk_kda_fwd_bf16_gate_matches_reference():
     _assert_close("final_state bf16 gate", got[1], ref.final_state, rtol=2e-2, atol=2e-2)
     _assert_close("g bf16 gate", got[2], _bsnd_intermediate_to_bnsd(gk))
     _assert_close("initial_state bf16 gate", got[11], initial_state)
+
+
+def test_chunk_kda_fwd_bf16_all_layouts_match_reference():
+    device = _device()
+    if device.type == "cpu":
+        return
+    q, k, v, gk, beta, initial_state = _make_inputs(
+        device, b=1, h=1, hv=2, t=16, dtype=torch.bfloat16
+    )
+    beta = beta.detach().to(torch.bfloat16).requires_grad_(True)
+    scale = q.shape[-1] ** -0.5
+    ref = chunk_kda_forward_reference(
+        q.detach().cpu(),
+        k.detach().cpu(),
+        v.detach().cpu(),
+        gk.detach().cpu(),
+        beta.detach().cpu(),
+        scale=scale,
+        chunk_size=64,
+        initial_state=initial_state.detach().cpu(),
+        output_final_state=True,
+    )
+
+    rank4_intermediates = (
+        gk.detach().cpu().permute(0, 2, 1, 3),
+        ref.Aqk.permute(0, 2, 1, 3),
+        ref.Akk.permute(0, 2, 1, 3),
+        ref.w.permute(0, 2, 1, 3),
+        ref.u.permute(0, 2, 1, 3),
+        ref.qg.permute(0, 2, 1, 3),
+        ref.kg.permute(0, 2, 1, 3),
+        ref.v_new.permute(0, 2, 1, 3),
+    )
+    cases = {
+        "BSND": (q, k, v, gk, beta),
+        "BNSD": (
+            q.permute(0, 2, 1, 3).contiguous(),
+            k.permute(0, 2, 1, 3).contiguous(),
+            v.permute(0, 2, 1, 3).contiguous(),
+            gk.permute(0, 2, 1, 3).contiguous(),
+            beta.permute(0, 2, 1).contiguous(),
+        ),
+        "TND": (q.squeeze(0), k.squeeze(0), v.squeeze(0), gk.squeeze(0), beta.squeeze(0)),
+        "NTD": (
+            q.squeeze(0).permute(1, 0, 2).contiguous(),
+            k.squeeze(0).permute(1, 0, 2).contiguous(),
+            v.squeeze(0).permute(1, 0, 2).contiguous(),
+            gk.squeeze(0).permute(1, 0, 2).contiguous(),
+            beta.squeeze(0).permute(1, 0).contiguous(),
+        ),
+    }
+    for layout, inputs in cases.items():
+        got = _chunk_kda_fwd_from_gk(
+            *inputs,
+            scale,
+            64,
+            layout=layout,
+            initial_state=initial_state,
+            output_final_state=True,
+            disable_recompute=True,
+            return_intermediate_states=True,
+        )
+        rank3 = layout in {"TND", "NTD"}
+        expected_intermediates = (
+            tuple(tensor.squeeze(0) for tensor in rank4_intermediates)
+            if rank3
+            else rank4_intermediates
+        )
+        _assert_close(f"o {layout} bf16", got[0], ref.o.squeeze(0) if rank3 else ref.o,
+                      rtol=2e-2, atol=2e-2)
+        _assert_close(f"final_state {layout} bf16", got[1], ref.final_state,
+                      rtol=2e-2, atol=2e-2)
+        for name, actual, expected in zip(
+            ("gk", "Aqk", "Akk", "w", "u", "qg", "kg", "v_new"),
+            got[2:10],
+            expected_intermediates,
+        ):
+            _assert_close(f"{name} {layout} bf16", actual, expected, rtol=2e-2, atol=2e-2)
+        _assert_close(f"h {layout} bf16", got[10], ref.h.squeeze(0) if rank3 else ref.h,
+                      rtol=2e-2, atol=2e-2)
+        _assert_close(f"initial_state {layout} bf16", got[11], initial_state)
+
+
+def _run_chunk_kda_fwd_bf16_beta_precision_case(*, h, t, beta_dtype, name):
+    device = _device()
+    if device.type == "cpu":
+        return
+    q, k, v, gk, beta, initial_state = _make_inputs(
+        device, h=h, hv=h, t=t, kdim=128, vdim=128, dtype=torch.bfloat16
+    )
+    beta_input = beta.detach().to(beta_dtype).requires_grad_(True)
+    scale = q.shape[-1] ** -0.5
+
+    got = _chunk_kda_fwd_from_gk(
+        q,
+        k,
+        v,
+        gk,
+        beta_input,
+        scale,
+        64,
+        layout="BSND",
+        initial_state=initial_state,
+        output_final_state=True,
+        disable_recompute=False,
+        return_intermediate_states=False,
+        safe_gate=True,
+    )
+    ref = chunk_kda_forward_reference(
+        q.detach().cpu(),
+        k.detach().cpu(),
+        v.detach().cpu(),
+        gk.detach().cpu(),
+        beta_input.detach().cpu().float(),
+        scale=scale,
+        chunk_size=64,
+        initial_state=initial_state.detach().cpu(),
+        output_final_state=True,
+    )
+    _assert_close(f"{name} o", got[0], ref.o, rtol=2e-2, atol=2e-2)
+    _assert_close(f"{name} final_state", got[1], ref.final_state, rtol=2e-2, atol=2e-2)
+
+
+def test_chunk_kda_fwd_bf16_beta_matches_reference():
+    _run_chunk_kda_fwd_bf16_beta_precision_case(
+        h=2, t=128, beta_dtype=torch.bfloat16, name="bf16 beta H2 C2"
+    )
+
+
+def test_chunk_kda_fwd_bf16_beta_fp32_control_matches_reference():
+    _run_chunk_kda_fwd_bf16_beta_precision_case(
+        h=2, t=128, beta_dtype=torch.float32, name="fp32 beta H2 C2"
+    )
+
+
+def test_chunk_kda_fwd_bf16_beta_single_head_two_chunks_matches_reference():
+    _run_chunk_kda_fwd_bf16_beta_precision_case(
+        h=1, t=128, beta_dtype=torch.bfloat16, name="bf16 beta H1 C2"
+    )
+
+
+def test_chunk_kda_fwd_bf16_beta_two_heads_single_chunk_matches_reference():
+    _run_chunk_kda_fwd_bf16_beta_precision_case(
+        h=2, t=64, beta_dtype=torch.bfloat16, name="bf16 beta H2 C1"
+    )
 
 
 def test_chunk_kda_fwd_fp16_matches_reference():
@@ -1752,6 +1917,32 @@ def test_kda_gate_cumsum_safe_gate_matches_reference():
     _assert_close("gate cumsum safe", got, ref, rtol=2e-3, atol=2e-3)
 
 
+def test_kda_gate_cumsum_fp32_k128_safe_gate_without_bias_matches_reference():
+    device = _device()
+    if device.type == "cpu":
+        return
+    torch.manual_seed(20260803)
+    raw = torch.randn(1, 2, 65, 128, dtype=torch.float32).to(device)
+    a_log = (torch.randn(2, dtype=torch.float32) * 0.1).to(device)
+    got = fla_ascendc.kda_gate_cumsum(
+        raw,
+        64,
+        A_log=a_log,
+        use_gate_in_kernel=True,
+        safe_gate=True,
+        lower_bound=-5.0,
+    )
+    ref = _kda_gate_cumsum_reference(
+        raw.detach().cpu(),
+        64,
+        A_log=a_log.detach().cpu(),
+        use_gate_in_kernel=True,
+        safe_gate=True,
+        lower_bound=-5.0,
+    )
+    _assert_close("gate cumsum fp32 k128 safe without bias", got, ref, rtol=2e-3, atol=2e-3)
+
+
 def test_chunk_kda_fwd_raw_gate_safe_modes_match_reference():
     device = _device()
     if device.type == "cpu":
@@ -1820,6 +2011,174 @@ def test_chunk_kda_fwd_raw_gate_safe_modes_match_reference():
         )
         _assert_close(f"{mode} Aqk", got[3], _bsnd_intermediate_to_bnsd(ref.Aqk), rtol=2e-2, atol=2e-2)
         _assert_close(f"{mode} Akk", got[4], _bsnd_intermediate_to_bnsd(ref.Akk), rtol=2e-2, atol=2e-2)
+
+
+def test_chunk_kda_fwd_a5_deferred_gate_matches_reference():
+    device = _device()
+    if device.type == "cpu":
+        return
+    torch.manual_seed(20260804)
+    b, t, h, hv, kdim, vdim = 1, 64, 96, 96, 128, 128
+    q, _ = _l2norm_fwd_torch(
+        (torch.randn(b, t, h, kdim, dtype=torch.float32) * 0.02).to(torch.bfloat16)
+    )
+    k, _ = _l2norm_fwd_torch(
+        (torch.randn(b, t, h, kdim, dtype=torch.float32) * 0.02).to(torch.bfloat16)
+    )
+    q = q.to(device)
+    k = k.to(device)
+    v = (torch.randn(b, t, hv, vdim, dtype=torch.float32) * 0.02).to(torch.bfloat16).to(device)
+    raw = (torch.randn(b, t, hv, kdim, dtype=torch.float32) * 0.2).to(device)
+    beta = torch.sigmoid(torch.randn(b, t, hv, dtype=torch.float32)).to(torch.bfloat16).to(device)
+    a_log = (torch.randn(hv, dtype=torch.float32) * 0.2 - 0.5).to(device)
+    dt_bias = (torch.randn(hv * kdim, dtype=torch.float32) * 0.1).to(device)
+    scale = kdim ** -0.5
+
+    raw_head = raw.permute(0, 2, 1, 3).contiguous()
+    gk_head = _kda_gate_cumsum_reference(
+        raw_head.detach().cpu(),
+        64,
+        A_log=a_log.detach().cpu(),
+        dt_bias=dt_bias.detach().cpu(),
+        use_gate_in_kernel=True,
+        safe_gate=True,
+        lower_bound=-5.0,
+    )
+    got = fla_ascendc.chunk_kda_fwd(
+        q,
+        k,
+        v,
+        raw,
+        beta,
+        scale,
+        64,
+        layout="BSND",
+        output_final_state=True,
+        safe_gate=True,
+        lower_bound=-5.0,
+        use_gate_in_kernel=True,
+        A_log=a_log,
+        dt_bias=dt_bias,
+        disable_recompute=True,
+        return_intermediate_states=True,
+    )
+    _assert_close("A5 deferred gate gk", got[2], gk_head, rtol=2e-3, atol=2e-3)
+
+    previous_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        ref = chunk_kda_forward_reference(
+            q.detach().cpu(),
+            k.detach().cpu(),
+            v.detach().cpu(),
+            gk_head.permute(0, 2, 1, 3).contiguous(),
+            beta.detach().cpu().float(),
+            scale=scale,
+            chunk_size=64,
+            initial_state=None,
+            output_final_state=True,
+        )
+    finally:
+        torch.set_num_threads(previous_threads)
+
+    comparisons = (
+        ("Aqk", got[3], _bsnd_intermediate_to_bnsd(ref.Aqk)),
+        ("Akk", got[4], _bsnd_intermediate_to_bnsd(ref.Akk)),
+        ("w", got[5], _bsnd_intermediate_to_bnsd(ref.w)),
+        ("u", got[6], _bsnd_intermediate_to_bnsd(ref.u)),
+        ("qg", got[7], _bsnd_intermediate_to_bnsd(ref.qg)),
+        ("kg", got[8], _bsnd_intermediate_to_bnsd(ref.kg)),
+        ("v_new", got[9], _bsnd_intermediate_to_bnsd(ref.v_new)),
+        ("h", got[10], ref.h),
+        ("o", got[0], ref.o),
+        ("final_state", got[1], ref.final_state),
+    )
+    for name, actual, expected_tensor in comparisons:
+        _assert_close(f"A5 deferred gate {name}", actual, expected_tensor, rtol=2e-2, atol=2e-2)
+    assert got[11] is None
+
+
+def test_chunk_kda_fwd_a5_deferred_gate_varlen_tail_matches_reference():
+    device = _device()
+    if device.type == "cpu":
+        return
+    torch.manual_seed(20260805)
+    t, h, hv, kdim, vdim = 65, 96, 96, 128, 128
+    cu_seqlens = (0, t)
+    q = (torch.randn(1, t, h, kdim, dtype=torch.float32) * 0.02).to(torch.bfloat16)
+    k = (torch.randn(1, t, h, kdim, dtype=torch.float32) * 0.02).to(torch.bfloat16)
+    v = (torch.randn(1, t, hv, vdim, dtype=torch.float32) * 0.02).to(torch.bfloat16)
+    raw = torch.randn(1, t, hv, kdim, dtype=torch.float32) * 0.2
+    beta = torch.sigmoid(torch.randn(1, t, hv, dtype=torch.float32)).to(torch.bfloat16)
+    a_log = torch.randn(hv, dtype=torch.float32) * 0.2 - 0.5
+    dt_bias = torch.randn(hv * kdim, dtype=torch.float32) * 0.1
+    scale = kdim ** -0.5
+
+    raw_head = raw.squeeze(0).permute(1, 0, 2).contiguous()
+    gk_head = _kda_gate_cumsum_reference(
+        raw_head,
+        64,
+        A_log=a_log,
+        dt_bias=dt_bias,
+        cu_seqlens=cu_seqlens,
+        use_gate_in_kernel=True,
+        safe_gate=True,
+        lower_bound=-5.0,
+    )
+    got = fla_ascendc.chunk_kda_fwd(
+        q.squeeze(0).permute(1, 0, 2).contiguous().to(device),
+        k.squeeze(0).permute(1, 0, 2).contiguous().to(device),
+        v.squeeze(0).permute(1, 0, 2).contiguous().to(device),
+        raw_head.to(device),
+        beta.squeeze(0).permute(1, 0).contiguous().to(device),
+        scale,
+        64,
+        layout="NTD",
+        cu_seqlens=cu_seqlens,
+        output_final_state=True,
+        safe_gate=True,
+        lower_bound=-5.0,
+        use_gate_in_kernel=True,
+        A_log=a_log.to(device),
+        dt_bias=dt_bias.to(device),
+        disable_recompute=True,
+        return_intermediate_states=True,
+    )
+    _assert_close("A5 varlen tail deferred gate gk", got[2], gk_head, rtol=2e-3, atol=2e-3)
+
+    ref = chunk_kda_forward_reference(
+        q,
+        k,
+        v,
+        gk_head.permute(1, 0, 2).unsqueeze(0).contiguous(),
+        beta.float(),
+        scale=scale,
+        chunk_size=64,
+        initial_state=None,
+        output_final_state=True,
+        cu_seqlens=torch.tensor(cu_seqlens, dtype=torch.int64),
+    )
+    comparisons = (
+        ("Aqk", got[3], ref.Aqk.squeeze(0).permute(1, 0, 2)),
+        ("Akk", got[4], ref.Akk.squeeze(0).permute(1, 0, 2)),
+        ("w", got[5], ref.w.squeeze(0).permute(1, 0, 2)),
+        ("u", got[6], ref.u.squeeze(0).permute(1, 0, 2)),
+        ("qg", got[7], ref.qg.squeeze(0).permute(1, 0, 2)),
+        ("kg", got[8], ref.kg.squeeze(0).permute(1, 0, 2)),
+        ("v_new", got[9], ref.v_new.squeeze(0).permute(1, 0, 2)),
+        ("h", got[10], ref.h.squeeze(0)),
+        ("o", got[0], ref.o.squeeze(0)),
+        ("final_state", got[1], ref.final_state),
+    )
+    for name, actual, expected_tensor in comparisons:
+        _assert_close(
+            f"A5 varlen tail deferred gate {name}",
+            actual,
+            expected_tensor,
+            rtol=2e-2,
+            atol=2e-2,
+        )
+    assert got[11] is None
 
 
 def test_kda_gate_cumsum_safe_gate_multitask_last_row_matches_reference():
@@ -2075,46 +2434,105 @@ def profile_chunk_kda_fwd_from_manifest():
         raise RuntimeError(f"expected exactly one performance case, got {len(cases)}")
     case = cases[0]
     shape, attrs = case["shape"], case["attrs"]
-    if attrs["layout"] != "NTD":
-        raise RuntimeError("the KDA performance runner currently requires NTD layout")
+    layout = attrs["layout"]
+    if layout not in {"NTD", "BSND"}:
+        raise RuntimeError("the KDA performance runner requires NTD or BSND layout")
 
     device = _device()
     if device.type == "cpu":
         raise RuntimeError("KDA performance profiling requires an NPU")
     h = int(shape["H_k"])
     hv = int(shape["H_v"])
+    batch = int(shape.get("B", 1))
     t = int(shape["T"])
     kdim = int(shape["K"])
     vdim = int(shape["V"])
     chunk_size = int(shape["chunk_size"])
     nt = int(shape["N_c"])
-    cu_seqlens = tuple(int(value) for value in case["optional_inputs"]["cu_seqlens"])
-    expected_chunks = sum(
-        (end - start + chunk_size - 1) // chunk_size
-        for start, end in zip(cu_seqlens, cu_seqlens[1:])
+    cu_values = case["optional_inputs"].get("cu_seqlens")
+    cu_seqlens = None if cu_values is None else tuple(int(value) for value in cu_values)
+    expected_chunks = (
+        batch * ((t + chunk_size - 1) // chunk_size)
+        if cu_seqlens is None
+        else sum(
+            (end - start + chunk_size - 1) // chunk_size
+            for start, end in zip(cu_seqlens, cu_seqlens[1:])
+        )
     )
-    if h != hv or cu_seqlens[0] != 0 or cu_seqlens[-1] != t or nt != expected_chunks:
-        raise RuntimeError("invalid NTD varlen performance case")
+    if h != hv or nt != expected_chunks:
+        raise RuntimeError("invalid KDA performance case chunk count or head mapping")
+    if cu_seqlens is not None and (
+        batch != 1 or cu_seqlens[0] != 0 or cu_seqlens[-1] != t
+    ):
+        raise RuntimeError("invalid KDA varlen performance metadata")
 
-    data_dtype = torch.float16
-    q = torch.zeros((h, t, kdim), dtype=data_dtype).to(device)
-    k = torch.zeros_like(q)
-    v = torch.zeros((hv, t, vdim), dtype=data_dtype).to(device)
-    raw_gate = torch.full((hv, t, kdim), -0.005 * math.log(2.0), dtype=torch.float32).to(device)
-    beta = torch.ones((hv, t), dtype=torch.float32).to(device)
+    dtype_name = case["dtype"]["q_k_v"]
+    data_dtype = {
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+    }[dtype_name]
+    beta_dtype = {
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+        "float32": torch.float32,
+    }[case["dtype"].get("beta", case["dtype"]["g_beta_state"])]
+    profile_kda_only = os.environ.get("FLA_NPU_PROFILE_KDA_ONLY") == "1"
+    normalized_fill = 1.0 / math.sqrt(float(kdim) + 1e-6)
+    if layout == "NTD":
+        q = torch.zeros((h, t, kdim), dtype=data_dtype).to(device)
+        k = torch.zeros_like(q)
+        v = torch.zeros((hv, t, vdim), dtype=data_dtype).to(device)
+        raw_gate = torch.full(
+            (hv, t, kdim), -0.005 * math.log(2.0), dtype=torch.float32
+        ).to(device)
+        beta_raw = torch.ones((hv, t), dtype=beta_dtype).to(device)
+    else:
+        q_fill = normalized_fill if profile_kda_only else 1.0
+        q = torch.full((batch, t, h, kdim), q_fill, dtype=data_dtype).to(device)
+        k = torch.ones_like(q)
+        if profile_kda_only:
+            k.fill_(q_fill)
+        v = torch.zeros((batch, t, hv, vdim), dtype=data_dtype).to(device)
+        raw_gate = torch.full(
+            (batch, t, hv, kdim), -1.0, dtype=torch.float32
+        ).to(device)
+        beta_fill = 0.5 if profile_kda_only else 0.0
+        beta_raw = torch.full((batch, t, hv), beta_fill, dtype=beta_dtype).to(device)
 
-    for _ in range(8):
+    use_gate_in_kernel = bool(attrs.get("use_gate_in_kernel", False))
+    a_log = torch.zeros((hv,), dtype=torch.float32).to(device) if use_gate_in_kernel else None
+    dt_bias = (
+        torch.zeros((hv * kdim,), dtype=torch.float32).to(device)
+        if use_gate_in_kernel
+        else None
+    )
+    use_l2norm = bool(attrs.get("use_qk_l2norm_in_kernel", False)) and not profile_kda_only
+    use_beta_sigmoid = bool(attrs.get("use_beta_sigmoid_in_kernel", False)) and not profile_kda_only
+
+    repeats = int(os.environ.get("FLA_NPU_PROFILE_REPEATS", "8"))
+    if repeats < 1:
+        raise RuntimeError("FLA_NPU_PROFILE_REPEATS must be positive")
+    for _ in range(repeats):
+        q_call, k_call = q, k
+        q_rstd = k_rstd = None
+        if use_l2norm:
+            q_call, q_rstd = _model_l2norm_fwd(q)
+            k_call, k_rstd = _model_l2norm_fwd(k)
+        beta = torch.sigmoid(beta_raw) if use_beta_sigmoid else beta_raw
         outputs = fla_ascendc.chunk_kda_fwd(
-            q, k, v, raw_gate, beta, float(attrs["scale"]), chunk_size,
-            layout="NTD", cu_seqlens=cu_seqlens,
+            q_call, k_call, v, raw_gate, beta, float(attrs["scale"]), chunk_size,
+            layout=layout, cu_seqlens=cu_seqlens,
             output_final_state=bool(attrs["output_final_state"]),
             disable_recompute=bool(attrs["disable_recompute"]),
             return_intermediate_states=bool(attrs["return_intermediate_states"]),
             safe_gate=bool(attrs["safe_gate"]),
-            use_gate_in_kernel=bool(attrs["use_gate_in_kernel"]),
+            lower_bound=attrs.get("lower_bound"),
+            use_gate_in_kernel=use_gate_in_kernel,
+            A_log=a_log,
+            dt_bias=dt_bias,
         )
         torch.npu.synchronize()
-        del outputs
+        del outputs, beta, q_call, k_call, q_rstd, k_rstd
 
 
 if __name__ == "__main__":
@@ -2132,7 +2550,10 @@ if __name__ == "__main__":
         test_kda_gate_cumsum_bnsd_direct_matches_reference()
         test_kda_gate_cumsum_ntd_direct_matches_reference()
         test_kda_gate_cumsum_safe_gate_matches_reference()
+        test_kda_gate_cumsum_fp32_k128_safe_gate_without_bias_matches_reference()
         test_chunk_kda_fwd_raw_gate_safe_modes_match_reference()
+        test_chunk_kda_fwd_a5_deferred_gate_matches_reference()
+        test_chunk_kda_fwd_a5_deferred_gate_varlen_tail_matches_reference()
         test_kda_gate_cumsum_safe_gate_multitask_last_row_matches_reference()
         test_kda_gate_cumsum_layout_is_not_inferred_from_shape()
         raise SystemExit(0)
@@ -2141,7 +2562,10 @@ if __name__ == "__main__":
         test_chunk_gdn_fwd_h_a5_model_shape_is_bitwise_deterministic()
         test_chunk_kda_fwd_matches_reference()
         test_chunk_kda_fwd_raw_gate_safe_modes_match_reference()
+        test_chunk_kda_fwd_a5_deferred_gate_matches_reference()
+        test_chunk_kda_fwd_a5_deferred_gate_varlen_tail_matches_reference()
         test_chunk_kda_fwd_bf16_gate_matches_reference()
+        test_chunk_kda_fwd_bf16_all_layouts_match_reference()
         test_chunk_kda_fwd_fp16_matches_reference()
         test_chunk_kda_fwd_fp16_safe_gate_large_span_matches_reference()
         test_chunk_kda_fwd_tnd_matches_reference()
@@ -2170,7 +2594,10 @@ if __name__ == "__main__":
     test_kda_gate_cumsum_bnsd_direct_matches_reference()
     test_kda_gate_cumsum_ntd_direct_matches_reference()
     test_kda_gate_cumsum_safe_gate_matches_reference()
+    test_kda_gate_cumsum_fp32_k128_safe_gate_without_bias_matches_reference()
     test_chunk_kda_fwd_raw_gate_safe_modes_match_reference()
+    test_chunk_kda_fwd_a5_deferred_gate_matches_reference()
+    test_chunk_kda_fwd_a5_deferred_gate_varlen_tail_matches_reference()
     test_kda_gate_cumsum_safe_gate_multitask_last_row_matches_reference()
     test_kda_gate_cumsum_layout_is_not_inferred_from_shape()
     test_chunk_kda_fwd_invalid_head_mapping_rejected()

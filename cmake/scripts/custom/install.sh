@@ -19,7 +19,8 @@ vendordir=vendors/$vendor_name
 
 QUIET="n"
 INSTALL_FOR_ALL="n"
-WHEEL_INSTALL="n"
+WHEEL_INSTALL="y"
+MODE_SET="n"
 
 
 while true
@@ -31,11 +32,23 @@ do
     ;;
     --full|--install)
         WHEEL_INSTALL="y"
+        MODE_SET="y"
+        shift
+    ;;
+    --cann)
+        WHEEL_INSTALL="n"
+        MODE_SET="y"
         shift
     ;;
     --install-path=*)
         INSTALL_PATH=$(echo $1 | cut -d"=" -f2-)
         INSTALL_PATH=${INSTALL_PATH%*/}
+        # An explicit install path targets the CANN OPP layout, unless a
+        # wheel/cann install mode was already requested explicitly.
+        if [ "${MODE_SET}" = "n" ]; then
+            WHEEL_INSTALL="n"
+            MODE_SET="y"
+        fi
         shift
     ;;
     --install-for-all)
@@ -71,17 +84,19 @@ get_wheel_opp_root() {
     local python_bin
     python_bin=$(get_python_bin)
     if [ -z "${python_bin}" ]; then
-        log "[ERROR] python is required to locate the installed fla_npu wheel OPP."
-        exit 1
+        log "[WARNING] python is required to locate the installed fla_npu wheel OPP."
+        return 1
     fi
 
     "${python_bin}" - <<'PY'
 import importlib.util
+import sys
 from pathlib import Path
 
 spec = importlib.util.find_spec("fla_npu")
 if spec is None or spec.origin is None:
-    raise SystemExit("fla_npu is not importable. Install flash-linear-attention-npu wheel first.")
+    print("fla_npu is not importable. Install flash-linear-attention-npu wheel first.", file=sys.stderr)
+    raise SystemExit(1)
 
 package_dir = Path(spec.origin).resolve().parent
 print(package_dir / "opp")
@@ -404,6 +419,10 @@ install_wheel_opp_package() {
     fi
 
     wheel_opp_root=$(get_wheel_opp_root)
+    if [ -z "${wheel_opp_root}" ]; then
+        log "[WARNING] fla_npu wheel is not importable, falling back to CANN OPP install."
+        return 1
+    fi
     wheel_opp_root="${wheel_opp_root%/}"
     dst_vendor="${wheel_opp_root}/${vendordir}"
 
@@ -429,7 +448,6 @@ install_wheel_opp_package() {
 if [ "${WHEEL_INSTALL}" = "y" ]; then
     install_wheel_opp_package
 fi
-
 if [ -n "${INSTALL_PATH}" ]; then
     if [[ ! "${INSTALL_PATH}" = /* ]]; then
         log "[ERROR] use absolute path for --install-path argument"

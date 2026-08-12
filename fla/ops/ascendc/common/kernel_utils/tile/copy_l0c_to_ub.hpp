@@ -13,11 +13,15 @@
 
 #include "catlass/arch/arch.hpp"
 #include "catlass/catlass.hpp"
+#if defined(CATLASS_ARCH) && CATLASS_ARCH == 3510
 #include "catlass/gemm/tile/ascend950/copy_l0c_to_dst.hpp"
+#endif
 #include "tla/tensor.hpp"
 #include "catlass/detail/tag_to_layout.hpp"
 
 namespace Common::Tile {
+
+#if defined(CATLASS_ARCH) && CATLASS_ARCH == 3510
 
 template <
     class ArchTag,
@@ -31,6 +35,10 @@ template <
 struct CopyL0CToUBTla {
     static_assert(DEPENDENT_FALSE<ArchTag>, "Unsupported copy l0c to ub, can not find the specialization.");
 };
+
+#endif
+
+#if defined(CATLASS_ARCH) && CATLASS_ARCH == 3510
 
 template <
     /// Tag indicating architecture
@@ -141,6 +149,8 @@ struct PackedTileCopyTla {
     using CopyL0CToGm = Catlass::Gemm::Tile::CopyL0CToGmTla<ArchTag, TensorL0C, TensorC, DEQUANT_GRANULARITY, ReluEnable>;
 #endif
 };
+
+#if defined(CATLASS_ARCH) && CATLASS_ARCH == 3510
 
 template <class TensorSrc_, class ElementDst_, class LayoutDst_, class CoordDst_, bool ReluEnable_>
 struct CopyL0CToUBTla<
@@ -361,6 +371,8 @@ struct CopyL0CToUBTla<
     }
 };
 
+#endif
+
 template <
     /// Tag indicating architecture
     class ArchTag,
@@ -392,6 +404,8 @@ struct PackedTileCopyTlaToUB
     using CopyL0CToDst =
         CopyL0CToUBTla<ArchTag, TensorL0C, TensorC, CopyMode, DEQUANT_GRANULARITY, ReluEnable>;
 };
+
+#endif
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

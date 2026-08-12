@@ -42,7 +42,6 @@ public:
         this->Attr("logical_seqlen").AttrType(REQUIRED).Int(1);
         this->Attr("logical_heads").AttrType(REQUIRED).Int(1);
         this->Attr("logical_head_dim").AttrType(REQUIRED).Int(1);
-
         OpAICoreConfig aicoreConfig;
         aicoreConfig.DynamicCompileStaticFlag(true)
             .DynamicFormatFlag(true)

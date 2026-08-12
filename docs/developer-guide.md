@@ -42,6 +42,10 @@ ABI 头文件会合并显示到对应算子的状态原因里；删除只按当�
 # 或等价写法
 ./build_out/fla-npu-*.run --full
 
+# 如需装到 CANN OPP 目录（ASCEND_CUSTOM_OPP_PATH / ASCEND_OPP_PATH），
+# 使用 --cann 或 --install-path=<绝对路径>
+# ./build_out/fla-npu-*.run --cann
+
 # 如果 Python wrapper 也有修改，再安装单独编译出的 wheel（路径替换为实际产物文件名）
 WHEEL_PATH="torch_custom/fla_npu/dist/<准确wheel文件名>.whl"
 python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"

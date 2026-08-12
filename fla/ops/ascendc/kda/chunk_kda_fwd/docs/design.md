@@ -3,7 +3,7 @@
 ## 目标
 
 1. 顶层接口对齐非 CP 的 FLA `chunk_kda_fwd`。
-2. 每个阶段是独立 L0 算子，不在一个 kernel 中用 stage 跨越另一个算子。
+2. 不新增公开算子原型；A5 快路径复用既有 `ChunkKdaFwd` 原型和外层 kernel 入口。
 3. A2/A3/A5 使用同一数学定义；A5 保留 regbase 双发射特化。
 4. 输入 layout 与输出 layout 解耦。
 5. FwdH 同时服务 KDA 与 GDN，并支持可选 scalar gate、key-wise gate 和 `state_v_first`。
@@ -11,17 +11,14 @@
 ## L2 调度
 
 ```text
-raw g
-  -> KdaGateCumsum
-  -> ChunkKdaFwdPrepare
-  -> ChunkKdaFwdPostWu
-  -> ChunkGatedDeltaRuleFwdH
-  -> ChunkKdaFwdFinalize
-  -> attn_out
+raw g -> ChunkKdaFwd[
+    gate cumsum -> Prepare/Post-WU -> FwdH -> Finalize
+] -> attn_out
 ```
 
-BSND/TND 输入先由 `l0op::Transpose` 物化为连续 BNSD/NTD。仓内不再维护独立 swap 算子。
-每个 kernel launch 在同一 stream 上建立阶段依赖。
+`aclnnChunkKdaFwd` 做公开 layout 的连续化和必要视图转换，然后只启动一个物理
+`ChunkKdaFwd` L0。Gate、Prepare、Post-WU、FwdH 和 Finalize 均是该 L0 内部阶段，不再注册或
+启动私有阶段 L0。选择所需信息均由既有输入、shape 和属性推导，不增加公开属性或接口字段。
 
 ## 阶段职责
 
@@ -35,7 +32,7 @@ gk = cumsum(gate) / ln(2)
 
 该算子同时保留独立 L2 接口供 GDN2 调用，输入和输出固定为 BNSD/NTD。
 
-### ChunkKdaFwdPrepare
+### Prepare
 
 只读取 `q/k/v/gk/beta` 及变长元数据，产生：
 
@@ -45,7 +42,7 @@ Aqk, Akk, qg, qg_scaled, w_seed, u_seed
 
 矩阵计算和三角求逆使用 FP32 累积；公开中间量在写回时转为 q dtype。
 
-### ChunkKdaFwdPostWu
+### Post-WU
 
 只读取 `k/gk/w_seed/Akk/u_seed`，产生：
 
@@ -55,7 +52,7 @@ w, u, kg, v_new_seed
 
 `Akk` 的 head 循环按 `H_v` 执行，GQA 映射只在读取 q/k head 时换算，避免按 `H_k` 重复或漏算。
 
-### ChunkGatedDeltaRuleFwdH
+### FwdH state propagation
 
 读取 `kg/w/u/gk` 和可选 `initial_state`，计算 chunk 间递推：
 
@@ -64,10 +61,10 @@ v_new = u - w @ h_prev
 h_next = exp2(gk_last) * h_prev + kg^T @ v_new
 ```
 
-`h` 与 `v_new` 必选于该 L0；`final_state` 真正可空。共享算子还支持 scalar `g`，其自然指数路径不再暴露
-`use_exp2` 属性；key-wise `gk` 固定使用 `exp2`。
+arch35 路径复用与 `ChunkGatedDeltaRuleFwdH` 相同的数学实现；其他场景在 `ChunkKdaFwd` 内嵌
+共享 FwdH 实现。独立 GDN L0 原型继续保留给其他调用方，key-wise `gk` 固定使用 `exp2`。
 
-### ChunkKdaFwdFinalize
+### Finalize
 
 只读取 `qg_scaled/Aqk/v_new/h`，计算：
 
@@ -87,10 +84,9 @@ sequence-major，并按 `state_v_first` 决定末两维顺序。`final_state` �
 ## 重计算策略
 
 L2 不理解 autograd 重计算策略。`final_state/gk/w/u/qg/kg/v_new/h` 是相互独立的
-`OPTIONAL_OUTPUT`；非空指针表示导出，空指针表示不公开该结果。`w/u/qg/kg/v_new/h` 的 L0
-阶段固定写内部 compute tensor，L2 通过 `ViewCopy` 导出非空输出，不能依赖公开可选输出来
-承接或延长内部生命周期。`gkOut` 非空时直接复用为 `gkCompute`，避免目标场景额外复制整张
-FP32 gate。
+`OPTIONAL_OUTPUT`；非空指针表示导出，空指针表示不公开该结果。arch35 快路径为隐藏输出传递
+固定 ABI 占位，并由 tiling 在 kernel workspace 中承接实际中间结果；通用路径使用同一规则。
+公开输出存在时直接作为内部目标使用。
 
 Python/legacy 包装层对齐 fla-org `chunk_kda_fwd` 提交
 `0f0f0c97af39343855b43bbbaddcedfda5cb9d77`：
@@ -102,19 +98,27 @@ Python/legacy 包装层对齐 fla-org `chunk_kda_fwd` 提交
 - `final_state` 只在 `output_final_state=true` 时创建公开输出。
 
 内部 `hCompute` 与公开 `hOut` 是两个生命周期：`hCompute` 是 FwdH 到 Finalize 的必需
-head-major 阶段结果，L2 无论 `hOut` 是否为空都必须提供；`hOut` 仅表示是否将该结果转为
-sequence-major 并通过 `ViewCopy` 导出到调用方。该规则对齐非 CP 的低层 12 返回值接口；
+head-major 阶段结果，`hOut` 为空时由 kernel workspace 承接；`hOut` 非空时，L2 提供 head-major
+临时输出并在导出边界转为 sequence-major。该规则对齐非 CP 的低层 12 返回值接口；
 第 12 项 `initial_state` 由 Python 层原对象透传。
 
 ## 模板化方案与 tiling key
 
-Prepare、PostWu 和 Finalize 是三个独立算子，各自维护 tiling 数据、workspace 偏移和固定
-`tiling key=1`，运行时 shape、变长序列信息和任务数只通过本阶段 tiling 传递。数据类型、
-safe-gate 数值路径和 A2/A3/A5 向量实现由编译期模板选择，不用运行时 stage 分支跨算子。
+物理 `ChunkKdaFwd` 只有一个外层 `op_kernel/chunk_kda_fwd.cpp` 入口。A5 实现位于
+`op_kernel/arch35/*.h`，host 侧 A5 模板选择位于 `op_host/arch35/*.h`。Prepare、Post-WU、
+Finalize 的内部实现头与统一 kernel 入口同属 `chunk_kda_fwd/op_kernel/`，不存在对应的独立 L0
+原型或 `.cpp` 入口。
 
-共享 FwdH 同样是独立算子，仅用 tiling key 区分 V=128 与 V=256 的 tile shape；scalar `g`
-固定按自然指数处理，key-wise `gk` 固定按 `exp2` 处理。该划分限制模板组合数量，也避免
-把其他阶段的属性或 workspace 生命周期带入 FwdH。
+- `tiling key=1`：非 chunk=64、K=V=128 场景的通用模板族。
+- `tiling key=2`：chunk=64、K=V=128 模板族，包括 dense、tail 和 varlen。
+
+两个 key 是同一物理 L0 的编译期场景变体，不是平台编号、独立算子或独立接口。A2/A3/A5
+均生成两个 key；同一个 key 内再由编译架构选择根目录通用实现或 `arch35/` 实现。host 的
+`SetTilingKey` 只检查 chunk、K、V，不检查 SoC。
+
+在 arch35 上，key2 的完整 64 行 chunk 使用 Prepare/Post-WU 成批融合流水；tail 使用同一物理
+L0 内的边界实现。dense 对齐场景使用 arch35 FwdH；tail/varlen 内嵌共享 FwdH。其他架构在
+同一 key2 下使用其对应实现。tiling key 不改变算子原型、输出契约或数学定义。
 
 ## 性能设计
 

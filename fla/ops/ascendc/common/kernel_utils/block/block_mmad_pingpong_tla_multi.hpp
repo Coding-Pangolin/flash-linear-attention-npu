@@ -328,7 +328,7 @@ public:
     /// Perform a block-scoped matrix multiply-accumulate
     template <class TensorA, class TensorB, class TensorC, class TensorBias = EmptyClass>
     CATLASS_DEVICE void operator()(TensorA &tensorA, TensorB &tensorB, TensorC &tensorC, GemmCoord const &actualShape,
-        TensorBias const &tensorBias = {})
+        TensorBias const &tensorBias = {}, bool clearL1Padding = false)
     {
         // Check L1TileShape
         if constexpr (HAS_BIAS) {
@@ -373,6 +373,12 @@ public:
         uint32_t kL1Actual = min(kBlockActual, L1_TILE_K);
         // load first matrix A tile from GM to L1
         AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(l1AEventList[l1AListId]);
+        if (clearL1Padding) {
+            AscendC::InitConstValueParams<ElementA> clearParams(
+                1, static_cast<uint16_t>(L1A_TILE_SIZE / 32), 0,
+                static_cast<ElementA>(0));
+            AscendC::InitConstValue(l1ATensorList[l1AListId], clearParams);
+        }
         auto tensorL1A = tla::MakeTensor(l1ATensorList[l1AListId], L1A_LAYOUT, Arch::PositionL1{});
         auto tensorTileA = GetTileA(tensorA, 0, 0, mBlockActual, kL1Actual);
         if constexpr (ENABLE_L1_RESIDENT) {
@@ -396,6 +402,12 @@ public:
 
         // load first matrix B tile from GM to L1
         AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(l1BEventList[l1BListId]);
+        if (clearL1Padding) {
+            AscendC::InitConstValueParams<ElementB> clearParams(
+                1, static_cast<uint16_t>(L1B_TILE_SIZE / 32), 0,
+                static_cast<ElementB>(0));
+            AscendC::InitConstValue(l1BTensorList[l1BListId], clearParams);
+        }
         auto tensorL1B = tla::MakeTensor(l1BTensorList[l1BListId], L1B_LAYOUT, Arch::PositionL1{});
         auto tensorTileB = GetTile(tensorB, tla::MakeCoord(0, 0), tla::MakeShape(kL1Actual, nBlockActual));
         if constexpr (ENABLE_L1_RESIDENT) {
@@ -455,6 +467,12 @@ public:
 
                 // load next matrix A tile from GM to L1
                 AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(l1AEventList[l1AListIdNext]);
+                if (clearL1Padding) {
+                    AscendC::InitConstValueParams<ElementA> clearParams(
+                        1, static_cast<uint16_t>(L1A_TILE_SIZE / 32), 0,
+                        static_cast<ElementA>(0));
+                    AscendC::InitConstValue(l1ATensorList[l1AListIdNext], clearParams);
+                }
                 if constexpr (ENABLE_L1_RESIDENT) {
                     if (lastAddrA[l1AListIdNext] != tensorTileA.data().GetPhyAddr()
                         || tla::get<0>(tensorTileA.coord()) != lastCoordA[l1AListIdNext].row()
@@ -475,6 +493,12 @@ public:
 
                 // load next matrix B tile from GM to L1
                 AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(l1BEventList[l1BListIdNext]);
+                if (clearL1Padding) {
+                    AscendC::InitConstValueParams<ElementB> clearParams(
+                        1, static_cast<uint16_t>(L1B_TILE_SIZE / 32), 0,
+                        static_cast<ElementB>(0));
+                    AscendC::InitConstValue(l1BTensorList[l1BListIdNext], clearParams);
+                }
                 if constexpr (ENABLE_L1_RESIDENT) {
                     if (lastAddrB[l1BListIdNext] != tensorTileB.data().GetPhyAddr()
                         || tla::get<0>(tensorTileB.coord()) != lastCoordB[l1BListIdNext].row()

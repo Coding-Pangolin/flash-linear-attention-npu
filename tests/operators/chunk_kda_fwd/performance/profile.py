@@ -23,9 +23,19 @@ RUNNER = ROOT / "tests/operators/_shared/chunk_kda_backend.py"
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--case-id",
+        default="chunk_kda_fwd_performance",
+        help="exact performance case id from tests/op_cases/chunk_kda_fwd.json",
+    )
     parser.add_argument("--output", default="outputs/chunk_kda_fwd_msopprof")
     parser.add_argument("--launch-count", type=int, default=20)
     parser.add_argument("--warm-up", type=int, default=5)
+    parser.add_argument("--repeats", type=int, default=8)
+    parser.add_argument(
+        "--kernel-name",
+        help="optional exact or profiler-supported kernel name filter",
+    )
     parser.add_argument(
         "--aic-metrics",
         default="BasicInfo",
@@ -39,14 +49,18 @@ def main():
     parser.add_argument("--kill", choices=("on", "off"), default="on")
     args = parser.parse_args()
     ids = case_ids(tag="performance", route="ascendc")
-    if not ids:
-        raise RuntimeError("no performance case is defined")
+    if args.case_id not in ids:
+        raise RuntimeError(
+            f"unknown chunk_kda_fwd performance case {args.case_id!r}; "
+            f"available cases: {', '.join(ids)}"
+        )
     env = os.environ.copy()
     env.update({
         "FLA_NPU_OPERATOR": "chunk_kda_fwd",
         "FLA_NPU_CASE_MANIFEST": str(ROOT / "tests/op_cases/chunk_kda_fwd.json"),
-        "FLA_NPU_CASE_IDS": ",".join(ids),
+        "FLA_NPU_CASE_IDS": args.case_id,
         "FLA_NPU_PROFILE_ONLY": "1",
+        "FLA_NPU_PROFILE_REPEATS": str(args.repeats),
     })
     application = f"{shlex.quote(sys.executable)} {shlex.quote(str(RUNNER))}"
     command = [
@@ -55,6 +69,8 @@ def main():
         f"--warm-up={args.warm_up}", f"--replay-mode={args.replay_mode}",
         f"--kill={args.kill}",
     ]
+    if args.kernel_name:
+        command.append(f"--kernel-name={args.kernel_name}")
     if args.dry_run:
         print(" ".join(shlex.quote(part) for part in command))
         return

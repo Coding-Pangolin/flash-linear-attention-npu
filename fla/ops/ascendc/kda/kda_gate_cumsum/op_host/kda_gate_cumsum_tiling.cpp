@@ -51,6 +51,17 @@ ge::graphStatus Tiling4KdaGateCumsum(gert::TilingContext *context)
     bool safeGate = *attrs->GetAttrPointer<bool>(ATTR_SAFE_GATE_IDX);
     float lowerBound = *attrs->GetAttrPointer<float>(ATTR_LOWER_BOUND_IDX);
 
+    const auto gShapePtr = context->GetInputShape(INPUT_G_IDX);
+    if (gShapePtr == nullptr) {
+        return ge::GRAPH_FAILED;
+    }
+    const auto &gShape = gShapePtr->GetStorageShape();
+    const bool inputSequenceMajor =
+        (rank == 4 && gShape.GetDimNum() == 4 && gShape.GetDim(0) == batch &&
+         gShape.GetDim(1) == t && gShape.GetDim(2) == hv && gShape.GetDim(3) == k) ||
+        (rank == 3 && gShape.GetDimNum() == 3 && gShape.GetDim(0) == t &&
+         gShape.GetDim(1) == hv && gShape.GetDim(2) == k);
+
     const auto cuShape = context->GetOptionalInputShape(INPUT_CU_SEQLENS_IDX);
     int64_t hasCuSeqlens = (cuShape != nullptr) ? 1 : 0;
     int64_t seqNum = hasCuSeqlens ? (cuShape->GetStorageShape().GetDim(0) - 1) : batch;
@@ -86,9 +97,9 @@ ge::graphStatus Tiling4KdaGateCumsum(gert::TilingContext *context)
     tiling.set_dataType(dataType);
     tiling.set_useGateInKernel(useGate ? 1 : 0);
     tiling.set_safeGate(safeGate ? 1 : 0);
+    tiling.set_inputSequenceMajor(inputSequenceMajor ? 1 : 0);
     tiling.set_lowerBound(lowerBound);
     tiling.set_usedCoreNum(blockDim == 0 ? 1 : blockDim);
-
     tiling.SaveToBuffer(context->GetRawTilingData()->GetData(), context->GetRawTilingData()->GetCapacity());
     context->GetRawTilingData()->SetDataSize(tiling.GetDataSize());
     return ge::GRAPH_SUCCESS;

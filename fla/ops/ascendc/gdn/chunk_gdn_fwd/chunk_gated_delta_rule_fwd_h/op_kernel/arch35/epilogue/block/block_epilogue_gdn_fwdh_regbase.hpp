@@ -8,7 +8,10 @@
 #define BLOCK_EPILOGUE_GDN_FWDH_REGBASE_HPP
 
 #include "kernel_operator.h"
+#ifndef FLA_NPU_REGBASE_HPP_INCLUDED
+#define FLA_NPU_REGBASE_HPP_INCLUDED
 #include "kernel_utils/vector/regbase.hpp"
+#endif
 
 namespace Catlass::Epilogue::Block::detail {
 

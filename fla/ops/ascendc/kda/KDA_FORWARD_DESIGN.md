@@ -8,17 +8,19 @@
 公共参数不包含 `total_chunks`、`gateScale`、`output_sequence_major` 或 stage。`N_c` 从
 `cu_seqlens/chunk_indices/chunk_size` 推导；gate 累计固定乘 `1/ln(2)`。
 
-## 算子拆分
+## 实现拆分
 
-| 算子 | 作用 | 是否有独立 L2 |
+| 组件 | 作用 | 是否有独立 L2 |
 | --- | --- | --- |
 | `KdaGateCumsum` | gate 激活和 chunk-local cumsum | 是，供 KDA/GDN2 复用 |
-| `ChunkKdaFwdPrepare` | Aqk/Akk/qg/seed | 否，仅作为顶层阶段 |
-| `ChunkKdaFwdPostWu` | w/u/kg/v_new seed | 否，仅作为顶层阶段 |
+| Prepare | Aqk/Akk/qg/seed | 否，`ChunkKdaFwd` 内部阶段 |
+| Post-WU | w/u/kg/v_new seed | 否，`ChunkKdaFwd` 内部阶段 |
 | `ChunkGatedDeltaRuleFwdH` | chunk 间状态递推 | 是，供 GDN/KDA 复用 |
-| `ChunkKdaFwdFinalize` | 输出融合与 sequence-major 写回 | 否，仅作为顶层阶段 |
+| Finalize | 输出融合与 sequence-major 写回 | 否，`ChunkKdaFwd` 内部阶段 |
 
-每个 L0 只声明本阶段实际读取的输入。阶段间张量通过显式 GM/workspace 传递，kernel 不跨算子 stage。
+不新增平台专用公开或私有原型。A2/A3/A5 均复用既有 `ChunkKdaFwd` 原型和同一个外层
+`.cpp` 入口；上述内部阶段不再注册独立 L0。独立 `KdaGateCumsum` 和
+`ChunkGatedDeltaRuleFwdH` 仍供其他模型单独调用。
 
 ## Gate 与指数
 
@@ -36,10 +38,10 @@ gk = chunk_local_cumsum(gate) / ln(2)
 ## 布局
 
 - `layout` 仅描述输入。
-- 输入 BSND/TND 在 L2 通过 `l0op::Transpose` 转为连续 BNSD/NTD。
+- `layout` 和实际输入 shape 共同决定 kernel 内读取方式；TND 在 L2 物化为连续 head-major 视图。
 - `attn_out` 固定 BSND/TND。
 - `final_state` 固定按序列排列。
-- `Aqk/Akk/gk/w/u/qg/kg/v_new/h` 固定 head-major，供反向继续计算。
+- `Aqk/Akk/gk/w/u/qg/kg/v_new` 固定 head-major，供反向继续计算；公开 `h` 在导出边界转为 sequence-major。
 - `state_v_first` 控制 initial/final state 与 h 的末两维。
 
 ## FLA 输出策略
@@ -58,7 +60,9 @@ aclnn 通过可空输出 descriptor 表达可选输出，OpDef 使用 `OPTIONAL_
 
 ## 平台与性能
 
-A2/A3/A5 使用相同 FP32 数学主路径。A5 的 VEC stage 使用 regbase 双发射，AIC/AIV 分别通过
-L1/UB 双缓冲覆盖搬运和计算。性能门禁使用完整 L2 调用，包含 `KdaGateCumsum`。
+A2/A3/A5 使用相同 FP32 数学定义。`tiling key=1` 表示非 `chunk_size=64`、`K=V=128`
+场景，`tiling key=2` 表示该场景并覆盖 dense、tail 和 varlen；tiling key 不区分平台。
+同一 key 内由编译架构选择对应 kernel 模板，并在同一物理 kernel 内完成 gate cumsum、内部融合
+与边界处理。独立 `KdaGateCumsum` 的 L2 接口保持不变。
 
 详细阶段设计见 `chunk_kda_fwd/docs/design.md`，API 契约见 `chunk_kda_fwd/docs/api.md`。

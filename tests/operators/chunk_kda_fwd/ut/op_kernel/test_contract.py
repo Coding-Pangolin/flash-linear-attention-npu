@@ -12,113 +12,271 @@ DIRECT_SOURCE = (
     ROOT
     / "examples/fast_kernel_launch_example/csrc/chunk_kda_fwd/chunk_kda_fwd_direct.cpp"
 )
-STAGE_KERNELS = {
-    "prepare": ROOT
-    / "fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/chunk_kda_fwd_prepare.cpp",
-    "post_wu": ROOT
-    / "fla/ops/ascendc/kda/chunk_kda_fwd_post_wu/op_kernel/chunk_kda_fwd_post_wu.cpp",
-    "output": ROOT
-    / "fla/ops/ascendc/kda/chunk_kda_fwd_finalize/op_kernel/chunk_kda_fwd_finalize.cpp",
+KERNEL_ENTRY = OP_ROOT / "op_kernel/chunk_kda_fwd.cpp"
+TILING_ENTRY = OP_ROOT / "op_host/chunk_kda_fwd_tiling.cpp"
+GENERIC_STAGE_IMPLEMENTATIONS = {
+    "prepare": OP_ROOT / "op_kernel/chunk_kda_fwd_prepare.h",
+    "post_wu": OP_ROOT / "op_kernel/chunk_kda_fwd_post_wu.h",
+    "output": OP_ROOT / "op_kernel/chunk_kda_fwd_finalize.h",
 }
-STAGE_IMPLEMENTATIONS = {
-    stage: path.with_name(f"chunk_kda_fwd_{stage}_kernel.hpp")
-    for stage, path in STAGE_KERNELS.items()
+ARCH35_STAGE_IMPLEMENTATIONS = {
+    "prepare": OP_ROOT / "op_kernel/arch35/chunk_kda_fwd_prepare.h",
+    "post_wu": OP_ROOT / "op_kernel/arch35/chunk_kda_fwd_post_wu.h",
+    "output": OP_ROOT / "op_kernel/arch35/chunk_kda_fwd_finalize.h",
 }
-STAGE_IMPLEMENTATIONS["output"] = STAGE_KERNELS["output"].with_name(
-    "chunk_kda_fwd_finalize_kernel.hpp"
+STAGE_IMPLEMENTATIONS = ARCH35_STAGE_IMPLEMENTATIONS
+ARCH35_KERNEL = OP_ROOT / "op_kernel/arch35/chunk_kda_fwd_impl.h"
+ARCH35_FWD_H = OP_ROOT / "op_kernel/arch35/chunk_kda_fwd_fwd_h.h"
+KERNEL_COMMON = OP_ROOT / "op_kernel/chunk_kda_fwd_common.h"
+ARCH35_TILING = OP_ROOT / "op_host/arch35/chunk_kda_fwd_tiling_impl.h"
+REMOVED_FUSED_ROOT = ROOT / "fla/ops/ascendc/kda/chunk_kda_fwd_fused_a5"
+REMOVED_STAGE_ROOTS = (
+    ROOT / "fla/ops/ascendc/kda/chunk_kda_fwd_prepare",
+    ROOT / "fla/ops/ascendc/kda/chunk_kda_fwd_post_wu",
+    ROOT / "fla/ops/ascendc/kda/chunk_kda_fwd_finalize",
 )
-STAGE_TILINGS = {
-    "prepare": STAGE_KERNELS["prepare"].parent.parent
-    / "op_host/chunk_kda_fwd_prepare_tiling.h",
-    "post_wu": STAGE_KERNELS["post_wu"].parent.parent
-    / "op_host/chunk_kda_fwd_post_wu_tiling.h",
-    "output": STAGE_KERNELS["output"].parent.parent
-    / "op_host/chunk_kda_fwd_finalize_tiling.h",
-}
 
 
-def test_direct_launch_uses_four_real_stage_kernels():
+def test_direct_launch_keeps_registered_public_entry():
     text = DIRECT_SOURCE.read_text(encoding="utf-8")
     assert "chunk_kda_fwd_direct" in text
-    assert "stage" not in text.split("TORCH_LIBRARY_FRAGMENT", 1)[1]
-    assert text.count("<<<blockDim") == 4
-    for name in (
-        "ChunkKdaPrepareDirectKernel",
-        "ChunkKdaPostWuDirectKernel",
-        "ChunkKdaFwdHDirectKernel",
-        "ChunkKdaOutputDirectKernel",
-    ):
-        assert name in text
-    assert "RunChunkKdaFused" not in text
-    assert "SyncAll" not in text
+    registration = text.split("TORCH_LIBRARY_FRAGMENT", 1)[1]
+    assert 'm.def("chunk_kda_fwd_direct(' in registration
+    assert registration.count('m.impl("chunk_kda_fwd_direct"') == 2
 
 
-def test_each_device_kernel_owns_exactly_one_stage():
+def test_a5_reuses_public_physical_entry_with_internal_stage_implementations():
     assert not LEGACY_COMMON_KERNEL.exists()
-    assert not (OP_ROOT / "op_kernel/chunk_kda_fwd.cpp").exists()
-    assert not (OP_ROOT / "op_host/chunk_kda_fwd_tiling.cpp").exists()
+    assert KERNEL_ENTRY.exists()
+    assert TILING_ENTRY.exists()
+    assert all(path.exists() for path in GENERIC_STAGE_IMPLEMENTATIONS.values())
+    assert all(path.exists() for path in ARCH35_STAGE_IMPLEMENTATIONS.values())
+    assert not REMOVED_FUSED_ROOT.exists()
+    assert all(not path.exists() for path in REMOVED_STAGE_ROOTS)
+    assert ARCH35_KERNEL.exists() and ARCH35_FWD_H.exists() and ARCH35_TILING.exists()
+    assert KERNEL_COMMON.exists()
 
-    expected = {
-        "prepare": ("RunChunkKdaPrepare", "ChunkKdaFwdPrepareKernel"),
-        "post_wu": ("RunChunkKdaPostWu", "ChunkKdaFwdPostWuKernel"),
-        "output": ("RunChunkKdaOutput", "ChunkKdaFwdFinalizeKernel"),
-    }
-    for stage, path in STAGE_KERNELS.items():
-        entry = path.read_text(encoding="utf-8")
-        implementation_path = STAGE_IMPLEMENTATIONS[stage]
-        implementation = implementation_path.read_text(encoding="utf-8")
-        runner, kernel_class = expected[stage]
-        assert f'#include "{implementation_path.name}"' in entry
-        assert runner in entry and runner in implementation
-        assert kernel_class in implementation
-        assert "KdaPhase" not in implementation
-        assert "RunChunkKdaFused" not in implementation
-        assert "SyncAll" not in entry and "SyncAll" not in implementation
-        for other_stage, (other_runner, other_class) in expected.items():
-            if other_stage != stage:
-                assert other_runner not in entry and other_runner not in implementation
-                assert other_class not in implementation
+    entry = KERNEL_ENTRY.read_text(encoding="utf-8")
+    assert entry.count('extern "C" __global__ __aicore__ void chunk_kda_fwd(') == 1
+    assert '#include "arch35/chunk_kda_fwd_impl.h"' in entry
+    assert not (OP_ROOT / "op_kernel/chunk_kda_fwd_impl.h").exists()
 
-    direct = DIRECT_SOURCE.read_text(encoding="utf-8")
-    for implementation_path in STAGE_IMPLEMENTATIONS.values():
-        assert implementation_path.as_posix().split("fla/", 1)[1] in direct
-    assert "common/kda/chunk_kda_fwd_kernel.hpp" not in direct
+    common = KERNEL_COMMON.read_text(encoding="utf-8")
+    prepare = ARCH35_STAGE_IMPLEMENTATIONS["prepare"].read_text(encoding="utf-8")
+    assert '#include "chunk_kda_fwd_prepare.h"' in common
+    assert '#include "arch35/chunk_kda_fwd_prepare.h"' in common
+    assert '#include "chunk_kda_fwd_finalize.h"' in common
+    assert '#include "arch35/chunk_kda_fwd_finalize.h"' in common
+    assert '#include "chunk_kda_fwd_post_wu.h"' in prepare
+    assert "common/kda/chunk_kda_fwd_kernel.hpp" not in common
+
+    for path in GENERIC_STAGE_IMPLEMENTATIONS.values():
+        generic = path.read_text(encoding="utf-8")
+        assert "__CCE_AICORE__" not in generic
+        assert "A5" not in generic
+        assert "Arch35" not in generic
 
 
-def test_each_stage_declares_generated_matmul_workspace_dependency():
-    for path in STAGE_KERNELS.values():
+def test_mode4_cross_core_sync_is_isolated_to_arch35():
+    generic_sources = [
+        KERNEL_ENTRY,
+        KERNEL_COMMON,
+        *GENERIC_STAGE_IMPLEMENTATIONS.values(),
+    ]
+    for path in generic_sources:
         text = path.read_text(encoding="utf-8")
-        assert '#include "lib/matmul_intf.h"' in text
+        assert "CrossCoreSetFlag<0x4" not in text
+        assert "CrossCoreWaitFlag<0x4" not in text
+
+    arch35_sources = [
+        ARCH35_KERNEL,
+        ARCH35_FWD_H,
+        *ARCH35_STAGE_IMPLEMENTATIONS.values(),
+    ]
+    arch35_text = "\n".join(path.read_text(encoding="utf-8") for path in arch35_sources)
+    assert "CrossCoreSetFlag<0x4" in arch35_text
+    assert "CrossCoreWaitFlag<0x4" in arch35_text
 
 
-def test_each_stage_tiling_owns_only_its_workspace():
-    expected = {
-        "prepare": "prepareScratchOffset",
-        "post_wu": "postWuScratchOffset",
-        "output": "outputScratchOffset",
-    }
-    for stage, path in STAGE_TILINGS.items():
-        text = path.read_text(encoding="utf-8")
-        assert expected[stage] in text
-        assert "fwdH" not in text
-        for other_stage, field in expected.items():
-            if other_stage != stage:
-                assert field not in text
-
-
-def test_l0_queues_standalone_fwd_h_between_kda_stages():
+def test_tiling_key_selects_shape_family_independently_of_platform():
+    tiling = TILING_ENTRY.read_text(encoding="utf-8")
+    arch35 = ARCH35_TILING.read_text(encoding="utf-8")
     l0 = (OP_ROOT / "op_host/op_api/chunk_kda_fwd.cpp").read_text(encoding="utf-8")
-    launches = (
-        l0.index("ADD_TO_LAUNCHER_LIST_AICORE(\n        ChunkKdaFwdPrepare"),
-        l0.index("ADD_TO_LAUNCHER_LIST_AICORE(\n        ChunkKdaFwdPostWu"),
-        l0.index("auto hResult = ChunkGatedDeltaRuleFwdH("),
-        l0.index("ADD_TO_LAUNCHER_LIST_AICORE(\n        ChunkKdaFwdFinalize"),
+    op_def = (OP_ROOT / "op_host/chunk_kda_fwd_def.cpp").read_text(encoding="utf-8")
+
+    for field in (
+        "prepareScratchOffset",
+        "postWuScratchOffset",
+        "outputScratchOffset",
+        "vWorkspaceOffset",
+    ):
+        assert field in tiling
+    assert "const bool useChunk64K128V128Template" in tiling
+    scenario_condition = tiling.split(
+        "const bool useChunk64K128V128Template", 1
+    )[1].split(";", 1)[0]
+    assert "chunkSize == 64" in scenario_condition
+    assert "shape.kDim == 128" in scenario_condition
+    assert "shape.vDim == 128" in scenario_condition
+    assert "isAscend950" not in scenario_condition
+    assert "chunkSize == 64 && kDim == 128 && vDim == 128" in arch35
+    shape_condition = arch35.split("const bool shapeSupported", 1)[1].split(";", 1)[0]
+    assert "isAscend950" in shape_condition
+    assert "!isVarLen" not in shape_condition
+    assert "seqlen % chunkSize" not in shape_condition
+    assert "const bool denseAligned = !isVarLen && seqlen % chunkSize == 0;" in arch35
+    gate_selection = arch35.split("options.computeGateInPrepare =", 1)[1].split(";", 1)[0]
+    assert "denseAligned" not in gate_selection
+    assert "isVarLen" not in gate_selection
+    assert "enabled" not in arch35
+    for gate_condition in (
+        "qIsBf16",
+        "rawGIsFp32",
+        "hasALog",
+        "useGateInKernel",
+        "safeGate",
+    ):
+        assert gate_condition in arch35
+    for private_attr in (
+        "logical_batch",
+        "logical_seqlen",
+        "logical_q_heads",
+        "defer_gate_cumsum",
+        "enablePrivateA5Path",
+        "store_qg",
+    ):
+        assert private_attr not in op_def
+    for private_attr in (
+        "logical_batch",
+        "logical_seqlen",
+        "logical_q_heads",
+        "defer_gate_cumsum",
+        "store_qg",
+    ):
+        assert private_attr not in l0
+    assert 'AddConfig("ascend950", config)' in op_def
+    assert 'AddConfig("ascend910b", config)' in op_def
+    assert 'AddConfig("ascend910_93", config)' in op_def
+
+
+def test_arch35_key1_stub_matches_public_kernel_tensor_address_count():
+    entry = KERNEL_ENTRY.read_text(encoding="utf-8")
+    stub = entry.split(
+        "#elif defined(__CCE_AICORE__) && __CCE_AICORE__ == 310", 1
+    )[1].split("#endif", 1)[0]
+    signature = stub.split("DispatchArch35SafeGate(", 1)[1].split(")", 1)[0]
+    assert signature.count("GM_ADDR") == 22
+
+
+def test_optional_output_workspace_uses_ir_instantiation_state():
+    tiling = TILING_ENTRY.read_text(encoding="utf-8")
+    has_output = tiling.split(
+        "bool HasOutput(gert::TilingContext *context, size_t index)", 1
+    )[1].split("struct ShapeInfo", 1)[0]
+
+    assert "GetIrOutputInstanceInfo(index)" in has_output
+    assert "GetInstanceNum() == 0" in has_output
+    assert "GetOutputShape(instanceInfo->GetInstanceStart())" in has_output
+    assert "GetShapeSize() != 1" in has_output
+    assert "GetOutputDesc(index)" not in has_output
+
+    kernel = KERNEL_COMMON.read_text(encoding="utf-8")
+    assert "return storeOutput ? output : userWorkspace + offset;" in kernel
+
+    aclnn = (OP_ROOT / "op_host/op_api/aclnn_chunk_kda_fwd.cpp").read_text(
+        encoding="utf-8"
     )
-    assert launches == tuple(sorted(launches))
-    assert "kgOut, wOut, uOut, nullptr, gk, initialStateOptional" in l0
-    assert "chunkIndicesOptional, outputFinalState, chunkSize, hOut, vNewOut" in l0
-    assert "neutralGForH" not in l0
-    assert "RunChunkKdaFused" not in l0
+    assert "const op::Shape placeholderShape = MakeShape({1});" in aclnn
+    assert "usePrivateA5Path" not in aclnn
+    for export in ("wExport", "uExport", "qgExport", "kgExport", "vNewExport"):
+        assert f"{export} == nullptr" in aclnn
+        assert "AllocTensor(executorPtr, placeholderShape" in aclnn
+    assert "outputFinalState ? stateShape4 : placeholderShape" in aclnn
+    assert "hExport == nullptr ? placeholderShape : hShape5" in aclnn
+
+
+def test_varlen_and_tail_use_the_same_physical_l0():
+    l0 = (OP_ROOT / "op_host/op_api/chunk_kda_fwd.cpp").read_text(encoding="utf-8")
+    assert l0.count("l0op::ChunkKdaFwd(") == 0
+    assert l0.count("OP_TYPE_REGISTER(ChunkKdaFwd);") == 1
+    assert l0.count("ADD_TO_LAUNCHER_LIST_AICORE(") == 1
+    for stage in ("ChunkKdaFwdPrepare", "ChunkKdaFwdPostWu", "ChunkKdaFwdFinalize"):
+        assert stage not in l0
+
+
+def test_l0_keeps_the_public_result_contract():
+    l0 = (OP_ROOT / "op_host/op_api/chunk_kda_fwd.cpp").read_text(encoding="utf-8")
+    aclnn = (OP_ROOT / "op_host/op_api/aclnn_chunk_kda_fwd.cpp").read_text(
+        encoding="utf-8"
+    )
+    for output in (
+        "attnOut",
+        "finalStateOut",
+        "gk",
+        "aqkOut",
+        "akkOut",
+        "wOut",
+        "uOut",
+        "qgOut",
+        "kgOut",
+        "vNewOut",
+        "hOut",
+    ):
+        assert output in l0
+    assert "params.gkOut" in aclnn and "gkCompute" in aclnn
+    assert "OP_TYPE_REGISTER(ChunkKdaFwd);" in l0
+    for stage in ("ChunkKdaFwdPrepare", "ChunkKdaFwdPostWu", "ChunkKdaFwdFinalize"):
+        assert f"OP_TYPE_REGISTER({stage});" not in l0
+        assert f"ADD_TO_LAUNCHER_LIST_AICORE({stage}" not in l0
+    assert "ChunkKdaFwdFusedArch35" not in l0
+
+
+def test_prepare_post_wu_fusion_stays_inside_chunk_kda_fwd():
+    common = KERNEL_COMMON.read_text(encoding="utf-8")
+    prepare = STAGE_IMPLEMENTATIONS["prepare"].read_text(encoding="utf-8")
+    post_wu = STAGE_IMPLEMENTATIONS["post_wu"].read_text(encoding="utf-8")
+    arch35 = ARCH35_TILING.read_text(encoding="utf-8")
+
+    assert "op.ProcessAicFused(postWu);" in prepare
+    assert "if (!tiling.fusePostWu && !tiling.fusePostWuIntoFwdH)" in common
+    assert "const bool canFusePreparePostWu =" in arch35
+    assert "denseAligned && qIsBf16 && safeGate && vHeads % 2 == 0;" in arch35
+    assert "options.useDenseFwdH = denseAligned && qIsBf16;" in arch35
+    fuse_into_selection = arch35.split(
+        "options.fusePostWuIntoFwdH =", 1
+    )[1].split(";", 1)[0]
+    assert "canFusePreparePostWu" in fuse_into_selection
+    fuse_selection = arch35.split("options.fusePostWu =", 1)[1].split(";", 1)[0]
+    assert "canFusePreparePostWu" in fuse_selection
+    assert "denseAligned" not in fuse_selection
+    assert "options.fusePostWu" in arch35
+    assert "options.fusePostWuIntoFwdH" in arch35
+    assert "batchChunkIdx" not in prepare and "batchEnd" in prepare
+    assert "ProcessPreparedFullHeadPairBatchArch35" in post_wu
+    assert "batchEnd[task] - batchStart[task] == BT_" in post_wu
+    assert "ProcessPreparedTailHeadPairArch35" in post_wu
+    assert "if (curT < BT_)" in post_wu
+    assert "ComputeTailWuVector(" in post_wu
+
+
+def test_u_seed_does_not_alias_post_wu_output():
+    common = KERNEL_COMMON.read_text(encoding="utf-8")
+    assert "GM_ADDR uSeed;" in common
+    assert "userWorkspace + tiling.outputScratchOffset" in common
+    assert "tiling.fusePostWu || tiling.fusePostWuIntoFwdH" in common
+    assert "addresses.w, akk, uSeed" in common
+    assert "addresses.w, addresses.u, addresses.kg" in common
+
+
+def test_generic_prepare_reads_sequence_major_inputs_with_head_stride():
+    prepare = GENERIC_STAGE_IMPLEMENTATIONS["prepare"].read_text(encoding="utf-8")
+    assert "inputSequenceMajor_ = tiling.inputSequenceMajor;" in prepare
+    assert "return ((b * T_ + t) * H_ + h) * K_ + d;" in prepare
+    assert "return ((b * T_ + t) * HV_ + hv) * V_ + d;" in prepare
+    assert "CopyRowsIn(qTyped, q_, QOffset" in prepare
+    assert "inputSequenceMajor_ ? H_ * K_ : K_" in prepare
+    assert "sourceSequenceMajor ? HV_ * dim : dim" in prepare
+    assert "matrixLocal, inputSequenceMajor_" in prepare
 
 
 def test_intermediate_outputs_keep_canonical_bnsd_graph_views_between_stages():
@@ -134,17 +292,19 @@ def test_intermediate_outputs_keep_canonical_bnsd_graph_views_between_stages():
         assert f"AsRank4({compute}," in aclnn
         assert f"Transpose(params.{output}" not in aclnn
     optional_names = {
-        "wOut": ("wExport", "wCompute"),
-        "uOut": ("uExport", "uCompute"),
-        "qgOut": ("qgExport", "qgCompute"),
-        "kgOut": ("kgExport", "kgCompute"),
-        "vNewOut": ("vNewExport", "vNewCompute"),
-        "hOut": ("hExport", "hCompute"),
+        "wOut": "wExport",
+        "uOut": "uExport",
+        "qgOut": "qgExport",
+        "kgOut": "kgExport",
+        "vNewOut": "vNewExport",
+        "hOut": "hExport",
     }
-    for output, (export, compute) in optional_names.items():
+    for output, export in optional_names.items():
         assert f"const aclTensor *{export} = params.{output};" in aclnn
-        assert f"const aclTensor *{compute} = AllocTensor(" in aclnn
         assert f"Transpose(params.{output}" not in aclnn
+    assert "const aclTensor *hCompute = AllocTensor(" in aclnn
+    for compute in ("wCompute", "uCompute", "qgCompute", "kgCompute", "vNewCompute"):
+        assert f"const aclTensor *{compute}" in aclnn
     assert "MakeShape({info.batch, info.hvNum, info.seqlen" in aclnn
     assert "MakeShape({info.batch, info.hvNum, info.totalChunks" in aclnn
     assert "MakeShape({info.batch, info.totalChunks, info.hvNum" in aclnn
@@ -161,17 +321,74 @@ def test_safe_gate_is_supported_across_public_and_direct_routes():
         ROOT / "torch_custom/fla_npu/op_plugin/ops/opapi/FLANpuOpApi.cpp"
     ).read_text(encoding="utf-8")
     direct = DIRECT_SOURCE.read_text(encoding="utf-8")
-    prepare = STAGE_KERNELS["prepare"].read_text(encoding="utf-8")
+    prepare = KERNEL_ENTRY.read_text(encoding="utf-8")
 
     assert "safe_gate is reserved" not in aclnn_runtime
     assert "safe_gate=true is not supported" not in legacy_runtime
     assert "ctypes.c_bool(safe_gate)" in aclnn_runtime
     assert "bool safe_gate=False" in direct
-    assert "RunChunkKdaPrepare<true" in prepare
-    assert "RunChunkKdaPrepare<false" in prepare
+    assert "arch35::Run<true" in prepare
+    assert "arch35::Run<false" in prepare
+    assert "DispatchGeneric<true" in prepare
+    assert "DispatchGeneric<false" in prepare
     assert "ScoreRefBlockSize" in STAGE_IMPLEMENTATIONS["prepare"].read_text(
         encoding="utf-8"
     )
+
+
+def test_typical_chunk64_k128_v128_uses_internal_prepare_specialization():
+    prepare_entry = KERNEL_ENTRY.read_text(encoding="utf-8")
+    prepare_impl = STAGE_IMPLEMENTATIONS["prepare"].read_text(encoding="utf-8")
+    prepare_tiling = TILING_ENTRY.read_text(encoding="utf-8")
+
+    assert "TILING_KEY_IS(2)" in prepare_entry
+    assert "if (TILING_KEY_IS(1))" in prepare_entry
+    assert "else if (TILING_KEY_IS(2))" in prepare_entry
+    assert "TILING_KEY_VAR == 2UL" in prepare_entry
+    assert "KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_2);" in prepare_entry
+    assert "KERNEL_TASK_TYPE(1, KERNEL_TYPE_MIX_AIC_1_2);" in prepare_entry
+    assert "KERNEL_TASK_TYPE(2, KERNEL_TYPE_MIX_AIC_1_2);" in prepare_entry
+    assert "DispatchArch35SafeGate" in prepare_entry
+    assert "DispatchGenericSafeGate" in prepare_entry
+    assert "ChunkKdaFwdTilingData, 64, 128, 128" in prepare_entry
+    assert "ConfigureChunkKdaFwdArch35" in prepare_tiling
+    assert "SetTilingKey(useChunk64K128V128Template ? 2 : 1)" in prepare_tiling
+    key2_branch = prepare_entry.split("else if (TILING_KEY_IS(2))", 1)[1]
+    assert "DispatchArch35SafeGate" in key2_branch
+    assert "DispatchGenericSafeGate" in key2_branch
+    assert "uint32_t COMPILE_BT = 0" in prepare_impl
+    assert "COMPILE_K == 0 ? tiling.kHeadDim : COMPILE_K" in prepare_impl
+
+
+def test_a5_regbase_triangular_state_update_orders_dependent_ub_rows():
+    prepare = STAGE_IMPLEMENTATIONS["prepare"].read_text(encoding="utf-8")
+    state_update = prepare.split(
+        "static __simd_vf__ inline void ForwardSubDiag16Regbase", 1
+    )[1].split("static __simd_vf__ inline void ApplyKdaRowScaleRegbase", 1)[0]
+
+    assert state_update.count("sourceRow < row") >= 2
+    assert state_update.count(
+        "LocalMemBar<MemType::VEC_STORE, MemType::VEC_LOAD>()"
+    ) >= 2
+
+
+def test_a5_fwd_h_reads_predecayed_vector_gate_k_from_workspace_without_redecay():
+    kernel = (
+        ROOT
+        / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/"
+        "op_kernel/arch35/gemm/kernel/gdn_fwd_h_kernel.hpp"
+    ).read_text(encoding="utf-8")
+    epilogue = (
+        ROOT
+        / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/"
+        "op_kernel/arch35/epilogue/block/block_epilogue_gdn_fwdh_vnew.hpp"
+    ).read_text(encoding="utf-8")
+
+    assert kernel.count("cube2OffsetK = kGated ? cube2Offsets.kDecayWorkOffset") == 2
+    assert kernel.count("auto tensorK = kGated") >= 2
+    assert epilogue.count("if constexpr (kGated)") >= 2
+    assert "KDA passes kg = k * exp2(g_last - gk). Keep that decay exactly once." in epilogue
+    assert epilogue.count("Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(vec1Done)") >= 4
 
 
 def test_fp16_score_pipeline_does_not_fall_back_to_two_row_cube_tiles():
@@ -279,10 +496,11 @@ def test_prepare_uses_a5_regbase_gate_math_with_a2_a3_fallback():
     assert '#include "kernel_utils/vector/regbase.hpp"' in prepare
     assert "static __simd_vf__ inline void PrepareKdaGateQwRegbase" in prepare
     assert "static __simd_vf__ inline void PrepareKdaGateKgRegbase" in prepare
-    assert "PrepareKdaGateQwKgRegbase<T, SCORE_T, GK_T, true, true>" in prepare
-    assert "PrepareKdaGateQwKgRegbase<T, SCORE_T, GK_T, true, false>" in prepare
-    assert "PrepareKdaGateQwKgRegbase<T, T, GK_T, true, false>" in prepare
-    assert "PrepareKdaGateQwKgRegbase<T, T, GK_T, false, false>" in prepare
+    assert "T, SCORE_T, GK_T, true, true, exportFinalKg, true>" in prepare
+    assert "PrepareKdaGateQwKgRegbase<T, SCORE_T, GK_T, true, true," in prepare
+    assert "PrepareKdaGateQwKgRegbase<T, SCORE_T, GK_T, true, false, false>" in prepare
+    assert "PrepareKdaGateQwKgRegbase<T, T, GK_T, true, false, false>" in prepare
+    assert "PrepareKdaGateQwKgRegbase<T, T, GK_T, false, false, false>" in prepare
     assert "ClampKdaGateRegbaseOutput" in prepare
     assert "KDA_EXP_INPUT_MAX" in prepare
     assert "KDA_EXP_INPUT_MIN" in prepare
@@ -291,15 +509,85 @@ def test_prepare_uses_a5_regbase_gate_math_with_a2_a3_fallback():
     assert "Cast(qTyped, outFp32, RoundMode::CAST_RINT" in prepare
 
 
-def test_a5_fused_post_wu_protects_l0c_reuse_with_fix_to_cube_events():
+def test_a5_typical_post_wu_uses_regbase_kg_double_buffer():
     post_wu = STAGE_IMPLEMENTATIONS["post_wu"].read_text(encoding="utf-8")
-    fused = post_wu.split(
-        "__aicore__ inline void ComputePostWuCubeFusedA5", 1
-    )[1].split("__aicore__ inline void ComputePostWuCube(", 1)[0]
+    post_aiv = post_wu.split(
+        "__aicore__ inline void ProcessChunkPostAiv", 1
+    )[1].split("__aicore__ inline void ProcessChunkPostAic", 1)[0]
 
-    assert fused.count("SetFlag<HardEvent::FIX_M>(KDA_POST_EVENT_FIX)") == 2
-    assert fused.count("WaitFlag<HardEvent::FIX_M>(KDA_POST_EVENT_FIX)") == 2
-    assert "FIX_MTE2>(KDA_POST_EVENT_FIX)" not in fused
+    assert '#include "kernel_utils/vector/regbase.hpp"' in post_wu
+    assert "KDA_TYPICAL_GATE_TILE_ROWS = 16" in post_wu
+    assert "KDA_TYPICAL_GATE_PIPELINE_ROWS = 32" in post_wu
+    assert "KDA_TYPICAL_GATE_PIPELINE_STAGES = 3" in post_wu
+    assert "ComputePostKdaKgRegbase" in post_wu
+    assert "PrefetchTypicalKg(slot ^ 1" in post_wu
+    assert "ProcessPostAivPipelineArch35" in post_wu
+    assert "PrefetchTypicalKgPipeline" in post_wu
+    assert "TypicalGatePipelineRef" in post_wu
+    assert "CanPipelineTypicalKg" in post_wu
+    assert "if (UseTypicalPostWuGate(curT))" in post_aiv
+    assert "ComputeTypicalKg" in post_aiv
+    assert "CrossCoreWaitFlagWithReverse" not in post_aiv.split("#else", 1)[0]
+
+
+def test_a5_post_wu_tail_uses_two_slot_arch35_pipeline_with_bounded_tiles():
+    post_wu = STAGE_IMPLEMENTATIONS["post_wu"].read_text(encoding="utf-8")
+    full_pipeline_dispatch = post_wu.split(
+        "__aicore__ inline bool UseFullPostWuPipelineArch35", 1
+    )[1].split("__aicore__ inline void ComputePostWuCubeFusedArch35", 1)[0]
+    tail_pipeline = post_wu.split(
+        "__aicore__ inline void ProcessPreparedTailHeadPairArch35", 1
+    )[1].split("__aicore__ inline void ProcessPreparedHeadPairBatchArch35", 1)[0]
+    prefetch = post_wu.split(
+        "__aicore__ inline void PrefetchPostWuPipelineArch35", 1
+    )[1].split("__aicore__ inline void PrefetchPostWuPipelineU", 1)[0]
+    bounded_mmad = post_wu.split(
+        "__aicore__ inline void ComputePrefetchedPostWuPipelineArch35", 1
+    )[1].split("__aicore__ inline void ComputePostWuCube", 1)[0]
+
+    assert "curT == 64" in full_pipeline_dispatch
+    assert "InitializePostWuPipelineEvents();" in tail_pipeline
+    assert "lane < KDA_POST_HEAD_PAIR_LANES" in tail_pipeline
+    assert "start, curT, false" in tail_pipeline
+    assert "FinalizePostWuPipelineEvents(KDA_POST_HEAD_PAIR_LANES);" in tail_pipeline
+    assert "const uint32_t m = static_cast<uint32_t>(curT);" in prefetch
+    assert "const uint32_t k = static_cast<uint32_t>(curT);" in prefetch
+    assert "const uint32_t m = static_cast<uint32_t>(curT);" in bounded_mmad
+    assert "const uint32_t k = static_cast<uint32_t>(curT);" in bounded_mmad
+    assert "copyL0CToDst(blockWOut, tileL0CW);" in bounded_mmad
+    assert "copyL0CToDst(blockUOut, tileL0CU);" in bounded_mmad
+
+
+def test_a5_post_wu_initializes_only_slots_consumed_by_each_full_run():
+    post_wu = STAGE_IMPLEMENTATIONS["post_wu"].read_text(encoding="utf-8")
+    aic_pipeline = post_wu.split(
+        "__aicore__ inline void ProcessPostAicPipelineArch35", 1
+    )[1].split("#endif", 1)[0]
+
+    assert "InitializePostWuPipelineSlot(slot);" in aic_pipeline
+    assert "InitializePostWuPipelineEvents();" not in aic_pipeline
+    assert "if (!reuseSlot) {" in aic_pipeline
+    assert "InitializePostWuPipelineSlot(nextSlot);" in aic_pipeline
+    assert aic_pipeline.index("InitializePostWuPipelineSlot(nextSlot);") < aic_pipeline.index(
+        "PrefetchPostWuPipelineArch35(\n                        resource, nextSlot"
+    )
+
+
+def test_a5_finalize_allocates_each_tail_scalar_event_from_its_own_pool():
+    finalize = STAGE_IMPLEMENTATIONS["output"].read_text(encoding="utf-8")
+    assert "vToSEvent_ = pipe_->AllocEventID<HardEvent::V_S>();" in finalize
+    assert "sToVEvent_ = pipe_->AllocEventID<HardEvent::S_V>();" in finalize
+    assert "sToMte2Event_ = pipe_->AllocEventID<HardEvent::S_MTE2>();" in finalize
+    assert "pipe_->ReleaseEventID<HardEvent::V_S>(vToSEvent_);" in finalize
+    assert "pipe_->ReleaseEventID<HardEvent::S_V>(sToVEvent_);" in finalize
+    assert "pipe_->ReleaseEventID<HardEvent::S_MTE2>(sToMte2Event_);" in finalize
+    tail = finalize.split("__aicore__ inline void ComputeTailLocalRows", 1)[1].split(
+        "template <typename CopyT>", 1
+    )[0]
+    assert "SetFlag<HardEvent::V_S>(mte2ToVEvent_)" not in tail
+    assert tail.count("SetFlag<HardEvent::V_S>(vToSEvent_)") == 2
+    assert tail.count("SetFlag<HardEvent::S_V>(sToVEvent_)") == 2
+    assert tail.count("SetFlag<HardEvent::S_MTE2>(sToMte2Event_)") == 2
 
 
 def test_a5_finalize_stages_full_chunk_mmads_without_l0c_accumulation():
@@ -308,14 +596,14 @@ def test_a5_finalize_stages_full_chunk_mmads_without_l0c_accumulation():
         "__aicore__ inline void ComputeOutputCube(", 1
     )[1].split("using ElementA = T;", 1)[0]
     staged = finalize.split(
-        "__aicore__ inline void ComputeOutputCubeStagedA5", 1
-    )[1].split("__aicore__ inline void PrefetchOutputTileA5", 1)[0]
+        "__aicore__ inline void ComputeOutputCubeStagedArch35", 1
+    )[1].split("__aicore__ inline void PrefetchOutputTileArch35", 1)[0]
     writeback = finalize.split(
         "__aicore__ inline void FinalizeOutputRows(", 1
     )[1].split("__aicore__ inline bool ResolveFlatChunk(", 1)[0]
 
     assert "BT_ == 64 && curT == BT_" in dispatch
-    assert "ComputeOutputCubeStagedA5" in dispatch
+    assert "ComputeOutputCubeStagedArch35" in dispatch
     assert staged.count("true, 0b11") == 2
     assert "false, 0b11" not in staged
     assert "copyL0CToDst(blockO, tileL0C, 0b11);" in staged
@@ -367,7 +655,7 @@ def test_fwd_h_uses_fixed_scalar_exp_and_keywise_exp2_on_a2_and_a5():
         assert "AscendC::Exp" in update and "AscendC::Exp" in vnew
 
 
-def test_a2_fwd_h_keeps_fp32_recurrence_state():
+def test_a2_fwd_h_keeps_fp32_state_updates():
     fwd_h_kernel = (
         ROOT
         / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h"
@@ -383,7 +671,7 @@ def test_a2_fwd_h_keeps_fp32_recurrence_state():
         encoding="utf-8"
     )
 
-    assert "bool useFp32Recurrence" in update
+    assert "bool useFp32StateUpdate" in update
     assert "AscendC::GlobalTensor<FinalStateElement> initialState" in update
     assert "initialState[rowStart * outputStride]" in update
     assert "CopyGmToUb(calcUbTensor, finalStateThisTile" in update
@@ -398,9 +686,15 @@ def test_a2_fwd_h_keeps_fp32_recurrence_state():
     assert "if (waitWsFromMte3)" in empty_subblock
     assert "WaitFlag<AscendC::HardEvent::MTE3_MTE2>" in empty_subblock
     assert "SetFlag<AscendC::HardEvent::V_MTE2>" in empty_subblock
+    assert empty_subblock.index("CrossCoreWaitFlag") < empty_subblock.index(
+        "if (waitWsFromMte3)"
+    )
+    assert empty_subblock.index("if (waitWsFromMte3)") < empty_subblock.index(
+        "CrossCoreSetFlag<0x2"
+    )
 
 
-def test_a5_fwd_h_uses_canonical_h_recurrence_and_fp32_final_state():
+def test_a5_fwd_h_uses_canonical_h_state_update_and_fp32_final_state():
     fwd_h_kernel = (
         ROOT
         / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h"
@@ -418,35 +712,175 @@ def test_a5_fwd_h_uses_canonical_h_recurrence_and_fp32_final_state():
 
     assert "CopyGmToUb(hUbTensor, hInputThisTile" in update
     assert "AscendC::Cast(calcUbTensor, hUbTensor" in update
+    assert "bool useFp32StateUpdate" in update
+    assert "initialState[rowStart * outputStride]" in update
+    assert "CopyGmToUb(calcUbTensor, finalStateThisTile" in update
     assert "ApplyRowScale(calcUbTensor, gkLastUbTensor" in update
     assert "AscendC::Add<float>(" in update
     assert "hUpdateUbTensorThisTile, calcUbTensor, hUpdateUbTensorThisTile" in update
     assert "CopyUbToGm(finalStateThisTile, hUpdateUbTensor" in update
     assert "CopyUbToGm(hOutputThisTile, hUbTensor" in update
+    assert "uint32_t updateReadyEvent = EVENT_ID3 + pingpongFlag;" in update
+    assert "WaitFlag<AscendC::HardEvent::MTE3_MTE2>(updateReadyEvent)" in update
     assert "gmInitialState[vec2Offsets.initialStateOffset]" in kernel
-    assert "event0FromMte3[streamId] = vec2Offsets.isFinalState;" in kernel
+    assert "event0FromMte3[streamId] = true;" in kernel
     empty_subblock = vnew.split("if (rowBegin >= mActual) {", 1)[1].split(
         "return;", 1
     )[0]
     assert "if (waitWsFromMte3)" in empty_subblock
     assert "WaitFlag<AscendC::HardEvent::MTE3_MTE2>" in empty_subblock
     assert "SetFlag<AscendC::HardEvent::V_MTE2>" in empty_subblock
+    assert empty_subblock.index("CrossCoreWaitFlag") < empty_subblock.index(
+        "if (waitWsFromMte3)"
+    )
+    assert empty_subblock.index("if (waitWsFromMte3)") < empty_subblock.index(
+        "CrossCoreSetFlag<0x2"
+    )
 
 
-def test_kda_keeps_fp32_recurrence_when_final_state_is_not_returned():
+def test_a5_fwd_h_routes_sub_16_token_tail_away_from_cube_mmad():
+    fwd_h_kernel = (
+        ROOT
+        / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h"
+        / "op_kernel/arch35"
+    )
+    kernel = (fwd_h_kernel / "gemm/kernel/gdn_fwd_h_kernel.hpp").read_text(
+        encoding="utf-8"
+    )
+    update = (
+        fwd_h_kernel / "epilogue/block/block_epilogue_gdn_fwdh_update.hpp"
+    ).read_text(encoding="utf-8")
+    vnew = (
+        fwd_h_kernel / "epilogue/block/block_epilogue_gdn_fwdh_vnew.hpp"
+    ).read_text(encoding="utf-8")
+
+    assert kernel.count("blockTokens < 16") >= 6
+    assert "ComputeTailVWorkspace(" in kernel
+    assert "ComputeTailHWorkspace(" in kernel
+    assert "vec1Offsets, EVENT_ID3 + (i == 0 ? 0 : pongBaseEvent)" in kernel
+    assert "vec2Offsets, EVENT_ID3 + (i == 0 ? 0 : pongBaseEvent)" in kernel
+    assert "cubeBlockScheduler.cube1Done[streamId]" in kernel
+    assert "cubeBlockScheduler.cube2Done[streamId]" in kernel
+    assert "bool useDirectForTask = useDirectFp32Ub && !tailVectorPath;" in kernel
+    assert "bool cube1AlreadyWaited" in vnew
+    assert "else if (!cube1AlreadyWaited)" in vnew
+    assert "bool cube2AlreadyWaited" in update
+    assert "else if (!cube2AlreadyWaited)" in update
+
+
+def test_a5_fwd_h_uses_bounded_single_stage_cube_for_aligned_tail_rows():
+    kernel = (
+        ROOT
+        / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h"
+        / "op_kernel/arch35/gemm/kernel/gdn_fwd_h_kernel.hpp"
+    ).read_text(encoding="utf-8")
+
+    assert "MmadPingpongTlaMulti<ArchTag, true, false, 1>" in kernel
+    assert "BlockMmadWHTail" in kernel
+    assert "BlockMmadKVTail" in kernel
+    assert kernel.count("EmptyClass{}, true") == 2
+    assert "bool useBoundedMmad = isVariedLen || (seqlen % chunkSize != 0);" in kernel
+    assert kernel.count("seqlen % chunkSize == 0") == 2
+
+
+def test_a5_direct_ub_fwd_h_requires_enough_dense_tasks_for_started_cores():
+    kernel = (
+        ROOT
+        / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h"
+        / "op_kernel/arch35/gemm/kernel/gdn_fwd_h_kernel.hpp"
+    ).read_text(encoding="utf-8")
+
+    assert kernel.count(
+        "denseTaskCount >= AscendC::GetBlockNum()"
+    ) == 2
+
+
+def test_a5_generic_fwd_h_synchronizes_all_cores_before_stage_handshake():
+    kernel = (
+        ROOT
+        / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h"
+        / "op_kernel/arch35/gemm/kernel/gdn_fwd_h_kernel.hpp"
+    ).read_text(encoding="utf-8")
+    process_prefix = kernel.split("__aicore__ inline void Process()", 1)[1].split(
+        "if ASCEND_IS_AIC", 1
+    )[0]
+
+    assert "AscendC::SyncAll<false>();" in process_prefix
+    assert "if (isVariedLen)" not in process_prefix
+
+
+def test_a5_finalize_uses_fp32_vector_accumulation_for_sub_16_reduction():
+    finalize = (
+        OP_ROOT / "op_kernel/arch35/chunk_kda_fwd_finalize.h"
+    ).read_text(encoding="utf-8")
+
+    assert "constexpr uint32_t KDA_CUBE_MIN_REDUCTION = 16;" in finalize
+    assert "ComputeTailLocalRows" in finalize
+    assert "ComputeTailStateRows" in finalize
+    assert "preparedQG_" in finalize
+    assert "propagatedH_" in finalize
+    assert "coefficientTyped" in finalize
+    assert "coefficients.GetValue(j)" in finalize
+    assert "LoadScalarAsFloat" not in finalize
+    assert "HardEvent::V_S" in finalize
+    assert "HardEvent::S_V" in finalize
+    assert finalize.count("curT < KDA_CUBE_MIN_REDUCTION") >= 2
+
+
+def test_a5_fwd_h_tail_stages_w_coefficients_in_ub_before_scalar_read():
+    kernel = (
+        ROOT
+        / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h"
+        / "op_kernel/arch35/gemm/kernel/gdn_fwd_h_kernel.hpp"
+    ).read_text(encoding="utf-8")
+
+    assert "TAIL_WEIGHT_INPUT_OFFSET" in kernel
+    assert "TAIL_WEIGHT_FLOAT_OFFSET" in kernel
+    assert "weightFloatUb.GetValue(kIdx)" in kernel
+    tail_v_workspace = kernel.split("ComputeTailVWorkspace", 1)[1].split(
+        "ComputeTailHWorkspace", 1
+    )[0]
+    tail_h_workspace = kernel.split("ComputeTailHWorkspace", 1)[1].split(
+        "__aicore__ inline void Process()", 1
+    )[0]
+    assert "AscendC::ResetMask();" in tail_v_workspace
+    assert "AscendC::ResetMask();" in tail_h_workspace
+    assert "LoadScalarAsFloat" not in tail_v_workspace
+    assert "weightFloatUb.GetValue(kRow)" in tail_h_workspace
+    assert "LoadScalarAsFloat" not in tail_h_workspace
+    assert "HardEvent::V_S" in kernel
+    assert "HardEvent::S_V" in kernel
+    assert "HardEvent::V_MTE2" in tail_v_workspace
+    assert "HardEvent::V_MTE2" in tail_h_workspace
+    assert "WaitFlag<AscendC::HardEvent::V_MTE2>(tailEventId)" in tail_v_workspace
+    assert "SetFlag<AscendC::HardEvent::V_MTE2>(tailEventId)" in tail_v_workspace
+    assert "WaitFlag<AscendC::HardEvent::V_MTE2>(tailEventId)" in tail_h_workspace
+    assert "SetFlag<AscendC::HardEvent::V_MTE2>(tailEventId)" in tail_h_workspace
+    assert "HardEvent::MTE3_MTE2>(tailEventId)" in tail_v_workspace
+    assert "HardEvent::MTE3_MTE2>(tailEventId)" in tail_h_workspace
+    assert "EVENT_ID3 + (i == 0 ? 0 : pongBaseEvent)" in kernel
+
+
+def test_kda_keeps_fp32_state_update_when_final_state_is_not_returned():
     aclnn = (OP_ROOT / "op_host/op_api/aclnn_chunk_kda_fwd.cpp").read_text(
         encoding="utf-8"
     )
     l0 = (OP_ROOT / "op_host/op_api/chunk_kda_fwd.cpp").read_text(encoding="utf-8")
+    tiling = TILING_ENTRY.read_text(encoding="utf-8")
+    kernel = KERNEL_COMMON.read_text(encoding="utf-8")
     assert "const bool outputFinalState = params.finalStateOut != nullptr;" in aclnn
-    assert "const aclTensor *finalStateCompute = AllocTensor(" in aclnn
+    assert "outputFinalState ? stateShape4 : placeholderShape" in aclnn
     assert "MakeShape({info.seqNum, info.hvNum, info.kDim, info.vDim})" in aclnn
-    assert "AllocTensor(executorPtr, stateShape4, DataType::DT_FLOAT)" in aclnn
-    assert "finalStateCompute, aqkCompute," in aclnn
-    assert "chunkIndicesOptional, outputFinalState, chunkSize, hOut, vNewOut," in l0
+    assert "qHead, kHead, vHead, gHead, betaHead" in aclnn
+    assert "params.lowerBound, attnCompute, finalStateCompute, gkCompute" in aclnn
+    assert "finalStateStorageOffset = storeFinalState ? 0" in tiling
+    assert "stateElements * sizeof(float)" in tiling
+    assert "tiling.finalStateStorageOffset," in kernel
+    assert "tiling.storeFinalState" in kernel
+    assert "OP_OUTPUT(attnOut, finalStateOut, gkOut, aqkOut" in l0
 
 
-def test_aclnn_l2_optional_outputs_are_pointer_driven():
+def test_aclnn_l2_optional_outputs_are_publicly_pointer_driven():
     aclnn = (OP_ROOT / "op_host/op_api/aclnn_chunk_kda_fwd.cpp").read_text(
         encoding="utf-8"
     )
@@ -471,26 +905,16 @@ def test_aclnn_l2_optional_outputs_are_pointer_driven():
     assert "params.useGateInKernel || params.gkOut != nullptr" not in aclnn
     assert "const aclTensor *gkCompute = params.gkOut;" in aclnn
     assert "if (gkCompute == nullptr)" in aclnn
-    for compute_name in (
-        "wCompute",
-        "uCompute",
-        "qgCompute",
-        "kgCompute",
-        "vNewCompute",
-        "hCompute",
-    ):
-        assert f"const aclTensor *{compute_name} = AllocTensor(" in aclnn
-    for result_index, export_name in (
-        (4, "wExport"),
-        (5, "uExport"),
-        (6, "qgExport"),
-        (7, "kgExport"),
-        (8, "vNewExport"),
-    ):
-        assert f"if ({export_name} != nullptr)" in aclnn
-        assert f"l0op::ViewCopy(result[{result_index}]" in aclnn
+    assert "AllocTensor(executorPtr, placeholderShape, DataType::DT_FLOAT)" in aclnn
+    for compute_name in ("wCompute", "uCompute", "qgCompute", "kgCompute", "vNewCompute"):
+        assert f"const aclTensor *{compute_name}" in aclnn
+    for export_name in ("wExport", "uExport", "qgExport", "kgExport", "vNewExport"):
+        assert export_name in aclnn
+    tiling = TILING_ENTRY.read_text(encoding="utf-8")
+    for store_name in ("storeGk", "storeW", "storeU", "storeQG", "storeKg", "storeVNew", "storeH"):
+        assert f"const bool {store_name} = HasOutput" in tiling
     assert "if (hExport != nullptr)" in aclnn
-    assert "const aclTensor *hResult = Transpose(result[9], hPerm, executorPtr);" in aclnn
+    assert "const aclTensor *hResult = Transpose(result[10], hPerm, executorPtr);" in aclnn
     assert "l0op::ViewCopy(hResult, hExport" in aclnn
 
 
@@ -563,35 +987,24 @@ def test_a5_fwd_h_kda_hot_path_uses_fused_dual_issue_regbase():
     assert "AscendC::LocalTensor<float> decayInput = scalarGated ?" in vnew
 
 
-def test_aqk_akk_share_one_l1_resident_right_matrix_slot():
+def test_aqk_akk_score_path_avoids_global_pipe_barrier():
     prepare = STAGE_IMPLEMENTATIONS["prepare"].read_text(encoding="utf-8")
-    resident_mmad = (
-        ROOT
-        / "fla/ops/ascendc/common/kernel_utils/block/block_mmad_pingpong_tla_multi.hpp"
-    ).read_text(encoding="utf-8")
-    assert "using KdaScoreDispatchPolicy" in prepare
-    assert "MmadPingpongTlaMulti<KdaArchTag, true, false, 1, true, 2, 1, 2, 2>" in prepare
-    assert "KdaScoreDispatchPolicy::ENABLE_L1_RESIDENT" in prepare
-    assert "KdaScoreDispatchPolicy::L1B_STAGES == 1" in prepare
     score_block = prepare.split(
-        "__aicore__ inline void ComputeRawAqkAkkCubeBlock", 1
+        "__aicore__ inline void ComputeRawAqkAkkCubeBlock(uint64_t b", 1
     )[1].split("__aicore__ inline bool UseAkkCubeSolve", 1)[0]
-    assert "BlockMmadTla<KdaScoreDispatchPolicy" in score_block
-    assert score_block.count("blockMmad(block") == 2
-    assert "blockMmad.preSetFlags();" in score_block
-    assert "blockMmad.finalWaitFlags();" in score_block
     assert "PipeBarrier<PIPE_ALL>()" not in score_block
-    assert resident_mmad.count("static_cast<uint32_t>(tla::get<0>(tensorTile") == 4
-    assert resident_mmad.count("static_cast<uint32_t>(tla::get<1>(tensorTile") == 4
 
 
 def test_a5_prepare_joins_both_aiv_subcores_before_shared_ready_signal():
     prepare = STAGE_IMPLEMENTATIONS["prepare"].read_text(encoding="utf-8")
     join = prepare.split(
-        "__aicore__ inline void JoinA5AivMte3()", 1
+        "__aicore__ inline void JoinAivMte3()", 1
     )[1].split("__aicore__ inline void RunAicAfterBothAivReady", 1)[0]
     assert "CrossCoreBarrier<0x1, PIPE_MTE3>();" in join
+    assert "if (!headPairMode_)" in join
     assert "PipeBarrier<PIPE_MTE3>();" in join
+    assert "headPairMode_ = KDA_ARCH35_ENABLE_HEAD_PAIR" in prepare
+    assert "if (headPairMode_ && !isAivOnly_)" in prepare
     run_after_join = prepare.split(
         "__aicore__ inline void RunAicAfterBothAivReady", 1
     )[1].split("__aicore__ inline void SignalAicSolveReady", 1)[0]
@@ -601,18 +1014,69 @@ def test_a5_prepare_joins_both_aiv_subcores_before_shared_ready_signal():
     score_loop = prepare.split(
         "__aicore__ inline void ProcessChunkPreAivFp32", 1
     )[1].split("Catlass::Arch::CrossCoreWaitFlagWithReverse<0x2, PIPE_MTE2>(scoreDoneFlag_);", 1)[0]
-    assert run_after_join.index("JoinA5AivMte3();") < run_after_join.index(
+    assert run_after_join.index("JoinAivMte3();") < run_after_join.index(
         "CrossCoreSetFlag<0x2, PIPE_MTE3>(syncReadyFlag_);"
     )
-    assert run_after_join.index("JoinA5AivMte3();") < run_after_join.index(
+    assert run_after_join.index("JoinAivMte3();") < run_after_join.index(
         "CrossCoreSetFlagWithReverse<0x2, PIPE_MTE3>(mchSyncReadyFlag_);"
     )
-    assert signal_solve.index("JoinA5AivMte3();") < signal_solve.index(
+    assert signal_solve.index("JoinAivMte3();") < signal_solve.index(
         "CrossCoreSetFlag<0x2, PIPE_MTE3>(syncReadyFlag_);"
     )
-    assert score_loop.rindex("JoinA5AivMte3();") < score_loop.rindex(
+    assert score_loop.rindex("JoinAivMte3();") < score_loop.rindex(
         "CrossCoreSetFlagWithReverse<0x2, PIPE_MTE3>(scoreReadyFlag_);"
     )
+
+
+def test_a5_prepare_exports_solved_akk_without_redundant_fp32_round_trip():
+    prepare = STAGE_IMPLEMENTATIONS["prepare"].read_text(encoding="utf-8")
+    finalize = prepare.split(
+        "__aicore__ inline void FinalizePrepareIntermediates", 1
+    )[1].split("__aicore__ inline bool ResolveFlatChunk", 1)[0]
+    finish_deferred = prepare.split(
+        "__aicore__ inline void FinishDeferredSafeChunk", 1
+    )[1].split("__aicore__ inline void FinishDeferredSafeChunkPair", 1)[0]
+    assert "uint64_t chunkIdx" in finalize
+    assert "SolveScratchOffset(b, hv, chunkIdx, KDA_SOLVE_SCRATCH_X)" in finalize
+    assert "CopyVectorIn(akkLocal, solveWorkspace_, xBase, matrixElems);" in finalize
+    assert "COMPILE_BT == 64 && COMPILE_K == 128 && COMPILE_V == 128" in finalize
+    assert "if constexpr (!(SAFE_GATE && COMPILE_BT == 64" in finish_deferred
+
+
+def test_a5_prepare_exports_masked_aqk_before_finalize_round_trip():
+    prepare = STAGE_IMPLEMENTATIONS["prepare"].read_text(encoding="utf-8")
+    solve_rows = prepare.split(
+        "__aicore__ inline void PrepareAqkAkkSolveInputRows", 1
+    )[1].split("__aicore__ inline void CubeGemmSolveSub", 1)[0]
+    finalize = prepare.split(
+        "__aicore__ inline void FinalizePrepareIntermediates", 1
+    )[1].split("__aicore__ inline bool ResolveFlatChunk", 1)[0]
+    assert "LocalTensor<T> aqkTyped = GateQTyped(0);" in solve_rows
+    assert "Muls(aqkMat, aqkMat, scale_" in solve_rows
+    assert "CopyVectorOut(o_, AOffset(b, hv, token, 0), aqkTyped" in solve_rows
+    assert "return;" in solve_rows
+    assert "if constexpr (!(SAFE_GATE && COMPILE_BT == 64" in finalize
+
+
+def test_a5_prepare_fuses_beta_w_and_v_into_score_factor_staging():
+    prepare = STAGE_IMPLEMENTATIONS["prepare"].read_text(encoding="utf-8")
+    regbase = prepare.split(
+        "static __simd_vf__ inline void PrepareKdaGateQwKgRegbase", 1
+    )[1].split("static __simd_vf__ inline void ForwardSubDiag16Regbase", 1)[0]
+    score_factors = prepare.split(
+        "__aicore__ inline void PrepareScoreFactorsBulk", 1
+    )[1].split("__aicore__ inline void PrepareGateProductsBulk", 1)[0]
+    finish_deferred = prepare.split(
+        "__aicore__ inline void FinishDeferredSafeChunk", 1
+    )[1].split("__aicore__ inline void FinishDeferredSafeChunkPair", 1)[0]
+    assert "return 2;" in prepare.split(
+        "__aicore__ inline constexpr uint64_t GateBufferDepth", 1
+    )[1].split("__aicore__ inline uint64_t GateInputSlotBytes", 1)[0]
+    assert "CastHalf2Float<InputT>" in regbase
+    assert "LoadAlign<float, LoadDist::DIST_BRC_B32>(betaReg, beta + row);" in regbase
+    assert "vDirect + offset" in regbase
+    assert "CopyVectorOut(vNew_" in score_factors
+    assert "HV_ % KDA_SCORE_LANES != 0" in finish_deferred
 
 
 def test_fwd_h_gk_only_path_skips_scalar_gate_scaling():
@@ -717,3 +1181,16 @@ def test_tiling_key_has_design_rationale():
     design = (OP_ROOT / "docs/design.md").read_text(encoding="utf-8")
     assert "模板化方案与 tiling key" in design
     assert "编译期" in design and "独立" in design
+
+
+def test_a5_gate_chunk_bulk_regbase_is_arch_guarded():
+    gate = (
+        ROOT
+        / "fla/ops/ascendc/kda/kda_gate_cumsum/op_kernel/kda_gate_cumsum_kernel.h"
+    ).read_text(encoding="utf-8")
+    marker = "__aicore__ inline void ProcessChunkBulkFp32("
+    arch_regions = gate.split(
+        "#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310"
+    )[1:]
+    guarded = next(region.split("#endif", 1)[0] for region in arch_regions if marker in region)
+    assert "AccumulateGateChunk128Regbase" in guarded.split(marker, 1)[1]

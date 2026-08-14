@@ -169,6 +169,7 @@ ge::graphStatus Tiling4ChunkGatedDeltaRuleFwdH(gert::TilingContext *context)
     tiling.set_dataType(plainTiling.dataType);
     tiling.set_stateDataType(plainTiling.stateDataType);
     tiling.set_gDataType(plainTiling.gDataType);
+    tiling.set_hasGk(plainTiling.hasGk);
     tiling.set_isVariedLen(plainTiling.isVariedLen);
     tiling.set_shapeBatch(plainTiling.shapeBatch);
     tiling.set_tokenBatch(plainTiling.tokenBatch);

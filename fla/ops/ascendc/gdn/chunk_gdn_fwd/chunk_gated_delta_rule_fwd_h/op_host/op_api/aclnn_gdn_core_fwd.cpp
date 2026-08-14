@@ -71,7 +71,7 @@ struct GdnCoreFwdParams {
     const aclTensor *aOut = nullptr;
 };
 
-op::Shape MakeShape(std::initializer_list<int64_t> dims)
+static op::Shape MakeShape(std::initializer_list<int64_t> dims)
 {
     op::Shape shape;
     for (int64_t dim : dims) {
@@ -80,31 +80,31 @@ op::Shape MakeShape(std::initializer_list<int64_t> dims)
     return shape;
 }
 
-const aclIntArray *MakePerm(std::initializer_list<int64_t> dims, aclOpExecutor *executor)
+static const aclIntArray *MakePerm(std::initializer_list<int64_t> dims, aclOpExecutor *executor)
 {
     return executor->AllocIntArray(dims.begin(), dims.size());
 }
 
-const aclTensor *TransposeContiguous(const aclTensor *tensor, std::initializer_list<int64_t> dims,
-                                     aclOpExecutor *executor)
+static const aclTensor *TransposeContiguous(const aclTensor *tensor, std::initializer_list<int64_t> dims,
+                                            aclOpExecutor *executor)
 {
     const aclTensor *permuted = l0op::Transpose(tensor, MakePerm(dims, executor), executor);
     return permuted == nullptr ? nullptr : l0op::Contiguous(permuted, executor);
 }
 
-int64_t Dim(const aclTensor *tensor, size_t index)
+static int64_t Dim(const aclTensor *tensor, size_t index)
 {
     return tensor->GetViewShape().GetDim(index);
 }
 
-int64_t SeqNum(const GdnCoreFwdParams &params)
+static int64_t SeqNum(const GdnCoreFwdParams &params)
 {
     return params.cuSeqlensOptional == nullptr
                ? Dim(params.q, 0)
                : static_cast<int64_t>(params.cuSeqlensOptional->Size()) - 1;
 }
 
-int64_t ExpectedChunks(const GdnCoreFwdParams &params)
+static int64_t ExpectedChunks(const GdnCoreFwdParams &params)
 {
     if (params.cuSeqlensOptional == nullptr) {
         return (Dim(params.q, 2) + params.chunkSize - 1) / params.chunkSize;
@@ -119,8 +119,8 @@ int64_t ExpectedChunks(const GdnCoreFwdParams &params)
     return total;
 }
 
-aclnnStatus CheckStateShape(const aclTensor *state, const char *name, int64_t seqNum, int64_t hv,
-                            int64_t kDim, int64_t vDim)
+static aclnnStatus CheckStateShape(const aclTensor *state, const char *name, int64_t seqNum, int64_t hv,
+                                   int64_t kDim, int64_t vDim)
 {
     if (state == nullptr) {
         return ACLNN_SUCCESS;
@@ -132,7 +132,7 @@ aclnnStatus CheckStateShape(const aclTensor *state, const char *name, int64_t se
     return ACLNN_SUCCESS;
 }
 
-aclnnStatus CheckMetadata(const GdnCoreFwdParams &params)
+static aclnnStatus CheckMetadata(const GdnCoreFwdParams &params)
 {
     if (params.cuSeqlensOptional == nullptr) {
         return ACLNN_SUCCESS;
@@ -167,7 +167,7 @@ aclnnStatus CheckMetadata(const GdnCoreFwdParams &params)
     return ACLNN_SUCCESS;
 }
 
-aclnnStatus MakeContiguous(const aclTensor *&tensor, aclOpExecutor *executor)
+static aclnnStatus MakeContiguous(const aclTensor *&tensor, aclOpExecutor *executor)
 {
     if (tensor == nullptr) {
         return ACLNN_SUCCESS;
@@ -184,7 +184,7 @@ aclnnStatus MakeContiguous(const aclTensor *&tensor, aclOpExecutor *executor)
         }                                 \
     } while (false)
 
-aclnnStatus CheckRank(const aclTensor *tensor, size_t rank, const char *name)
+static aclnnStatus CheckRank(const aclTensor *tensor, size_t rank, const char *name)
 {
     CHECK_COND(tensor != nullptr, ACLNN_ERR_PARAM_NULLPTR, "%s must not be nullptr.", name);
     CHECK_COND(tensor->GetViewShape().GetDimNum() == rank, ACLNN_ERR_PARAM_INVALID,
@@ -192,7 +192,7 @@ aclnnStatus CheckRank(const aclTensor *tensor, size_t rank, const char *name)
     return ACLNN_SUCCESS;
 }
 
-aclnnStatus CheckParams(const GdnCoreFwdParams &params, GdnCorePhase phase)
+static aclnnStatus CheckParams(const GdnCoreFwdParams &params, GdnCorePhase phase)
 {
     CHECK_RET(CheckRank(params.q, 4, "q") == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID);
     CHECK_RET(CheckRank(params.k, 4, "k") == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID);
@@ -289,7 +289,7 @@ aclnnStatus CheckParams(const GdnCoreFwdParams &params, GdnCorePhase phase)
     return ACLNN_SUCCESS;
 }
 
-int64_t TotalChunks(const GdnCoreFwdParams &params)
+static int64_t TotalChunks(const GdnCoreFwdParams &params)
 {
     return ExpectedChunks(params);
 }
@@ -339,14 +339,6 @@ static aclnnStatus GdnCoreFwdGetWorkspaceSizeImpl(
     const int64_t vDim = Dim(params.v, 3);
     const int64_t totalChunks = TotalChunks(params);
     CHECK_COND(totalChunks > 0, ACLNN_ERR_PARAM_INVALID, "total chunk count must be positive.");
-
-    const aclTensor *cuTensor = nullptr;
-    const aclTensor *chunkTensor = nullptr;
-    if (params.cuSeqlensOptional != nullptr) {
-        cuTensor = executorPtr->ConvertToTensor(params.cuSeqlensOptional, DataType::DT_INT64);
-        chunkTensor = executorPtr->ConvertToTensor(params.chunkIndicesOptional, DataType::DT_INT64);
-        CHECK_RET(cuTensor != nullptr && chunkTensor != nullptr, ACLNN_ERR_INNER_NULLPTR);
-    }
 
     const bool isPhase6 = phase == GdnCorePhase::PHASE_6_FUSED_CORE;
     auto gCumsumBht = isPhase6
@@ -436,7 +428,8 @@ static aclnnStatus GdnCoreFwdGetWorkspaceSizeImpl(
         GDN_STAGE_CHECK(gCumsum != nullptr && aForValueHeads != nullptr, 169103);
     } else {
         gCumsum = l0op::ChunkLocalCumsum(
-            gBht, cuTensor, chunkTensor, params.chunkSize, false, 1.0, true, "float32",
+            gBht, params.cuSeqlensOptional, params.chunkIndicesOptional,
+            params.chunkSize, false, 1.0, true, "float32",
             gCumsumBht, executorPtr);
         GDN_STAGE_CHECK(gCumsum != nullptr, 169103);
     }

@@ -88,7 +88,6 @@ void FillHMacroTiling(const ::ChunkGatedDeltaRuleFwdHTilingData &src,
     dst.set_dataType(src.dataType);
     dst.set_gDataType(src.gDataType);
     dst.set_stateDataType(src.stateDataType);
-    dst.set_hasGk(src.hasGk);
     dst.set_isVariedLen(src.isVariedLen);
     dst.set_shapeBatch(src.shapeBatch);
     dst.set_tokenBatch(src.tokenBatch);

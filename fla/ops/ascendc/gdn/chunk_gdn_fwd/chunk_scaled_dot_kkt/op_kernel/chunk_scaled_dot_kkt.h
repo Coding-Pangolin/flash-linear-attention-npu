@@ -352,10 +352,7 @@ private:
         if (rowCount <= 0) {
             return false;
         }
-        colCount = rowBegin + rowCount;
-        if (colCount > meta.valid) {
-            colCount = meta.valid;
-        }
+        colCount = BT_;
         return colCount > 0;
     }
 
@@ -418,8 +415,6 @@ private:
                 Catlass::Arch::CrossCoreWaitFlag(scoreDoneFlag_[scoreSlot]);
             }
             Catlass::Arch::Resource<KktArchTag> resource;
-            BlockMmad blockMmad(resource);
-            blockMmad.preSetFlags();
             for (int64_t batchIdx = 0; batchIdx < scoreGroupBatch; ++batchIdx) {
                 const int64_t scoreBlockTask = scoreGroupBase + batchIdx * usedAicNum_;
                 if (scoreBlockTask >= scoreBlockTaskNum) {
@@ -433,9 +428,11 @@ private:
                     continue;
                 }
                 const int64_t scoreOffset = GetScoreOffset(cubeIdx, scoreSlot, batchIdx);
+                BlockMmad blockMmad(resource);
+                blockMmad.preSetFlags();
                 ComputeCatlassScoreBlock(meta, rowBegin, rowCount, colCount, scoreOffset, blockMmad);
+                blockMmad.finalWaitFlags();
             }
-            blockMmad.finalWaitFlags();
             Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_FIX>(scoreReadyFlag_[scoreSlot]);
             ++scoreGroupSeq;
         }

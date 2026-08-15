@@ -346,7 +346,11 @@ at::Tensor npu_chunk_fwd_o(
     at::Tensor final_state_out;
     if (output_final_state_) {
         int N = cu_seqlens.has_value() ? cu_seqlens->size() - 1 : B;
-        auto state_options = initial_state.has_value() ? initial_state->options() : h_out.options();
+        // Kernel tiling uses fp32 state when initial_state is absent. Allocating
+        // bf16 here made V2 write float into a half-size buffer → NaN/Inf.
+        auto state_options = initial_state.has_value()
+            ? initial_state->options()
+            : h_out.options().dtype(at::kFloat);
         final_state_out = at::empty({N, HV, K, V}, state_options);
     } else {
         final_state_out = at::empty({1}, k.options());

@@ -103,16 +103,16 @@ bool MulOverflow(uint64_t a, uint64_t b, uint64_t *out)
     return false;
 }
 
-bool IsCatlassScoreSocSupported(platform_ascendc::SocVersion socVersion)
+bool IsCatlassScoreArchSupported(NpuArch npuArch)
 {
     // Keep CATLASS score on SOCs with a matching arch tag and validated cross-core pipeline.
-    return socVersion == platform_ascendc::SocVersion::ASCEND950;
+    return npuArch == NpuArch::DAV_3510;
 }
 
-uint64_t ScoreRowBlockSize(uint64_t bt, platform_ascendc::SocVersion socVersion)
+uint64_t ScoreRowBlockSize(uint64_t bt, NpuArch npuArch)
 {
     uint64_t rowBlock = static_cast<uint64_t>(NsChunkScaledDotKkt::SCORE_ROW_BLOCK_A2);
-    if (socVersion == platform_ascendc::SocVersion::ASCEND950) {
+    if (npuArch == NpuArch::DAV_3510) {
         rowBlock = bt <= static_cast<uint64_t>(NsChunkScaledDotKkt::SCORE_ROW_BLOCK_A5_BT64)
                        ? static_cast<uint64_t>(NsChunkScaledDotKkt::SCORE_ROW_BLOCK_A5_BT64)
                        : static_cast<uint64_t>(NsChunkScaledDotKkt::SCORE_ROW_BLOCK_A5_BT128);
@@ -120,9 +120,9 @@ uint64_t ScoreRowBlockSize(uint64_t bt, platform_ascendc::SocVersion socVersion)
     return std::min<uint64_t>(bt, rowBlock);
 }
 
-uint64_t ScoreRowBlockCount(uint64_t bt, platform_ascendc::SocVersion socVersion)
+uint64_t ScoreRowBlockCount(uint64_t bt, NpuArch npuArch)
 {
-    const uint64_t rowBlockSize = ScoreRowBlockSize(bt, socVersion);
+    const uint64_t rowBlockSize = ScoreRowBlockSize(bt, npuArch);
     return rowBlockSize == 0 ? 0 : CeilDiv(bt, rowBlockSize);
 }
 
@@ -266,16 +266,16 @@ ge::graphStatus TilingFunc(gert::TilingContext *context)
     uint64_t aicNum = kDefaultAicNum;
     uint64_t aivNum = kDefaultAivNum;
     uint64_t libApiWorkspace = kDefaultLibApiWorkspace;
-    platform_ascendc::SocVersion socVersion = platform_ascendc::SocVersion::RESERVED_VERSION;
-    bool catlassScoreSocSupported = false;
+    NpuArch npuArch = NpuArch::DAV_2201;
+    bool catlassScoreArchSupported = false;
     auto platformInfo = context->GetPlatformInfo();
     if (platformInfo != nullptr) {
         platform_ascendc::PlatformAscendC platform(platformInfo);
         aicNum = static_cast<uint64_t>(platform.GetCoreNumAic());
         aivNum = static_cast<uint64_t>(platform.GetCoreNumAiv());
         libApiWorkspace = static_cast<uint64_t>(platform.GetLibApiWorkSpaceSize());
-        socVersion = platform.GetSocVersion();
-        catlassScoreSocSupported = IsCatlassScoreSocSupported(socVersion);
+        npuArch = platform.GetCurNpuArch();
+        catlassScoreArchSupported = IsCatlassScoreArchSupported(npuArch);
     }
     if (aicNum == 0) {
         aicNum = kDefaultAicNum;
@@ -291,15 +291,15 @@ ge::graphStatus TilingFunc(gert::TilingContext *context)
         return ge::GRAPH_FAILED;
     }
     uint64_t scoreBlockTaskNum = 0;
-    if (MulOverflow(scoreTaskNum, ScoreRowBlockCount(bt, socVersion), &scoreBlockTaskNum) || scoreBlockTaskNum == 0) {
+    if (MulOverflow(scoreTaskNum, ScoreRowBlockCount(bt, npuArch), &scoreBlockTaskNum) || scoreBlockTaskNum == 0) {
         return ge::GRAPH_FAILED;
     }
 
     const uint64_t pairableAicNum = std::min<uint64_t>(aicNum, aivNum / 2);
     const bool useCatlassScore =
-        catlassScoreSocSupported && pairableAicNum > 0 &&
+        catlassScoreArchSupported && pairableAicNum > 0 &&
         bt >= static_cast<uint64_t>(NsChunkScaledDotKkt::CATLASS_SCORE_MIN_BT) && (k % 16) == 0;
-    if (catlassScoreSocSupported && !useCatlassScore) {
+    if (catlassScoreArchSupported && !useCatlassScore) {
         return ge::GRAPH_FAILED;
     }
     const uint64_t aicTaskNum = useCatlassScore ? scoreBlockTaskNum : scoreTaskNum;

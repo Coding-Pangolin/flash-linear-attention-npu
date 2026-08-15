@@ -72,11 +72,9 @@ static int64_t CeilDiv(int64_t a, int64_t b)
     return (a + b - 1) / b;
 }
 
-static bool IsCumSumFastPathSocSupported(platform_ascendc::SocVersion socVersion)
+static bool IsCumSumFastPathArchSupported(NpuArch npuArch)
 {
-    return socVersion == platform_ascendc::SocVersion::ASCEND910B ||
-           socVersion == platform_ascendc::SocVersion::ASCEND910_93 ||
-           socVersion == platform_ascendc::SocVersion::ASCEND950;
+    return npuArch == NpuArch::DAV_2201 || npuArch == NpuArch::DAV_3510;
 }
 
 static int64_t GetFastBufferLimit(int64_t ubSize)
@@ -295,7 +293,7 @@ static ge::graphStatus TilingChunkLocalCumsum(gert::TilingContext *context)
     int64_t aivNum = ascendcPlatform.GetCoreNumAiv();
     uint64_t ubSize = 0;
     ascendcPlatform.GetCoreMemSize(platform_ascendc::CoreMemType::UB, ubSize);
-    bool enableCumSumFastPath = IsCumSumFastPathSocSupported(ascendcPlatform.GetSocVersion());
+    bool enableCumSumFastPath = IsCumSumFastPathArchSupported(ascendcPlatform.GetCurNpuArch());
     int64_t fastBufferLimit = GetFastBufferLimit(static_cast<int64_t>(ubSize));
     OP_CHECK_IF(aivNum <= 0,
                 OPS_REPORT_VECTOR_INNER_ERR(context->GetNodeName(), "aivNum is invalid."),

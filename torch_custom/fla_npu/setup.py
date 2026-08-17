@@ -37,10 +37,14 @@ def get_sources():
                 if file.endswith(".cpp") or file.endswith(".cc"):
                     sources.append(os.path.join(root, file))
 
-    BUILD_EXCLUDE_LIST = [f"{aten_dir}/VariableTypeEverything.cpp",
-        f"{aten_dir}/ADInplaceOrViewTypeEverything.cpp",
-        f"{aten_dir}/python_functionsEverything.cpp",
-        f"{aten_dir}/RegisterFunctionalizationEverything.cpp"]
+    BUILD_EXCLUDE_LIST = [
+        os.path.join(aten_dir, "VariableTypeEverything.cpp"),
+        os.path.join(aten_dir, "ADInplaceOrViewTypeEverything.cpp"),
+        os.path.join(aten_dir, "python_functionsEverything.cpp"),
+        os.path.join(aten_dir, "RegisterFunctionalizationEverything.cpp"),
+        os.path.join(ops_dir, "OpInterfaceEverything.cpp"),
+        os.path.join(ops_dir, "ops", "opapi", "StructKernelNpuOpApiEverything.cpp"),
+    ]
 
     sources_new = [cur_file for cur_file in sources if cur_file not in BUILD_EXCLUDE_LIST]
     print("====sources_new:", sources_new)

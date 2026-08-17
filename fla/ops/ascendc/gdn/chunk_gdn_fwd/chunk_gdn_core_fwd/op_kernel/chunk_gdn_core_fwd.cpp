@@ -223,11 +223,9 @@ __aicore__ inline void RunPhase6Cumsum(
     if ASCEND_IS_AIC {
         return;
     }
-    // A MIX core has two AIV subblocks. Let one subblock run each logical
-    // cumsum partition so the embedded AIV-only scheduler cannot duplicate GM writes.
-    if (AscendC::GetSubBlockIdx() != 0) {
-        return;
-    }
+    // In a MIX launch, the AIV block index is already expanded across both
+    // subblocks. Keep both subblocks so the standalone scheduler covers every
+    // vector task exactly once.
 
     ChunkLocalCumsumTilingData cumsumTiling{};
     cumsumTiling.b = static_cast<int64_t>(tiling.B);

@@ -329,6 +329,7 @@ __aicore__ inline void RunPhase6(
             userWorkspace + phase5->recomputeWorkspaceOffset, &recomputeTiling);
     }
 
+    WritePublicCumsumRows(gCumsumBht, gCumsumBth, cuSeqlens, chunkIndices, abc);
     DispatchFwdH<TileShapes>(k, w, u, gCumsumBht, gk, initialState, cuSeqlens,
                              chunkIndices, h, vNew, finalState, tiling, userWorkspace);
 
@@ -349,11 +350,6 @@ __aicore__ inline void RunPhase6(
     CopyOTiling(gmOTiling, oTiling);
     DispatchFwdO(q, k, vNew, h, gCumsumBht, cuSeqlens, chunkIndices, o,
                  userWorkspace, &oTiling);
-
-    // The public BTH cumsum view is independent of the H/O inputs.  Delay
-    // this owner-only layout copy until the dependent path has launched so it
-    // cannot hold FwdH at its initial cross-core join.
-    WritePublicCumsumRows(gCumsumBht, gCumsumBth, cuSeqlens, chunkIndices, abc);
 }
 
 } // namespace

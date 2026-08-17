@@ -241,7 +241,7 @@ __aicore__ inline void RunPhase6(
     }
     if ASCEND_IS_AIV {
         AscendC::TPipe kktPipe;
-        NsChunkScaledDotKkt::ChunkScaledDotKkt<InputT, InputT> kkt;
+        NsChunkScaledDotKktFusedCumsum::ChunkScaledDotKktFusedCumsum<InputT, InputT> kkt;
         kkt.InitFusedCumsum(
             k, rawG, beta, cuSeqlens, chunkIndices, gCumsumBht, aWorkspace,
             scoreWorkspace, abc.B, abc.Hk, abc.Hv, abc.hvPerHk, abc.T, abc.K,

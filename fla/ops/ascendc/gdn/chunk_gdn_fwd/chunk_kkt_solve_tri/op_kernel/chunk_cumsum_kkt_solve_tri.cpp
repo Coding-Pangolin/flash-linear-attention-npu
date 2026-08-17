@@ -2,7 +2,7 @@
 #include "chunk_cumsum_kkt_solve_tri_tiling_key.h"
 #endif
 #include "chunk_kkt_cube.h"
-#include "chunk_scaled_dot_kkt.h"
+#include "chunk_scaled_dot_kkt_fused_cumsum.h"
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 #include "arch35/solve_tri_ascend950.h"
 #else
@@ -83,7 +83,7 @@ __global__ __aicore__ void chunk_cumsum_kkt_solve_tri(GM_ADDR k,
     }
     if ASCEND_IS_AIV {
         TPipe kktPipe;
-        NsChunkScaledDotKkt::ChunkScaledDotKkt<DTYPE_K, DTYPE_K> kkt;
+        NsChunkScaledDotKktFusedCumsum::ChunkScaledDotKktFusedCumsum<DTYPE_K, DTYPE_K> kkt;
         kkt.InitFusedCumsum(
             k, g, beta, cuSeqlens, chunkIndices, gCumsum, aWorkspace, scoreWorkspace,
             tilingData.B, tilingData.Hk, tilingData.Hv, tilingData.hvPerHk,

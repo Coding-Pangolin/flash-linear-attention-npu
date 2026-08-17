@@ -26,12 +26,6 @@ ASCENDC_NAMES = (
     "chunk_fwd_o",
     "chunk_gated_delta_rule_bwd_dhu",
     "chunk_gated_delta_rule_fwd_h",
-    "chunk_kkt_solve_tri",
-    "chunk_local_cumsum",
-    "chunk_scaled_dot_kkt",
-    "gdn_core_fwd",
-    "gdn_core_fwd_phase1",
-    "gdn_core_fwd_phase2",
     "prepare_wy_repr_bwd_da",
     "prepare_wy_repr_bwd_full",
     "recompute_w_u_fwd",
@@ -48,6 +42,15 @@ TRITON_NAMES = (
     "input_guard",
     "l2norm",
     "solve_tril",
+)
+REQUIRED_TRITON_SOURCES = (
+    "__init__.py",
+    "causal_conv1d.py",
+    "chunk_scaled_dot_kkt.py",
+    "cumsum.py",
+    "l2norm.py",
+    "solve_tril_fast.py",
+    "utils.py",
 )
 REQUIRED_ASCENDC_CONFIGS = (
     "recompute_w_u_fwd.json",
@@ -95,6 +98,21 @@ def _require_packaged_opp_configs(fla_npu_module) -> None:
         )
 
 
+def _require_packaged_triton_sources(fla_npu_module) -> None:
+    package_root = Path(fla_npu_module.__file__).resolve().parent
+    triton_core = package_root / "ops" / "triton" / "triton_core"
+    missing = [
+        source_name
+        for source_name in REQUIRED_TRITON_SOURCES
+        if not (triton_core / source_name).is_file()
+    ]
+    if missing:
+        raise AssertionError(
+            "packaged Triton sources are missing from "
+            f"{triton_core}: {', '.join(missing)}"
+        )
+
+
 def _require_safe_packaged_opapi(fla_npu_module) -> None:
     package_root = Path(fla_npu_module.__file__).resolve().parent
     vendor_dirs = list((package_root / "opp" / "vendors").glob("*"))
@@ -127,20 +145,6 @@ def _require_safe_packaged_opapi(fla_npu_module) -> None:
         raise AssertionError(
             "FLA_NPU_OP_API_LIB must point to the packaged libcust_opapi.so"
         )
-
-
-def _require_packaged_triton_core(fla_npu_module) -> None:
-    package_root = Path(fla_npu_module.__file__).resolve().parent
-    triton_core = package_root / "ops" / "triton" / "triton_core"
-    required = (
-        triton_core / "__init__.py",
-        triton_core / "causal_conv1d.py",
-        triton_core / "cumsum.py",
-        triton_core / "l2norm.py",
-    )
-    missing = [str(path.relative_to(package_root)) for path in required if not path.is_file()]
-    if missing:
-        raise AssertionError("packaged Triton core files are missing: " + ", ".join(missing))
 
 
 def main() -> int:
@@ -190,7 +194,7 @@ def main() -> int:
 
     _require_packaged_opp_configs(fla_npu)
     _require_safe_packaged_opapi(fla_npu)
-    _require_packaged_triton_core(fla_npu)
+    _require_packaged_triton_sources(fla_npu)
 
     if ascendc.BACKWARD_OPS.get("causal_conv1d") != "causal_conv1d_bwd":
         raise AssertionError("causal_conv1d backward binding metadata is missing")

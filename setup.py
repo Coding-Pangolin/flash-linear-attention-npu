@@ -63,23 +63,6 @@ TORCHNPUGEN_MODULES = (
 )
 
 
-def _python_packages():
-    packages = find_packages(
-        where=str(TORCH_EXTENSION_DIR),
-        include=["fla_npu", "fla_npu.*"],
-    )
-    if TRITON_CORE_SOURCE.exists() and TRITON_CORE_PACKAGE not in packages:
-        packages.append(TRITON_CORE_PACKAGE)
-    return packages
-
-
-def _python_package_dirs():
-    package_dirs = {"fla_npu": str(FLA_NPU_PACKAGE_DIR.relative_to(REPO_ROOT))}
-    if TRITON_CORE_SOURCE.exists():
-        package_dirs[TRITON_CORE_PACKAGE] = str(TRITON_CORE_SOURCE.relative_to(REPO_ROOT))
-    return package_dirs
-
-
 def _read_requirements():
     requirements = REPO_ROOT / "requirements.txt"
     if not requirements.exists():
@@ -90,6 +73,27 @@ def _read_requirements():
         if line and not line.startswith("#"):
             deps.append(line)
     return deps
+
+
+def _packages():
+    packages = find_packages(
+        where=str(TORCH_EXTENSION_DIR),
+        include=["fla_npu", "fla_npu.*"],
+    )
+    if not TRITON_CORE_SOURCE.is_dir():
+        raise FileNotFoundError(
+            f"Triton source directory is missing: {TRITON_CORE_SOURCE}"
+        )
+    if TRITON_CORE_PACKAGE not in packages:
+        packages.append(TRITON_CORE_PACKAGE)
+    return packages
+
+
+def _package_dir():
+    return {
+        "fla_npu": str(FLA_NPU_PACKAGE_DIR.relative_to(REPO_ROOT)),
+        TRITON_CORE_PACKAGE: str(TRITON_CORE_SOURCE.relative_to(REPO_ROOT)),
+    }
 
 
 def _env_flag(name):
@@ -586,8 +590,8 @@ setup(
     description="High-performance linear attention operators for Ascend NPU",
     long_description=(REPO_ROOT / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
-    packages=_python_packages(),
-    package_dir=_python_package_dirs(),
+    packages=_packages(),
+    package_dir=_package_dir(),
     package_data={"fla_npu": ["opp/**/*"]},
     include_package_data=True,
     license_files=[

@@ -44,15 +44,19 @@ python scripts/check_npu_env.py --build-only
 
 ```sh
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w dist
+FLA_NPU_SOC=ascend910b python scripts/build_wheel.py
 ```
+
+脚本内部仍使用 `pip wheel --no-build-isolation --no-deps` 完成构建，并在成功后打印本轮
+wheel 的绝对路径和可直接复制执行的强制覆盖安装命令。可通过 `--wheel-dir` 修改默认的
+`dist/` 输出目录。
 
 修改任何源码或适配后，重新执行同一条命令做全量构建。构建流程会清理上一轮
 `build/`、`build_out/` 和 `output/` 中间产物，不依赖 Git diff 或旧 CMake 状态决定
 编译范围：
 
 ```sh
-FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w dist
+FLA_NPU_SOC=ascend910b python scripts/build_wheel.py
 ```
 
 构建完成后，wheel 仍统一输出到 `dist/`。该目录可能同时存在不同版本或构建标签

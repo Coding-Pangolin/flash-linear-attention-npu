@@ -1,6 +1,25 @@
 # GDN 当前进度 A2
 
-更新时间：2026-08-16（Asia/Shanghai）
+更新时间：2026-08-17（Asia/Shanghai）
+
+## 新版 main Cumsum/KKT 三路线重新定基线（2026-08-17，当前规划）
+
+- 当前新版基线固定为 upstream 仓库
+  `https://github.com/flashserve/flash-linear-attention-npu.git` 的 `main` 分支提交
+  `3434816c1da8082996962e61e070f9947541d89b`，冻结时间为 2026-08-17；提交说明为
+  `fix(gdn): KKT tail precision and fixed BT128 crash on top of PR #283 (#319)`。
+- 该提交包含新版 `ChunkLocalCumsum` BHT fast path、KKT score/pipeline/A5 优化，以及 KKT tail
+  precision 和 BT128 crash 修复。后续测试、构建和性能报告均使用该完整 commit，不再使用动态 `main`。
+- 旧 `main@8a63cf3eb28807440abf3aa88adedca2e5152862`、旧 `chw`/Phase6 三路线结果继续保留为历史归档，
+  不与新版结果拼接或混用。
+- 新分支 `chw_new_cumsum_kkt` 尚待从当前 `chw` 提交 `d040921` 创建。该分支需要基于上述新版 main
+  重新构建六算子与 Phase6 运行时，并记录源码、wheel、OPP 和 `libcust_opapi.so` hash。
+- 新版三路线口径固定为：
+  1. `main_new6`：新版 `main@3434816c1da8082996962e61e070f9947541d89b` 六 ACLNN；
+  2. `chw_new6`：`chw_new_cumsum_kkt` 分支六 ACLNN；
+  3. `phase6_new`：同一新分支的 `aclnnGdnCoreFwdPhase6`。
+- 三路线复用现有固定测试合同和输入，先完成 route、shape/dtype、finite、fresh-process 确定性及精度门禁，
+  通过后再执行同设备 AB/BA NPU Event 和 Level2 profiling。当前尚无新版三路线 NPU 精度或性能结论。
 
 ## A2：最新固定模型三路线门禁结果（2026-08-16，当前有效）
 

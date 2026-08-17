@@ -12,6 +12,10 @@
 #include "../../chunk_kkt_solve_tri/op_kernel/chunk_cumsum_kkt_solve_tri.cpp"
 #undef GDN_CHUNK_CUMSUM_KKT_SOLVE_IMPL_ONLY
 
+#define GDN_CHUNK_LOCAL_CUMSUM_IMPL_ONLY
+#include "../../chunk_local_cumsum/op_kernel/chunk_local_cumsum.cpp"
+#undef GDN_CHUNK_LOCAL_CUMSUM_IMPL_ONLY
+
 namespace GDN {
 namespace {
 
@@ -21,6 +25,7 @@ constexpr uint32_t OWNER_MTE3_TO_V_EVENT = 2;
 constexpr uint32_t UB_ALIGNMENT = 32;
 constexpr uint32_t PHASE6_TILING_ALIGNMENT = 8;
 constexpr uint64_t PHASE6_SOLVE_DONE_FLAG = 5;
+constexpr int64_t PHASE6_CUMSUM_FAST_BUFFER_LIMIT = 160 * 1024;
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 constexpr AscendC::SyncAllConfig PHASE6_HO_SYNC_CONFIG = {PIPE_MTE3, PIPE_MTE2};
 #endif
@@ -211,6 +216,44 @@ __aicore__ inline void WritePublicCumsumRows(
     }
 }
 
+__aicore__ inline void RunPhase6Cumsum(
+    GM_ADDR rawG, GM_ADDR cuSeqlens, GM_ADDR chunkIndices, GM_ADDR gCumsumBht,
+    const ChunkGdnCoreFwdAbcTiling &tiling)
+{
+    if ASCEND_IS_AIC {
+        return;
+    }
+    // A MIX core has two AIV subblocks. Let one subblock run each logical
+    // cumsum partition so the embedded AIV-only scheduler cannot duplicate GM writes.
+    if (AscendC::GetSubBlockIdx() != 0) {
+        return;
+    }
+
+    ChunkLocalCumsumTilingData cumsumTiling{};
+    cumsumTiling.b = static_cast<int64_t>(tiling.B);
+    cumsumTiling.t = static_cast<int64_t>(tiling.T);
+    cumsumTiling.h = static_cast<int64_t>(tiling.Hv);
+    cumsumTiling.chunkSize = static_cast<int64_t>(tiling.BT);
+    cumsumTiling.blockT = static_cast<int64_t>(tiling.BT);
+    cumsumTiling.numBlocks = static_cast<int64_t>(tiling.NT);
+    cumsumTiling.seqNum = 0;
+    cumsumTiling.totalElements = static_cast<int64_t>(tiling.B * tiling.Hv * tiling.T);
+    cumsumTiling.isVarlen = static_cast<int64_t>(tiling.isVarlen);
+    cumsumTiling.reverse = 0;
+    cumsumTiling.headFirst = 1;
+    cumsumTiling.optimizedHeadFirst = 1;
+    cumsumTiling.varlenSeqTask = 0;
+    cumsumTiling.enableCumSumFastPath = 1;
+    cumsumTiling.fastBufferLimit = PHASE6_CUMSUM_FAST_BUFFER_LIMIT;
+    cumsumTiling.inputDtype = 0;
+    cumsumTiling.outputDtype = 0;
+    cumsumTiling.scale = 1.0f;
+
+    ChunkLocalCumsumKernel<float, float> cumsum;
+    cumsum.Init(rawG, cuSeqlens, chunkIndices, gCumsumBht, &cumsumTiling);
+    cumsum.Process();
+}
+
 template <typename InputT, typename TileShapes>
 __aicore__ inline void RunPhase6(
     GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR beta, GM_ADDR rawG, GM_ADDR gk,
@@ -237,17 +280,22 @@ __aicore__ inline void RunPhase6(
     if ASCEND_IS_AIC {
         NsChunkKktCube::ChunkKktCube<InputT> kktCube;
         kktCube.Process(k, cuSeqlens, chunkIndices, scoreWorkspace, &abc);
-        AscendC::CrossCoreSetFlag<0x2, PIPE_FIX>(SCORE_READY_FLAG);
     }
+    if ASCEND_IS_AIV {
+        RunPhase6Cumsum(rawG, cuSeqlens, chunkIndices, gCumsumBht, abc);
+    }
+
+    // The cumsum and score stages are independent. Join them once before the
+    // old BF16 KKT epilogue consumes both the score tiles and the cumsum view.
+    AscendC::SyncAll<false>();
+
     if ASCEND_IS_AIV {
         AscendC::TPipe kktPipe;
         NsChunkScaledDotKktFusedCumsum::ChunkScaledDotKktFusedCumsum<InputT, InputT> kkt;
-        kkt.InitFusedCumsum(
-            k, rawG, beta, cuSeqlens, chunkIndices, gCumsumBht, aWorkspace,
-            scoreWorkspace, abc.B, abc.Hk, abc.Hv, abc.hvPerHk, abc.T, abc.K,
-            abc.BT, abc.NT, abc.taskNum, abc.usedAicNum, abc.usedAivNum,
-            abc.btAlign, abc.isVarlen, &kktPipe);
-        AscendC::CrossCoreWaitFlag(SCORE_READY_FLAG);
+        kkt.Init(
+            k, gCumsumBht, beta, cuSeqlens, chunkIndices, aWorkspace, scoreWorkspace,
+            abc.B, abc.Hk, abc.Hv, abc.hvPerHk, abc.T, abc.K, abc.BT, abc.NT,
+            abc.taskNum, abc.usedAicNum, abc.usedAivNum, abc.btAlign, abc.isVarlen, &kktPipe);
         kkt.ProcessEpilogueForSolve(abc.tilesPerCore);
         kktPipe.Reset();
     }

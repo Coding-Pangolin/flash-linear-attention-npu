@@ -12,8 +12,13 @@
   precision 和 BT128 crash 修复。后续测试、构建和性能报告均使用该完整 commit，不再使用动态 `main`。
 - 旧 `main@8a63cf3eb28807440abf3aa88adedca2e5152862`、旧 `chw`/Phase6 三路线结果继续保留为历史归档，
   不与新版结果拼接或混用。
-- 新分支 `chw_new_cumsum_kkt` 尚待从当前 `chw` 提交 `d040921` 创建。该分支需要基于上述新版 main
-  重新构建六算子与 Phase6 运行时，并记录源码、wheel、OPP 和 `libcust_opapi.so` hash。
+- 新分支 `chw_new_cumsum_kkt` 的新版 main 集成检查点为
+  `67b797491d611b627227998196e972219fcc6ee5`：它合入了上述固定 main，且独立
+  `ChunkLocalCumsum` 与 `ChunkScaledDotKkt` 均保持 upstream 源码版本。为保持既有复合 ACLNN
+  路径可构建，旧的“融合 cumsum + KKT epilogue”仅作为私有 helper 保留；它不是独立
+  `ChunkScaledDotKkt` 的回退，也尚未宣称吸收新版 KKT Catlass 流水。
+- 该检查点只通过了合并完整性、冲突标记、diff 空白和 Python 打包脚本语法检查；尚未执行 A5 构建。
+  A5 首轮需重新构建六算子与 Phase6 运行时，并记录源码、wheel、OPP 和 `libcust_opapi.so` hash。
 - 新版三路线口径固定为：
   1. `main_new6`：新版 `main@3434816c1da8082996962e61e070f9947541d89b` 六 ACLNN；
   2. `chw_new6`：`chw_new_cumsum_kkt` 分支六 ACLNN；

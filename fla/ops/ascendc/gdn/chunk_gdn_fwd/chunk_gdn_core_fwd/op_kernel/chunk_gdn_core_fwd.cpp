@@ -259,17 +259,14 @@ __aicore__ inline void RunPhase6(
         RunSolvePhase<InputT, 128>(aWorkspace, cuSeqlens, chunkIndices, A,
                                    solveWorkspace, &abc);
     }
-#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-    // The arch35 solve schedule uses the same contiguous task range as
-    // recompute. Gate both AIV subblocks on their paired AIC so the otherwise
-    // idle AIV1 cannot enter the local consumer range before A is written.
+    // Solve and recompute share a contiguous task range. Publish solved A
+    // before either paired AIV enters its local consumer range.
     if ASCEND_IS_AIC {
         AscendC::CrossCoreSetFlag<0x2, PIPE_FIX>(PHASE6_SOLVE_DONE_FLAG);
     }
     if ASCEND_IS_AIV {
         AscendC::CrossCoreWaitFlag(PHASE6_SOLVE_DONE_FLAG);
     }
-#endif
     GM_ADDR w = userWorkspace + phase5->wIntermediateOffset;
     GM_ADDR u = userWorkspace + phase5->uIntermediateOffset;
     GM_ADDR h = userWorkspace + phase5->hIntermediateOffset;
@@ -294,6 +291,9 @@ __aicore__ inline void RunPhase6(
     // H publishes h/vNew through MTE3 and O first consumes them through MTE2.
     // Limit the global hand-off to those pipelines instead of draining PIPE_ALL.
     AscendC::SyncAll<false, PHASE6_HO_SYNC_CONFIG>();
+#else
+    // Ascend910B supports only the full-pipeline SyncAll overload.
+    AscendC::SyncAll<false>();
 #endif
 
     const uint64_t oTilingOffset =

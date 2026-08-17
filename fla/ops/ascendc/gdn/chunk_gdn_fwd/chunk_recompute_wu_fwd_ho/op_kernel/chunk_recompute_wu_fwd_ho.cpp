@@ -302,6 +302,12 @@ __aicore__ inline void RunFused(
     DispatchFwdH<TileShapes>(k, w, u, g, gk, initialState, cuSeqlens, chunkIndices,
                              h, vNew, finalState, tiling, userWorkspace);
 
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+    // FwdO consumes h/vNew across all FwdH task groups.  Drain the A5 H phase
+    // globally before any group starts the dependent O phase.
+    AscendC::SyncAll<false>();
+#endif
+
     ChunkFwdOTilingData oTiling{};
     CopyOTiling(gmOTiling, oTiling);
     DispatchFwdO(q, k, vNew, h, g, cuSeqlens, chunkIndices, o, userWorkspace, &oTiling);

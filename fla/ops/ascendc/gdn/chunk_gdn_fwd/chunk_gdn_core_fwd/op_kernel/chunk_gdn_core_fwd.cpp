@@ -20,6 +20,10 @@ constexpr uint32_t OWNER_V_TO_MTE3_EVENT = 1;
 constexpr uint32_t OWNER_MTE3_TO_V_EVENT = 2;
 constexpr uint32_t UB_ALIGNMENT = 32;
 constexpr uint32_t PHASE6_TILING_ALIGNMENT = 8;
+constexpr uint64_t PHASE6_SOLVE_DONE_FLAG = 5;
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+constexpr AscendC::SyncAllConfig PHASE6_HO_SYNC_CONFIG = {PIPE_MTE3, PIPE_MTE2};
+#endif
 
 __aicore__ inline uint64_t AlignPhase6(uint64_t value, uint64_t alignment)
 {
@@ -77,6 +81,17 @@ __aicore__ inline void CopyAbcTiling(
     dst.totalChunks = src->totalChunks;
     dst.layoutMode = src->layoutMode;
     dst.dtypeMode = src->dtypeMode;
+    dst.totalTokens = src->totalTokens;
+
+    static_assert(sizeof(TCubeTiling) % sizeof(uint32_t) == 0,
+                  "TCubeTiling must be copied as complete 32-bit words");
+    const __gm__ uint32_t *cubeSrc =
+        reinterpret_cast<const __gm__ uint32_t *>(&src->cubeTilingData);
+    uint32_t *cubeDst = reinterpret_cast<uint32_t *>(&dst.cubeTilingData);
+    constexpr uint32_t cubeWordCount = sizeof(TCubeTiling) / sizeof(uint32_t);
+    for (uint32_t index = 0; index < cubeWordCount; ++index) {
+        cubeDst[index] = cubeSrc[index];
+    }
 }
 
 __aicore__ inline void WritePublicCumsumRows(
@@ -236,6 +251,7 @@ __aicore__ inline void RunPhase6(
         kkt.ProcessEpilogueForSolve(abc.tilesPerCore);
         kktPipe.Reset();
     }
+
     if (abc.BT == 64) {
         RunSolvePhase<InputT, 64>(aWorkspace, cuSeqlens, chunkIndices, A,
                                   solveWorkspace, &abc);
@@ -243,6 +259,17 @@ __aicore__ inline void RunPhase6(
         RunSolvePhase<InputT, 128>(aWorkspace, cuSeqlens, chunkIndices, A,
                                    solveWorkspace, &abc);
     }
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+    // The arch35 solve schedule uses the same contiguous task range as
+    // recompute. Gate both AIV subblocks on their paired AIC so the otherwise
+    // idle AIV1 cannot enter the local consumer range before A is written.
+    if ASCEND_IS_AIC {
+        AscendC::CrossCoreSetFlag<0x2, PIPE_FIX>(PHASE6_SOLVE_DONE_FLAG);
+    }
+    if ASCEND_IS_AIV {
+        AscendC::CrossCoreWaitFlag(PHASE6_SOLVE_DONE_FLAG);
+    }
+#endif
     GM_ADDR w = userWorkspace + phase5->wIntermediateOffset;
     GM_ADDR u = userWorkspace + phase5->uIntermediateOffset;
     GM_ADDR h = userWorkspace + phase5->hIntermediateOffset;
@@ -262,6 +289,12 @@ __aicore__ inline void RunPhase6(
     WritePublicCumsumRows(gCumsumBht, gCumsumBth, cuSeqlens, chunkIndices, abc);
     DispatchFwdH<TileShapes>(k, w, u, gCumsumBht, gk, initialState, cuSeqlens,
                              chunkIndices, h, vNew, finalState, tiling, userWorkspace);
+
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+    // H publishes h/vNew through MTE3 and O first consumes them through MTE2.
+    // Limit the global hand-off to those pipelines instead of draining PIPE_ALL.
+    AscendC::SyncAll<false, PHASE6_HO_SYNC_CONFIG>();
+#endif
 
     const uint64_t oTilingOffset =
         AlignPhase6(sizeof(ChunkGatedDeltaRuleFwdHTilingData), PHASE6_TILING_ALIGNMENT);

@@ -88,8 +88,29 @@ static const aclIntArray *MakePerm(std::initializer_list<int64_t> dims, aclOpExe
 static const aclTensor *TransposeContiguous(const aclTensor *tensor, std::initializer_list<int64_t> dims,
                                             aclOpExecutor *executor)
 {
-    const aclTensor *permuted = l0op::Transpose(tensor, MakePerm(dims, executor), executor);
-    return permuted == nullptr ? nullptr : l0op::Contiguous(permuted, executor);
+    const aclIntArray *perm = MakePerm(dims, executor);
+    if (perm == nullptr) {
+        return nullptr;
+    }
+    const aclTensor *permuted = l0op::Transpose(tensor, perm, executor);
+    if (permuted == nullptr) {
+        return nullptr;
+    }
+    const aclTensor *materialized = l0op::Contiguous(permuted, executor);
+    if (materialized == nullptr) {
+        return nullptr;
+    }
+
+    // Contiguous materializes the storage, but the resulting tensor can still
+    // carry the transpose view metadata. Re-declare the logical shape so the
+    // following custom ops see a dense BHT/BHTC tensor instead of a stale view.
+    const aclTensor *reshaped = l0op::Reshape(materialized, permuted->GetViewShape(), executor);
+    if (reshaped == nullptr) {
+        return nullptr;
+    }
+    reshaped->SetStorageShape(reshaped->GetViewShape());
+    reshaped->SetOriginalShape(reshaped->GetViewShape());
+    return reshaped;
 }
 
 static int64_t Dim(const aclTensor *tensor, size_t index)

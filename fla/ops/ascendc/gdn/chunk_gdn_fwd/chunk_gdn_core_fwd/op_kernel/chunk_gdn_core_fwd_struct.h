@@ -6,6 +6,7 @@
 #define CHUNK_GDN_CORE_FWD_STRUCT_H
 
 #include <cstdint>
+#include "kernel_tiling/kernel_tiling.h"
 
 namespace GDN {
 
@@ -40,6 +41,8 @@ struct ChunkGdnCoreFwdAbcTiling {
     int64_t totalChunks;
     int64_t layoutMode;
     int64_t dtypeMode;
+    int64_t totalTokens;
+    TCubeTiling cubeTilingData;
 };
 
 struct ChunkGdnCoreFwdTrailer {

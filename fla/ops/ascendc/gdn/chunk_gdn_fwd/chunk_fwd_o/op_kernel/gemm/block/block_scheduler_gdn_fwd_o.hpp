@@ -79,9 +79,6 @@ struct BlockSchedulerGdnFwdO {
     uint32_t batchTokens;
     uint32_t pipelineHeadIdx{0};
     uint32_t pipelineLaneIdx{0};
-    uint32_t hTaskBatchCount{0};
-    uint32_t hTasksPerCore{1};
-    uint32_t hTaskStride{0};
 
     AscendC::GlobalTensor<int64_t> gmSeqlen;
     AscendC::GlobalTensor<int64_t> gmChunkOffsets;
@@ -141,18 +138,8 @@ struct BlockSchedulerGdnFwdO {
                 isRunning = taskIdx < taskNum;
             }
         } else if (taskAffinity) {
-            if (isVariedLen) {
-                for (uint32_t sequence = 0; sequence < tokenBatch; ++sequence) {
-                    hTaskBatchCount += gmSeqlen.GetValue(sequence + 1) > gmSeqlen.GetValue(sequence);
-                }
-            } else {
-                hTaskBatchCount = shapeBatch;
-            }
-            const uint32_t hTaskNum = hTaskBatchCount * vNumHead;
-            hTasksPerCore = hTaskNum > cubeCoreNum ? GDN_FWD_O_PING_PONG_STAGES : 1;
-            hTaskStride = cubeCoreNum * hTasksPerCore;
             taskIdx = 0;
-            isRunning = taskNum > 0 && hTaskStride > 0;
+            isRunning = taskNum > 0 && cubeCoreNum > 0;
         } else {
             taskIdx = cubeCoreIdx * GDN_FWD_O_PING_PONG_STAGES;
             isRunning = taskIdx < taskNum;
@@ -179,8 +166,10 @@ struct BlockSchedulerGdnFwdO {
                                        ? GetCompactSequenceIdx(gmChunkOffsets.GetValue(2 * candidateChunkIdx))
                                        : candidateBatchIdx;
         const uint32_t hTaskIdx = hBatchIdx * vNumHead + candidateHeadIdx;
-        const uint32_t producerCoreIdx = (hTaskIdx % hTaskStride) / hTasksPerCore;
-        return producerCoreIdx == cubeCoreIdx;
+        // FwdH assigns task wave * coreNum + coreIdx, so every dependent O
+        // chunk must stay on hTaskIdx % coreNum. The old two-tasks-per-core
+        // formula no longer matched FwdH after its wave scheduler was added.
+        return cubeCoreNum > 0 && (hTaskIdx % cubeCoreNum) == cubeCoreIdx;
     }
 
     CATLASS_DEVICE

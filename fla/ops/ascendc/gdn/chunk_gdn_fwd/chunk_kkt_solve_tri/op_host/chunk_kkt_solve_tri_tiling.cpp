@@ -202,6 +202,7 @@ ge::graphStatus ChunkKktSolveTriTilingFunc(gert::TilingContext *context)
     tiling.set_totalChunks(static_cast<int64_t>(chunks));
     tiling.set_layoutMode(isVarlen == 0 ? 0 : 3);
     tiling.set_dtypeMode(dtype == ge::DT_BF16 ? 1 : 0);
+    tiling.set_totalTokens(isVarlen == 0 ? 0 : static_cast<int64_t>(t));
     if (BuildCubeTiling(bt, k, dtype, tiling) != ge::GRAPH_SUCCESS) {
         return ge::GRAPH_FAILED;
     }

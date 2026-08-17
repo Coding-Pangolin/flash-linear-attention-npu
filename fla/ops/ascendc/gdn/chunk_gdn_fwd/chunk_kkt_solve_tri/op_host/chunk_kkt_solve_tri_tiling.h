@@ -37,6 +37,7 @@ BEGIN_TILING_DATA_DEF(ChunkKktSolveTriTilingData)
     TILING_DATA_FIELD_DEF(int64_t, totalChunks);
     TILING_DATA_FIELD_DEF(int64_t, layoutMode);
     TILING_DATA_FIELD_DEF(int64_t, dtypeMode);
+    TILING_DATA_FIELD_DEF(int64_t, totalTokens);
     TILING_DATA_FIELD_DEF_STRUCT(TCubeTiling, cubeTilingData);
 END_TILING_DATA_DEF;
 

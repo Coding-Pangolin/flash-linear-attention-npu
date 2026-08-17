@@ -195,6 +195,13 @@ __aicore__ inline void RunFused(GM_ADDR q, GM_ADDR k, GM_ADDR w, GM_ADDR u, GM_A
     DispatchFwdH<TileShapes>(k, w, u, g, gk, initialState, cuSeqlens, chunkIndices,
                              h, vNew, finalState, tiling, userWorkspace);
 
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+    // FwdO reads h/vNew written by every AIC/AIV group in FwdH.  The
+    // standalone FwdH operator ends here, but HO must close that cross-core
+    // phase before any core starts consuming the shared intermediates.
+    AscendC::SyncAll<false>();
+#endif
+
     ChunkFwdOTilingData oTiling{};
     CopyOTiling(gmOTiling, oTiling);
     DispatchFwdO(q, k, vNew, h, g, cuSeqlens, chunkIndices, o, userWorkspace, &oTiling);

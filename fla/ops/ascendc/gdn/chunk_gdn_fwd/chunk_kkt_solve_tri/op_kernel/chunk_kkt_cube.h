@@ -10,6 +10,8 @@
 #endif
 
 #include "kernel_operator.h"
+#include "kernel_tiling/kernel_tiling.h"
+#include "lib/matmul_intf.h"
 #include "catlass/arch/arch.hpp"
 #include "catlass/arch/resource.hpp"
 #include "catlass/catlass.hpp"
@@ -21,6 +23,7 @@
 #include "tla/tensor.hpp"
 
 namespace NsChunkKktCube {
+using namespace AscendC;
 
 template <typename T>
 class ChunkKktCube {
@@ -50,11 +53,33 @@ class ChunkKktCube {
     static constexpr auto L1B_LAYOUT =
         tla::MakeLayout<T, LayoutTagL1B>(tla::Int<K_DIM>{}, tla::Int<MAX_BT>{});
 
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+    using MatmulAType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, T>;
+    using MatmulBType = matmul::MatmulType<
+        TPosition::GM, CubeFormat::ND, T, true, LayoutMode::NONE, false>;
+    using MatmulCType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, float>;
+    using MatmulBiasType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, float>;
+    // Match ChunkScaledDotKkt so the fused score path preserves its BF16/FP16
+    // accumulation and completion semantics on Ascend950.
+    static constexpr MatmulConfig MATMUL_CONFIG = GetNormalConfig(true);
+#endif
+
 public:
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+    // The Phase6 AIC half performs the matmul directly.  Do not use the
+    // matmul::Matmul alias here: in a MIX build it can resolve to MatmulClient,
+    // which requires KFC registration and is not a direct AIC implementation.
+    matmul::MatmulImpl<MatmulAType, MatmulBType, MatmulCType,
+                       MatmulBiasType, MATMUL_CONFIG> scoreMatmul;
+#endif
+
     template <typename TilingData>
     __aicore__ inline void Process(GM_ADDR k, GM_ADDR cuSeqlens, GM_ADDR chunkIndices,
                                    GM_ADDR score, const TilingData *tiling)
     {
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+        ProcessAscend950(k, cuSeqlens, chunkIndices, score, tiling);
+#else
         Catlass::Arch::Resource<ArchTag> resource;
         auto l1A = resource.l1Buf.template GetBufferByByte<T>(0);
         auto l1B = resource.l1Buf.template GetBufferByByte<T>(MAX_BT * K_DIM * sizeof(T));
@@ -96,9 +121,67 @@ public:
         AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(EVENT_L0A);
         AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(EVENT_L0B);
         AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(EVENT_L0C);
+#endif
     }
 
 private:
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+    template <typename TilingData>
+    __aicore__ inline void ProcessAscend950(GM_ADDR k, GM_ADDR cuSeqlens,
+                                            GM_ADDR chunkIndices, GM_ADDR score,
+                                            const TilingData *tiling)
+    {
+        AscendC::TPipe scorePipe;
+        // The local-tiling Init overload is not const-correct, but Matmul only
+        // retains this metadata for read-only use during the current call.
+        scoreMatmul.Init(const_cast<AscendC::tiling::TCubeTiling *>(&tiling->cubeTilingData),
+                         &scorePipe);
+        AscendC::GlobalTensor<T> kGm;
+        AscendC::GlobalTensor<float> scoreGm;
+        // Give the address checker the real GM extents.  Without an explicit
+        // length, long-sequence score tiles are checked against the default
+        // 384 KiB boundary even though Phase6 allocates the full workspace.
+        const uint64_t kElements = static_cast<uint64_t>(tiling->B) *
+                                    static_cast<uint64_t>(tiling->Hk) *
+                                    static_cast<uint64_t>(tiling->T) *
+                                    static_cast<uint64_t>(tiling->K);
+        const uint64_t scoreElements = static_cast<uint64_t>(tiling->taskNum) *
+                                        static_cast<uint64_t>(tiling->BT) *
+                                        static_cast<uint64_t>(tiling->BT);
+        kGm.SetGlobalBuffer(reinterpret_cast<__gm__ T *>(k), kElements);
+        scoreGm.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(score), scoreElements);
+
+        const int64_t begin =
+            static_cast<int64_t>(AscendC::GetBlockIdx()) * tiling->tilesPerCore;
+        int64_t end = begin + tiling->tilesPerCore;
+        end = end < tiling->taskNum ? end : static_cast<int64_t>(tiling->taskNum);
+        for (int64_t task = begin; task < end; ++task) {
+            int64_t inputOffset = 0;
+            int64_t valid = 0;
+            DecodeTask(task, cuSeqlens, chunkIndices, tiling, inputOffset, valid);
+            if (valid <= 0) {
+                continue;
+            }
+
+            const int64_t scoreOffset =
+                task * static_cast<int64_t>(tiling->BT * tiling->BT);
+            scoreMatmul.SetOrgShape(static_cast<int32_t>(tiling->BT),
+                                    static_cast<int32_t>(tiling->BT),
+                                    static_cast<int32_t>(tiling->K));
+            scoreMatmul.SetSingleShape(static_cast<int32_t>(valid),
+                                       static_cast<int32_t>(valid),
+                                       static_cast<int32_t>(tiling->K));
+            scoreMatmul.SetTensorA(kGm[inputOffset]);
+            scoreMatmul.SetTensorB(kGm[inputOffset], true);
+            scoreMatmul.SetTail(static_cast<int32_t>(valid),
+                                static_cast<int32_t>(valid),
+                                static_cast<int32_t>(tiling->K));
+            scoreMatmul.template IterateAll<false>(scoreGm[scoreOffset], 0, false, true);
+            scoreMatmul.End();
+        }
+    }
+#endif
+
     template <typename TilingData>
     __aicore__ inline void DecodeTask(int64_t task, GM_ADDR cuSeqlens, GM_ADDR chunkIndices,
                                       const TilingData *tiling, int64_t &inputOffset, int64_t &valid)
@@ -146,9 +229,21 @@ private:
     {
         AscendC::GlobalTensor<T> kGm;
         AscendC::GlobalTensor<float> scoreGm;
-        kGm.SetGlobalBuffer(reinterpret_cast<__gm__ T *>(k) + inputOffset);
-        scoreGm.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(score) +
-                                task * static_cast<int64_t>(tiling->BT * tiling->BT));
+        const uint64_t kElements = static_cast<uint64_t>(tiling->B) *
+                                   static_cast<uint64_t>(tiling->Hk) *
+                                   static_cast<uint64_t>(tiling->T) *
+                                   static_cast<uint64_t>(tiling->K);
+        const uint64_t scoreElements = static_cast<uint64_t>(tiling->taskNum) *
+                                       static_cast<uint64_t>(tiling->BT) *
+                                       static_cast<uint64_t>(tiling->BT);
+        const uint64_t kOffset = static_cast<uint64_t>(inputOffset);
+        const uint64_t scoreOffset = static_cast<uint64_t>(task) *
+                                     static_cast<uint64_t>(tiling->BT) *
+                                     static_cast<uint64_t>(tiling->BT);
+        kGm.SetGlobalBuffer(reinterpret_cast<__gm__ T *>(k) + inputOffset,
+                            kElements > kOffset ? kElements - kOffset : 0);
+        scoreGm.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(score) + scoreOffset,
+                                scoreElements > scoreOffset ? scoreElements - scoreOffset : 0);
 
         LayoutK tagK = LayoutK::MakeLayout<T>(valid, tiling->K);
         LayoutKt tagKt = LayoutKt::MakeLayout<T>(tiling->K, valid);

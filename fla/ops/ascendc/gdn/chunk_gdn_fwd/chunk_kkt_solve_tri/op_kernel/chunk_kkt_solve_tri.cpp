@@ -1,8 +1,12 @@
 #include "chunk_kkt_solve_tri_tiling_key.h"
 #include "chunk_kkt_cube.h"
 #include "chunk_scaled_dot_kkt.h"
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+#include "arch35/solve_tri_ascend950.h"
+#else
 #include "solve_tri_cube.h"
 #include "solve_tri_vector.h"
+#endif
 
 using namespace AscendC;
 
@@ -15,6 +19,17 @@ __aicore__ inline void RunSolvePhase(GM_ADDR a, GM_ADDR cuSeqlens, GM_ADDR chunk
                                      GM_ADDR out, GM_ADDR workspace,
                                      const ChunkKktSolveTriTilingData *tilingData)
 {
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+    if ASCEND_IS_AIC {
+        CrossCoreWaitFlag(KKT_READY_FLAG);
+    }
+    if ASCEND_IS_AIV {
+        CrossCoreSetFlag<0x2, PIPE_MTE3>(KKT_READY_FLAG);
+    }
+    SolveTri<T, T> solve;
+    solve.Init(a, cuSeqlens, chunkIndices, out, workspace, tilingData);
+    solve.Process();
+#else
     if ASCEND_IS_AIC {
         // CrossCoreSetFlag<0x2> merges the paired AIV signals into one event.
         // Wait once so solve cannot consume the GM hand-off before both writers finish MTE3.
@@ -33,6 +48,7 @@ __aicore__ inline void RunSolvePhase(GM_ADDR a, GM_ADDR cuSeqlens, GM_ADDR chunk
         }
         CrossCoreSetFlag<0x2, PIPE_MTE3>(KKT_READY_FLAG);
     }
+#endif
 }
 }  // namespace
 

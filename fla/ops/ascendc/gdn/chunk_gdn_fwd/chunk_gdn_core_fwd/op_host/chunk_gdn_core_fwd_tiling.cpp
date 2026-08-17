@@ -6,10 +6,12 @@
 
 #include "../../chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
 #include "../../chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling.h"
+#include "../../chunk_gated_delta_rule_fwd_h/op_kernel/chunk_gated_delta_rule_fwd_h_struct.h"
 #include "../../chunk_recompute_wu_fwd_ho/op_kernel/chunk_recompute_wu_fwd_ho_struct.h"
 #include "../op_kernel/chunk_gdn_core_fwd_struct.h"
 
 #include "securec.h"
+#include "tiling/tiling_api.h"
 #include "tiling/platform/platform_ascendc.h"
 #include "tiling_base/tiling_templates_registry.h"
 #include <algorithm>
@@ -85,6 +87,33 @@ bool GetChunkCount(const gert::StorageShape *shape, uint64_t *count)
         return true;
     }
     return false;
+}
+
+ge::graphStatus BuildAbcCubeTiling(uint64_t bt, uint64_t k, ge::DataType dtype,
+                                   AscendC::tiling::TCubeTiling &tiling)
+{
+    matmul_tiling::MatmulApiTiling mm;
+    const auto inputType = dtype == ge::DT_BF16
+                               ? matmul_tiling::DataType::DT_BF16
+                               : matmul_tiling::DataType::DT_FLOAT16;
+    if (mm.SetAType(matmul_tiling::TPosition::GM, matmul_tiling::CubeFormat::ND,
+                    inputType, false) != 0 ||
+        mm.SetBType(matmul_tiling::TPosition::GM, matmul_tiling::CubeFormat::ND,
+                    inputType, true) != 0 ||
+        mm.SetCType(matmul_tiling::TPosition::GM, matmul_tiling::CubeFormat::ND,
+                    matmul_tiling::DataType::DT_FLOAT) != 0 ||
+        mm.EnableBias(false) != 0) {
+        return ge::GRAPH_FAILED;
+    }
+    const int32_t btI32 = static_cast<int32_t>(bt);
+    const int32_t kI32 = static_cast<int32_t>(k);
+    if (mm.SetShape(btI32, btI32, kI32) != 0 ||
+        mm.SetOrgShape(btI32, btI32, kI32) != 0 ||
+        mm.SetFixSplit(btI32, btI32, -1) != 0 ||
+        mm.SetBufferSpace(-1, -1, -1, -1) != 0) {
+        return ge::GRAPH_FAILED;
+    }
+    return mm.GetTiling(tiling) == -1 ? ge::GRAPH_FAILED : ge::GRAPH_SUCCESS;
 }
 
 } // namespace
@@ -236,6 +265,12 @@ ge::graphStatus Tiling4ChunkGdnCoreFwd(gert::TilingContext *context)
     abc.totalChunks = static_cast<int64_t>(abc.NT);
     abc.layoutMode = isVarlen ? 3 : 0;
     abc.dtypeMode = isBf16 ? 1 : 0;
+    abc.totalTokens = isVarlen ? tokens : 0;
+    OP_CHECK_IF(BuildAbcCubeTiling(abc.BT, abc.K, inputDtype,
+                                   abc.cubeTilingData) != ge::GRAPH_SUCCESS,
+                OP_LOGE(context->GetNodeName(),
+                        "Failed to build the Phase 6 KKT Matmul tiling."),
+                return ge::GRAPH_FAILED);
     uint64_t workspaceOffset = AlignUp(workspaceSizes[0] - systemWorkspace, WORKSPACE_ALIGNMENT);
     trailer.scoreWorkspaceOffset = workspaceOffset;
     workspaceOffset += abc.scoreWorkspaceBytes;
@@ -248,7 +283,13 @@ ge::graphStatus Tiling4ChunkGdnCoreFwd(gert::TilingContext *context)
     workspaceSizes[0] = systemWorkspace + workspaceOffset;
 
     ChunkGatedDeltaRuleFwdHTilingData hTiling;
-    const uint64_t oTilingOffset = AlignUp(hTiling.GetDataSize(), TILING_ALIGNMENT);
+    const uint64_t hTilingSize = hTiling.GetDataSize();
+    OP_CHECK_IF(hTilingSize != sizeof(::ChunkGatedDeltaRuleFwdHTilingData),
+                OP_LOGE(context->GetNodeName(),
+                        "FwdH host/kernel tiling size mismatch: host=%lu, kernel=%zu.",
+                        hTilingSize, sizeof(::ChunkGatedDeltaRuleFwdHTilingData)),
+                return ge::GRAPH_FAILED);
+    const uint64_t oTilingOffset = AlignUp(hTilingSize, TILING_ALIGNMENT);
     const uint64_t phase5TrailerEnd = oTilingOffset + sizeof(GDN::ChunkFwdOTilingData) +
                                       sizeof(GDN::ChunkRecomputeWUFwdHOTrailer);
     const uint64_t phase6TrailerOffset = AlignUp(phase5TrailerEnd, TILING_ALIGNMENT);

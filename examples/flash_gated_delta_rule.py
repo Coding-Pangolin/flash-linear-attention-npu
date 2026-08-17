@@ -847,6 +847,7 @@ def flash_chunk_gated_delta_rule_fwd(
         cu_seqlens=cu_seqlens,
         chunk_indices=chunk_indices,
         chunk_size=chunk_size,
+        output_dtype=torch.float32,
     )
 
     A = solve_tri_auto(
@@ -880,11 +881,8 @@ def flash_chunk_gated_delta_rule_fwd(
         initial_state=initial_state,
         output_final_state=output_final_state,
         chunk_size=chunk_size,
-        save_new_value=True,
         cu_seqlens=cu_list,
         chunk_indices=chunk_list,
-        use_exp2=False,
-        transpose_state_layout=False,
     )
     o = ascendc_chunk_fwd_o(
         q,

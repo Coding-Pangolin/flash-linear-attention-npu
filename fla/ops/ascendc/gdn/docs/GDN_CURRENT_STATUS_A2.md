@@ -1,6 +1,141 @@
 # GDN 当前进度 A2
 
-更新时间：2026-08-14（Asia/Shanghai）
+更新时间：2026-08-16（Asia/Shanghai）
+
+## A2：最新固定模型三路线门禁结果（2026-08-16，当前有效）
+
+- 正式合同固定为 `B=2,Hk=Hv=32,T=8192,K=V=128,chunk=64,BF16,varlen=False`，device 0，输入文件
+  SHA256 为 `3a4ae595403b429321732cf2f30b3dae2bb6802ee99e9f4720652af5de1ee822`。三路线为干净
+  `main@8a63cf3` 六 ACLNN、同提交锚点 `chw@68a1a45e476d` 六 ACLNN、以及该 chw 工作树的
+  `aclnnGdnCoreFwdPhase6`。
+- 全量十算子 OPP 已完成构建，并通过隔离安装、公共 Python API、ACLNN 符号、10 个 kernel 目录及
+  45 object/45 JSON 校验；当前有效 release 为
+  `/opt/chw/gdn-phase6-deployments-latest-main-20260816/releases/20260816_161252_68a1a45e476d_dirty`。
+  `libcust_opapi.so` SHA256 为 `d2de6e70ac7e40951935e5b07eb17300ab4130d0ae1cca22a919075b2e07b2be`。
+- 有效运行证据根：
+  `/opt/chw/gdn-model-case-a2-results/20260816_162529_b2_hk32_hv32_t8192_kt4096_vt4096_k128_v128_c64_d0`。
+  三路线均完成 3 次 fresh-process 预检；route、shape、dtype、finite 均通过。main 与 chw 各三次均只有
+  一个输出 raw SHA256，且两条 baseline 的 hash 相同：
+  `6b73455ad329d3b3190f5e5679fa7ef6fbb17f31b1a7497933a0cfb1ab83acdf`。
+- **门禁失败**：Phase6 三次 fresh process 分别得到三个不同的输出 raw SHA256：
+  `2d71a788...d271a99c`、`eb655d05...33143750`、`f94eced1...fa448393`；
+  `determinism_comparison.json.status=FAIL`。全部输出有限，但 Phase6 不具备重复 bit-exact 性。
+- 对保存的首次输出进行离线量化后，main -> chw 完全 bit-exact；chw -> Phase6 有
+  `4,702,626 / 67,108,864` 个 BF16 raw-bit mismatch（`7.0075%`），`36,647` 个元素超过
+  `atol=rtol=0.01`，最大绝对误差 `0.0457000732`，RMSE `0.000646592`。详见同目录
+  `accuracy_comparison.json`。
+- 脚本在重复确定性门禁处主动停止，**没有**产生本轮 AB/BA NPU Event、正式性能结论或 profiler CSV；
+  任何旧绝对性能数据均不得与本轮拼接。此前 systemd 缺少 `HOME` 的 r2 和前台 SSH 超时的 r1 均为无效中断轮，
+  不纳入上述结论。
+- 当前状态：`THREE_ROUTE_PHASE6_NONDETERMINISTIC_AND_ACCURACY_FAIL_NO_PERF`。冻结性能扩展、profiling
+  和更大矩阵；下一步只能在用户批准新的单变量 Phase6 根因诊断计划后恢复 NPU 实验。
+
+## A2：Phase6 中间量定位（2026-08-16，r5，有效）
+
+- 这是对固定模型三路线失败的单变量定位实验，不是性能实验：同一输入文件、device 0、同一隔离
+  release，先运行一次同分支六 ACLNN reference，再运行 3 次 fresh-process `aclnnGdnCoreFwdPhase6`。
+  输入 SHA256 仍为 `3a4ae595403b429321732cf2f30b3dae2bb6802ee99e9f4720652af5de1ee822`；三次 Phase6
+  route 均明确捕获为 `aclnnGdnCoreFwdPhase6`，workspace 均为 `1054642688` bytes，全部有限。
+- 证据根：`/opt/chw/gdn-phase6-diagnostics/20260816_intermediate_r5`；汇总为
+  `component_comparison.json`，脚本为 `gdn_phase6_intermediate_probe_verify.sh`。
+- `g_cumsum`：Phase6 三次 raw SHA256 完全相同，且三次均与六 ACLNN reference bit-exact（0 mismatch）。
+- `A`：Phase6 三次 raw SHA256 完全相同，且三次均与六 ACLNN reference bit-exact（0 mismatch）。
+- `o`：Phase6 三次分别为 3 个 raw SHA256，重复 bit-exact 失败；相对 reference 的 BF16 raw mismatch
+  分别为 `4,676,252 (6.9682%)`、`4,740,985 (7.0646%)`、`4,626,922 (6.8947%)`，最大绝对误差分别为
+  `0.0462494`、`0.0388489`、`0.0417480`。这与三路线正式门禁的漂移结论一致。
+- 当前可证明的首个**可观测**分歧在 `A/g_cumsum` 之后、公开 `o` 之前：Cumsum、KKT、SolveTri
+  这条 ABC 产物链在本 case 上不是漂移源。`A` 之后还经过 Recompute W/U、FwdH、FwdO，
+  仅凭公开输出不能在这三个阶段之间继续定位；因此根因状态仍为
+  `PHASE6_DRIFT_AFTER_A_BEFORE_O_UNRESOLVED`，不宣称已定位到具体 kernel。
+- 仍冻结 AB/BA NPU Event、profiler、1000-case、V=256 和其它 shape；下一条实验必须是经过批准的
+  Recompute W/U/H/O 内部单变量观测或替代路径对照。
+
+## A2：HO 单变量同步探针门禁（2026-08-16）
+
+- 本次只验证一个变量：在 `RunPhase6` 的 solve/recompute 边界插入一处 `SyncAll`，并只替换
+  BF16 固定变体 `ChunkGdnCoreFwd_e9ff32ae361a136aa58ab0f8fa63b7a5`；其余 host、OPP、变体和全局
+  `current` 均保持不变。隔离 release：
+  `/opt/chw/gdn-phase6-deployments/releases/20260816_122612_68a1a45e476d_e9ff32ae361a136aa58ab0f8fa63b7a5_probe`。
+- 固定输入为既有 `B=2,H=32,T=8192,K=V=128,BF16,C=64`，输入文件 SHA256 为
+  `3a4ae595403b429321732cf2f30b3dae2bb6802ee99e9f4720652af5de1ee822`，device 1，fresh process。
+- 结果：repeat 1 `PASS`、finite，output raw SHA256
+  `a514557e883edc5baea3e17438c527531014b06a834c610c9b13ee8fb43cd406`；repeat 2 在输出检查阶段
+  报 `RuntimeError: non-finite GDN output`。因此该单变量变体未通过稳定性门禁，不能扩大到更多重复或 case，
+  也不能宣称 `SyncAll` 修复有效。
+- 原始证据：`/opt/chw/gdn-phase6-probes/a2_ho_sync_bf16_r2`；验证 unit 已结束且无残留 probe 进程。
+- 当前门禁：`PHASE6_HO_SYNCALL_PROBE_FAIL_NONFINITE`。1000-case、V=256、Phase3/4 扩展及其它设备实验继续冻结，
+  仅保留后台完整编译作为构建证据，不激活其产物。
+
+## A2：固定模型三路线正式门禁（2026-08-16）
+
+- 运行根：`/opt/chw/gdn-model-case-a2-results/three_route_20260816_r1`；合同为
+  `B=2,Hk=Hv=32,T=8192,K=V=128,chunk=64,BF16,varlen=False`，device 1，输入文件 SHA256
+  `3a4ae595403b429321732cf2f30b3dae2bb6802ee99e9f4720652af5de1ee822`。
+- `main_baseline@8a63cf3` 和 `chw_baseline@68a1a45` 均完成 fresh-process 3/3，六 ACLNN 路由、输出 shape/dtype、finite 门禁通过。
+- 旧 Phase6 release `20260816_023919_68a1a45e476d_dirty` 首次 Phase6 preflight 触发
+  `507015` AICore MPU 非法地址，正式脚本在性能扩展前停止；无 Event/profiler 数据可用。
+- 旧 release 的 `source_status` 未包含当前本地 core/tiling 配套改动。已将本地 dirty tree（基底仍为
+  `68a1a45e476d`）应用到远端隔离 clone `/opt/chw/self/code/phase6-latest-main-20260816`，并启动独立构建 unit
+  `gdn-phase6-latest-main-build-20260816-r1.service`，deployment root 为
+  `/opt/chw/gdn-phase6-deployments-latest-main-20260816`；该 unit 不改动正式 `current`。
+- 这是当时的历史构建状态；后续完整包已发布并完成三路线复测，当前有效结论以文首
+  “最新固定模型三路线门禁结果”为准：Phase6 重复确定性与容差均失败，未恢复 AB/BA 或 profiling。
+
+## A2：baseline repair2 case585 根因与 R19 修复（2026-08-15）
+
+- 当前首要功能门禁已从 R18 全 1000-case 首轮收敛到唯一重复异常 case585：
+  `state_initial_final_0185_fp16_b1_lb16_hk4_hv8_c64_t1136`。
+- 已定位首个错误算子为 `aclnnChunkGatedDeltaRuleFwdH`，首个错误输出为
+  `final_state`；同次 `h` 和 `v_new` 不漂移。
+- 根因是 scalar-g 模板 `kGated=false` 的 `blockTokens < 16` TailH 无条件读
+  `gmKDecayWorkspace`，而该 workspace 只在 `kGated=true` 有生产者；因此将未定义
+  workspace 内容带入 final-state 更新。
+- R19 最小修复：`kGated=true` 保持读 K-decay workspace，`kGated=false` 改读真实
+  `gmK`。R18 -> R19 只有这一个功能变量。
+- R19 FwdH 同进程 20/20 finite 且 `h/v_new/final_state` 各一个 raw hash；官方六 ACLNN
+  整网 fresh-process 5/5 finite、outer/core 门禁逐次通过、所有定义组件跨次 bit-exact。
+- 为排除低概率不确定性，随后在同一 A2 device 3、同一共享 VLLM 环境中追加 100 次
+  fresh-process 重放：100/100 `PASS`、100/100 finite、outer/core 门禁 100/100 通过；
+  输入六路 hash、整网五类定义组件 raw hash 和 26 个 `valid_a_chunks` 均各只有一个状态。
+  汇总证据：
+  `/opt/chw/gdn-main-vs-phase6-full1000-r1/baseline_repair2/analysis_case585_r19_full_r100/evidence/r100_validation_summary.json`。
+- 该结果证明 case585 在 R19 隔离候选上的 100 次重放未观察到跨次不确定性；尚不等同于
+  统一生产候选的 1000-case 三轮验收，也不覆盖其它 SOC。
+- CPU 公式对照进一步证明 R19 恢复了正确 K 项：差异点仅在短尾序列的 K 行
+  63/127，R19 误差比 R18 主要坏态下降约 50--1000 倍。
+- 当前状态：`CASE585_SCALAR_TAIL_K_R19_TARGETED_PASS_R100`。尚未将隔离 R19 宣称为生产版，
+  下一门禁是带回统一候选后用原 1000 条保存输入做三轮 fresh-process 验收。
+- 详细证据见
+  [`GDN_FWDH_SCALAR_TAIL_K_R19_A2.md`](evidence/phase6_original_h_provenance_20260803/GDN_FWDH_SCALAR_TAIL_K_R19_A2.md)；
+  远程原始证据根为 `/opt/chw/gdn-case585-scalar-tailk-20260815-r19/evidence`。
+
+## A2：三路线正式性能实验准备状态（2026-08-15）
+
+- 本轮正式口径固定为同一输入、同一卡、同进程隔离的三条路线：干净
+  `main@8a63cf3eb288` 六 ACLNN、`chw@68a1a45e476d` 同分支六 ACLNN、同一
+  `chw` 分支的 Phase6。报告拆分为总体收益（main -> Phase6）、旧算子修改收益
+  （main -> chw 六算子）和纯融合收益（chw 六算子 -> Phase6）。
+- `main_baseline` release
+  `/opt/chw/gdn-baseline-deployments/releases/20260815_114734_8a63cf3eb288` 已核验为上述固定
+  commit，且六 ACLNN public/workspace 符号门禁通过。上游 main 后续推进（当前可见 tip 为
+  `73798c9`）不改变此 case 的定义。
+- 当前 `chw` 工作树以 `68a1a45e476d` 为提交锚点。此前
+  `/opt/chw/gdn-phase6-deployments/releases/20260815_115317_68a1a45e476d` 是旧隔离 release；
+  2026-08-15 正在通过 `gdn_phase6_build_deploy.sh` 从当前工作树生成完整 OPP 包。此前一次
+  `--ops=chunk_gdn_core_fwd` 的局部包缺少
+  `aclnnGdnCoreFwdPhase6GetWorkspaceSize`，因此不可用于本轮正式测试；完整包尚未激活前，
+  三路线 NPU 测试不得启动。
+- 首次 NPU 执行因脚本误加入未批准的 recurrent 第四路线，在
+  `aclnnRecurrentGatedDeltaRuleGetWorkspaceSize` 返回 `aclnnStatus=561103` 后按
+  失败即停止；三条正式路线尚未启动，不得据此写入性能或精度结论。失败证据：
+  `/opt/chw/gdn-three-route-results/20260815_125611_b1_hk2_hv4_t16384_kt256_vt512_k128_v128_c64_d4`。
+- 修正脚本后再次启动时，device 4 在 `main_baseline` 前被 `VLLMWorker_TP` 占用，且
+  device 0-7 全部有同类进程；空卡门禁再次停止执行，未发射任何 GDN kernel。失败证据：
+  `/opt/chw/gdn-three-route-results/20260815_141103_b1_hk2_hv4_t16384_kt256_vt512_k128_v128_c64_d4`。
+- 已将本地和远端 `/opt/chw/self` 的测试入口收敛为三路线，静态 `bash -n`、Python AST
+  和路线残留检查均通过。用户已授权 A2 共享卡运行，固定模型入口默认
+  `GDN_REQUIRE_IDLE=0`，但会保存运行前 `npu-smi` 快照并在结论中标注常驻 VLLM 竞争；待完整
+  Phase6 OPP 的符号门禁通过后，先做固定输入预检，再做 AB/BA 与 profiler。
 
 ## A2：Phase6 原生 GVA + 任意 dense T 最小闭环（2026-08-14）
 
@@ -121,6 +256,36 @@
   repair1 运行期间不扩大到其它 case、1000-case、V=256 或 layout 矩阵。
 
 ## 唯一当前结论
+
+## A2：固定模型三路线正式包重建（2026-08-16）
+
+- 正式合同固定为 `B=2,Hk=Hv=32,T=8192,K=V=128,chunk_size=64,BF16,varlen=False`；三条
+  路线为干净 `main@8a63cf3eb288` 六 ACLNN、同基底本地 `chw@68a1a45e476d` 六 ACLNN，及同一
+  `chw` 工作树的 `aclnnGdnCoreFwdPhase6`。
+- 两条 baseline 已完成三次 fresh-process 预检：路线调用、shape/dtype、全部有限值门禁均通过。
+  旧 Phase6 release 在首个预检报 `507015`，设备日志为 `ChunkGdnCoreFwd` AICore MPU 非法访存；
+  因此旧 release 未进入 Event 或 profiler，不能据其产生任何性能结论。
+- 本地最新未提交工作树已以 `68a1a45e476d` 为提交锚点同步到
+  `/opt/chw/self/code/phase6-latest-main-20260816`；`git apply --check` 与 `git diff --check` 通过。
+  此处“最新”只指本地工作树，不指持续推进的 upstream main tip。
+- 第一轮完整包构建在 protobuf 编译向共享 `/tmp` 写临时汇编时遇到 `No space left on device`；这是基础设施
+  失败，不是源码/算子编译错误，失败 staging 和日志均保留在
+  `/opt/chw/gdn-phase6-deployments-latest-main-20260816/.staging_20260816_125831_68a1a45e476d_dirty_801142`。
+- 历史记录：第二轮隔离重建当时运行于 systemd 单元
+  `gdn-phase6-latest-main-build-20260816-r2.service`，部署根
+  `/opt/chw/gdn-phase6-deployments-latest-main-20260816`，临时目录
+  `/opt/chw/gdn-phase6-build-tmp-20260816-r2`，并行度 `-j2`。它不覆盖任何旧 release/current。
+  截至记录时 `SolveTri`、`ChunkCumsumKkt`、`ChunkCumsumKktSolveTri`、`ChunkFwdO` 和部分 `FwdH`
+  已完成，正在编译 `FwdH/HO` 变体；服务为 `active/running`、编译器满核，未见新的错误。
+- 新包通过安装与符号/内核目录校验后，才允许用
+  `PHASE6_DEPLOY_ROOT=/opt/chw/gdn-phase6-deployments-latest-main-20260816`
+  运行 `gdn_test_model_case_a2.sh`。测试入口已确认先做三路 3 次 fresh-process 预检，之后才执行 AB/BA
+  NPU Event，最后每路采集 Level2 + PipeUtilization 和 5 类 CANN CSV。
+- 当前构建余量已由生成参数文件核实：`ChunkGatedDeltaRuleFwdHO` 共 8 个参数族，5 个已落盘、3 个仍在
+  编译；`ChunkGdnCoreFwd` 共 4 个参数族，尚未开始。故当前长时间运行属于全量 OPP 展开，不是无日志卡死。
+- 该构建随后生成完整 `.run` 包；包装脚本首次因 `-j2` 续行异常未发布，复用同一 `.run` 后已完成
+  隔离安装和符号/内核/API 校验。当前状态已更新为文首的
+  `THREE_ROUTE_PHASE6_NONDETERMINISTIC_AND_ACCURACY_FAIL_NO_PERF`。
 
 - 当前定位对象是原 main 六 ACLNN baseline 的自非 bit-exact，不是 Phase6 独有问题。
 - 首个漂移输出已定位到 `aclnnChunkGatedDeltaRuleFwdH.v_new`；后续 `ChunkFwdO.output` 只是传播。

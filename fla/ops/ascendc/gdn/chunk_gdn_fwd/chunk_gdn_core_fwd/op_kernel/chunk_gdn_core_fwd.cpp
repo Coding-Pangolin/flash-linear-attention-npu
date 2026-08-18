@@ -24,6 +24,9 @@ constexpr uint32_t OWNER_V_TO_MTE3_EVENT = 1;
 constexpr uint32_t OWNER_MTE3_TO_V_EVENT = 2;
 constexpr uint32_t UB_ALIGNMENT = 32;
 constexpr uint32_t PHASE6_TILING_ALIGNMENT = 8;
+// Score completion is the only cross-core dependency before the AIV epilogue.
+// Keep it separate from the later SolveTri hand-off (flag 5).
+constexpr uint64_t PHASE6_SCORE_READY_FLAG = 2;
 constexpr uint64_t PHASE6_SOLVE_DONE_FLAG = 5;
 constexpr int64_t PHASE6_CUMSUM_FAST_BUFFER_LIMIT = 160 * 1024;
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
@@ -283,9 +286,15 @@ __aicore__ inline void RunPhase6(
         RunPhase6Cumsum(rawG, cuSeqlens, chunkIndices, gCumsumBht, abc);
     }
 
-    // The cumsum and score stages are independent. Join them once before the
-    // old BF16 KKT epilogue consumes both the score tiles and the cumsum view.
-    AscendC::SyncAll<false>();
+    // Cumsum is already complete on each AIV when it reaches this point. The
+    // epilogue only needs the AIC score completion, so avoid draining all
+    // pipelines with a full SyncAll here.
+    if ASCEND_IS_AIC {
+        AscendC::CrossCoreSetFlag<0x2, PIPE_FIX>(PHASE6_SCORE_READY_FLAG);
+    }
+    if ASCEND_IS_AIV {
+        AscendC::CrossCoreWaitFlag(PHASE6_SCORE_READY_FLAG);
+    }
 
     if ASCEND_IS_AIV {
         AscendC::TPipe kktPipe;

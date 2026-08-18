@@ -86,15 +86,19 @@ python scripts/check_npu_env.py --build-only
 
 ```sh
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
-FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w dist
+FLA_NPU_SOC=ascend910b python scripts/build_wheel.py
 ```
+
+脚本内部仍使用 `pip wheel --no-build-isolation --no-deps` 完成构建，并在成功后打印本轮
+wheel 的绝对路径和可直接复制执行的强制覆盖安装命令。可通过 `--wheel-dir` 修改默认的
+`dist/` 输出目录。
 
 修改任何源码或适配后，重新执行同一条命令做全量构建。构建流程会清理上一轮
 `build/`、`build_out/` 和 `output/` 中间产物，不依赖 Git diff 或旧 CMake 状态决定
 编译范围：
 
 ```sh
-FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w dist
+FLA_NPU_SOC=ascend910b python scripts/build_wheel.py
 ```
 
 构建完成后，wheel 仍统一输出到 `dist/`。该目录可能同时存在不同版本或构建标签
@@ -160,68 +164,6 @@ python scripts/check_packaged_wheel_api.py
 
 `torch.ops.npu.*` / `torch_npu.ops.*` 是旧版本（v26.6.0 及更早）的调用方式，**v26.6.0 之后不再维护旧版本兼容接口**，新代码请使用 `fla_npu.ops.ascendc` 下的稳定 Python 入口。迁移期如需临时兼容（`install_torch_npu_ops_compat()` / `load_legacy_torch_ops()`）及其注意事项（如 `hasattr(torch_npu.ops, ...)` 的版本差异），见[兼容与迁移指南](docs/migration-guide.md)。
 
-#### 测试单算子
-
-```sh
-# 运行测试
-cd torch_custom/fla_npu/test
-bash test.sh --device 0                      # 全量测试
-bash test.sh --device 0 --op causal_conv1d   # 单个 AscendC 测试任务
-```
-
-`test.sh` 仅在**源码树已内建 OPP**（`fla_npu/opp/vendors/fla_npu_transformer` 下存在
-`libcust_opapi.so`）时才把源码目录 prepend 到 `PYTHONPATH`；按 Step 2/3 只安装了 wheel
-的用户直接运行即可，测试会使用已安装 wheel 的内嵌 OPP，不会被源码树骨架 OPP 遮蔽。
-
-> 部分用例（`chunk_bwd_dv_local` / `prepare_wy_repr_bwd_full` / `recompute_w_u_fwd`）的
-> 精度比对依赖内部 `ct` 模块（`ct.single` / `ct.dual` / `ct.isclose`），该模块不随 CANN
-> 或 `requirements.txt` 提供。全新环境运行全量 `test.sh` 时，这些用例会因
-> `ModuleNotFoundError: No module named 'ct'` 失败，属预期现象；单算子冒烟建议选择
-> `gdn_fwd_o` 等不依赖 `ct` 的用例。每个用例默认超时 300s。
-
-`--op` 当前仅覆盖 `test.sh` 已接入的 AscendC 测试任务，可选值：
-
-- `prepare_wy_repr_bwd_full`
-- `chunk_gated_delta_rule_bwd_dhu`
-- `chunk_bwd_dv_local`
-- `causal_conv1d`
-- `prepare_wy_repr_bwd_da`
-- `chunk_bwd_dqkwg`
-- `gdn_fwd_o`
-- `gdn_fwd_h`
-- `recompute_w_u_fwd`
-- `chunk_local_cumsum`
-- `chunk_scaled_dot_kkt`
-
-#### 算子调用方式参考
-
-推荐通过 `fla_npu.ops.ascendc` 或 `fla_npu.ops.triton` 导入对应算子；具体入参可参考
-`torch_custom/fla_npu/test` 下的对应算子测试脚本。
-
-例如：
-
-```python
-import torch
-import fla_npu
-from fla_npu.ops.ascendc import chunk_bwd_dv_local
-
-dv = chunk_bwd_dv_local(...)
-```
-
-使用旧版 `torch.ops.npu.*` / `torch_npu.ops.*` 的存量代码如何迁移到新调用方式，见
-[兼容与迁移指南](docs/migration-guide.md)。
-
-#### 端到端 Example/ST 验证
-
-完成安装后，可以一键运行 GDN 模块。该示例会组装 GDN 相关前向/反向算子，覆盖 AscendC 和 Triton 调用链：
-
-```sh
-python examples/flash_gated_delta_rule.py
-```
-
-在 CI 中新增 / 调整端到端 Example/ST 用例（shape、`gate_source` 等字段）见
-[开发者指南](docs/developer-guide.md) 场景 5。
-
 不再使用时，按 distribution 名卸载：
 
 ```sh
@@ -253,6 +195,91 @@ python scripts/check_install_workflows.py \
 新增适配时，用 `--updated-wheel-op` 声明新增的公开 API。只验证 standalone
 Python wheel 加单算子 run 包时，将 `--base-mode` 设为 `skeleton`。该脚本看护
 打包安装和主要加载通路，不替代算子自身的精度、泛化或性能测试。
+
+### 测试单算子
+
+单算子看护统一使用 `tests/atk` 下的 ATK 工程。每个算子目录包含
+`atk_<op>.json`、`<op>.yaml`、`gen_<op>.py`、`executor_<op>.py` 和本算子
+`README.md`。各算子的输入 shape、dtype、可选输入和 tiling 限制以对应算子 README 为准。
+
+运行前先加载 ATK、CANN 和当前安装的 OPP/Python 环境：
+
+```sh
+source <cann_install_path>/set_env.sh
+atk --version
+npu-smi info
+```
+
+一键执行某个算子的完整 ATK 动作：
+
+```sh
+bash tests/atk/run_test_cpu.sh -op=causal_conv1d -npu_device_id=0
+```
+
+当前 `-op` 可选值为：
+
+- `causal_conv1d`
+- `causal_conv1d_bwd`
+- `chunk_bwd_dqkwg`
+- `chunk_bwd_dv_local`
+- `chunk_fwd_o`
+- `chunk_gated_delta_rule_bwd_dhu`
+- `chunk_gated_delta_rule_fwd_h`
+- `chunk_kda_fwd`
+- `chunk_local_cumsum`
+- `chunk_scaled_dot_kkt`
+- `prepare_wy_repr_bwd`
+- `prepare_wy_repr_bwd_da`
+- `prepare_wy_repr_bwd_full`
+- `recompute_w_u_fwd`
+- `recurrent_gated_delta_rule`
+- `recurrent_kda`
+- `solve_tri`
+
+`run_test_cpu.sh` 支持以下 scope：
+
+```sh
+bash tests/atk/run_test_cpu.sh -op=causal_conv1d -npu_device_id=0 -scope=accuracy
+bash tests/atk/run_test_cpu.sh -op=causal_conv1d -npu_device_id=0 -scope=performance
+bash tests/atk/run_test_cpu.sh -op=causal_conv1d -npu_device_id=0 -scope=determinism
+bash tests/atk/run_test_cpu.sh -op=causal_conv1d -npu_device_id=0 -scope=mssanitizer
+```
+
+默认 `-scope=all` 会执行 CPU 双标杆精度、性能、确定性和 mssanitizer。未设置 `CASE_START/CASE_END` 时不向 ATK 传入 `-s/-e`，会执行JSON中的全部用例；需要只跑指定顺序范围时使用：
+
+```sh
+CASE_START=0 CASE_END=1 \
+bash tests/atk/run_test_cpu.sh -op=causal_conv1d -npu_device_id=0
+```
+
+ATK 工程结构、支持算子索引、环境变量和新增算子规范见
+[`tests/atk/README.md`](tests/atk/README.md)。
+
+### 算子调用方式参考
+
+推荐通过 `fla_npu.ops.ascendc` 或 `fla_npu.ops.triton` 导入对应算子；具体入参可参考 `torch_custom/fla_npu/test` 下的对应算子测试脚本。
+
+例如：
+
+```python
+import torch
+import fla_npu
+from fla_npu.ops.ascendc import chunk_bwd_dv_local
+
+dv = chunk_bwd_dv_local(...)
+```
+
+### 端到端 Example/ST 验证
+
+完成安装后，可以一键运行 GDN 模块。该示例会组装 GDN 相关前向/反向算子，覆盖 AscendC 和 Triton 调用链：
+
+```sh
+python examples/flash_gated_delta_rule.py
+```
+
+NPU CI 的 Example/ST 用例由 [`ci/example_st_cases.json`](ci/example_st_cases.json) 管理。当前默认启用 `case1_current_default`，shape 与上面的直接运行默认值一致；后续 GVA、`Vdim=256` 等泛化场景可以在该文件中新增用例，显式填写 `B`、`T`、`chunk_size`、`query_head`、`value_head`、`Kdim`、`Vdim` 等 shape 字段，以及 `gate_source`、`gate_function`、`initial_state`、`output_final_state`、`qk_l2norm` 等行为字段。
+
+当前端到端 Example/ST 已支持 `gate_source=g`；`gk` / `g+gk` 先作为用例 schema 预留，待 NPU fwd_h 路径支持后再启用。
 
 ## 开发者指引
 

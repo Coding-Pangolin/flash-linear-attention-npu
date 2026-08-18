@@ -168,8 +168,8 @@ dv = chunk_bwd_dv_local(...)
 
 ## 场景 4：测试单算子
 
-测试命令与 `--op` 可选值已在根 [README](../README.md) Step 4 的"测试单算子"节完整列出；
-本场景仅补充开发调试时可用的选项：
+单算子看护的命令与 `-op` 可选值已在根 [README](../README.md) Step 4 的"测试单算子"节完整列出
+（ATK 工程）；本场景仅补充开发调试时可用的 `test.sh` 选项：
 
 ```sh
 cd torch_custom/fla_npu/test

@@ -1,0 +1,129 @@
+"""prepare_wy_repr_bwd_full 的 ATK executor。
+
+输入生成、CPU 标杆、run_cpu、run_npu 和 FunctionApi 都放在本算子目录中。
+"""
+
+from __future__ import annotations
+
+import math
+import sys
+from pathlib import Path
+from typing import Any
+
+import torch
+import torch.nn.functional as F
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+
+from atk.configs.dataset_config import InputDataset
+from atk.configs.results_config import TaskResult
+from atk.tasks.api_execute import register
+from atk.tasks.api_execute.base_api import BaseApi
+
+from _ascendc_common_executor import (
+    _RCP_LN2,
+    _calc_dtype,
+    _case_spec,
+    _chunks,
+    _finite_tuple,
+    _gate,
+    _int_tensor,
+    _kda_gate,
+    _marker_device,
+    _num_chunks,
+    _orig_dtype,
+    _rand,
+    _randn,
+    _zeros,
+)
+
+
+OP_NAME = "prepare_wy_repr_bwd_full"
+
+
+def build_inputs(spec: dict[str, Any], device: torch.device, high_precision: bool = False) -> dict[str, Any]:
+    dtype_name = str(spec.get("dtype", "bf16")).lower()
+    calc_dtype = _calc_dtype(dtype_name, high_precision)
+    seed = int(spec.get("seed", 20260817))
+    B, HK, HV, T, K, V = (int(spec[x]) for x in ("B", "HK", "HV", "T", "K", "V"))
+    chunk_size = int(spec["chunk_size"])
+    inputs = {
+        "k": _randn((B, HK, T, K), dtype_name, calc_dtype, device, seed + 1),
+        "v": _randn((B, HV, T, V), dtype_name, calc_dtype, device, seed + 2),
+        "beta": _rand((B, HV, T), "fp32", torch.float64 if high_precision else torch.float32, device, seed + 3, 0.1, 0.9),
+        "A": _randn((B, HV, T, chunk_size), dtype_name, calc_dtype, device, seed + 4),
+        "g": _gate((B, HV, T), torch.float64 if high_precision else torch.float32, device, seed + 5),
+        "chunk_size": chunk_size,
+    }
+    if OP_NAME != "recompute_w_u_fwd":
+        inputs["dw"] = _randn((B, HV, T, K), dtype_name, calc_dtype, device, seed + 6)
+        inputs["du"] = _randn((B, HV, T, V), dtype_name, calc_dtype, device, seed + 7)
+    if OP_NAME == "prepare_wy_repr_bwd_full":
+        inputs["dA"] = _zeros((B, HV, T, chunk_size), dtype_name, calc_dtype, device)
+    return inputs
+
+
+def _prepare_wy_common_ref(inputs):
+    k, v, beta, A, g = inputs["k"], inputs["v"], inputs["beta"], inputs["A"], inputs["g"]
+    dw, du = inputs["dw"], inputs["du"]
+    B, HK, T, K = k.shape
+    HV, V = v.shape[1], v.shape[3]
+    chunk_size = int(inputs["chunk_size"])
+    calc = torch.float64 if k.dtype == torch.float64 else torch.float32
+    dk = torch.zeros((B, HK, T, K), dtype=calc, device=k.device)
+    dv = torch.zeros((B, HV, T, V), dtype=calc, device=k.device)
+    dbeta = torch.zeros((B, HV, T), dtype=calc, device=k.device)
+    dg = torch.zeros((B, HV, T), dtype=calc, device=k.device)
+    group = max(HV // HK, 1)
+    for b in range(B):
+        for hv in range(HV):
+            hk = hv // group
+            for start, end in _chunks(T, chunk_size):
+                length = end - start
+                a = A[b, hv, start:end, :length].to(calc)
+                k_chunk = k[b, hk, start:end].to(calc)
+                v_chunk = v[b, hv, start:end].to(calc)
+                beta_chunk = beta[b, hv, start:end].to(calc)
+                g_chunk = g[b, hv, start:end].to(calc)
+                tmp_w = torch.matmul(a.t(), dw[b, hv, start:end].to(calc))
+                tmp_u = torch.matmul(a.t(), du[b, hv, start:end].to(calc))
+                exp_g = torch.exp(g_chunk).unsqueeze(-1)
+                dk[b, hk, start:end] += tmp_w * beta_chunk.unsqueeze(-1) * exp_g
+                dv[b, hv, start:end] = tmp_u * beta_chunk.unsqueeze(-1)
+                dbeta[b, hv, start:end] += (tmp_w * k_chunk * exp_g).sum(-1) + (tmp_u * v_chunk).sum(-1)
+                dg[b, hv, start:end] += (tmp_w * k_chunk * beta_chunk.unsqueeze(-1) * exp_g).sum(-1)
+    return dk.to(k.dtype), dv.to(v.dtype), dbeta.to(beta.dtype), dg.to(g.dtype)
+
+
+def run_cpu(spec: dict[str, Any], high_precision: bool = False):
+    """运行 CPU 同精度或 fp64 高精度标杆。"""
+    inputs = build_inputs(spec, torch.device("cpu"), high_precision=high_precision)
+    return _prepare_wy_common_ref(inputs)
+
+
+def run_npu(spec: dict[str, Any], input_data: InputDataset):
+    """运行 NPU DUT。"""
+    inputs = build_inputs(spec, _marker_device(input_data), high_precision=False)
+    from fla_npu.ops import ascendc
+
+    return ascendc.prepare_wy_repr_bwd_full(inputs["k"], inputs["v"], inputs["beta"], inputs["A"], inputs["dA"], inputs["dw"], inputs["du"], inputs["g"], inputs["chunk_size"], cu_seqlens=None, chunk_indices=None)
+
+
+@register("executor_prepare_wy_repr_bwd_full")
+class FunctionApi(BaseApi):
+    """ATK 执行入口。"""
+
+    def __init__(self, task_result: TaskResult):
+        super(FunctionApi, self).__init__(task_result)
+        self.is_benchmark_task = bool(task_result.is_benchmark_task)
+        self.high_precision = self.device == "cpu" and self.is_benchmark_task
+
+    def __call__(self, input_data: InputDataset, with_output: bool = False):
+        spec = _case_spec(input_data, OP_NAME)
+        if self.device in {"npu", "pyaclnn"}:
+            outputs = run_npu(spec, input_data)
+        elif self.device == "cpu":
+            outputs = run_cpu(spec, self.high_precision)
+        else:
+            raise RuntimeError(f"{OP_NAME} 仅支持 NPU DUT 与 CPU 标杆节点，当前设备：{self.device!r}")
+        return _finite_tuple(outputs)

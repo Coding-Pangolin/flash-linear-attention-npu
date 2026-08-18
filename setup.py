@@ -27,7 +27,6 @@ except Exception:
 REPO_ROOT = Path(__file__).resolve().parent
 TORCH_EXTENSION_DIR = REPO_ROOT / "torch_custom" / "fla_npu"
 FLA_NPU_PACKAGE_DIR = TORCH_EXTENSION_DIR / "fla_npu"
-
 # The Triton core sources live outside torch_custom/fla_npu (in fla/), so the
 # root find_packages(where=TORCH_EXTENSION_DIR) cannot discover them. Mirror the
 # mapping used by torch_custom/fla_npu/setup.py so the root wheel also ships
@@ -78,6 +77,27 @@ def _read_requirements():
         if line and not line.startswith("#"):
             deps.append(line)
     return deps
+
+
+def _packages():
+    packages = find_packages(
+        where=str(TORCH_EXTENSION_DIR),
+        include=["fla_npu", "fla_npu.*"],
+    )
+    if not TRITON_CORE_SOURCE.is_dir():
+        raise FileNotFoundError(
+            f"Triton source directory is missing: {TRITON_CORE_SOURCE}"
+        )
+    if TRITON_CORE_PACKAGE not in packages:
+        packages.append(TRITON_CORE_PACKAGE)
+    return packages
+
+
+def _package_dir():
+    return {
+        "fla_npu": str(FLA_NPU_PACKAGE_DIR.relative_to(REPO_ROOT)),
+        TRITON_CORE_PACKAGE: str(TRITON_CORE_SOURCE.relative_to(REPO_ROOT)),
+    }
 
 
 def _env_flag(name):
@@ -556,22 +576,6 @@ class BinaryDistribution(Distribution):
 CMDCLASS = {"build_py": FlaNpuBuildPy}
 
 
-def _find_packages() -> list[str]:
-    packages = find_packages(
-        where=str(TORCH_EXTENSION_DIR),
-        include=["fla_npu", "fla_npu.*"],
-    )
-    if TRITON_CORE_SOURCE.is_dir() and TRITON_CORE_PACKAGE not in packages:
-        packages.append(TRITON_CORE_PACKAGE)
-    return packages
-
-
-def _find_package_dir() -> dict[str, str]:
-    package_dir = {"fla_npu": str(FLA_NPU_PACKAGE_DIR.relative_to(REPO_ROOT))}
-    if TRITON_CORE_SOURCE.is_dir():
-        package_dir[TRITON_CORE_PACKAGE] = str(TRITON_CORE_SOURCE.relative_to(REPO_ROOT))
-    return package_dir
-
 if _bdist_wheel is not None:
     class FlaNpuBdistWheel(_bdist_wheel):
         def finalize_options(self):
@@ -594,8 +598,8 @@ setup(
     description="High-performance linear attention operators for Ascend NPU",
     long_description=(REPO_ROOT / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
-    packages=_find_packages(),
-    package_dir=_find_package_dir(),
+    packages=_packages(),
+    package_dir=_package_dir(),
     package_data={"fla_npu": ["opp/**/*"]},
     include_package_data=True,
     license_files=[

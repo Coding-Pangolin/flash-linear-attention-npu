@@ -7,6 +7,8 @@ from typing import List, Optional, Tuple
 
 import torch
 
+_LN2 = 0.69314718055994530942
+
 _PTA_TEST = os.path.abspath(
     os.path.join(
         os.path.dirname(__file__),
@@ -32,7 +34,28 @@ def _round_elem(x: torch.Tensor, elem_dtype: torch.dtype) -> torch.Tensor:
 
 
 def _matmul_npu_aligned(a: torch.Tensor, b: torch.Tensor, elem_dtype: torch.dtype) -> torch.Tensor:
-    return _round_elem(a, elem_dtype) @ _round_elem(b, elem_dtype)
+    a = _round_elem(a, elem_dtype).contiguous()
+    b = _round_elem(b, elem_dtype).contiguous()
+    if a.device.type == "npu" and a.dim() > 3:
+        batch_shape = torch.broadcast_shapes(a.shape[:-2], b.shape[:-2])
+        if a.shape[:-2] != batch_shape:
+            a = a.expand(*batch_shape, *a.shape[-2:]).contiguous()
+        if b.shape[:-2] != batch_shape:
+            b = b.expand(*batch_shape, *b.shape[-2:]).contiguous()
+
+        m = a.shape[-2]
+        n = b.shape[-1]
+        out = a.reshape(-1, m, a.shape[-1]) @ b.reshape(-1, b.shape[-2], n)
+        return out.reshape(*batch_shape, m, n)
+    return a @ b
+
+
+def _gate_exp2(x: torch.Tensor) -> torch.Tensor:
+    return torch.exp(x * _LN2)
+
+
+def _gate_exp(x: torch.Tensor) -> torch.Tensor:
+    return torch.exp(x)
 
 
 def chunk_gated_delta_rule_bwd_dhu_cpu(
@@ -44,11 +67,15 @@ def chunk_gated_delta_rule_bwd_dhu_cpu(
     cu_seqlens: Optional[List[int]] = None,
     chunk_indices: Optional[List[int]] = None,
     g: Optional[torch.Tensor] = None,
+    gK: Optional[torch.Tensor] = None,
+    h0: Optional[torch.Tensor] = None,
+    dht: Optional[torch.Tensor] = None,
     scale: Optional[float] = None,
     chunk_size: int = 64,
     golden_mode: str = "fp32",
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor]:
     """GVA 形状 CPU 标杆。golden_mode: fp64 / npu / fp32。"""
+    del dht
     dtype_ = q.dtype
     if golden_mode == "fp64":
         compute_dtype = torch.float64
@@ -92,6 +119,8 @@ def chunk_gated_delta_rule_bwd_dhu_cpu(
         dv = dv.to(dtype_)
         if g is not None:
             g = g.float()
+        if gK is not None:
+            gK = gK.float()
     else:
         q = q.to(compute_dtype)
         k = k.to(compute_dtype)
@@ -100,6 +129,8 @@ def chunk_gated_delta_rule_bwd_dhu_cpu(
         dv = dv.to(compute_dtype)
         if g is not None:
             g = g.to(compute_dtype)
+        if gK is not None:
+            gK = gK.to(compute_dtype)
 
     def _mm(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         if elem_dtype is None:
@@ -144,6 +175,7 @@ def chunk_gated_delta_rule_bwd_dhu_cpu(
         })
 
     dh = torch.zeros(B, Hv, NT, K, V, device=device, dtype=compute_dtype)
+    dh0 = torch.zeros_like(dh) if h0 is not None else None
     dv2 = dv.clone() if cu_seqlens is not None else torch.zeros(B, Hv, T, V, device=device, dtype=dtype_)
 
     if cu_seqlens is None:
@@ -164,11 +196,11 @@ def chunk_gated_delta_rule_bwd_dhu_cpu(
             b_do = _to_compute(do[:, :, gs:ge, :])
             b_dv_existing = _to_compute(dv[:, :, gs:ge, :])
 
-            b_dv = _mm(k_blk, b_dh)
+            b_dv = _store(_mm(k_blk, b_dh))
             if g is not None:
                 bg_last = g[:, :, global_last_idx].to(torch.float32)
                 b_g = g[:, :, gs:ge].to(torch.float32)
-                gate_factor = torch.exp(bg_last.unsqueeze(-1) - b_g).unsqueeze(-1)
+                gate_factor = _gate_exp(bg_last.unsqueeze(-1) - b_g).unsqueeze(-1)
                 m_t = torch.arange(block_size_t, device=device, dtype=torch.float32) < float(block_size_t)
                 b_dv = b_dv * gate_factor * m_t.view(1, 1, block_size_t, 1)
 
@@ -178,64 +210,78 @@ def chunk_gated_delta_rule_bwd_dhu_cpu(
             b_q_t = q_blk.transpose(-1, -2)
             b_w_t = w_blk.transpose(-1, -2)
             if g is not None:
-                bg_last_exp = torch.exp(bg_last)
-                b_g_exp = torch.exp(b_g)
+                bg_last_exp = _gate_exp(bg_last)
+                b_g_exp = _gate_exp(b_g)
                 b_dh_for_update = b_dh * bg_last_exp.unsqueeze(-1).unsqueeze(-1)
                 b_q_gated = b_q_t * b_g_exp.unsqueeze(-2)
+            elif gK is not None:
+                bgk_last_exp = _gate_exp2(gK[:, :, global_last_idx, :].to(torch.float32))
+                b_dh_for_update = b_dh * bgk_last_exp.unsqueeze(-1)
+                b_q_gated = b_q_t
             else:
                 b_dh_for_update = b_dh.clone()
                 b_q_gated = b_q_t
 
-            term1 = _mm(b_q_gated, b_do) * scale_f
-            term2 = _mm(b_w_t, b_dv)
+            term1 = _store(_mm(b_q_gated, b_do)) * scale_f
+            term2 = _store(_mm(b_w_t, b_dv))
             b_dh = _store(b_dh_for_update + term1 - term2)
+
+        if dh0 is not None:
+            dh0[:, :, 0, :, :] = b_dh
     else:
-        for b in range(B):
-            for i_h in range(Hv):
-                hq = i_h // hv_per_hk
-                num_tokens = len(cu_seqlens) - 1
-                b_dh_buffers = {i_n: torch.zeros(K, V, device=device, dtype=compute_dtype) for i_n in range(num_tokens)}
-                for i_t in range(NT - 1, -1, -1):
-                    info = chunk_info[i_t]
-                    i_n = info["i_n"]
-                    b_dh = b_dh_buffers[i_n]
-                    dh[b, i_h, i_t] = b_dh
-                    gs, ge = info["global_start_t"], info["global_end_t"]
-                    block_size_t = info["block_size_t"]
-                    last_idx = min((info["block_idx_in_token"] + 1) * BT, info["token_length"]) - 1
-                    global_last_idx = info["bos"] + last_idx
+        hq = torch.arange(Hv, device=device, dtype=torch.long) // hv_per_hk
+        num_tokens = len(cu_seqlens) - 1
+        b_dh_buffers = torch.zeros(B, Hv, num_tokens, K, V, device=device, dtype=compute_dtype)
+        for i_t in range(NT - 1, -1, -1):
+            info = chunk_info[i_t]
+            i_n = info["i_n"]
+            gs, ge = info["global_start_t"], info["global_end_t"]
+            block_size_t = info["block_size_t"]
+            b_dh = b_dh_buffers[:, :, i_n, :, :]
+            dh[:, :, i_t, :, :] = b_dh
 
-                    b_do = _to_compute(do[b, i_h, gs:ge, :])
-                    b_dv_existing = _to_compute(dv[b, i_h, gs:ge, :])
-                    b_k = _to_compute(k[b, hq, gs:ge, :])
-                    b_dv = _mm(b_k, b_dh)
+            last_idx = min((info["block_idx_in_token"] + 1) * BT, info["token_length"]) - 1
+            global_last_idx = info["bos"] + last_idx
 
-                    if g is not None:
-                        bg_last = g[b, i_h, global_last_idx].to(torch.float32)
-                        b_g = g[b, i_h, gs:ge].to(torch.float32)
-                        bg_last_exp = torch.exp(bg_last)
-                        b_g_exp = torch.exp(b_g)
-                        m_t = torch.arange(block_size_t, device=device) < block_size_t
-                        b_dv = b_dv * torch.exp(bg_last - b_g).unsqueeze(-1) * m_t.unsqueeze(-1).float()
-                    else:
-                        bg_last_exp = b_g_exp = None
+            k_blk = _to_compute(k[:, :, gs:ge, :].index_select(1, hq))
+            q_blk = _to_compute(q[:, :, gs:ge, :].index_select(1, hq))
+            w_blk = _to_compute(w[:, :, gs:ge, :])
+            b_do = _to_compute(do[:, :, gs:ge, :])
+            b_dv_existing = _to_compute(dv[:, :, gs:ge, :])
 
-                    b_dv = b_dv + b_dv_existing
-                    dv2[b, i_h, gs:ge, :] = _store(b_dv).to(dtype_)
+            b_dv = _store(_mm(k_blk, b_dh))
+            if g is not None:
+                bg_last = g[:, :, global_last_idx].to(torch.float32)
+                b_g = g[:, :, gs:ge].to(torch.float32)
+                gate_factor = _gate_exp(bg_last.unsqueeze(-1) - b_g).unsqueeze(-1)
+                m_t = torch.arange(block_size_t, device=device, dtype=torch.float32) < float(block_size_t)
+                b_dv = b_dv * gate_factor * m_t.view(1, 1, block_size_t, 1)
 
-                    b_q = _to_compute(q[b, hq, gs:ge, :])
-                    b_w = _to_compute(w[b, i_h, gs:ge, :])
-                    b_q_t = b_q.transpose(0, 1)
-                    b_w_t = b_w.transpose(0, 1)
-                    b_dh_for_update = b_dh.clone()
-                    if g is not None:
-                        b_dh_for_update = b_dh_for_update * bg_last_exp
-                        b_q_gated = b_q_t * b_g_exp.unsqueeze(0)
-                    else:
-                        b_q_gated = b_q_t
+            b_dv = b_dv + b_dv_existing
+            dv2[:, :, gs:ge, :] = _store(b_dv).to(dtype_)
 
-                    term1 = _mm(b_q_gated, b_do) * scale_f
-                    term2 = _mm(b_w_t, b_dv)
-                    b_dh_buffers[i_n] = _store(b_dh_for_update + term1 - term2)
+            b_q_t = q_blk.transpose(-1, -2)
+            b_w_t = w_blk.transpose(-1, -2)
+            if g is not None:
+                bg_last_exp = _gate_exp(bg_last)
+                b_g_exp = _gate_exp(b_g)
+                b_dh_for_update = b_dh * bg_last_exp.unsqueeze(-1).unsqueeze(-1)
+                b_q_gated = b_q_t * b_g_exp.unsqueeze(-2)
+            elif gK is not None:
+                bgk_last_exp = _gate_exp2(gK[:, :, global_last_idx, :].to(torch.float32))
+                b_dh_for_update = b_dh * bgk_last_exp.unsqueeze(-1)
+                b_q_gated = b_q_t
+            else:
+                b_dh_for_update = b_dh.clone()
+                b_q_gated = b_q_t
 
-    return dh, None, dv2
+            term1 = _store(_mm(b_q_gated, b_do)) * scale_f
+            term2 = _store(_mm(b_w_t, b_dv))
+            b_dh_buffers[:, :, i_n, :, :] = _store(b_dh_for_update + term1 - term2)
+
+        if dh0 is not None:
+            for info in chunk_info:
+                if info["block_idx_in_token"] == 0:
+                    dh0[:, :, info["i_t"], :, :] = b_dh_buffers[:, :, info["i_n"], :, :]
+
+    return dh, dh0, dv2

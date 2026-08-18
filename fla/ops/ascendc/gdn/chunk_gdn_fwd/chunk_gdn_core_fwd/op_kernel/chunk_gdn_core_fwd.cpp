@@ -109,20 +109,9 @@ __aicore__ inline void WritePublicCumsumRows(
     if ASCEND_IS_AIC {
         return;
     }
-#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-    // Each public BTH chunk has a disjoint destination range.  Split those
-    // chunks across the two A5 AIV subblocks instead of leaving subblock 1
-    // idle during the public-layout writeback.
-    const uint64_t writerPartition = static_cast<uint64_t>(GetSubBlockIdx());
-    const uint64_t writerPartitionCount =
-        static_cast<uint64_t>(GetSubBlockNum());
-#else
     if (GetSubBlockIdx() != 0) {
         return;
     }
-    const uint64_t writerPartition = 0;
-    const uint64_t writerPartitionCount = 1;
-#endif
 
     const uint64_t coreGroup = static_cast<uint64_t>(GetBlockIdx()) /
                                static_cast<uint64_t>(GetSubBlockNum());
@@ -133,9 +122,8 @@ __aicore__ inline void WritePublicCumsumRows(
             : tiling.taskNum;
     bool ownsChunk = false;
     for (uint64_t task = taskBegin; task < taskEnd; ++task) {
-        const uint64_t chunk = task % tiling.NT;
         const uint64_t head = (task / tiling.NT) % tiling.Hv;
-        if (head == 0 && chunk % writerPartitionCount == writerPartition) {
+        if (head == 0) {
             ownsChunk = true;
             break;
         }
@@ -183,7 +171,7 @@ __aicore__ inline void WritePublicCumsumRows(
         const uint64_t chunk = task % tiling.NT;
         const uint64_t head = (task / tiling.NT) % tiling.Hv;
         const uint64_t batch = task / (tiling.Hv * tiling.NT);
-        if (head != 0 || chunk % writerPartitionCount != writerPartition) {
+        if (head != 0) {
             continue;
         }
         uint64_t rowStart = chunk * tiling.BT;

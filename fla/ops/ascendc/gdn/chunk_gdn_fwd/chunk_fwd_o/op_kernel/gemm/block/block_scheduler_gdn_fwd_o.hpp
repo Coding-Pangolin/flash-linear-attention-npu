@@ -166,22 +166,10 @@ struct BlockSchedulerGdnFwdO {
                                        ? GetCompactSequenceIdx(gmChunkOffsets.GetValue(2 * candidateChunkIdx))
                                        : candidateBatchIdx;
         const uint32_t hTaskIdx = hBatchIdx * vNumHead + candidateHeadIdx;
-#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-        // The A5 FwdH scheduler assigns up to two (batch, head) streams to a
-        // core in each wave: core * streamsPerCore + stream, then advances by
-        // coreNum * streamsPerCore. Keep every dependent O chunk on that same
-        // producer core so dense H -> O needs no global hand-off barrier.
-        const uint32_t hTaskNum = shapeBatch * vNumHead;
-        const uint32_t streamsPerCore = hTaskNum > cubeCoreNum
-                                            ? GDN_FWD_O_PING_PONG_STAGES : 1;
-        return cubeCoreNum > 0 &&
-               ((hTaskIdx / streamsPerCore) % cubeCoreNum) == cubeCoreIdx;
-#else
         // FwdH assigns task wave * coreNum + coreIdx, so every dependent O
         // chunk must stay on hTaskIdx % coreNum. The old two-tasks-per-core
         // formula no longer matched FwdH after its wave scheduler was added.
         return cubeCoreNum > 0 && (hTaskIdx % cubeCoreNum) == cubeCoreIdx;
-#endif
     }
 
     CATLASS_DEVICE

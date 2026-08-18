@@ -302,6 +302,26 @@ def _check_make_exists(failures: list[str]) -> None:
         _fail(failures, "make not found (nor ninja as a CMake build backend)")
 
 
+def _check_patch_exists(failures: list[str]) -> None:
+    """Check that the system ``patch`` command is available.
+
+    The CMake third-party build applies source patches via
+    ``PATCH_COMMAND patch -p1 < ...`` (abseil-cpp and ascend protobuf), so a
+    missing ``patch`` only surfaces halfway through the build. It has no
+    version requirement, so we only check presence.
+    """
+    patch = shutil.which("patch")
+    if patch:
+        _ok(f"patch: {patch}")
+    else:
+        _fail(
+            failures,
+            "patch not found. It is required by the CMake third-party build "
+            "(abseil-cpp / ascend protobuf PATCH_COMMAND); install it with the "
+            "system package manager (e.g. apt-get install -y patch).",
+        )
+
+
 def _check_bisheng_exists(failures: list[str]) -> None:
     """Check that the Ascend C kernel compiler (bisheng) is available.
 
@@ -431,6 +451,7 @@ def main() -> int:
     _check_cmake_version(failures)
     _check_gcc_version(failures)
     _check_make_exists(failures)
+    _check_patch_exists(failures)
     _check_bisheng_exists(failures)
     _check_setuptools_version(failures)
     _check_build_system_deps(failures)

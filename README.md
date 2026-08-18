@@ -78,7 +78,7 @@ python scripts/check_npu_env.py
 python scripts/check_npu_env.py --build-only
 ```
 
-预检覆盖编译链上的 `cmake`、`gcc`/`g++`、`setuptools` 版本要求，`make` / `bisheng` 存在性检查，以及 `wheel` / `packaging` / `psutil`（`--no-build-isolation` 构建时需本机已装）的导入检查。其余组件未纳入预检，缺失时会在 `pip wheel` 阶段才报错。各组件的最低版本要求与详细说明见[开发者指南](../docs/developer-guide.md) 场景 2 的工具链依赖表。
+预检覆盖编译链上的 `cmake`、`gcc`/`g++`、`setuptools` 版本要求，`make` / `patch` / `bisheng` 存在性检查，以及 `wheel` / `packaging` / `psutil`（`--no-build-isolation` 构建时需本机已装）的导入检查。其余组件未纳入预检，缺失时会在 `pip wheel` 阶段才报错。各组件的最低版本要求与详细说明见[开发者指南](../docs/developer-guide.md) 场景 2 的工具链依赖表。
 
 > `triton-ascend` 与 CANN 版本需要匹配：CANN 8.x 使用 `>=3.2.0` 即可；CANN 9.x（9.0.0+）因 Ascend Triton 后端 JIT 编译 `npu_utils.cpp` 依赖更新的 `rt.h` 头文件，需要 **`>=3.2.1`**（3.2.0 在 CANN 9.1.0 上会编译失败）。预检会按检测到的 CANN 版本自动校验 `triton-ascend` 是否满足对应下限。
 

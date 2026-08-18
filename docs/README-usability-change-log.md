@@ -527,3 +527,28 @@ reviewer 在 `README.md` 与 `docs/developer-guide.md` 新增 2 条【review】�
 
 - **评论（3757737653）**：建议用 `FLA_NPU_OPS` 环境变量控制一键编包时编译单算子并实测补充到文档。当时判断**不成立**——`FLA_NPU_OPS` 在 PR #274 从 setup.py 移除（`tests/test_wheel_environment.py` 有守卫断言其不得出现），`pip wheel` 只支持全量编包，单算子场景走 developer-guide 场景 1 的 `bash build.sh --pkg ... --ops=<op>` run 包方式，并已在评论下回复说明。
 - **后续用户结论（覆盖 O8）**：PR #274 移除 `FLA_NPU_OPS` 属于**错误移除，应保留**。已据此恢复：`setup.py` `_build_run_package()` 恢复读取 `FLA_NPU_OPS` 并透传 `build.sh --ops=<op>`；README 环境变量表加回 `FLA_NPU_OPS` 行；developer-guide 场景 2 补充 `FLA_NPU_OPS` 单算子 wheel 用法；`tests/test_wheel_environment.py` 移除 `assertNotIn("FLA_NPU_OPS")` 并新增 `test_package_build_supports_single_op_filter` 断言其存在；migration-guide 差异表同步更新。
+
+## P. 第十轮修订（2026-08-18）：处理 issue #63 + PR #280 新增 3 条 review 评论
+
+### 修订 P1（issue #63）：check_npu_env.py 预检新增 patch
+
+- **issue（#63）**：编译安装缺少 `cmake`、`patch` 等系统命令时 README 无提示，构建到第三方源码阶段才报错。8/17 补充评论明确要求：预检 `cmake`（>=3.16）与 `patch`，缺失立即提示，保持 pyproject.toml / 预检 / README 一致。
+- **判断**：`cmake>=3.16` 已在预检覆盖（此前修订）；**patch 未覆盖**——构建在 `cmake/third_party/abseil-cpp.cmake:55` 与 `ascend_protobuf.cmake:57` 的 `PATCH_COMMAND` 中调用系统 `patch`，缺失只在中途暴露。
+- **实际改法**：`check_npu_env.py` 新增 `_check_patch_exists()`（存在性检查，无版本下限，缺失时 `[FAIL]` 并给出 `apt-get install -y patch` 提示）；README Step 2 预检描述与 developer-guide 工具链依赖表同步加 `patch` 行。已实测：本机 `[OK] patch`；空 PATH 模拟缺失时 `[FAIL]` 正确输出。
+- **未改**：`pyproject.toml` 不声明 cmake/patch——`[build-system] requires` 只负责 pip 隔离构建的 Python 包，系统命令应由预检 + 文档覆盖（`--no-build-isolation` 也无需它）。
+
+### 修订 P2（migration-guide）：强调新接口稳定、旧方式简单提及
+
+- **评论（3801853040）**：`docs/migration-guide.md:37`「显示要求用户使用最新接口，承诺最新接口不会变动，旧的使用方式简单提及即可」。
+- **实际改法**：背景表格改为"状态"列（旧方式已停止演进 / 新接口推荐且稳定）；"迁移期临时兼容"章节开头新增承诺——`fla_npu.ops.ascendc` 是稳定入口、后续版本不会变动；legacy 路径描述精简（去掉冗余的生成文件清单，保留 `install_torch_npu_ops_compat()` 的 `AttributeError` 注意与 legacy 构建命令）。
+
+### 修订 P3（developer-guide）：新增"调用链路与场景选择"
+
+- **评论（3802064080）**：`docs/developer-guide.md:11`「增加调用链路图（让用户明白什么时候改什么）、各场景适配的情况（什么时候用哪个场景）」。
+- **实际改法**：developer-guide 开头新增"调用链路与场景选择"章节：ASCII 链路图（源码修改 → 构建产物 → 验证 → 确认生效，标注各场景）+ 场景选择表（你想做什么 → 用哪个场景 → 产物）；目录同步加锚点。README 现有"场景 2 的工具链依赖表"等引用保持有效。
+
+### 修订 P4（developer-guide 场景 2）：标题与 FLA_NPU_OPS 对齐
+
+- **评论（3801871866）**：`docs/developer-guide.md:62`「一键编包支持单算子 FLA_NPU_OPS 相关内容也要放在这」。
+- **判断**：`FLA_NPU_OPS` 单算子 wheel 用法在恢复 `FLA_NPU_OPS` 时已补入场景 2；评论希望该能力在场景 2 更明确。
+- **实际改法**：场景 2 标题由"一键编包（全量 wheel）"改为"一键编包（wheel）"，引导句明确"默认全量，或用 `FLA_NPU_OPS` 只编指定算子"，与已恢复的 `FLA_NPU_OPS` 单算子 wheel 用法保持一致。

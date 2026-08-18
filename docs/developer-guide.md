@@ -1,13 +1,47 @@
 # 开发者指南
 
-本文档面向在 `flash-linear-attention-npu` 仓库内进行开发的开发者，按场景拆分为：单独编译单算子、增加新算子、测试单算子、端到端验证，以及如何确认 wheel 来自最新源码。
+本文档面向在 `flash-linear-attention-npu` 仓库内进行开发的开发者，按场景拆分为：单独编译单算子、增加新算子、测试单算子、端到端验证，以及如何确认 wheel 来自最新源码。开始前先看[调用链路与场景选择](#调用链路与场景选择)，确定当前改动该走哪个场景。
 
+- [调用链路与场景选择](#调用链路与场景选择)
 - [场景 1：单独编译单算子（run 包）](#场景-1单独编译单算子run-包)
-- [场景 2：一键编包（全量 wheel）](#场景-2一键编包全量-wheel)
+- [场景 2：一键编包（wheel）](#场景-2一键编包wheel)
 - [场景 3：增加一个新算子（目录结构 + torch_custom）](#场景-3增加一个新算子目录结构--torch_custom)
 - [场景 4：测试单算子](#场景-4测试单算子)
 - [场景 5：端到端 Example/ST 验证](#场景-5端到端-examplest-验证)
 - [如何确认新构建的 wheel 来自最新源码](#如何确认新构建的-wheel-来自最新源码)
+
+## 调用链路与场景选择
+
+先理解一次从"源码修改"到"NPU 上跑起来"的完整链路，再按"你改了什么"选择对应场景：
+
+```
+修改源码
+  │
+  ├─ 改 Ascend C 算子（kernel / host / tiling）  ────────────┐
+  ├─ 改 Python wrapper（_aclnn_ctypes.py 等）  ───────────────┼─→ 场景 2 一键编包（wheel）
+  ├─ 改 wheel 打包 / 构建流程（setup.py / build.sh） ──────────┤    或 场景 1 单独编译单算子 run 包
+  └─ 新增算子（目录结构 + wrapper 注册）  ──→ 场景 3           │
+                                                               ▼
+  构建产物
+  ├─ wheel（Python wrapper + 内嵌 OPP）      ──→ pip install，客户直接使用
+  └─ run 包（仅 Ascend C 产物）             ──→ 覆盖 wheel 内嵌 OPP
+                                                               ▼
+  验证
+  ├─ 场景 4 测试单算子（ATK / test.sh）
+  └─ 场景 5 端到端 Example/ST 验证
+                                                               ▼
+  确认生效
+  └─ 如何确认新构建的 wheel 来自最新源码（md5 比对）
+```
+
+| 你想做什么 | 使用场景 | 产物 |
+| --- | --- | --- |
+| 只替换少量算子的 Ascend C 产物（kernel/host/tiling） | 场景 1：`bash build.sh --pkg ... --ops=<op>` 编 run 包 | `.run` |
+| 一键编包（含 Python wrapper 修改、全量或 `FLA_NPU_OPS` 单算子） | 场景 2：`pip wheel` | wheel |
+| 新增一个算子（目录 + torch_custom wrapper） | 场景 3 | 源码 |
+| 测试单个算子的精度/性能/确定性 | 场景 4（ATK） | - |
+| 端到端验证（Example/ST，CI 用例） | 场景 5 | - |
+| 确认实际安装的是最新编译产物 | 如何确认 wheel 来自最新源码（md5 脚本） | - |
 
 ## 场景 1：单独编译单算子（run 包）
 
@@ -58,10 +92,11 @@ run 包覆盖完成后会重写幂等的 `set_env.bash`，并把实际 OPP 文�
 > 常规使用者推荐直接用根 README Step 2 / Step 3 的一键编包 + wheel 安装主流程；
 > 本场景仅在需要快速替换单个算子产物时使用。
 
-## 场景 2：一键编包（全量 wheel）
+## 场景 2：一键编包（wheel）
 
-在仓库根目录用 `pip wheel` 全量构建 wheel，构建流程会清理上一轮 `build/`、`build_out/`
-和 `output/` 中间产物，不依赖 Git diff 或旧 CMake 状态决定编译范围：
+在仓库根目录用 `pip wheel` 构建 wheel（默认全量，或用 `FLA_NPU_OPS` 只编指定算子），
+构建流程会清理上一轮 `build/`、`build_out/` 和 `output/` 中间产物，不依赖 Git diff 或旧
+CMake 状态决定编译范围：
 
 ```sh
 FLA_NPU_SOC=ascend910b python -m pip wheel --no-build-isolation --no-deps . -w dist

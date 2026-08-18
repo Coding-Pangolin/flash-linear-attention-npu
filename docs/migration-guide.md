@@ -4,12 +4,15 @@
 
 ## 背景：调用方式演进
 
-| 版本           | 默认调用方式                              | 说明                                                                 |
-| -------------- | ----------------------------------------- | -------------------------------------------------------------------- |
-| v26.6.0 及更早 | `torch.ops.npu.*` / `torch_npu.ops.*` | 依赖 PyTorch / torch_npu dispatcher ABI                              |
-| v26.6.0 之后   | `fla_npu.ops.ascendc` 稳定 Python 入口  | 通过 Python ctypes 直调`libcust_opapi.so`，不再依赖 dispatcher ABI |
+| 版本           | 调用方式                          | 状态                     |
+| -------------- | --------------------------------- | ------------------------ |
+| v26.6.0 及更早 | `torch.ops.npu.*` / `torch_npu.ops.*` | 旧方式，已停止演进       |
+| v26.6.0 之后   | `fla_npu.ops.ascendc` 稳定 Python 入口 | 推荐使用，接口保持稳定   |
 
-**v26.6.0 之后不再维护旧版本兼容接口**。`torch.ops.npu.*` / `torch_npu.ops.*` 仅作为迁移期临时兼容能力保留，不推荐新增代码使用，也不会默认使能。
+**v26.6.0 之后不再维护旧版本兼容接口**。`fla_npu.ops.ascendc` 通过 Python ctypes 直调
+`libcust_opapi.so`，不依赖 PyTorch / torch_npu dispatcher ABI，接口语义稳定、后续版本
+不会变动。`torch.ops.npu.*` / `torch_npu.ops.*` 仅作为迁移期临时兼容能力保留，不推荐
+新增代码使用，也不会默认使能。
 
 ## 从旧版本升级步骤
 
@@ -36,7 +39,9 @@
 
 ## 迁移期临时兼容
 
-存量代码暂未迁移完成时，可显式开启兼容路径。新代码请勿使用 legacy 路径。
+新接口 `fla_npu.ops.ascendc` 是稳定 Python 入口，语义保持兼容、后续版本不会变动，
+新代码请始终使用它。以下兼容能力仅供存量代码在迁移期临时使用，新代码请勿使用
+legacy 路径。
 
 ### 兼容 `torch_npu.ops.*`（推荐优先使用）
 
@@ -50,13 +55,13 @@ ascendc.install_torch_npu_ops_compat()
 torch_npu.ops.npu_xxx(...)
 ```
 
-> 注意：`import fla_npu` 后直接写 `fla_npu.ops.ascendc.install_torch_npu_ops_compat()` 会报
-> `AttributeError: module 'fla_npu' has no attribute 'ops'`，因为 `fla_npu` 顶层不自动导入
-> `ops` 子模块，必须先执行 `from fla_npu.ops import ascendc`（或 `import fla_npu.ops.ascendc`）。
+> 注意：`fla_npu` 顶层不自动导入 `ops` 子模块，必须先执行
+> `from fla_npu.ops import ascendc`（或 `import fla_npu.ops.ascendc`），否则直接写
+> `fla_npu.ops.ascendc.install_torch_npu_ops_compat()` 会报 `AttributeError`。
 
 ### 兼容更旧的 `torch.ops.npu.*`
 
-需要额外构建 legacy extension：
+需额外构建 legacy extension：
 
 ```sh
 bash gen.sh npu_custom.yaml
@@ -70,9 +75,8 @@ fla_npu.load_legacy_torch_ops()
 torch.ops.npu.npu_xxx(...)
 ```
 
-legacy 路径会生成或使用 `op_plugin/`、`torch_npu/csrc/`、`custom_aclnn_extension_lib*.so`、
-`npu_custom.yaml`、`test_native_functions.yaml`、`deprecated.yaml`。legacy extension 会重新绑定
-PyTorch、Python、C++ ABI 和 torch_npu dispatcher 行为，因此只用于历史接口兼容或专项验证。
+legacy extension 会重新绑定 PyTorch、Python、C++ ABI 和 torch_npu dispatcher 行为，
+因此只用于历史接口兼容或专项验证。
 
 ## 新旧版本行为差异
 

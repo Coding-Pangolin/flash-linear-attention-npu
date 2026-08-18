@@ -343,9 +343,11 @@ __aicore__ inline void RunPhase6(
                              chunkIndices, h, vNew, finalState, tiling, userWorkspace);
 
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-    // H publishes h/vNew through MTE3 and O first consumes them through MTE2.
-    // Limit the global hand-off to those pipelines instead of draining PIPE_ALL.
-    AscendC::SyncAll<false, PHASE6_HO_SYNC_CONFIG>();
+    if (abc.isVarlen != 0) {
+        // Varlen compaction may change the producer/consumer participant set,
+        // so retain the conservative global H -> O hand-off for that path.
+        AscendC::SyncAll<false, PHASE6_HO_SYNC_CONFIG>();
+    }
 #else
     // Ascend910B supports only the full-pipeline SyncAll overload.
     AscendC::SyncAll<false>();

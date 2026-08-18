@@ -110,10 +110,9 @@ def run_fused(inputs: dict):
 
 
 def clear_allocator_state() -> None:
-    ascendc_runtime._RECENT_LAUNCH_STORAGE.clear()
+    torch.npu.synchronize()
     gc.collect()
     torch.npu.empty_cache()
-    torch.npu.synchronize()
 
 
 @contextmanager
@@ -176,7 +175,6 @@ def run_synchronized(function, inputs: dict) -> None:
     outputs = function(inputs)
     torch.npu.synchronize()
     del outputs
-    ascendc_runtime._RECENT_LAUNCH_STORAGE.clear()
 
 
 def measure_paired(inputs: dict, warmup: int, iterations: int) -> dict:
@@ -199,7 +197,6 @@ def measure_paired(inputs: dict, warmup: int, iterations: int) -> dict:
             end.synchronize()
             samples[name].append(float(start.elapsed_time(end)))
             del outputs
-            ascendc_runtime._RECENT_LAUNCH_STORAGE.clear()
     summaries = {name: summarize_samples(values) for name, values in samples.items()}
     baseline = summaries["baseline_two_aclnn"]
     fused = summaries["fused_one_aclnn"]

@@ -450,10 +450,9 @@ def compare_a(expected: torch.Tensor, actual: torch.Tensor, inputs: dict,
 
 
 def clear_allocator_state() -> None:
-    ascendc_runtime._RECENT_LAUNCH_STORAGE.clear()
+    torch.npu.synchronize()
     gc.collect()
     torch.npu.empty_cache()
-    torch.npu.synchronize()
 
 
 @contextmanager
@@ -528,7 +527,6 @@ def run_synchronized(function, inputs: dict) -> None:
     outputs = function(inputs)
     torch.npu.synchronize()
     del outputs
-    ascendc_runtime._RECENT_LAUNCH_STORAGE.clear()
 
 
 def measure_latency(function, inputs: dict, warmup: int, iterations: int) -> dict:
@@ -545,7 +543,6 @@ def measure_latency(function, inputs: dict, warmup: int, iterations: int) -> dic
         end.synchronize()
         samples.append(float(start.elapsed_time(end)))
         del outputs
-        ascendc_runtime._RECENT_LAUNCH_STORAGE.clear()
     result = latency_summary(samples)
     clear_allocator_state()
     return result
@@ -582,7 +579,6 @@ def measure_paired_latency(
             end.synchronize()
             samples[name].append(float(start.elapsed_time(end)))
             del outputs
-            ascendc_runtime._RECENT_LAUNCH_STORAGE.clear()
 
     first_summary = latency_summary(samples[first_name])
     second_summary = latency_summary(samples[second_name])
@@ -652,7 +648,6 @@ def measure_balanced_latency(
                 end.synchronize()
                 samples[name].append(float(start.elapsed_time(end)))
                 del outputs
-                ascendc_runtime._RECENT_LAUNCH_STORAGE.clear()
             except Exception as error:
                 raise RuntimeError(
                     f"balanced measurement failed at iteration={iteration}, variant={name}"

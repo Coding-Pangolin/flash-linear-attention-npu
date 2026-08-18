@@ -15,10 +15,14 @@
 #include "catlass/arch/arch.hpp"
 #include "catlass/arch/resource.hpp"
 #include "catlass/catlass.hpp"
+#include "catlass/gemm/block/block_mmad.hpp"
+#include "catlass/gemm/dispatch_policy.hpp"
 #include "catlass/gemm/gemm_type.hpp"
 #include "catlass/gemm/tile/tile_copy.hpp"
 #include "catlass/gemm/tile/tile_mmad.hpp"
+#include "catlass/gemm_coord.hpp"
 #include "catlass/layout/layout.hpp"
+#include "kernel_utils/block/block_mmad_pingpong_tla_multi.hpp"
 #include "tla/layout.hpp"
 #include "tla/tensor.hpp"
 
@@ -45,6 +49,14 @@ class ChunkKktCube {
     using LayoutTagL0B = typename TileCopy::LayoutTagL0B;
     using TileMmad = Catlass::Gemm::Tile::TileMmadTla<ArchTag, T, LayoutTagL1A>;
     using ElementAccumulator = typename TileCopy::ElementAccumulator;
+
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+    // Reuse the same A5 Catlass score policy as the standalone KKT path.
+    // The fused kernel keeps its existing score workspace and AIV epilogue;
+    // only the AIC score producer is changed in this candidate.
+    using ScoreDispatchPolicy = Catlass::Gemm::MmadPingpongTlaMulti<ArchTag, true, false>;
+    using ScoreInt128 = tla::Int<128>;
+#endif
 
     static constexpr uint32_t MAX_BT = 128;
     static constexpr uint32_t K_DIM = 128;
@@ -131,6 +143,15 @@ private:
                                             GM_ADDR chunkIndices, GM_ADDR score,
                                             const TilingData *tiling)
     {
+        if (tiling->BT == 64) {
+            ProcessAscend950Catlass<64>(k, cuSeqlens, chunkIndices, score, tiling);
+            return;
+        }
+        if (tiling->BT == 128) {
+            ProcessAscend950Catlass<128>(k, cuSeqlens, chunkIndices, score, tiling);
+            return;
+        }
+
         AscendC::TPipe scorePipe;
         // The local-tiling Init overload is not const-correct, but Matmul only
         // retains this metadata for read-only use during the current call.
@@ -178,6 +199,65 @@ private:
                                 static_cast<int32_t>(tiling->K));
             scoreMatmul.template IterateAll<false>(scoreGm[scoreOffset], 0, false, true);
             scoreMatmul.End();
+        }
+    }
+
+    template <uint32_t BT_VALUE, typename TilingData>
+    __aicore__ inline void ProcessAscend950Catlass(GM_ADDR k, GM_ADDR cuSeqlens,
+                                                   GM_ADDR chunkIndices, GM_ADDR score,
+                                                   const TilingData *tiling)
+    {
+        using L1TileShape = tla::Shape<tla::Int<BT_VALUE>, tla::Int<BT_VALUE>, ScoreInt128>;
+        using L0TileShape = L1TileShape;
+        using BlockMmad = Catlass::Gemm::Block::BlockMmadTla<
+            ScoreDispatchPolicy, L1TileShape, L0TileShape, T, T, float, void, TileCopy>;
+
+        AscendC::GlobalTensor<T> kGm;
+        AscendC::GlobalTensor<float> scoreGm;
+        const uint64_t kElements = static_cast<uint64_t>(tiling->B) *
+                                    static_cast<uint64_t>(tiling->Hk) *
+                                    static_cast<uint64_t>(tiling->T) *
+                                    static_cast<uint64_t>(tiling->K);
+        const uint64_t scoreElements = static_cast<uint64_t>(tiling->taskNum) *
+                                        static_cast<uint64_t>(tiling->BT) *
+                                        static_cast<uint64_t>(tiling->BT);
+        kGm.SetGlobalBuffer(reinterpret_cast<__gm__ T *>(k), kElements);
+        scoreGm.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(score), scoreElements);
+
+        const int64_t begin =
+            static_cast<int64_t>(AscendC::GetBlockIdx()) * tiling->tilesPerCore;
+        int64_t end = begin + tiling->tilesPerCore;
+        end = end < tiling->taskNum ? end : static_cast<int64_t>(tiling->taskNum);
+
+        Catlass::Arch::Resource<ArchTag> resource;
+        for (int64_t task = begin; task < end; ++task) {
+            int64_t inputOffset = 0;
+            int64_t valid = 0;
+            DecodeTask(task, cuSeqlens, chunkIndices, tiling, inputOffset, valid);
+            if (valid <= 0) {
+                continue;
+            }
+
+            const int64_t scoreOffset = task * static_cast<int64_t>(BT_VALUE * BT_VALUE);
+            using LayoutTagA = Catlass::layout::RowMajor;
+            using LayoutTagB = Catlass::layout::ColumnMajor;
+            using LayoutTagC = Catlass::layout::RowMajor;
+            auto layoutA = tla::MakeLayout<T, LayoutTagA>(BT_VALUE, K_DIM);
+            auto layoutB = tla::MakeLayout<T, LayoutTagB>(K_DIM, BT_VALUE);
+            auto layoutC = tla::MakeLayout<float, LayoutTagC>(BT_VALUE, BT_VALUE);
+            Catlass::GemmCoord shape{static_cast<uint32_t>(valid), static_cast<uint32_t>(valid), K_DIM};
+
+            auto tensorA = tla::MakeTensor(kGm[inputOffset], layoutA, Catlass::Arch::PositionGM{});
+            auto tensorB = tla::MakeTensor(kGm[inputOffset], layoutB, Catlass::Arch::PositionGM{});
+            auto tensorC = tla::MakeTensor(scoreGm[scoreOffset], layoutC, Catlass::Arch::PositionGM{});
+            auto blockA = GetTile(tensorA, tla::MakeCoord(0, 0), tla::MakeShape(shape.m(), shape.k()));
+            auto blockB = GetTile(tensorB, tla::MakeCoord(0, 0), tla::MakeShape(shape.k(), shape.n()));
+            auto blockC = GetTile(tensorC, tla::MakeCoord(0, 0), tla::MakeShape(shape.m(), shape.n()));
+
+            BlockMmad blockMmad(resource);
+            blockMmad.preSetFlags();
+            blockMmad(blockA, blockB, blockC, shape);
+            blockMmad.finalWaitFlags();
         }
     }
 #endif

@@ -30,23 +30,21 @@ __aicore__ inline void RunSolvePhase(GM_ADDR a, GM_ADDR cuSeqlens, GM_ADDR chunk
     solve.Init(a, cuSeqlens, chunkIndices, out, workspace, tilingData);
     solve.Process();
 #else
-    if ASCEND_IS_AIC {
-        // CrossCoreSetFlag<0x2> merges the paired AIV signals into one event.
-        // Wait once so solve cannot consume the GM hand-off before both writers finish MTE3.
-        CrossCoreWaitFlag(KKT_READY_FLAG);
-        NsSolveTri::SolveTriCube<MATRIX_SIZE, T> solve;
-        solve.Init(a, cuSeqlens, chunkIndices, out, workspace, tilingData, true);
-        solve.Process(false);
-    }
     if ASCEND_IS_AIV {
         // One AIV creates the constants in this core group's private solve
-        // workspace. Its ready signal is sent only after those writes finish.
+        // workspace. The full barrier below also waits for both AIV KKT
+        // epilogues before the paired AIC reads either GM region.
         if (GetSubBlockIdx() == 0) {
             NsSolveTri::SolveTriVector<MATRIX_SIZE, T> constants;
             constants.Init(workspace, tilingData->totalTiles, tilingData->matrixSize);
             constants.Process(false, true);
         }
-        CrossCoreSetFlag<0x2, PIPE_MTE3>(KKT_READY_FLAG);
+    }
+    SyncAll<false>();
+    if ASCEND_IS_AIC {
+        NsSolveTri::SolveTriCube<MATRIX_SIZE, T> solve;
+        solve.Init(a, cuSeqlens, chunkIndices, out, workspace, tilingData, true);
+        solve.Process(false);
     }
 #endif
 }

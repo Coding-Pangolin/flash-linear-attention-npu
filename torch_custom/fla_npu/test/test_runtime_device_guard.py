@@ -207,18 +207,8 @@ class RuntimeDeviceGuardTest(unittest.TestCase):
                         lambda ctx: [ctx.tensor(FakeTensor(2), "input"), ctx.tensor(output, "output")],
                         output,
                     )
-                    events_before_release = list(events)
-                    RUNTIME._RECENT_LAUNCH_STORAGE.clear()
 
         self.assertIs(result, output)
-        self.assertEqual(
-            events_before_release,
-            [
-                ("descriptor", 2, 2),
-                ("descriptor", 2, 2),
-                ("launch", 2, 2),
-            ],
-        )
         self.assertEqual(
             events,
             [
@@ -231,7 +221,7 @@ class RuntimeDeviceGuardTest(unittest.TestCase):
         )
         self.assertEqual(npu.current_device(), 0)
 
-    def test_call_aclnn_releases_outputs_workspace_and_helpers_after_synchronized_clear(self):
+    def test_call_aclnn_does_not_retain_outputs_workspace_or_helpers(self):
         npu = FakeNpu(current_device=0)
         torch_module = fake_torch(npu)
         workspace_ref = None
@@ -272,10 +262,8 @@ class RuntimeDeviceGuardTest(unittest.TestCase):
                     )
 
         self.assertIsNotNone(workspace_ref)
-        self.assertIsNotNone(workspace_ref())
+        self.assertIsNone(workspace_ref())
         self.assertIs(result, output)
-        with mock.patch.dict(sys.modules, {"torch": torch_module}):
-            RUNTIME._RECENT_LAUNCH_STORAGE.clear()
         del result
         del output
         del helper
@@ -283,6 +271,50 @@ class RuntimeDeviceGuardTest(unittest.TestCase):
         gc.collect()
         self.assertIsNone(output_ref())
         self.assertIsNone(helper_ref())
+
+    def test_repeated_calls_do_not_accumulate_launch_owned_objects(self):
+        npu = FakeNpu(current_device=0)
+        torch_module = fake_torch(npu)
+        output_refs = []
+        helper_refs = []
+        workspace_refs = []
+
+        class FakeDescriptor:
+            def __init__(self, runtime, tensor):
+                self.ptr = 0xD00D
+
+            def destroy(self):
+                self.ptr = None
+
+        class Workspace:
+            pass
+
+        class FakeRuntime:
+            def call(self, name, args, device, *, get_workspace_argtypes=None):
+                workspace = Workspace()
+                workspace_refs.append(weakref.ref(workspace))
+                return workspace
+
+        with mock.patch.dict(sys.modules, {"torch": torch_module}):
+            with mock.patch.object(RUNTIME, "runtime", return_value=FakeRuntime()):
+                with mock.patch.object(RUNTIME, "_AclTensor", FakeDescriptor):
+                    for _ in range(256):
+                        output = FakeTensor(0)
+                        helper = FakeTensor(0)
+                        output_refs.append(weakref.ref(output))
+                        helper_refs.append(weakref.ref(helper))
+
+                        def build_args(ctx, helper_tensor=helper):
+                            ctx.keepalive_tensors.append(helper_tensor)
+                            return [ctx.tensor(output, "output")]
+
+                        result = RUNTIME.call_aclnn("aclnnTest", build_args, output)
+                        del result, output, helper, build_args
+
+        gc.collect()
+        self.assertTrue(all(reference() is None for reference in output_refs))
+        self.assertTrue(all(reference() is None for reference in helper_refs))
+        self.assertTrue(all(reference() is None for reference in workspace_refs))
 
 
 if __name__ == "__main__":

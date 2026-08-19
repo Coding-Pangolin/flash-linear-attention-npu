@@ -172,6 +172,33 @@ struct BlockSchedulerGdnFwdO {
         return cubeCoreNum > 0 && (hTaskIdx % cubeCoreNum) == cubeCoreIdx;
     }
 
+    // Dense task-affinity ownership depends only on batch/head, not chunk.
+    // Jump directly to the next owned head while preserving the original
+    // ascending task order.  Varlen keeps the guarded scan above because its
+    // compact batch mapping is read from GM.
+    CATLASS_DEVICE
+    uint32_t FindNextOwnedDenseTask(uint32_t candidateTaskIdx) const {
+        if (candidateTaskIdx >= taskNum || cubeCoreNum == 0 || vNumHead == 0 || numChunks == 0) {
+            return taskNum;
+        }
+        while (candidateTaskIdx < taskNum) {
+            const uint32_t batchChunk = candidateTaskIdx / vNumHead;
+            const uint32_t batch = batchChunk / numChunks;
+            const uint32_t headBegin = candidateTaskIdx - batchChunk * vNumHead;
+            const uint32_t ownerBase = (batch * vNumHead) % cubeCoreNum;
+            uint32_t head = (cubeCoreIdx + cubeCoreNum - ownerBase) % cubeCoreNum;
+            if (head < headBegin) {
+                const uint32_t distance = headBegin - head;
+                head += ((distance + cubeCoreNum - 1) / cubeCoreNum) * cubeCoreNum;
+            }
+            if (head < vNumHead) {
+                return batchChunk * vNumHead + head;
+            }
+            candidateTaskIdx = (batchChunk + 1) * vNumHead;
+        }
+        return taskNum;
+    }
+
     CATLASS_DEVICE
     void InitTask() {
         uint32_t curTaskIdx;
@@ -184,9 +211,7 @@ struct BlockSchedulerGdnFwdO {
             }
             taskIdx += GDN_FWD_HO_CONSUMERS_PER_HEAD * vNumHead;
         } else if (taskAffinity) {
-            while (taskIdx < taskNum && !IsTaskOwnedByCore(taskIdx)) {
-                ++taskIdx;
-            }
+            taskIdx = FindNextOwnedDenseTask(taskIdx);
             if (unlikely(taskIdx >= taskNum)) {
                 isRunning = false;
                 currStage = (currStage + 1) % GDN_FWD_O_PING_PONG_STAGES;

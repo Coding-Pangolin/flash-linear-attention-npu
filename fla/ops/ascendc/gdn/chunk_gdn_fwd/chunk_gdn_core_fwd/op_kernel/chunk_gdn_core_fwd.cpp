@@ -28,6 +28,10 @@ constexpr uint32_t PHASE6_TILING_ALIGNMENT = 8;
 // Keep it separate from the later SolveTri hand-off (flag 5).
 constexpr uint64_t PHASE6_SCORE_READY_FLAG = 2;
 constexpr uint64_t PHASE6_SOLVE_DONE_FLAG = 5;
+// H/O schedulers consume CrossCore flags 0..7. Keep this hand-off on an
+// independent flag so AIV can enter O immediately after publishing its GM
+// writes; the paired AIC wait consumes the ready event.
+constexpr uint64_t PHASE6_HO_AIV_READY_FLAG = 8;
 constexpr int64_t PHASE6_CUMSUM_FAST_BUFFER_LIMIT = 160 * 1024;
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 constexpr AscendC::SyncAllConfig PHASE6_HO_SYNC_CONFIG = {PIPE_MTE3, PIPE_MTE2};
@@ -343,9 +347,20 @@ __aicore__ inline void RunPhase6(
                              chunkIndices, h, vNew, finalState, tiling, userWorkspace);
 
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-    // H publishes h/vNew through MTE3 and O first consumes them through MTE2.
-    // Limit the global hand-off to those pipelines instead of draining PIPE_ALL.
-    AscendC::SyncAll<false, PHASE6_HO_SYNC_CONFIG>();
+    // Dense H assigns each dependent O stream to the same AI Core. Publish the
+    // H/vNew GM RAW edge with a dedicated ready flag; O's own 0..7 ping-pong
+    // flags therefore retain their original lifetime without a global barrier.
+    if (phase6->abc.isVarlen == 0) {
+        if ASCEND_IS_AIV {
+            AscendC::CrossCoreSetFlag<0x2, PIPE_MTE3>(PHASE6_HO_AIV_READY_FLAG);
+        }
+        if ASCEND_IS_AIC {
+            AscendC::CrossCoreWaitFlag(PHASE6_HO_AIV_READY_FLAG);
+        }
+    } else {
+        // Varlen O may consume a stream on another core.
+        AscendC::SyncAll<false, PHASE6_HO_SYNC_CONFIG>();
+    }
 #else
     // Ascend910B supports only the full-pipeline SyncAll overload.
     AscendC::SyncAll<false>();

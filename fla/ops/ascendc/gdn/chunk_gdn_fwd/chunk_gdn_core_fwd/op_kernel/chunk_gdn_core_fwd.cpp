@@ -28,12 +28,6 @@ constexpr uint32_t PHASE6_TILING_ALIGNMENT = 8;
 // Keep it separate from the later SolveTri hand-off (flag 5).
 constexpr uint64_t PHASE6_SCORE_READY_FLAG = 2;
 constexpr uint64_t PHASE6_SOLVE_DONE_FLAG = 5;
-// Dense Phase6 reuses the already-drained outer flags to close the H/O local
-// hand-off before FwdO reuses its internal 0..7 flag range. Both AIVs publish
-// their completed H/vNew MTE3 writes; the paired AIC releases them only after
-// it has observed both arrivals.
-constexpr uint64_t PHASE6_HO_AIV_READY_FLAG = PHASE6_SCORE_READY_FLAG;
-constexpr uint64_t PHASE6_HO_AIC_RELEASE_FLAG = PHASE6_SOLVE_DONE_FLAG;
 constexpr int64_t PHASE6_CUMSUM_FAST_BUFFER_LIMIT = 160 * 1024;
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 constexpr AscendC::SyncAllConfig PHASE6_HO_SYNC_CONFIG = {PIPE_MTE3, PIPE_MTE2};
@@ -349,24 +343,9 @@ __aicore__ inline void RunPhase6(
                              chunkIndices, h, vNew, finalState, tiling, userWorkspace);
 
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-    if (abc.isVarlen == 0) {
-        // Dense H and O assign every (batch, value-head) stream to the same
-        // AI Core. Close H's local CrossCore flag lifetime before O reuses its
-        // 0..7 flags, and establish the MTE3 -> MTE2 RAW edge without waiting
-        // for unrelated cores.
-        if ASCEND_IS_AIV {
-            AscendC::CrossCoreSetFlag<0x2, PIPE_MTE3>(PHASE6_HO_AIV_READY_FLAG);
-            AscendC::CrossCoreWaitFlag(PHASE6_HO_AIC_RELEASE_FLAG);
-        }
-        if ASCEND_IS_AIC {
-            AscendC::CrossCoreWaitFlag(PHASE6_HO_AIV_READY_FLAG);
-            AscendC::CrossCoreSetFlag<0x2, PIPE_FIX>(PHASE6_HO_AIC_RELEASE_FLAG);
-        }
-    } else {
-        // Varlen O may consume a stream on a different core, so retain the
-        // conservative global GM visibility boundary.
-        AscendC::SyncAll<false, PHASE6_HO_SYNC_CONFIG>();
-    }
+    // H publishes h/vNew through MTE3 and O first consumes them through MTE2.
+    // Limit the global hand-off to those pipelines instead of draining PIPE_ALL.
+    AscendC::SyncAll<false, PHASE6_HO_SYNC_CONFIG>();
 #else
     // Ascend910B supports only the full-pipeline SyncAll overload.
     AscendC::SyncAll<false>();

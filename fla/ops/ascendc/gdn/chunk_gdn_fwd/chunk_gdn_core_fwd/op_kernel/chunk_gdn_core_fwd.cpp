@@ -28,6 +28,13 @@ constexpr uint32_t PHASE6_TILING_ALIGNMENT = 8;
 // Keep it separate from the later SolveTri hand-off (flag 5).
 constexpr uint64_t PHASE6_SCORE_READY_FLAG = 2;
 constexpr uint64_t PHASE6_SOLVE_DONE_FLAG = 5;
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+// Dense H/O hand-off reuses the already-drained phase flag range.  AIC waits
+// for both AIV producers before entering O; AIV does not need a reverse gate
+// because O's own 0..7 ping-pong events are persistent until their consumers
+// wait, so it can enter O immediately after publishing H/vNew.
+constexpr uint64_t PHASE6_HO_AIV_READY_FLAG = PHASE6_SCORE_READY_FLAG;
+#endif
 constexpr int64_t PHASE6_CUMSUM_FAST_BUFFER_LIMIT = 160 * 1024;
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 constexpr AscendC::SyncAllConfig PHASE6_HO_SYNC_CONFIG = {PIPE_MTE3, PIPE_MTE2};
@@ -343,9 +350,20 @@ __aicore__ inline void RunPhase6(
                              chunkIndices, h, vNew, finalState, tiling, userWorkspace);
 
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-    // H publishes h/vNew through MTE3 and O first consumes them through MTE2.
-    // Limit the global hand-off to those pipelines instead of draining PIPE_ALL.
-    AscendC::SyncAll<false, PHASE6_HO_SYNC_CONFIG>();
+    if (abc.isVarlen == 0) {
+        // Dense H and O assign each stream to the same core.  The AIC waits
+        // for both H AIV writers; AIV can continue directly into O once its
+        // MTE3 write is published, avoiding the reverse release wait.
+        if ASCEND_IS_AIV {
+            AscendC::CrossCoreSetFlag<0x2, PIPE_MTE3>(PHASE6_HO_AIV_READY_FLAG);
+        }
+        if ASCEND_IS_AIC {
+            AscendC::CrossCoreWaitFlag(PHASE6_HO_AIV_READY_FLAG);
+        }
+    } else {
+        // Varlen O may consume a stream on another core.
+        AscendC::SyncAll<false, PHASE6_HO_SYNC_CONFIG>();
+    }
 #else
     // Ascend910B supports only the full-pipeline SyncAll overload.
     AscendC::SyncAll<false>();

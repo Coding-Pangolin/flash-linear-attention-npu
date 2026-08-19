@@ -32,20 +32,19 @@ __aicore__ inline void RunSolvePhase(GM_ADDR a, GM_ADDR cuSeqlens, GM_ADDR chunk
     solve.Init(a, cuSeqlens, chunkIndices, out, workspace, tilingData);
     solve.Process();
 #else
+    if ASCEND_IS_AIC {
+        CrossCoreWaitFlag(KKT_READY_FLAG);
+        NsSolveTri::SolveTriCube<MATRIX_SIZE, T> solve;
+        solve.Init(a, cuSeqlens, chunkIndices, out, workspace, tilingData, true);
+        solve.Process(false);
+    }
     if ASCEND_IS_AIV {
         if (GetSubBlockIdx() == 0) {
             NsSolveTri::SolveTriVector<MATRIX_SIZE, T> constants;
             constants.Init(workspace, tilingData->totalTiles, tilingData->matrixSize);
             constants.Process(false, true);
         }
-    }
-    // A full MIX barrier joins both AIV epilogues and the AIC score producer
-    // before SolveTri consumes the GM hand-off.
-    SyncAll<false>();
-    if ASCEND_IS_AIC {
-        NsSolveTri::SolveTriCube<MATRIX_SIZE, T> solve;
-        solve.Init(a, cuSeqlens, chunkIndices, out, workspace, tilingData, true);
-        solve.Process(false);
+        CrossCoreSetFlag<0x2, PIPE_MTE3>(KKT_READY_FLAG);
     }
 #endif
 }

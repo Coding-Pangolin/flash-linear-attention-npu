@@ -10,6 +10,9 @@
 .idea
 cmake-build-*
 
+# Offline third-party bundle produced by scripts/tools/prepare_offline_bundle.py
+/offline_bundle/
+
 # Visual Studio
 .vs
 
@@ -22,6 +25,7 @@ cmake-build-*
 # build & output tempalte dirs
 /build/
 /build_out/
+/dist/
 /output/
 /.ci-cache/
 

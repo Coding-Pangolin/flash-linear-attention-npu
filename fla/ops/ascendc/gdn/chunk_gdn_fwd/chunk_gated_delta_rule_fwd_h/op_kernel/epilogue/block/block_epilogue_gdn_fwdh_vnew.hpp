@@ -333,6 +333,9 @@ public:
             AscendC::DataCopy(vnewOutputThisSubBlock, vNewOutputUbTensor, mActualThisSubBlock * nvActual);
             AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID1 + pingpongFlag);
             if constexpr (!kGated) {
+                // vec1Done releases the downstream consumer. Drain the
+                // asynchronous GM write before publishing that token.
+                AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID1 + pingpongFlag);
                 Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(vec1Done);
             }
 
@@ -429,6 +432,8 @@ public:
             AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID1 + pingpongFlag);
             if (rowStart + rowsThisTile >= rowEnd) {
                 if constexpr (!kGated) {
+                    // Same producer/consumer handoff for the tiled path.
+                    AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID1 + pingpongFlag);
                     Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(vec1Done);
                 }
             }

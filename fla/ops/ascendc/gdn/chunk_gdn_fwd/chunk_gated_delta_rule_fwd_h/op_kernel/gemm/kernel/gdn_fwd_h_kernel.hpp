@@ -432,9 +432,16 @@ public:
                     floatUb, inputUb, AscendC::RoundMode::CAST_NONE,
                     offsets.vBlockDim);
                 AscendC::PipeBarrier<PIPE_V>();
-                float weight = LoadScalarAsFloat(
-                    gmKDecayWorkspace,
-                    offsets.kDecayWorkOffset + tokenRow * kHeadDim + kRow);
+                float weight = 0.0f;
+                if constexpr (kGated) {
+                    weight = LoadScalarAsFloat(
+                        gmKDecayWorkspace,
+                        offsets.kDecayWorkOffset + tokenRow * kHeadDim + kRow);
+                } else {
+                    weight = LoadScalarAsFloat(
+                        gmK,
+                        offsets.wkOffset + tokenRow * kHeadDim + kRow);
+                }
                 AscendC::Muls(floatUb, floatUb, weight, offsets.vBlockDim);
                 AscendC::PipeBarrier<PIPE_V>();
                 AscendC::Add(accumUb, accumUb, floatUb, offsets.vBlockDim);
@@ -751,7 +758,9 @@ public:
                             continue;
                         }
                         const GDNFwdHOffsets& vec1Offsets = vecBlockScheduler.GetCurTaskOffsets(stream);
-                        if (vec1Offsets.blockTokens < 16) {
+                        bool tailVectorPath = vec1Offsets.blockTokens < 16;
+                        if (tailVectorPath) {
+                            Arch::CrossCoreWaitFlag(vecBlockScheduler.cube1Done[streamId]);
                             ComputeTailVWorkspace(vec1Offsets);
                         }
                         bool waitWsFromMte3 = storeFinalState && std::is_same<ElementFinalState, float>::value &&
@@ -763,7 +772,7 @@ public:
                             vec1Offsets.blockTokens, kHeadDim, vec1Offsets.vBlockDim, vHeadDim,
                             vecBlockScheduler.cube1Done[streamId], vecBlockScheduler.vec1Done[streamId],
                             vec1Offsets.isInitialState, vec1Offsets.isFinalState, storeFinalState,
-                            waitWsFromMte3, (streamId == 0)
+                            waitWsFromMte3, (streamId == 0), tailVectorPath
                         );
                         AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID1);
                         AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID1);

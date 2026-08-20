@@ -263,7 +263,11 @@ ge::graphStatus Tiling4ChunkGdnCoreFwd(gert::TilingContext *context)
     abc.lastChunkValidSize = isVarlen ? 0 :
         (tokens % *chunkSize == 0 ? *chunkSize : tokens % *chunkSize);
     abc.totalChunks = static_cast<int64_t>(abc.NT);
-    abc.layoutMode = isVarlen ? 3 : 0;
+    // Public A is always BNSD [B, Hv, T, BT]. The fused KKT producer also
+    // enumerates B -> Hv -> chunk, so varlen uses the private SolveTri mode 4
+    // (BNSD + cu_seqlens/chunk_indices). Mode 3 is reserved for standalone
+    // SolveTri's public NTD layout and must not be reused here.
+    abc.layoutMode = isVarlen ? 4 : 0;
     abc.dtypeMode = isBf16 ? 1 : 0;
     abc.totalTokens = isVarlen ? tokens : 0;
     OP_CHECK_IF(BuildAbcCubeTiling(abc.BT, abc.K, inputDtype,

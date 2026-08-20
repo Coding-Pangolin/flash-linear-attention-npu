@@ -196,9 +196,11 @@ __aicore__ inline void SolveTriCube<MATRIX_SIZE, T>::Init(
     totalChunks_ = tilingData->totalChunks;
     layoutMode_ = tilingData->layoutMode;
 
-    // 行间步长: BNSD(0)/NTD(3) = BT (单 chunk 内连续), BSND(1)/TND(2) = H*BT (非连续)
-    if (layoutMode_ == 0 || layoutMode_ == 3) {
-        rowStride_ = matrixSize_;  // BNSD or NTD (contiguous)
+    // 行间步长: BNSD(0)/NTD(3)/Phase6-varlen-BNSD(4) = BT (单 chunk 内连续),
+    // BSND(1)/TND(2) = H*BT (非连续)。mode 4 只由 Phase6 fused core 使用；
+    // standalone SolveTri 的公开 mode 3 仍保持 NTD 语义。
+    if (layoutMode_ == 0 || layoutMode_ == 3 || layoutMode_ == 4) {
+        rowStride_ = matrixSize_;  // BNSD, NTD or Phase6 varlen BNSD (contiguous)
     } else {
         rowStride_ = numHeads_ * matrixSize_;  // BSND or TND (non-contiguous)
     }
@@ -294,7 +296,23 @@ __aicore__ inline int64_t SolveTriCube<MATRIX_SIZE, T>::GetTileGMOffset(int64_t 
     int64_t H = numHeads_;
     int64_t BT = matrixSize_;
 
-    if (layoutMode_ == 3) {
+    if (layoutMode_ == 4) {
+        // Phase6 fused varlen: A is public BNSD [B, H, T, BT]. The producer
+        // (ChunkScaledDotKkt) enumerates tasks as B -> H -> chunk, so chunk
+        // remains the fastest-changing task coordinate. This is deliberately
+        // separate from mode 3, whose public standalone contract is NTD.
+        int64_t chunk_global_idx = tileIdx % totalChunks_;
+        int64_t h = (tileIdx / totalChunks_) % H;
+        int64_t b = tileIdx / (totalChunks_ * H);
+
+        int64_t seq_idx = chunkIndicesGM_.GetValue(chunk_global_idx * 2);
+        int64_t chunk_in_seq = chunkIndicesGM_.GetValue(chunk_global_idx * 2 + 1);
+        int64_t bos = cuSeqlensGM_.GetValue(seq_idx);
+
+        return b * H * seqLen_ * BT + h * seqLen_ * BT +
+               (bos + chunk_in_seq * BT) * BT;
+
+    } else if (layoutMode_ == 3) {
         // NTD 变长格式: [H, total_T, BT] (B=1, chunks contiguous, row_stride = BT)
         // 遍历顺序: chunk_global → H (H 变化最快)
         int64_t chunk_global_idx = tileIdx / H;
@@ -350,11 +368,15 @@ __aicore__ inline int64_t SolveTriCube<MATRIX_SIZE, T>::GetTileGMOffset(int64_t 
 template <int MATRIX_SIZE, typename T>
 __aicore__ inline int64_t SolveTriCube<MATRIX_SIZE, T>::GetTileValidSize(int64_t tileIdx)
 {
-    if (layoutMode_ == 2 || layoutMode_ == 3) {
+    if (layoutMode_ == 2 || layoutMode_ == 3 || layoutMode_ == 4) {
         // TND/NTD: 动态计算每个序列的尾块
         int64_t H = numHeads_;
         int64_t BT = matrixSize_;
-         int64_t chunk_global_idx = layoutMode_ == 2 ? tileIdx / H : tileIdx % totalChunks_;
+        // TND/NTD use chunk -> head task order. Phase6 fused varlen BNSD
+        // uses head -> chunk, matching its A producer, so decode separately.
+        int64_t chunk_global_idx = layoutMode_ == 2 || layoutMode_ == 3
+                                       ? tileIdx / H
+                                       : tileIdx % totalChunks_;
 
         // 从 chunk_indices 读取 (seq_idx, chunk_in_seq)
         int64_t seq_idx = chunkIndicesGM_.GetValue(chunk_global_idx * 2);

@@ -26,9 +26,15 @@ __aicore__ inline void RunSolvePhase(GM_ADDR a, GM_ADDR cuSeqlens, GM_ADDR chunk
     if ASCEND_IS_AIV {
         CrossCoreSetFlag<0x2, PIPE_MTE3>(KKT_READY_FLAG);
     }
-    SolveTri<T, T> solve;
-    solve.Init(a, cuSeqlens, chunkIndices, out, workspace, tilingData);
-    solve.Process();
+    if constexpr (MATRIX_SIZE == 64) {
+        SolveTri64<T, T> solve;
+        solve.Init(a, cuSeqlens, chunkIndices, out, workspace, tilingData, true, true);
+        solve.Process();
+    } else {
+        SolveTri128<T, T> solve;
+        solve.Init(a, cuSeqlens, chunkIndices, out, workspace, tilingData, true, true);
+        solve.Process();
+    }
 #else
     if ASCEND_IS_AIC {
         // CrossCoreSetFlag<0x2> merges the paired AIV signals into one event.

@@ -390,7 +390,9 @@ public:
             AscendC::WaitFlag<AscendC::HardEvent::V_S>(EVENT_ID6);
             AscendC::Duplicate(accumUb, 0.0f, offsets.vBlockDim);
             AscendC::PipeBarrier<PIPE_V>();
+            AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID5);
             for (uint32_t kIdx = 0; kIdx < kHeadDim; ++kIdx) {
+                AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID5);
                 AscendC::DataCopy(
                     inputUb, gmH[offsets.hSrcOffset + kIdx * vHeadDim],
                     offsets.vBlockDim);
@@ -400,6 +402,7 @@ public:
                     floatUb, inputUb, AscendC::RoundMode::CAST_NONE,
                     offsets.vBlockDim);
                 AscendC::PipeBarrier<PIPE_V>();
+                AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID5);
                 float weight = weightFloatUb.GetValue(kIdx);
                 AscendC::SetFlag<AscendC::HardEvent::S_V>(EVENT_ID6);
                 AscendC::WaitFlag<AscendC::HardEvent::S_V>(EVENT_ID6);
@@ -408,6 +411,7 @@ public:
                 AscendC::Add(accumUb, accumUb, floatUb, offsets.vBlockDim);
                 AscendC::PipeBarrier<PIPE_V>();
             }
+            AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID5);
             AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(EVENT_ID7);
             AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(EVENT_ID7);
             AscendC::DataCopy(
@@ -439,7 +443,9 @@ public:
         for (uint32_t kRow = rowBegin; kRow < rowEnd; ++kRow) {
             AscendC::Duplicate(accumUb, 0.0f, offsets.vBlockDim);
             AscendC::PipeBarrier<PIPE_V>();
+            AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID5);
             for (uint32_t tokenRow = 0; tokenRow < offsets.blockTokens; ++tokenRow) {
+                AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID5);
                 AscendC::DataCopy(
                     inputUb,
                     gmVUpdateWorkspace[offsets.vWorkOffset + tokenRow * offsets.vBlockDim],
@@ -450,6 +456,7 @@ public:
                     floatUb, inputUb, AscendC::RoundMode::CAST_NONE,
                     offsets.vBlockDim);
                 AscendC::PipeBarrier<PIPE_V>();
+                AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID5);
                 float weight = 0.0f;
                 if constexpr (kGated) {
                     weight = LoadScalarAsFloat(
@@ -465,6 +472,7 @@ public:
                 AscendC::Add(accumUb, accumUb, floatUb, offsets.vBlockDim);
                 AscendC::PipeBarrier<PIPE_V>();
             }
+            AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID5);
             AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(EVENT_ID7);
             AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(EVENT_ID7);
             AscendC::DataCopy(

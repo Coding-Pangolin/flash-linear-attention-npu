@@ -135,6 +135,13 @@ public:
         uint32_t mOffset = subBlockIdx * mActualPerSubBlock;
         uint32_t nOffset = 0;
         int64_t offsetA = mOffset * nActual + nOffset;
+        // A one-token tail is assigned to the first AIV sub-block only.  The
+        // other sub-block must not enter the vector/event pipeline with a
+        // zero-row tile: its broadcast and GM-write setup can otherwise
+        // touch padding and race the valid sub-block's hand-off to Cube3.
+        if (mActualThisSubBlock == 0) {
+            return;
+        }
         uint16_t aInputDstStride;
         if((nActual - 1) % 16 <= 7) aInputDstStride = 1;
         else aInputDstStride = 0;

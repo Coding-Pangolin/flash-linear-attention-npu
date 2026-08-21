@@ -363,14 +363,31 @@ public:
         constexpr uint32_t TAIL_INPUT_OFFSET = 166 * 1024;
         constexpr uint32_t TAIL_FLOAT_OFFSET = 167 * 1024;
         constexpr uint32_t TAIL_ACCUM_OFFSET = 168 * 1024;
+        constexpr uint32_t TAIL_WEIGHT_INPUT_OFFSET = 169 * 1024;
+        constexpr uint32_t TAIL_WEIGHT_FLOAT_OFFSET = 170 * 1024;
         AscendC::LocalTensor<ElementH> inputUb =
             resource.ubBuf.template GetBufferByByte<ElementH>(TAIL_INPUT_OFFSET);
         AscendC::LocalTensor<float> floatUb =
             resource.ubBuf.template GetBufferByByte<float>(TAIL_FLOAT_OFFSET);
         AscendC::LocalTensor<float> accumUb =
             resource.ubBuf.template GetBufferByByte<float>(TAIL_ACCUM_OFFSET);
+        AscendC::LocalTensor<ElementW> weightInputUb =
+            resource.ubBuf.template GetBufferByByte<ElementW>(TAIL_WEIGHT_INPUT_OFFSET);
+        AscendC::LocalTensor<float> weightFloatUb =
+            resource.ubBuf.template GetBufferByByte<float>(TAIL_WEIGHT_FLOAT_OFFSET);
 
         for (uint32_t tokenRow = rowBegin; tokenRow < rowEnd; ++tokenRow) {
+            AscendC::DataCopy(
+                weightInputUb, gmW[offsets.wOffset + tokenRow * kHeadDim],
+                kHeadDim);
+            AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(EVENT_ID6);
+            AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(EVENT_ID6);
+            AscendC::Cast(
+                weightFloatUb, weightInputUb, AscendC::RoundMode::CAST_NONE,
+                kHeadDim);
+            AscendC::PipeBarrier<PIPE_V>();
+            AscendC::SetFlag<AscendC::HardEvent::V_S>(EVENT_ID6);
+            AscendC::WaitFlag<AscendC::HardEvent::V_S>(EVENT_ID6);
             AscendC::Duplicate(accumUb, 0.0f, offsets.vBlockDim);
             AscendC::PipeBarrier<PIPE_V>();
             for (uint32_t kIdx = 0; kIdx < kHeadDim; ++kIdx) {
@@ -383,8 +400,9 @@ public:
                     floatUb, inputUb, AscendC::RoundMode::CAST_NONE,
                     offsets.vBlockDim);
                 AscendC::PipeBarrier<PIPE_V>();
-                float weight = LoadScalarAsFloat(
-                    gmW, offsets.wOffset + tokenRow * kHeadDim + kIdx);
+                float weight = weightFloatUb.GetValue(kIdx);
+                AscendC::SetFlag<AscendC::HardEvent::S_V>(EVENT_ID6);
+                AscendC::WaitFlag<AscendC::HardEvent::S_V>(EVENT_ID6);
                 AscendC::Muls(floatUb, floatUb, weight, offsets.vBlockDim);
                 AscendC::PipeBarrier<PIPE_V>();
                 AscendC::Add(accumUb, accumUb, floatUb, offsets.vBlockDim);

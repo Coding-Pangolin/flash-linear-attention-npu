@@ -33,8 +33,9 @@ constexpr uint32_t kDbStage16 = 2;
 template <typename InDtype, typename OutDtype>
 class SolveTri16 {
 public:
+    template <typename TilingData>
     __aicore__ inline void Init(GM_ADDR aGm, GM_ADDR cu_seqlens, GM_ADDR chunk_indices, GM_ADDR outGm,
-                                GM_ADDR workspace, const SolveTriTilingData *tilingData)
+                                GM_ADDR workspace, const TilingData *tilingData)
     {
         (void)workspace;
         gm_a.SetGlobalBuffer(reinterpret_cast<__gm__ InDtype *>(aGm));

@@ -35,8 +35,9 @@ constexpr int64_t kTilesPerAicBatch32 = 2;
 template <typename InDtype, typename OutDtype>
 class SolveTri32 {
 public:
+    template <typename TilingData>
     __aicore__ inline void Init(GM_ADDR aGm, GM_ADDR cu_seqlens, GM_ADDR chunk_indices, GM_ADDR outGm,
-                                GM_ADDR workspace, const SolveTriTilingData *tilingData)
+                                GM_ADDR workspace, const TilingData *tilingData)
     {
         gm_a.SetGlobalBuffer(reinterpret_cast<__gm__ InDtype *>(aGm));
         gm_cu_seqlens.SetGlobalBuffer(reinterpret_cast<__gm__ int64_t *>(cu_seqlens));

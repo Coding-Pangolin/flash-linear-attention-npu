@@ -8,6 +8,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import re
 import time
 from pathlib import Path
@@ -551,6 +552,47 @@ def _build_torch_extension_inplace():
 _EXTERNAL_BUILD_DONE = False
 _RUN_PACKAGE = None
 
+_OFFLINE_BUNDLE_DST = "offline/third_party"
+
+
+def _stage_offline_bundle(build_lib: Path) -> None:
+    """Copy the minimal offline third-party bundle into the wheel (if available).
+
+    The wheel ships a prebuilt OPP, so end users install it without compiling.
+    Developers who need to rebuild from matching sources can also rely on this
+    wheel: the offline bundle placed under ``fla_npu/offline/third_party`` is the
+    minimal source subset each ``cmake/third_party/*.cmake`` probes for offline,
+    so it can be extracted into a source tree's ``third_party/`` to compile fully
+    without network.
+
+    When the repository ``third_party/`` cache is absent (e.g. a build that never
+    fetched it), the bundle is skipped and the wheel still works for normal use.
+    """
+    cache = REPO_ROOT / "third_party"
+    if not cache.is_dir() or not any(cache.iterdir()):
+        print("[fla-npu build] third_party cache not found; skipping offline bundle", flush=True)
+        return
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="fla-npu-bundle-"))
+    bundle_root = tmp_dir / "offline_bundle"
+    prepare = REPO_ROOT / "scripts" / "tools" / "prepare_offline_bundle.py"
+    if not prepare.is_file():
+        print("[fla-npu build] prepare_offline_bundle.py missing; skipping bundle", flush=True)
+        return
+
+    _run(
+        [sys.executable, str(prepare), "--cache", str(cache), "--out", str(bundle_root)],
+        REPO_ROOT,
+    )
+
+    third_party_dst = build_lib / "fla_npu" / _OFFLINE_BUNDLE_DST
+    if third_party_dst.exists():
+        shutil.rmtree(third_party_dst)
+    third_party_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(bundle_root, third_party_dst)
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    print(f"[fla-npu build] Offline third-party bundle staged at {third_party_dst}", flush=True)
+
 
 class FlaNpuBuildPy(_build_py):
     def run(self):
@@ -567,6 +609,7 @@ class FlaNpuBuildPy(_build_py):
         super().run()
         run_package = _RUN_PACKAGE or _find_single_run_package()
         _stage_run_package(run_package, Path(self.build_lib) / "fla_npu" / "opp")
+        _stage_offline_bundle(Path(self.build_lib))
 
 
 class BinaryDistribution(Distribution):
@@ -604,7 +647,7 @@ setup(
     long_description_content_type="text/markdown",
     packages=_packages(),
     package_dir=_package_dir(),
-    package_data={"fla_npu": ["opp/**/*"]},
+    package_data={"fla_npu": ["opp/**/*", "offline/third_party/**/*"]},
     include_package_data=True,
     license_files=[
         "LICENSE",

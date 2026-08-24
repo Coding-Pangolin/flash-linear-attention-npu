@@ -805,6 +805,7 @@ __aicore__ inline void SolveTriCube<MATRIX_SIZE, T>::LoadInputTile(int64_t gmOff
             inputGM_[gmOffset + tailSrcOffset],
             tailParams);
     }
+
     SetFlag<HardEvent::MTE2_MTE1>(EVT_MTE2_MTE1);
     WaitFlag<HardEvent::MTE2_MTE1>(EVT_MTE2_MTE1);
 }
@@ -1061,4 +1062,3 @@ __aicore__ inline void SolveTriCube<MATRIX_SIZE, T>::ProcessPartialTile(int64_t 
 }  // namespace NsSolveTri
 
 #endif  // SOLVE_TRI_CUBE_H
- 

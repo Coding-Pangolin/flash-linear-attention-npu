@@ -2,13 +2,11 @@
  * Copyright (c) 2026 Tianjin University, Ltd.
  * CANN Open Software License Agreement Version 2.0.
  */
-#include "chunk_recompute_wu_fwd_ho_tiling.h"
-
 #include "../../chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling.h"
 #include "../../chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling_processor.h"
 #include "../../chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
+#include "../../chunk_recompute_wu_fwd_ho/op_kernel/chunk_recompute_wu_fwd_ho_struct.h"
 #include "../../recompute_w_u_fwd/op_host/op_tiling/recompute_w_u_fwd_tiling_processor.h"
-#include "../op_kernel/chunk_recompute_wu_fwd_ho_struct.h"
 
 #include "securec.h"
 #include "tiling_base/tiling_templates_registry.h"
@@ -384,15 +382,5 @@ ge::graphStatus Tiling4ChunkRecomputeWUFwdHO(gert::TilingContext *context)
             trailer.wIntermediateOffset, trailer.uIntermediateOffset, workspaceOffset);
     return ge::GRAPH_SUCCESS;
 }
-
-ge::graphStatus TilingPrepareForChunkRecomputeWUFwdHO(gert::TilingParseContext *context)
-{
-    (void)context;
-    return ge::GRAPH_SUCCESS;
-}
-
-IMPL_OP_OPTILING(ChunkRecomputeWUFwdHO)
-    .Tiling(Tiling4ChunkRecomputeWUFwdHO)
-    .TilingParse<ChunkRecomputeWUFwdHOCompileInfo>(TilingPrepareForChunkRecomputeWUFwdHO);
 
 } // namespace optiling

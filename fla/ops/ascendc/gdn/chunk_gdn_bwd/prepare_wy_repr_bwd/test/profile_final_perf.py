@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import gc
+import importlib
 import random
 import time
 from dataclasses import dataclass
@@ -38,6 +39,14 @@ PERF_CASES = (
     PerfCase("P3_V256_C64", 1, 32, 65536, 128, 256, 64),
     PerfCase("P4_V256_C128", 1, 32, 65536, 128, 256, 128),
 )
+
+
+def release_aclnn_keepalive():
+    try:
+        runtime_mod = importlib.import_module("fla_npu.ops.ascendc._runtime")
+        runtime_mod._RECENT_LAUNCH_STORAGE.clear()
+    except Exception:
+        pass
 
 
 def rand_symmetric(shape: tuple[int, ...], device: str, dtype: torch.dtype):
@@ -80,7 +89,7 @@ def make_inputs(case: PerfCase, device: str, seed: int):
 
 
 def clear_npu_cache():
-    torch.npu.synchronize()
+    release_aclnn_keepalive()
     gc.collect()
     torch.npu.empty_cache()
 

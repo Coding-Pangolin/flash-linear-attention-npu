@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import gc
+import importlib
 
 import torch
 import torch_npu
@@ -15,6 +16,14 @@ V = 128
 CHUNK_SIZE = 64
 K_DTYPE = torch.bfloat16
 G_DTYPE = torch.float32
+
+
+def release_aclnn_keepalive():
+    try:
+        runtime_mod = importlib.import_module("fla_npu.ops.ascendc._runtime")
+        runtime_mod._RECENT_LAUNCH_STORAGE.clear()
+    except Exception:
+        pass
 
 
 def main() -> int:
@@ -39,7 +48,7 @@ def main() -> int:
         )
 
         del k, v, beta, A, dw, du, g, outputs
-        torch.npu.synchronize()
+        release_aclnn_keepalive()
         gc.collect()
     return 0
 

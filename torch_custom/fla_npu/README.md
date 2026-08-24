@@ -55,7 +55,7 @@ fla_npu/
 └── ...
 ```
 
-使用方式：`pip install fla_npu*.whl` 安装后，先 source 已安装 custom OPP 的 `set_env.bash`，或设置 `FLA_NPU_OPP_PATH` 指向 OPP root / vendor 目录，即可在 Python 中调用本样例接入的自定义算子（如 `torch.ops.npu.npu_fast_gelu_custom`、`torch_npu.ops.fast_gelu_custom` 或 `from fla_npu.ops.ascendc import fast_gelu_custom`）。
+使用方式：`pip install fla_npu*.whl` 安装后，先 source 已安装 custom OPP 的 `set_env.bash`，或设置 `FLA_NPU_OPP_PATH` 指向 OPP root / vendor 目录，即可在 Python 中调用本样例接入的自定义算子（如 `torch.ops.npu.npu_fast_gelu_custom`、`torch_npu.ops.fast_gelu_custom` 或 `from fla_npu.ops.ascendc import fast_gelu_custom`）。FLA 自定义 op_api 使用 `libcust_opapi.so`，不要在 custom OPP 的 `op_api/lib` 目录创建会遮蔽 CANN 运行库的 `libopapi.so` 别名。
 
 
 ## 一键运行样例

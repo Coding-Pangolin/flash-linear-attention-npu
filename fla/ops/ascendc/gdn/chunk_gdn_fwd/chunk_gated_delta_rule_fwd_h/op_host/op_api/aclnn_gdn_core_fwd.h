@@ -11,15 +11,9 @@
 extern "C" {
 #endif
 
-/**
- * Composite GDN core forward:
- * local_cumsum -> KKT -> solve_tri -> recompute_w_u -> fwd_h -> fwd_o.
- *
- * Phase 2 replaces KKT + solve_tri with one fused kernel while keeping this ABI
- * and the other four kernel boundaries unchanged.
- */
+/** Final Phase 6 composite: ABC + DEF and public BTH g_cumsum in one kernel. */
 __attribute__((visibility("default")))
-aclnnStatus aclnnGdnCoreFwdGetWorkspaceSize(
+aclnnStatus aclnnGdnCoreFwdPhase6GetWorkspaceSize(
     const aclTensor *q,
     const aclTensor *k,
     const aclTensor *v,
@@ -39,7 +33,7 @@ aclnnStatus aclnnGdnCoreFwdGetWorkspaceSize(
     aclOpExecutor **executor);
 
 __attribute__((visibility("default")))
-aclnnStatus aclnnGdnCoreFwd(
+aclnnStatus aclnnGdnCoreFwdPhase6(
     void *workspace,
     uint64_t workspaceSize,
     aclOpExecutor *executor,

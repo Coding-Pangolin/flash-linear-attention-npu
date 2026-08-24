@@ -74,72 +74,6 @@ _GET_WORKSPACE_ARGTYPES = {
         ctypes.POINTER(ctypes.c_uint64),  # workspaceSize
         ctypes.POINTER(ctypes.c_void_p),  # executor
     ],
-    "aclnnGdnCoreFwd": [
-        *([ctypes.c_void_p] * 6),
-        ctypes.c_bool,
-        ctypes.c_int64,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_double,
-        *([ctypes.c_void_p] * 4),
-        ctypes.POINTER(ctypes.c_uint64),
-        ctypes.POINTER(ctypes.c_void_p),
-    ],
-    "aclnnGdnCoreFwdPhase1": [
-        *([ctypes.c_void_p] * 6),
-        ctypes.c_bool,
-        ctypes.c_int64,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_double,
-        *([ctypes.c_void_p] * 4),
-        ctypes.POINTER(ctypes.c_uint64),
-        ctypes.POINTER(ctypes.c_void_p),
-    ],
-    "aclnnGdnCoreFwdPhase2": [
-        *([ctypes.c_void_p] * 6),
-        ctypes.c_bool,
-        ctypes.c_int64,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_double,
-        *([ctypes.c_void_p] * 4),
-        ctypes.POINTER(ctypes.c_uint64),
-        ctypes.POINTER(ctypes.c_void_p),
-    ],
-    "aclnnGdnCoreFwdPhase3": [
-        *([ctypes.c_void_p] * 6),
-        ctypes.c_bool,
-        ctypes.c_int64,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_double,
-        *([ctypes.c_void_p] * 4),
-        ctypes.POINTER(ctypes.c_uint64),
-        ctypes.POINTER(ctypes.c_void_p),
-    ],
-    "aclnnGdnCoreFwdPhase4": [
-        *([ctypes.c_void_p] * 6),
-        ctypes.c_bool,
-        ctypes.c_int64,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_double,
-        *([ctypes.c_void_p] * 4),
-        ctypes.POINTER(ctypes.c_uint64),
-        ctypes.POINTER(ctypes.c_void_p),
-    ],
-    "aclnnGdnCoreFwdPhase5": [
-        *([ctypes.c_void_p] * 6),
-        ctypes.c_bool,
-        ctypes.c_int64,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_double,
-        *([ctypes.c_void_p] * 4),
-        ctypes.POINTER(ctypes.c_uint64),
-        ctypes.POINTER(ctypes.c_void_p),
-    ],
     "aclnnGdnCoreFwdPhase6": [
         *([ctypes.c_void_p] * 6),
         ctypes.c_bool,
@@ -1073,8 +1007,7 @@ def npu_causal_conv1d(
     )
 
 
-def _npu_gdn_core_fwd(
-    aclnn_name,
+def npu_gdn_core_fwd_phase6(
     q,
     k,
     v,
@@ -1088,6 +1021,7 @@ def _npu_gdn_core_fwd(
     chunk_indices=None,
     scale=None,
 ):
+    """Call the final Phase 6 single-kernel GDN core."""
     import torch
 
     q_shape = _shape(q)
@@ -1099,26 +1033,17 @@ def _npu_gdn_core_fwd(
         raise RuntimeError("npu_gdn_core_fwd: q, k and v must be rank-4 BNSD tensors.")
     if q_shape[3] != 128 or k_shape[3] != 128:
         raise RuntimeError("npu_gdn_core_fwd: the composite implementation requires K=128.")
-    phase6_v256 = aclnn_name == "aclnnGdnCoreFwdPhase6"
-    supported_v_dims = (128, 256) if phase6_v256 else (128,)
-    if v_shape[3] not in supported_v_dims:
-        if phase6_v256:
-            raise RuntimeError("npu_gdn_core_fwd: Phase 6 requires V=128 or V=256.")
-        raise RuntimeError("npu_gdn_core_fwd: this composite checkpoint requires V=128.")
+    if v_shape[3] not in (128, 256):
+        raise RuntimeError("npu_gdn_core_fwd: Phase 6 requires V=128 or V=256.")
     if q_shape != k_shape:
         raise RuntimeError("npu_gdn_core_fwd: q and k must have identical shapes.")
     batch, k_heads, tokens, k_dim = q_shape
     _, v_heads, v_tokens, v_dim = v_shape
     if v_tokens != tokens or v_shape[0] != batch:
         raise RuntimeError("npu_gdn_core_fwd: v must match q/k in B and T.")
-    if aclnn_name == "aclnnGdnCoreFwdPhase6":
-        if v_heads % k_heads != 0:
-            raise RuntimeError(
-                "npu_gdn_core_fwd: Phase 6 GVA requires value heads divisible by key heads."
-            )
-    elif k_heads != v_heads:
+    if v_heads % k_heads != 0:
         raise RuntimeError(
-            "npu_gdn_core_fwd: earlier phase checkpoints expect q/k heads expanded to Hv before entry."
+            "npu_gdn_core_fwd: Phase 6 GVA requires value heads divisible by key heads."
         )
     if beta_shape != (batch, tokens, v_heads) or g_shape != beta_shape:
         raise RuntimeError("npu_gdn_core_fwd: beta and g must have shape [B,T,Hv].")
@@ -1157,7 +1082,7 @@ def _npu_gdn_core_fwd(
         final_state = _empty((seq_num, v_heads, k_dim, v_dim), q, dtype=state_dtype)
     outputs = (o, final_state, g_cumsum, A)
     return _call_aclnn(
-        aclnn_name,
+        "aclnnGdnCoreFwdPhase6",
         lambda ctx: [
             ctx.tensor(q, "q"),
             ctx.tensor(k, "k"),
@@ -1177,41 +1102,6 @@ def _npu_gdn_core_fwd(
         ],
         outputs,
     )
-
-
-def npu_gdn_core_fwd(q, k, v, g, beta, **kwargs):
-    """Call the current default GDN core implementation (currently Phase 2)."""
-    return _npu_gdn_core_fwd("aclnnGdnCoreFwd", q, k, v, g, beta, **kwargs)
-
-
-def npu_gdn_core_fwd_phase1(q, k, v, g, beta, **kwargs):
-    """Call the immutable Phase 1 six-kernel composite checkpoint."""
-    return _npu_gdn_core_fwd("aclnnGdnCoreFwdPhase1", q, k, v, g, beta, **kwargs)
-
-
-def npu_gdn_core_fwd_phase2(q, k, v, g, beta, **kwargs):
-    """Call the immutable Phase 2 fused KKT + solve_tri checkpoint."""
-    return _npu_gdn_core_fwd("aclnnGdnCoreFwdPhase2", q, k, v, g, beta, **kwargs)
-
-
-def npu_gdn_core_fwd_phase3(q, k, v, g, beta, **kwargs):
-    """Call the immutable Phase 3 fused local-cumsum + KKT checkpoint."""
-    return _npu_gdn_core_fwd("aclnnGdnCoreFwdPhase3", q, k, v, g, beta, **kwargs)
-
-
-def npu_gdn_core_fwd_phase4(q, k, v, g, beta, **kwargs):
-    """Call the Phase 4 checkpoint with fused fwd_h + fwd_o."""
-    return _npu_gdn_core_fwd("aclnnGdnCoreFwdPhase4", q, k, v, g, beta, **kwargs)
-
-
-def npu_gdn_core_fwd_phase5(q, k, v, g, beta, **kwargs):
-    """Call the Phase 5 checkpoint with fused recompute_w_u + fwd_h + fwd_o."""
-    return _npu_gdn_core_fwd("aclnnGdnCoreFwdPhase5", q, k, v, g, beta, **kwargs)
-
-
-def npu_gdn_core_fwd_phase6(q, k, v, g, beta, **kwargs):
-    """Call the restricted Phase 6 P0a single-kernel checkpoint."""
-    return _npu_gdn_core_fwd("aclnnGdnCoreFwdPhase6", q, k, v, g, beta, **kwargs)
 
 
 def npu_chunk_local_cumsum(

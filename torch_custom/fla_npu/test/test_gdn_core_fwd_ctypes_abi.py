@@ -26,6 +26,7 @@ GDN_CORE_CPP = (
     Path(__file__).resolve().parents[3]
     / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_host/op_api/aclnn_gdn_core_fwd.cpp"
 )
+GDN_CORE_HEADER = GDN_CORE_CPP.with_suffix(".h")
 CHUNK_CUMSUM_KKT_HEADER = (
     Path(__file__).resolve().parents[3]
     / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_scaled_dot_kkt/op_host/op_api/aclnn_chunk_cumsum_kkt.h"
@@ -128,6 +129,8 @@ class GdnCoreFwdCtypesAbiTest(unittest.TestCase):
         source = EXAMPLE_PATH.read_text(encoding="utf-8")
         import ast
 
+        self.assertIn("gdn_core_fwd_phase6 as ascendc_gdn_core_fwd", source)
+
         module = ast.parse(source)
         defaults = {}
         for node in ast.walk(module):
@@ -146,10 +149,10 @@ class GdnCoreFwdCtypesAbiTest(unittest.TestCase):
     def test_dense_call_matches_public_aclnn_signature(self):
         captured = {}
         module = load_ctypes_module(captured)
-        outputs = module.npu_gdn_core_fwd(**make_inputs(), chunk_size=64, scale=0.125)
+        outputs = module.npu_gdn_core_fwd_phase6(**make_inputs(), chunk_size=64, scale=0.125)
 
         self.assertIs(outputs, captured["outputs"])
-        self.assertEqual(captured["name"], "aclnnGdnCoreFwd")
+        self.assertEqual(captured["name"], "aclnnGdnCoreFwdPhase6")
         self.assertEqual(len(captured["args"]), 15)
         self.assertEqual(captured["ctx"].int_array_calls, [None, None])
         self.assertEqual(
@@ -165,7 +168,7 @@ class GdnCoreFwdCtypesAbiTest(unittest.TestCase):
         captured = {}
         module = load_ctypes_module(captured)
         initial_state = FakeTensor((2, 4, 128, 128), "fp16")
-        output, final_state, g_cumsum, A = module.npu_gdn_core_fwd(
+        output, final_state, g_cumsum, A = module.npu_gdn_core_fwd_phase6(
             **make_inputs(tokens=130),
             initial_state=initial_state,
             output_final_state=True,
@@ -187,14 +190,14 @@ class GdnCoreFwdCtypesAbiTest(unittest.TestCase):
     def test_rejects_noncanonical_varlen_chunk_order(self):
         module = load_ctypes_module({})
         with self.assertRaisesRegex(RuntimeError, "canonical sequence-major order"):
-            module.npu_gdn_core_fwd(
+            module.npu_gdn_core_fwd_phase6(
                 **make_inputs(tokens=130),
                 chunk_size=64,
                 cu_seqlens=[0, 65, 130],
                 chunk_indices=[0, 0, 1, 0, 0, 1, 1, 1],
             )
 
-    def test_phase6_accepts_v256_without_extending_earlier_checkpoints(self):
+    def test_phase6_accepts_v256(self):
         captured = {}
         module = load_ctypes_module(captured)
         inputs = make_inputs(value_dim=256)
@@ -206,9 +209,6 @@ class GdnCoreFwdCtypesAbiTest(unittest.TestCase):
         self.assertIsNone(final_state)
         self.assertEqual(g_cumsum.shape, (1, 128, 4))
         self.assertEqual(A.shape, (1, 4, 128, 64))
-        with self.assertRaisesRegex(RuntimeError, "requires V=128"):
-            module.npu_gdn_core_fwd_phase5(**inputs)
-
     def test_phase6_accepts_native_gva_and_arbitrary_dense_tail(self):
         captured = {}
         module = load_ctypes_module(captured)
@@ -231,12 +231,11 @@ class GdnCoreFwdCtypesAbiTest(unittest.TestCase):
                 **make_inputs(heads=3, value_heads=8), chunk_size=64
             )
 
-    def test_phase6_cpp_param_contract_allows_v256_only_for_phase6(self):
+    def test_phase6_cpp_param_contract_allows_v256(self):
         source = GDN_CORE_CPP.read_text(encoding="utf-8")
-        self.assertIn("CheckParams(const GdnCoreFwdParams &params, GdnCorePhase phase)", source)
-        self.assertIn("phase == GdnCorePhase::PHASE_6_FUSED_CORE", source)
+        self.assertIn("CheckParams(const GdnCoreFwdParams &params)", source)
         self.assertIn("vDim == GDN_CORE_V256", source)
-        self.assertIn("earlier checkpoints require V=128", source)
+        self.assertNotIn("GdnCorePhase", source)
 
     def test_get_workspace_signature_matches_aclnn_header(self):
         module = load_ctypes_module({})
@@ -251,50 +250,27 @@ class GdnCoreFwdCtypesAbiTest(unittest.TestCase):
             ctypes.POINTER(ctypes.c_uint64),
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self.assertEqual(module._GET_WORKSPACE_ARGTYPES["aclnnGdnCoreFwd"], expected)
-        self.assertEqual(module._GET_WORKSPACE_ARGTYPES["aclnnGdnCoreFwdPhase1"], expected)
-        self.assertEqual(module._GET_WORKSPACE_ARGTYPES["aclnnGdnCoreFwdPhase2"], expected)
-        self.assertEqual(module._GET_WORKSPACE_ARGTYPES["aclnnGdnCoreFwdPhase3"], expected)
-        self.assertEqual(module._GET_WORKSPACE_ARGTYPES["aclnnGdnCoreFwdPhase4"], expected)
-        self.assertEqual(module._GET_WORKSPACE_ARGTYPES["aclnnGdnCoreFwdPhase5"], expected)
         self.assertEqual(module._GET_WORKSPACE_ARGTYPES["aclnnGdnCoreFwdPhase6"], expected)
 
-    def test_versioned_phase_wrappers_use_fixed_aclnn_symbols(self):
-        for wrapper_name, aclnn_name in (
-            ("npu_gdn_core_fwd_phase1", "aclnnGdnCoreFwdPhase1"),
-            ("npu_gdn_core_fwd_phase2", "aclnnGdnCoreFwdPhase2"),
-            ("npu_gdn_core_fwd_phase3", "aclnnGdnCoreFwdPhase3"),
-            ("npu_gdn_core_fwd_phase4", "aclnnGdnCoreFwdPhase4"),
-            ("npu_gdn_core_fwd_phase5", "aclnnGdnCoreFwdPhase5"),
-            ("npu_gdn_core_fwd_phase6", "aclnnGdnCoreFwdPhase6"),
-        ):
-            with self.subTest(wrapper=wrapper_name):
-                captured = {}
-                module = load_ctypes_module(captured)
-                getattr(module, wrapper_name)(**make_inputs(), chunk_size=64)
-                self.assertEqual(captured["name"], aclnn_name)
-                self.assertEqual(len(captured["args"]), 15)
+    def test_phase6_wrapper_uses_fixed_aclnn_symbol(self):
+        captured = {}
+        module = load_ctypes_module(captured)
+        module.npu_gdn_core_fwd_phase6(**make_inputs(), chunk_size=64)
+        self.assertEqual(captured["name"], "aclnnGdnCoreFwdPhase6")
+        self.assertEqual(len(captured["args"]), 15)
 
-    def test_versioned_cpp_routes_keep_both_phase_boundaries(self):
+    def test_cpp_route_keeps_only_phase6_boundary(self):
         source = GDN_CORE_CPP.read_text(encoding="utf-8")
-        self.assertIn("GdnCorePhase::PHASE_1_SIX_KERNELS", source)
-        self.assertIn("l0op::ChunkScaledDotKkt", source)
-        self.assertIn("l0op::SolveTri", source)
-        self.assertIn("GdnCorePhase::PHASE_2_FUSED_KKT_SOLVE", source)
-        self.assertIn("l0op::ChunkKktSolveTri", source)
-        self.assertIn("GdnCorePhase::PHASE_3_FUSED_CUMSUM_KKT_SOLVE", source)
-        self.assertIn("l0op::ChunkCumsumKktSolveTri", source)
-        self.assertIn("GdnCorePhase::PHASE_4_FUSED_FWD_HO", source)
-        self.assertIn("l0op::ChunkGatedDeltaRuleFwdHO", source)
-        self.assertIn("GdnCorePhase::PHASE_5_FUSED_RECOMPUTE_WU_HO", source)
-        self.assertIn("l0op::ChunkRecomputeWUFwdHO", source)
-        self.assertIn("GdnCorePhase::PHASE_6_FUSED_CORE", source)
+        header = GDN_CORE_HEADER.read_text(encoding="utf-8")
         self.assertIn("l0op::ChunkGdnCoreFwd", source)
-        self.assertNotIn("l0op::ChunkCumsumKkt(", source)
-        self.assertIn("aclnnGdnCoreFwdPhase3GetWorkspaceSize", source)
-        self.assertIn("aclnnGdnCoreFwdPhase4GetWorkspaceSize", source)
-        self.assertIn("aclnnGdnCoreFwdPhase5GetWorkspaceSize", source)
         self.assertIn("aclnnGdnCoreFwdPhase6GetWorkspaceSize", source)
+        self.assertIn("aclnnGdnCoreFwdPhase6GetWorkspaceSize", header)
+        self.assertIn("aclnnGdnCoreFwdPhase6(", header)
+        for phase in range(1, 6):
+            self.assertNotIn(f"aclnnGdnCoreFwdPhase{phase}", source)
+            self.assertNotIn(f"aclnnGdnCoreFwdPhase{phase}", header)
+        self.assertNotIn("aclnnGdnCoreFwdGetWorkspaceSize", source)
+        self.assertNotIn("aclnnGdnCoreFwdGetWorkspaceSize", header)
 
     def test_preprocess_direct_wrappers_match_aclnn_descriptor_kinds(self):
         captured = {}

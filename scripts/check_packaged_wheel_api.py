@@ -63,6 +63,15 @@ FORBIDDEN_ASCENDC_NAMES = (
 FORBIDDEN_ASCENDC_CONFIGS = (
     "recompute_wu_fwd.json",
 )
+REQUIRED_TRITON_CORE_FILES = (
+    "__init__.py",
+    "causal_conv1d.py",
+    "chunk_scaled_dot_kkt.py",
+    "cumsum.py",
+    "l2norm.py",
+    "solve_tril_fast.py",
+    "utils.py",
+)
 
 
 def _require_attr(obj, name: str, owner: str) -> None:
@@ -134,6 +143,23 @@ def _require_safe_packaged_opapi(fla_npu_module) -> None:
         )
 
 
+def _require_packaged_triton_core(fla_npu_module) -> None:
+    package_root = Path(fla_npu_module.__file__).resolve().parent
+    triton_core = package_root / "ops" / "triton" / "triton_core"
+    missing = [
+        name
+        for name in REQUIRED_TRITON_CORE_FILES
+        if not (triton_core / name).is_file()
+    ]
+    if missing:
+        raise AssertionError(
+            "packaged wheel is missing internal fla_npu Triton sources: "
+            + ", ".join(missing)
+            + ". This is a wheel packaging error, not a missing "
+            "triton-ascend installation."
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -180,6 +206,7 @@ def main() -> int:
             _require_attr(torch_npu.ops, f"npu_{name}", "torch_npu.ops")
 
     _require_packaged_opp_configs(fla_npu)
+    _require_packaged_triton_core(fla_npu)
     _require_safe_packaged_opapi(fla_npu)
 
     if ascendc.BACKWARD_OPS.get("causal_conv1d") != "causal_conv1d_bwd":

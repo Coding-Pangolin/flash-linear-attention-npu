@@ -74,23 +74,6 @@ _GET_WORKSPACE_ARGTYPES = {
         ctypes.POINTER(ctypes.c_uint64),  # workspaceSize
         ctypes.POINTER(ctypes.c_void_p),  # executor
     ],
-    "aclnnCausalConv1d": [
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_int64,
-        ctypes.c_int64,
-        ctypes.c_int64,
-        ctypes.c_int64,
-        ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_uint64),
-        ctypes.POINTER(ctypes.c_void_p),
-    ],
     "aclnnGdnCoreFwd": [
         *([ctypes.c_void_p] * 6),
         ctypes.c_bool,
@@ -1076,8 +1059,6 @@ def npu_causal_conv1d(
             ctx.tensor(weight, "weight"),
             ctx.tensor(bias, "bias"),
             ctx.tensor(conv_states, "conv_states"),
-            # The public aclnn API declares these four optional inputs as aclIntArray,
-            # not aclTensor. A non-null descriptor of the wrong kind corrupts host state.
             ctx.int_array(query_start_loc),
             ctx.int_array(cache_indices),
             ctx.int_array(initial_state_mode),

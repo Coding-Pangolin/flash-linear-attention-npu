@@ -8,9 +8,7 @@
 #include "../../chunk_recompute_wu_fwd_ho/op_kernel/chunk_recompute_wu_fwd_ho.cpp"
 #undef GDN_CHUNK_RECOMPUTE_WU_FWD_HO_IMPL_ONLY
 
-#define GDN_CHUNK_CUMSUM_KKT_SOLVE_IMPL_ONLY
 #include "../../chunk_kkt_solve_tri/op_kernel/chunk_cumsum_kkt_solve_tri.cpp"
-#undef GDN_CHUNK_CUMSUM_KKT_SOLVE_IMPL_ONLY
 
 #define GDN_CHUNK_LOCAL_CUMSUM_IMPL_ONLY
 #include "../../chunk_local_cumsum/op_kernel/chunk_local_cumsum.cpp"

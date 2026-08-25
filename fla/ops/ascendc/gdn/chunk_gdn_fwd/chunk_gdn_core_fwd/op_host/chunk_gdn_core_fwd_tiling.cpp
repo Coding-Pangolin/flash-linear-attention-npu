@@ -7,7 +7,7 @@
 #include "../../chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
 #include "../../chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling.h"
 #include "../../chunk_gated_delta_rule_fwd_h/op_kernel/chunk_gated_delta_rule_fwd_h_struct.h"
-#include "../op_kernel/internal/def/chunk_gdn_core_def_struct.h"
+#include "../op_kernel/internal/state_update_output/chunk_gdn_core_state_update_output_struct.h"
 #include "../op_kernel/chunk_gdn_core_fwd_struct.h"
 
 #include "securec.h"
@@ -19,7 +19,7 @@
 
 namespace optiling {
 
-ge::graphStatus Tiling4ChunkGdnCoreDef(gert::TilingContext *context);
+ge::graphStatus Tiling4ChunkGdnCoreStateOutput(gert::TilingContext *context);
 
 namespace {
 
@@ -89,8 +89,8 @@ bool GetChunkCount(const gert::StorageShape *shape, uint64_t *count)
     return false;
 }
 
-ge::graphStatus BuildAbcCubeTiling(uint64_t bt, uint64_t k, ge::DataType dtype,
-                                   AscendC::tiling::TCubeTiling &tiling)
+ge::graphStatus BuildCoefficientCubeTiling(uint64_t bt, uint64_t k, ge::DataType dtype,
+                                           AscendC::tiling::TCubeTiling &tiling)
 {
     matmul_tiling::MatmulApiTiling mm;
     const auto inputType = dtype == ge::DT_BF16
@@ -213,7 +213,7 @@ ge::graphStatus Tiling4ChunkGdnCoreFwd(gert::TilingContext *context)
     OP_CHECK_IF(!IsShape(aShape, {batch, valueHeads, tokens, *chunkSize}),
                 OP_LOGE(context->GetNodeName(), "Phase 6 requires a_storage=[B,Hv,T,chunk_size]."),
                 return ge::GRAPH_FAILED);
-    OP_CHECK_IF(Tiling4ChunkGdnCoreDef(context) != ge::GRAPH_SUCCESS,
+    OP_CHECK_IF(Tiling4ChunkGdnCoreStateOutput(context) != ge::GRAPH_SUCCESS,
                 OP_LOGE(context->GetNodeName(), "Reuse of the accepted Phase 5 suffix tiling failed."),
                 return ge::GRAPH_FAILED);
 
@@ -228,58 +228,58 @@ ge::graphStatus Tiling4ChunkGdnCoreFwd(gert::TilingContext *context)
                 return ge::GRAPH_FAILED);
 
     GDN::ChunkGdnCoreFwdTrailer trailer{};
-    auto &abc = trailer.abc;
-    abc.B = static_cast<uint64_t>(batch);
-    abc.Hk = static_cast<uint64_t>(heads);
-    abc.Hv = static_cast<uint64_t>(valueHeads);
-    abc.hvPerHk = static_cast<uint64_t>(valueHeads / heads);
-    abc.T = static_cast<uint64_t>(tokens);
-    abc.K = SUPPORTED_K_DIM;
-    abc.BT = static_cast<uint64_t>(*chunkSize);
-    abc.NT = isVarlen ? varlenChunks : CeilDiv(abc.T, abc.BT);
-    // ABC produces one KKT/solve tile per value head. K is shared by the
+    auto &coefficient = trailer.coefficient;
+    coefficient.B = static_cast<uint64_t>(batch);
+    coefficient.Hk = static_cast<uint64_t>(heads);
+    coefficient.Hv = static_cast<uint64_t>(valueHeads);
+    coefficient.hvPerHk = static_cast<uint64_t>(valueHeads / heads);
+    coefficient.T = static_cast<uint64_t>(tokens);
+    coefficient.K = SUPPORTED_K_DIM;
+    coefficient.BT = static_cast<uint64_t>(*chunkSize);
+    coefficient.NT = isVarlen ? varlenChunks : CeilDiv(coefficient.T, coefficient.BT);
+    // Coefficient generation produces one KKT/solve tile per value head. K is shared by the
     // contiguous group of hvPerHk value heads mapped to one logical K head.
-    abc.taskNum = abc.B * abc.Hv * abc.NT;
-    abc.usedAicNum = aicCoreNum;
-    abc.usedAivNum = std::min<uint64_t>(aivCoreNum, aicCoreNum * 2);
-    abc.btAlign = AlignUp(abc.BT, FP32_BLOCK_ELEMS);
-    abc.isVarlen = isVarlen ? 1 : 0;
-    abc.scoreWorkspaceBytes =
-        AlignUp(abc.taskNum * abc.BT * abc.BT * sizeof(float), WORKSPACE_ALIGNMENT);
-    abc.aWorkspaceBytes = AlignUp(
-        abc.B * abc.Hv * abc.T * abc.BT * sizeof(uint16_t), WORKSPACE_ALIGNMENT);
-    abc.solveWorkspacePerCoreBytes = AlignUp(
-        5 * abc.BT * abc.BT * sizeof(uint16_t), WORKSPACE_ALIGNMENT);
-    abc.totalTiles = static_cast<int64_t>(abc.taskNum);
-    abc.matrixSize = *chunkSize;
-    abc.numHeads = valueHeads;
-    abc.seqLen = tokens;
-    abc.batchSize = batch;
-    abc.isLower = 1;
-    abc.hasCuSeqlens = isVarlen ? 1 : 0;
-    abc.tilesPerCore = static_cast<int64_t>(CeilDiv(abc.taskNum, aicCoreNum));
-    abc.chunkSize = *chunkSize;
-    abc.numChunks = isVarlen ? 0 : static_cast<int64_t>(abc.NT);
-    abc.lastChunkValidSize = isVarlen ? 0 :
+    coefficient.taskNum = coefficient.B * coefficient.Hv * coefficient.NT;
+    coefficient.usedAicNum = aicCoreNum;
+    coefficient.usedAivNum = std::min<uint64_t>(aivCoreNum, aicCoreNum * 2);
+    coefficient.btAlign = AlignUp(coefficient.BT, FP32_BLOCK_ELEMS);
+    coefficient.isVarlen = isVarlen ? 1 : 0;
+    coefficient.scoreWorkspaceBytes =
+        AlignUp(coefficient.taskNum * coefficient.BT * coefficient.BT * sizeof(float), WORKSPACE_ALIGNMENT);
+    coefficient.aWorkspaceBytes = AlignUp(
+        coefficient.B * coefficient.Hv * coefficient.T * coefficient.BT * sizeof(uint16_t), WORKSPACE_ALIGNMENT);
+    coefficient.solveWorkspacePerCoreBytes = AlignUp(
+        5 * coefficient.BT * coefficient.BT * sizeof(uint16_t), WORKSPACE_ALIGNMENT);
+    coefficient.totalTiles = static_cast<int64_t>(coefficient.taskNum);
+    coefficient.matrixSize = *chunkSize;
+    coefficient.numHeads = valueHeads;
+    coefficient.seqLen = tokens;
+    coefficient.batchSize = batch;
+    coefficient.isLower = 1;
+    coefficient.hasCuSeqlens = isVarlen ? 1 : 0;
+    coefficient.tilesPerCore = static_cast<int64_t>(CeilDiv(coefficient.taskNum, aicCoreNum));
+    coefficient.chunkSize = *chunkSize;
+    coefficient.numChunks = isVarlen ? 0 : static_cast<int64_t>(coefficient.NT);
+    coefficient.lastChunkValidSize = isVarlen ? 0 :
         (tokens % *chunkSize == 0 ? *chunkSize : tokens % *chunkSize);
-    abc.totalChunks = static_cast<int64_t>(abc.NT);
-    abc.layoutMode = isVarlen ? 3 : 0;
-    abc.dtypeMode = isBf16 ? 1 : 0;
-    abc.totalTokens = isVarlen ? tokens : 0;
-    OP_CHECK_IF(BuildAbcCubeTiling(abc.BT, abc.K, inputDtype,
-                                   abc.cubeTilingData) != ge::GRAPH_SUCCESS,
+    coefficient.totalChunks = static_cast<int64_t>(coefficient.NT);
+    coefficient.layoutMode = isVarlen ? 3 : 0;
+    coefficient.dtypeMode = isBf16 ? 1 : 0;
+    coefficient.totalTokens = isVarlen ? tokens : 0;
+    OP_CHECK_IF(BuildCoefficientCubeTiling(coefficient.BT, coefficient.K, inputDtype,
+                                           coefficient.cubeTilingData) != ge::GRAPH_SUCCESS,
                 OP_LOGE(context->GetNodeName(),
                         "Failed to build the Phase 6 KKT Matmul tiling."),
                 return ge::GRAPH_FAILED);
     uint64_t workspaceOffset = AlignUp(workspaceSizes[0] - systemWorkspace, WORKSPACE_ALIGNMENT);
     trailer.scoreWorkspaceOffset = workspaceOffset;
-    workspaceOffset += abc.scoreWorkspaceBytes;
+    workspaceOffset += coefficient.scoreWorkspaceBytes;
     trailer.aWorkspaceOffset = workspaceOffset;
-    workspaceOffset += abc.aWorkspaceBytes;
+    workspaceOffset += coefficient.aWorkspaceBytes;
     trailer.solveWorkspaceOffset = workspaceOffset;
-    workspaceOffset += aicCoreNum * abc.solveWorkspacePerCoreBytes;
+    workspaceOffset += aicCoreNum * coefficient.solveWorkspacePerCoreBytes;
     trailer.gCumsumBhtOffset = workspaceOffset;
-    workspaceOffset += AlignUp(abc.B * abc.Hv * abc.T * sizeof(float), WORKSPACE_ALIGNMENT);
+    workspaceOffset += AlignUp(coefficient.B * coefficient.Hv * coefficient.T * sizeof(float), WORKSPACE_ALIGNMENT);
     workspaceSizes[0] = systemWorkspace + workspaceOffset;
 
     ChunkGatedDeltaRuleFwdHTilingData hTiling;
@@ -290,9 +290,9 @@ ge::graphStatus Tiling4ChunkGdnCoreFwd(gert::TilingContext *context)
                         hTilingSize, sizeof(::ChunkGatedDeltaRuleFwdHTilingData)),
                 return ge::GRAPH_FAILED);
     const uint64_t oTilingOffset = AlignUp(hTilingSize, TILING_ALIGNMENT);
-    const uint64_t defTilingEnd = oTilingOffset + sizeof(GDN::ChunkFwdOTilingData) +
-                                  sizeof(GDN::ChunkGdnCoreDefTrailer);
-    const uint64_t phase6TrailerOffset = AlignUp(defTilingEnd, TILING_ALIGNMENT);
+    const uint64_t stateOutputTilingEnd = oTilingOffset + sizeof(GDN::ChunkFwdOTilingData) +
+                                          sizeof(GDN::ChunkGdnCoreStateOutputTrailer);
+    const uint64_t phase6TrailerOffset = AlignUp(stateOutputTilingEnd, TILING_ALIGNMENT);
     auto *rawTiling = context->GetRawTilingData();
     OP_CHECK_NULL_WITH_CONTEXT(context, rawTiling);
     const uint64_t rawTilingSize = phase6TrailerOffset + sizeof(trailer);
@@ -302,7 +302,7 @@ ge::graphStatus Tiling4ChunkGdnCoreFwd(gert::TilingContext *context)
     OP_CHECK_IF(memcpy_s(static_cast<uint8_t *>(rawTiling->GetData()) + phase6TrailerOffset,
                          rawTiling->GetCapacity() - phase6TrailerOffset,
                          &trailer, sizeof(trailer)) != EOK,
-                OP_LOGE(context->GetNodeName(), "Serialize Phase 6 ABC trailer failed."),
+                OP_LOGE(context->GetNodeName(), "Serialize Phase 6 coefficient trailer failed."),
                 return ge::GRAPH_FAILED);
     rawTiling->SetDataSize(rawTilingSize);
     context->SetTilingKey(vDim == SUPPORTED_V_DIM_256 ? TILING_KEY_V256 : TILING_KEY_V128);
@@ -310,7 +310,7 @@ ge::graphStatus Tiling4ChunkGdnCoreFwd(gert::TilingContext *context)
     OP_LOGD(context->GetNodeName(),
             "Phase 6 tiling: B=%ld, Hk=%ld, Hv=%ld, T=%ld, K=%ld, V=%ld, blocks=%lu, tasks=%lu, suffix=%zu, total=%zu.",
             batch, heads, valueHeads, tokens, kDim, vDim,
-            aicCoreNum, abc.taskNum, workspaceSizes[0] - systemWorkspace,
+            aicCoreNum, coefficient.taskNum, workspaceSizes[0] - systemWorkspace,
             workspaceSizes[0]);
     return ge::GRAPH_SUCCESS;
 }

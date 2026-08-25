@@ -2,8 +2,8 @@
  * Copyright (c) 2026 Tianjin University, Ltd.
  * CANN Open Software License Agreement Version 2.0.
  */
-#ifndef CHUNK_GDN_CORE_DEF_STRUCT_H
-#define CHUNK_GDN_CORE_DEF_STRUCT_H
+#ifndef CHUNK_GDN_CORE_STATE_UPDATE_OUTPUT_STRUCT_H
+#define CHUNK_GDN_CORE_STATE_UPDATE_OUTPUT_STRUCT_H
 
 #include <cstdint>
 
@@ -11,7 +11,7 @@
 
 namespace GDN {
 
-struct ChunkGdnCoreDefTrailer {
+struct ChunkGdnCoreStateOutputTrailer {
     RecomputeWUFwdTilingData recompute;
     int64_t recomputeWorkspaceOffset;
     int64_t wIntermediateOffset;
@@ -24,4 +24,4 @@ struct ChunkGdnCoreDefTrailer {
 
 } // namespace GDN
 
-#endif // CHUNK_GDN_CORE_DEF_STRUCT_H
+#endif // CHUNK_GDN_CORE_STATE_UPDATE_OUTPUT_STRUCT_H

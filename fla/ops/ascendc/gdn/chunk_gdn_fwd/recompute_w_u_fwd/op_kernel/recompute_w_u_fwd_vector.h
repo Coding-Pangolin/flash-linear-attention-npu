@@ -165,7 +165,7 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType,
     uint32_t loopEnd = coreLoops;
     uint32_t loopStep = coreNumAic;
     if constexpr (kAbcTaskOrder) {
-        // Phase 6 ABC assigns a contiguous task range to each AIC. Keep the
+        // Phase 6 coefficient generation assigns a contiguous task range to each AIC. Keep the
         // recompute consumer on the same core so A is locally produced first.
         const uint32_t tasksPerCore = (coreLoops + coreNumAic - 1) / coreNumAic;
         loopBegin = coreIdx * tasksPerCore;

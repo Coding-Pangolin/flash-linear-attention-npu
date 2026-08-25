@@ -4,8 +4,8 @@
  */
 #include "chunk_gdn_core_fwd_struct.h"
 
-#include "internal/def/chunk_gdn_core_def.cpp"
-#include "internal/abc/chunk_gdn_core_abc.cpp"
+#include "internal/state_update_output/chunk_gdn_core_state_update_output.cpp"
+#include "internal/coefficient_generation/chunk_gdn_core_coefficient_generation.cpp"
 
 #define GDN_CHUNK_LOCAL_CUMSUM_IMPL_ONLY
 #include "../../chunk_local_cumsum/op_kernel/chunk_local_cumsum.cpp"
@@ -33,11 +33,11 @@ __aicore__ inline uint64_t AlignPhase6(uint64_t value, uint64_t alignment)
     return (value + alignment - 1) / alignment * alignment;
 }
 
-__aicore__ inline const __gm__ ChunkGdnCoreDefTrailer *GetDefTrailer(GM_ADDR tiling)
+__aicore__ inline const __gm__ ChunkGdnCoreStateOutputTrailer *GetStateOutputTrailer(GM_ADDR tiling)
 {
     const uint64_t oTilingOffset = AlignPhase6(
         sizeof(ChunkGatedDeltaRuleFwdHTilingData), PHASE6_TILING_ALIGNMENT);
-    return reinterpret_cast<const __gm__ ChunkGdnCoreDefTrailer *>(
+    return reinterpret_cast<const __gm__ ChunkGdnCoreStateOutputTrailer *>(
         tiling + oTilingOffset + sizeof(ChunkFwdOTilingData));
 }
 
@@ -45,14 +45,14 @@ __aicore__ inline const __gm__ ChunkGdnCoreFwdTrailer *GetPhase6Trailer(GM_ADDR 
 {
     const uint64_t oTilingOffset = AlignPhase6(
         sizeof(ChunkGatedDeltaRuleFwdHTilingData), PHASE6_TILING_ALIGNMENT);
-    const uint64_t defTilingEnd = oTilingOffset + sizeof(ChunkFwdOTilingData) +
-                                  sizeof(ChunkGdnCoreDefTrailer);
+    const uint64_t stateOutputTilingEnd = oTilingOffset + sizeof(ChunkFwdOTilingData) +
+                                          sizeof(ChunkGdnCoreStateOutputTrailer);
     return reinterpret_cast<const __gm__ ChunkGdnCoreFwdTrailer *>(
-        tiling + AlignPhase6(defTilingEnd, PHASE6_TILING_ALIGNMENT));
+        tiling + AlignPhase6(stateOutputTilingEnd, PHASE6_TILING_ALIGNMENT));
 }
 
-__aicore__ inline void CopyAbcTiling(
-    const __gm__ ChunkGdnCoreFwdAbcTiling *src, ChunkGdnCoreFwdAbcTiling &dst)
+__aicore__ inline void CopyCoefficientTiling(
+    const __gm__ ChunkGdnCoreCoefficientTiling *src, ChunkGdnCoreCoefficientTiling &dst)
 {
     dst.B = src->B;
     dst.Hk = src->Hk;
@@ -99,7 +99,7 @@ __aicore__ inline void CopyAbcTiling(
 
 __aicore__ inline void WritePublicCumsumRows(
     GM_ADDR gCumsumBht, GM_ADDR gCumsumBth, GM_ADDR cuSeqlens, GM_ADDR chunkIndices,
-    const ChunkGdnCoreFwdAbcTiling &tiling)
+    const ChunkGdnCoreCoefficientTiling &tiling)
 {
     if ASCEND_IS_AIC {
         return;
@@ -216,7 +216,7 @@ __aicore__ inline void WritePublicCumsumRows(
 
 __aicore__ inline void RunPhase6Cumsum(
     GM_ADDR rawG, GM_ADDR cuSeqlens, GM_ADDR chunkIndices, GM_ADDR gCumsumBht,
-    const ChunkGdnCoreFwdAbcTiling &tiling)
+    const ChunkGdnCoreCoefficientTiling &tiling)
 {
     if ASCEND_IS_AIC {
         return;
@@ -257,10 +257,10 @@ __aicore__ inline void RunPhase6(
     GM_ADDR finalState, GM_ADDR gCumsumBth, GM_ADDR A, GM_ADDR workspace, GM_ADDR tiling)
 {
     GM_ADDR userWorkspace = AscendC::GetUserWorkspace(workspace);
-    const __gm__ ChunkGdnCoreDefTrailer *defTiling = GetDefTrailer(tiling);
+    const __gm__ ChunkGdnCoreStateOutputTrailer *stateOutputTiling = GetStateOutputTrailer(tiling);
     const __gm__ ChunkGdnCoreFwdTrailer *phase6 = GetPhase6Trailer(tiling);
-    ChunkGdnCoreFwdAbcTiling abc{};
-    CopyAbcTiling(&phase6->abc, abc);
+    ChunkGdnCoreCoefficientTiling coefficient{};
+    CopyCoefficientTiling(&phase6->coefficient, coefficient);
 
     GM_ADDR scoreWorkspace = userWorkspace + phase6->scoreWorkspaceOffset;
     GM_ADDR aWorkspace = userWorkspace + phase6->aWorkspaceOffset;
@@ -271,14 +271,14 @@ __aicore__ inline void RunPhase6(
         coreGroup /= static_cast<uint64_t>(AscendC::GetSubBlockNum());
     }
     GM_ADDR solveWorkspace =
-        solveWorkspaceBase + coreGroup * abc.solveWorkspacePerCoreBytes;
+        solveWorkspaceBase + coreGroup * coefficient.solveWorkspacePerCoreBytes;
 
     if ASCEND_IS_AIC {
         NsChunkKktCube::ChunkKktCube<InputT> kktCube;
-        kktCube.Process(k, cuSeqlens, chunkIndices, scoreWorkspace, &abc);
+        kktCube.Process(k, cuSeqlens, chunkIndices, scoreWorkspace, &coefficient);
     }
     if ASCEND_IS_AIV {
-        RunPhase6Cumsum(rawG, cuSeqlens, chunkIndices, gCumsumBht, abc);
+        RunPhase6Cumsum(rawG, cuSeqlens, chunkIndices, gCumsumBht, coefficient);
     }
 
     // Cumsum is already complete on each AIV when it reaches this point. The
@@ -296,18 +296,18 @@ __aicore__ inline void RunPhase6(
         NsChunkScaledDotKktFusedCumsum::ChunkScaledDotKktFusedCumsum<InputT, InputT> kkt;
         kkt.Init(
             k, gCumsumBht, beta, cuSeqlens, chunkIndices, aWorkspace, scoreWorkspace,
-            abc.B, abc.Hk, abc.Hv, abc.hvPerHk, abc.T, abc.K, abc.BT, abc.NT,
-            abc.taskNum, abc.usedAicNum, abc.usedAivNum, abc.btAlign, abc.isVarlen, &kktPipe);
-        kkt.ProcessEpilogueForSolve(abc.tilesPerCore);
+            coefficient.B, coefficient.Hk, coefficient.Hv, coefficient.hvPerHk, coefficient.T, coefficient.K, coefficient.BT, coefficient.NT,
+            coefficient.taskNum, coefficient.usedAicNum, coefficient.usedAivNum, coefficient.btAlign, coefficient.isVarlen, &kktPipe);
+        kkt.ProcessEpilogueForSolve(coefficient.tilesPerCore);
         kktPipe.Reset();
     }
 
-    if (abc.BT == 64) {
+    if (coefficient.BT == 64) {
         RunSolvePhase<InputT, 64>(aWorkspace, cuSeqlens, chunkIndices, A,
-                                  solveWorkspace, &abc);
+                                  solveWorkspace, &coefficient);
     } else {
         RunSolvePhase<InputT, 128>(aWorkspace, cuSeqlens, chunkIndices, A,
-                                   solveWorkspace, &abc);
+                                   solveWorkspace, &coefficient);
     }
     // Solve and recompute share a contiguous task range. Publish solved A
     // before either paired AIV enters its local consumer range.
@@ -317,23 +317,23 @@ __aicore__ inline void RunPhase6(
     if ASCEND_IS_AIV {
         AscendC::CrossCoreWaitFlag(PHASE6_SOLVE_DONE_FLAG);
     }
-    GM_ADDR w = userWorkspace + defTiling->wIntermediateOffset;
-    GM_ADDR u = userWorkspace + defTiling->uIntermediateOffset;
-    GM_ADDR h = userWorkspace + defTiling->hIntermediateOffset;
-    GM_ADDR vNew = userWorkspace + defTiling->vNewIntermediateOffset;
+    GM_ADDR w = userWorkspace + stateOutputTiling->wIntermediateOffset;
+    GM_ADDR u = userWorkspace + stateOutputTiling->uIntermediateOffset;
+    GM_ADDR h = userWorkspace + stateOutputTiling->hIntermediateOffset;
+    GM_ADDR vNew = userWorkspace + stateOutputTiling->vNewIntermediateOffset;
     RecomputeWUFwdTilingData recomputeTiling{};
-    CopyRecomputeTiling(&defTiling->recompute, recomputeTiling);
-    if (defTiling->recompute.V == 256) {
+    CopyRecomputeTiling(&stateOutputTiling->recompute, recomputeTiling);
+    if (stateOutputTiling->recompute.V == 256) {
         DispatchRecompute<InputT, float, 256, true>(
             k, v, beta, A, gCumsumBht, cuSeqlens, chunkIndices, w, u,
-            userWorkspace + defTiling->recomputeWorkspaceOffset, &recomputeTiling);
+            userWorkspace + stateOutputTiling->recomputeWorkspaceOffset, &recomputeTiling);
     } else {
         DispatchRecompute<InputT, float, 128, true>(
             k, v, beta, A, gCumsumBht, cuSeqlens, chunkIndices, w, u,
-            userWorkspace + defTiling->recomputeWorkspaceOffset, &recomputeTiling);
+            userWorkspace + stateOutputTiling->recomputeWorkspaceOffset, &recomputeTiling);
     }
 
-    WritePublicCumsumRows(gCumsumBht, gCumsumBth, cuSeqlens, chunkIndices, abc);
+    WritePublicCumsumRows(gCumsumBht, gCumsumBth, cuSeqlens, chunkIndices, coefficient);
     DispatchFwdH<TileShapes>(k, w, u, gCumsumBht, gk, initialState, cuSeqlens,
                              chunkIndices, h, vNew, finalState, tiling, userWorkspace);
 
@@ -370,7 +370,7 @@ extern "C" __global__ __aicore__ void chunk_gdn_core_fwd(
     if (TILING_KEY_IS(1)) {
         KERNEL_TASK_TYPE(1, KERNEL_TYPE_MIX_AIC_1_2);
         const __gm__ GDN::ChunkGdnCoreFwdTrailer *phase6 = GDN::GetPhase6Trailer(tiling);
-        if (phase6->abc.dtypeMode == 1) {
+        if (phase6->coefficient.dtypeMode == 1) {
             GDN::RunPhase6<bfloat16_t, Catlass::Gemm::Kernel::GDNFwdHTileShapes128>(
                 q, k, v, beta, raw_g, gk, initial_state, cu_seqlens, chunk_indices,
                 o, final_state, g_cumsum_bth, A, workspace, tiling);
@@ -382,7 +382,7 @@ extern "C" __global__ __aicore__ void chunk_gdn_core_fwd(
     } else if (TILING_KEY_IS(2)) {
         KERNEL_TASK_TYPE(2, KERNEL_TYPE_MIX_AIC_1_2);
         const __gm__ GDN::ChunkGdnCoreFwdTrailer *phase6 = GDN::GetPhase6Trailer(tiling);
-        if (phase6->abc.dtypeMode == 1) {
+        if (phase6->coefficient.dtypeMode == 1) {
             GDN::RunPhase6<bfloat16_t, Catlass::Gemm::Kernel::GDNFwdHTileShapes256>(
                 q, k, v, beta, raw_g, gk, initial_state, cu_seqlens, chunk_indices,
                 o, final_state, g_cumsum_bth, A, workspace, tiling);

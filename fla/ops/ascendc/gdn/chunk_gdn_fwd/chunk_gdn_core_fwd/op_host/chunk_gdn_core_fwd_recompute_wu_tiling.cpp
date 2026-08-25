@@ -5,7 +5,7 @@
 #include "../../chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling.h"
 #include "../../chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling_processor.h"
 #include "../../chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
-#include "../op_kernel/internal/def/chunk_gdn_core_def_struct.h"
+#include "../op_kernel/internal/state_update_output/chunk_gdn_core_state_update_output_struct.h"
 #include "../../recompute_w_u_fwd/op_host/op_tiling/recompute_w_u_fwd_tiling_processor.h"
 
 #include "securec.h"
@@ -122,9 +122,9 @@ size_t FillOTilingWorkspace(GDN::ChunkFwdOTilingData &tiling, uint32_t aicCoreNu
 
 } // namespace
 
-ge::graphStatus Tiling4ChunkGdnCoreDef(gert::TilingContext *context)
+ge::graphStatus Tiling4ChunkGdnCoreStateOutput(gert::TilingContext *context)
 {
-    OP_LOGD(context->GetNodeName(), "Tiling4ChunkGdnCoreDef start.");
+    OP_LOGD(context->GetNodeName(), "Tiling4ChunkGdnCoreStateOutput start.");
     const auto *qShapePtr = context->GetOptionalInputShape(INPUT_Q);
     const auto *kShapePtr = context->GetOptionalInputShape(INPUT_K);
     const auto *vShapePtr = context->GetOptionalInputShape(INPUT_V);
@@ -333,7 +333,7 @@ ge::graphStatus Tiling4ChunkGdnCoreDef(gert::TilingContext *context)
     hWorkspaceSize += hoShift;
 
     size_t workspaceOffset = AlignUp(std::max(hWorkspaceSize, oWorkspaceSize), WORKSPACE_ALIGNMENT);
-    GDN::ChunkGdnCoreDefTrailer trailer{};
+    GDN::ChunkGdnCoreStateOutputTrailer trailer{};
     trailer.recompute = recomputeTiling;
     trailer.recomputeWorkspaceOffset = 0;
     trailer.wIntermediateOffset = static_cast<int64_t>(wOffset);

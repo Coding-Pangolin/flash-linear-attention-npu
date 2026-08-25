@@ -10,7 +10,7 @@
 
 namespace GDN {
 
-struct ChunkGdnCoreFwdAbcTiling {
+struct ChunkGdnCoreCoefficientTiling {
     uint64_t B;
     uint64_t Hk;
     uint64_t Hv;
@@ -46,7 +46,7 @@ struct ChunkGdnCoreFwdAbcTiling {
 };
 
 struct ChunkGdnCoreFwdTrailer {
-    ChunkGdnCoreFwdAbcTiling abc;
+    ChunkGdnCoreCoefficientTiling coefficient;
     uint64_t scoreWorkspaceOffset;
     uint64_t aWorkspaceOffset;
     uint64_t solveWorkspaceOffset;

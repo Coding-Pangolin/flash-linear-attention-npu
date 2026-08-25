@@ -272,7 +272,7 @@ private:
                                       : static_cast<int64_t>(tiling->Hk);
         const int64_t taskHead = (task / static_cast<int64_t>(tiling->NT)) % taskHeads;
         const int64_t b = task / static_cast<int64_t>(taskHeads * tiling->NT);
-        // Phase6 schedules one ABC task per value head. Map that value head
+        // Phase6 schedules one coefficient-generation task per value head. Map that value head
         // back to the shared logical key head; standalone KKT retains its
         // legacy Hk task axis because taskHeads == Hk there.
         const int64_t h = (taskHeads == static_cast<int64_t>(tiling->Hv) && tiling->hvPerHk > 0)

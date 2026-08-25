@@ -138,7 +138,7 @@ public:
             uint32_t loopEnd = coreLoops;
             uint32_t loopStep = AscendC::GetBlockNum();
             if constexpr (kAbcTaskOrder) {
-                // Match the contiguous ABC producer range in the fused core.
+                // Match the contiguous coefficient-generation producer range in the fused core.
                 const uint32_t tasksPerCore =
                     (coreLoops + AscendC::GetBlockNum() - 1) / AscendC::GetBlockNum();
                 loopBegin = coreIdx * tasksPerCore;

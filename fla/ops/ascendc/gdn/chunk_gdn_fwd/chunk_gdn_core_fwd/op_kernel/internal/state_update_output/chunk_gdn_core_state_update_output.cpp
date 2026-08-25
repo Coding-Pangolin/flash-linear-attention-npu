@@ -14,7 +14,7 @@
 #include "../../../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_common.h"
 #include "../../../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_cube.h"
 #include "../../../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_vector.h"
-#include "chunk_gdn_core_def_struct.h"
+#include "chunk_gdn_core_state_update_output_struct.h"
 #include "kernel_operator.h"
 #include "lib/matmul_intf.h"
 

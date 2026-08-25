@@ -123,7 +123,7 @@ private:
         BT_ = static_cast<int64_t>(bt);
         NT_ = static_cast<int64_t>(nt);
         taskNum_ = static_cast<int64_t>(taskNum);
-        // Phase6 expands the ABC work queue to value heads so that every
+        // Phase6 expands the coefficient-generation queue to value heads so that every
         // [B, Hv, T, BT] A row is produced. Standalone KKT keeps its legacy
         // Hk task queue; infer the active task-head axis from taskNum.
         const int64_t taskDenom = B_ * NT_;

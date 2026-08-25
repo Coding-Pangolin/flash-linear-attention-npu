@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-/** Final Phase 6 composite: ABC + DEF and public BTH g_cumsum in one kernel. */
+/** Final Phase 6 composite: coefficient generation plus state/output update in one kernel. */
 __attribute__((visibility("default")))
 aclnnStatus aclnnGdnCoreFwdPhase6GetWorkspaceSize(
     const aclTensor *q,

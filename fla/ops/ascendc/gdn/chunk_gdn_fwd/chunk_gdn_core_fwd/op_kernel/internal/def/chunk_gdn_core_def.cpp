@@ -2,19 +2,19 @@
  * Copyright (c) 2026 Tianjin University, Ltd.
  * CANN Open Software License Agreement Version 2.0.
  */
-#include "../../chunk_gated_delta_rule_fwd_h/op_kernel/chunk_gated_delta_rule_fwd_h_struct.h"
+#include "../../../../chunk_gated_delta_rule_fwd_h/op_kernel/chunk_gated_delta_rule_fwd_h_struct.h"
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-#include "../../chunk_gated_delta_rule_fwd_h/op_kernel/arch35/gemm/kernel/gdn_fwd_h_kernel.hpp"
+#include "../../../../chunk_gated_delta_rule_fwd_h/op_kernel/arch35/gemm/kernel/gdn_fwd_h_kernel.hpp"
 #else
-#include "../../chunk_gated_delta_rule_fwd_h/op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp"
+#include "../../../../chunk_gated_delta_rule_fwd_h/op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp"
 #endif
 #undef CATLASS_ARCH
-#include "../../chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
-#include "../../chunk_fwd_o/op_kernel/gemm/kernel/gdn_fwd_o_kernel.hpp"
-#include "../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_common.h"
-#include "../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_cube.h"
-#include "../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_vector.h"
-#include "chunk_recompute_wu_fwd_ho_struct.h"
+#include "../../../../chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
+#include "../../../../chunk_fwd_o/op_kernel/gemm/kernel/gdn_fwd_o_kernel.hpp"
+#include "../../../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_common.h"
+#include "../../../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_cube.h"
+#include "../../../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_vector.h"
+#include "chunk_gdn_core_def_struct.h"
 #include "kernel_operator.h"
 #include "lib/matmul_intf.h"
 
@@ -35,12 +35,6 @@ struct RecomputeWUFwdTileShapes256 {
     using L1TileShape = GemmCubeTileShape<_128, _256, _256>;
     using L0TileShape = GemmCubeTileShape<_128, _256, _64>;
 };
-
-constexpr uint64_t TILING_ALIGNMENT = 8;
-__aicore__ inline uint64_t AlignTilingSize(uint64_t value)
-{
-    return (value + TILING_ALIGNMENT - 1) / TILING_ALIGNMENT * TILING_ALIGNMENT;
-}
 
 template <typename InputT, typename GT, typename StateT, typename TileShapes, bool kGated>
 __aicore__ inline void RunFwdH(GM_ADDR k, GM_ADDR w, GM_ADDR u, GM_ADDR g, GM_ADDR gk,
@@ -258,84 +252,5 @@ __aicore__ inline void DispatchFwdO(GM_ADDR q, GM_ADDR k, GM_ADDR vNew, GM_ADDR 
     }
 }
 
-template <typename TileShapes>
-__aicore__ inline void RunFused(
-    GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR beta, GM_ADDR A, GM_ADDR g, GM_ADDR gk,
-    GM_ADDR initialState, GM_ADDR cuSeqlens, GM_ADDR chunkIndices, GM_ADDR o,
-    GM_ADDR finalState, GM_ADDR workspace, GM_ADDR tiling)
-{
-    GM_ADDR userWorkspace = AscendC::GetUserWorkspace(workspace);
-    const uint64_t oTilingOffset = AlignTilingSize(sizeof(ChunkGatedDeltaRuleFwdHTilingData));
-    const __gm__ ChunkFwdOTilingData *gmOTiling =
-        reinterpret_cast<const __gm__ ChunkFwdOTilingData *>(tiling + oTilingOffset);
-    const __gm__ ChunkRecomputeWUFwdHOTrailer *trailer =
-        reinterpret_cast<const __gm__ ChunkRecomputeWUFwdHOTrailer *>(
-            tiling + oTilingOffset + sizeof(ChunkFwdOTilingData));
-    GM_ADDR w = userWorkspace + trailer->wIntermediateOffset;
-    GM_ADDR u = userWorkspace + trailer->uIntermediateOffset;
-    GM_ADDR h = userWorkspace + trailer->hIntermediateOffset;
-    GM_ADDR vNew = userWorkspace + trailer->vNewIntermediateOffset;
-    RecomputeWUFwdTilingData recomputeTiling{};
-    CopyRecomputeTiling(&trailer->recompute, recomputeTiling);
-
-    if (trailer->qDataType == 1) {
-        if (trailer->recompute.V == 256) {
-            DispatchRecompute<bfloat16_t, float, 256>(
-                k, v, beta, A, g, cuSeqlens, chunkIndices, w, u,
-                userWorkspace + trailer->recomputeWorkspaceOffset, &recomputeTiling);
-        } else {
-            DispatchRecompute<bfloat16_t, float, 128>(
-                k, v, beta, A, g, cuSeqlens, chunkIndices, w, u,
-                userWorkspace + trailer->recomputeWorkspaceOffset, &recomputeTiling);
-        }
-    } else if (trailer->recompute.V == 256) {
-        DispatchRecompute<half, float, 256>(
-            k, v, beta, A, g, cuSeqlens, chunkIndices, w, u,
-            userWorkspace + trailer->recomputeWorkspaceOffset, &recomputeTiling);
-    } else {
-        DispatchRecompute<half, float, 128>(
-            k, v, beta, A, g, cuSeqlens, chunkIndices, w, u,
-            userWorkspace + trailer->recomputeWorkspaceOffset, &recomputeTiling);
-    }
-    // FwdH performs a full MIX barrier after state initialization and before
-    // either AIC or AIV consumes w/u, so a second stage barrier here is redundant.
-    DispatchFwdH<TileShapes>(k, w, u, g, gk, initialState, cuSeqlens, chunkIndices,
-                             h, vNew, finalState, tiling, userWorkspace);
-
-#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-    // FwdO consumes h/vNew across all FwdH task groups.  Drain the A5 H phase
-    // globally before any group starts the dependent O phase.
-    AscendC::SyncAll<false>();
-#endif
-
-    ChunkFwdOTilingData oTiling{};
-    CopyOTiling(gmOTiling, oTiling);
-    DispatchFwdO(q, k, vNew, h, g, cuSeqlens, chunkIndices, o, userWorkspace, &oTiling);
-}
-
 } // namespace
 } // namespace GDN
-
-#ifndef GDN_CHUNK_RECOMPUTE_WU_FWD_HO_IMPL_ONLY
-extern "C" __global__ __aicore__ void chunk_recompute_wu_fwd_ho(
-    GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR beta, GM_ADDR A, GM_ADDR g, GM_ADDR gk,
-    GM_ADDR initial_state, GM_ADDR cu_seqlens, GM_ADDR chunk_indices,
-    GM_ADDR o, GM_ADDR final_state, GM_ADDR workspace, GM_ADDR tiling)
-{
-    // The host packs H/O/recompute metadata into one opaque tiling blob. Register
-    // the trailer type so the AscendC compiler emits the kernel tiling metadata;
-    // the entry still reads the packed sections by their explicit offsets above.
-    REGISTER_TILING_DEFAULT(GDN::ChunkRecomputeWUFwdHOTrailer);
-    if (TILING_KEY_IS(1)) {
-        KERNEL_TASK_TYPE(1, KERNEL_TYPE_MIX_AIC_1_2);
-        GDN::RunFused<Catlass::Gemm::Kernel::GDNFwdHTileShapes128>(
-            q, k, v, beta, A, g, gk, initial_state, cu_seqlens, chunk_indices,
-            o, final_state, workspace, tiling);
-    } else if (TILING_KEY_IS(2)) {
-        KERNEL_TASK_TYPE(2, KERNEL_TYPE_MIX_AIC_1_2);
-        GDN::RunFused<Catlass::Gemm::Kernel::GDNFwdHTileShapes256>(
-            q, k, v, beta, A, g, gk, initial_state, cu_seqlens, chunk_indices,
-            o, final_state, workspace, tiling);
-    }
-}
-#endif

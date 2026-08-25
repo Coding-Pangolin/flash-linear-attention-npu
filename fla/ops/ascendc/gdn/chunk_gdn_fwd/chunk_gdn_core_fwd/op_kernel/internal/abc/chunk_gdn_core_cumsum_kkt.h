@@ -1,5 +1,5 @@
-#ifndef CHUNK_SCALED_DOT_KKT_FUSED_CUMSUM_H
-#define CHUNK_SCALED_DOT_KKT_FUSED_CUMSUM_H
+#ifndef CHUNK_GDN_CORE_CUMSUM_KKT_H
+#define CHUNK_GDN_CORE_CUMSUM_KKT_H
 
 #include "kernel_operator.h"
 #include "kernel_tiling/kernel_tiling.h"
@@ -12,8 +12,8 @@
 
 struct ChunkScaledDotKktTilingData;
 
-// Private helper for the legacy fused Cumsum/KKT composite routes. The public
-// ChunkScaledDotKkt implementation remains in chunk_scaled_dot_kkt.h.
+// Phase6-private cumsum/KKT component. The public standalone
+// ChunkScaledDotKkt implementation remains in its original operator directory.
 namespace NsChunkScaledDotKktFusedCumsum {
 using namespace AscendC;
 
@@ -625,4 +625,4 @@ private:
 };
 }  // namespace NsChunkScaledDotKktFusedCumsum
 
-#endif  // CHUNK_SCALED_DOT_KKT_FUSED_CUMSUM_H
+#endif  // CHUNK_GDN_CORE_CUMSUM_KKT_H

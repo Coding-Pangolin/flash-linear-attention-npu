@@ -24,7 +24,7 @@ CTYPES_PATH = ASCENDC_DIR / "_aclnn_ctypes.py"
 EXAMPLE_PATH = Path(__file__).resolve().parents[3] / "examples" / "flash_gated_delta_rule.py"
 GDN_CORE_CPP = (
     Path(__file__).resolve().parents[3]
-    / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_host/op_api/aclnn_gdn_core_fwd.cpp"
+    / "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gdn_core_fwd/op_host/op_api/aclnn_gdn_core_fwd.cpp"
 )
 GDN_CORE_HEADER = GDN_CORE_CPP.with_suffix(".h")
 class FakeTensor:

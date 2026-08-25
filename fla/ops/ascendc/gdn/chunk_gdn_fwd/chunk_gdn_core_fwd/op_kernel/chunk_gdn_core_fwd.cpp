@@ -4,11 +4,8 @@
  */
 #include "chunk_gdn_core_fwd_struct.h"
 
-#define GDN_CHUNK_RECOMPUTE_WU_FWD_HO_IMPL_ONLY
-#include "../../chunk_recompute_wu_fwd_ho/op_kernel/chunk_recompute_wu_fwd_ho.cpp"
-#undef GDN_CHUNK_RECOMPUTE_WU_FWD_HO_IMPL_ONLY
-
-#include "../../chunk_kkt_solve_tri/op_kernel/chunk_cumsum_kkt_solve_tri.cpp"
+#include "internal/def/chunk_gdn_core_def.cpp"
+#include "internal/abc/chunk_gdn_core_abc.cpp"
 
 #define GDN_CHUNK_LOCAL_CUMSUM_IMPL_ONLY
 #include "../../chunk_local_cumsum/op_kernel/chunk_local_cumsum.cpp"
@@ -36,11 +33,11 @@ __aicore__ inline uint64_t AlignPhase6(uint64_t value, uint64_t alignment)
     return (value + alignment - 1) / alignment * alignment;
 }
 
-__aicore__ inline const __gm__ ChunkRecomputeWUFwdHOTrailer *GetPhase5Trailer(GM_ADDR tiling)
+__aicore__ inline const __gm__ ChunkGdnCoreDefTrailer *GetDefTrailer(GM_ADDR tiling)
 {
     const uint64_t oTilingOffset = AlignPhase6(
         sizeof(ChunkGatedDeltaRuleFwdHTilingData), PHASE6_TILING_ALIGNMENT);
-    return reinterpret_cast<const __gm__ ChunkRecomputeWUFwdHOTrailer *>(
+    return reinterpret_cast<const __gm__ ChunkGdnCoreDefTrailer *>(
         tiling + oTilingOffset + sizeof(ChunkFwdOTilingData));
 }
 
@@ -48,10 +45,10 @@ __aicore__ inline const __gm__ ChunkGdnCoreFwdTrailer *GetPhase6Trailer(GM_ADDR 
 {
     const uint64_t oTilingOffset = AlignPhase6(
         sizeof(ChunkGatedDeltaRuleFwdHTilingData), PHASE6_TILING_ALIGNMENT);
-    const uint64_t phase5End = oTilingOffset + sizeof(ChunkFwdOTilingData) +
-                               sizeof(ChunkRecomputeWUFwdHOTrailer);
+    const uint64_t defTilingEnd = oTilingOffset + sizeof(ChunkFwdOTilingData) +
+                                  sizeof(ChunkGdnCoreDefTrailer);
     return reinterpret_cast<const __gm__ ChunkGdnCoreFwdTrailer *>(
-        tiling + AlignPhase6(phase5End, PHASE6_TILING_ALIGNMENT));
+        tiling + AlignPhase6(defTilingEnd, PHASE6_TILING_ALIGNMENT));
 }
 
 __aicore__ inline void CopyAbcTiling(
@@ -260,7 +257,7 @@ __aicore__ inline void RunPhase6(
     GM_ADDR finalState, GM_ADDR gCumsumBth, GM_ADDR A, GM_ADDR workspace, GM_ADDR tiling)
 {
     GM_ADDR userWorkspace = AscendC::GetUserWorkspace(workspace);
-    const __gm__ ChunkRecomputeWUFwdHOTrailer *phase5 = GetPhase5Trailer(tiling);
+    const __gm__ ChunkGdnCoreDefTrailer *defTiling = GetDefTrailer(tiling);
     const __gm__ ChunkGdnCoreFwdTrailer *phase6 = GetPhase6Trailer(tiling);
     ChunkGdnCoreFwdAbcTiling abc{};
     CopyAbcTiling(&phase6->abc, abc);
@@ -320,20 +317,20 @@ __aicore__ inline void RunPhase6(
     if ASCEND_IS_AIV {
         AscendC::CrossCoreWaitFlag(PHASE6_SOLVE_DONE_FLAG);
     }
-    GM_ADDR w = userWorkspace + phase5->wIntermediateOffset;
-    GM_ADDR u = userWorkspace + phase5->uIntermediateOffset;
-    GM_ADDR h = userWorkspace + phase5->hIntermediateOffset;
-    GM_ADDR vNew = userWorkspace + phase5->vNewIntermediateOffset;
+    GM_ADDR w = userWorkspace + defTiling->wIntermediateOffset;
+    GM_ADDR u = userWorkspace + defTiling->uIntermediateOffset;
+    GM_ADDR h = userWorkspace + defTiling->hIntermediateOffset;
+    GM_ADDR vNew = userWorkspace + defTiling->vNewIntermediateOffset;
     RecomputeWUFwdTilingData recomputeTiling{};
-    CopyRecomputeTiling(&phase5->recompute, recomputeTiling);
-    if (phase5->recompute.V == 256) {
+    CopyRecomputeTiling(&defTiling->recompute, recomputeTiling);
+    if (defTiling->recompute.V == 256) {
         DispatchRecompute<InputT, float, 256, true>(
             k, v, beta, A, gCumsumBht, cuSeqlens, chunkIndices, w, u,
-            userWorkspace + phase5->recomputeWorkspaceOffset, &recomputeTiling);
+            userWorkspace + defTiling->recomputeWorkspaceOffset, &recomputeTiling);
     } else {
         DispatchRecompute<InputT, float, 128, true>(
             k, v, beta, A, gCumsumBht, cuSeqlens, chunkIndices, w, u,
-            userWorkspace + phase5->recomputeWorkspaceOffset, &recomputeTiling);
+            userWorkspace + defTiling->recomputeWorkspaceOffset, &recomputeTiling);
     }
 
     WritePublicCumsumRows(gCumsumBht, gCumsumBth, cuSeqlens, chunkIndices, abc);

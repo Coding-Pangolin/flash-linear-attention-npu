@@ -7,7 +7,7 @@
 #include "../../chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
 #include "../../chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling.h"
 #include "../../chunk_gated_delta_rule_fwd_h/op_kernel/chunk_gated_delta_rule_fwd_h_struct.h"
-#include "../../chunk_recompute_wu_fwd_ho/op_kernel/chunk_recompute_wu_fwd_ho_struct.h"
+#include "../op_kernel/internal/def/chunk_gdn_core_def_struct.h"
 #include "../op_kernel/chunk_gdn_core_fwd_struct.h"
 
 #include "securec.h"
@@ -19,7 +19,7 @@
 
 namespace optiling {
 
-ge::graphStatus Tiling4ChunkRecomputeWUFwdHO(gert::TilingContext *context);
+ge::graphStatus Tiling4ChunkGdnCoreDef(gert::TilingContext *context);
 
 namespace {
 
@@ -213,7 +213,7 @@ ge::graphStatus Tiling4ChunkGdnCoreFwd(gert::TilingContext *context)
     OP_CHECK_IF(!IsShape(aShape, {batch, valueHeads, tokens, *chunkSize}),
                 OP_LOGE(context->GetNodeName(), "Phase 6 requires a_storage=[B,Hv,T,chunk_size]."),
                 return ge::GRAPH_FAILED);
-    OP_CHECK_IF(Tiling4ChunkRecomputeWUFwdHO(context) != ge::GRAPH_SUCCESS,
+    OP_CHECK_IF(Tiling4ChunkGdnCoreDef(context) != ge::GRAPH_SUCCESS,
                 OP_LOGE(context->GetNodeName(), "Reuse of the accepted Phase 5 suffix tiling failed."),
                 return ge::GRAPH_FAILED);
 
@@ -290,9 +290,9 @@ ge::graphStatus Tiling4ChunkGdnCoreFwd(gert::TilingContext *context)
                         hTilingSize, sizeof(::ChunkGatedDeltaRuleFwdHTilingData)),
                 return ge::GRAPH_FAILED);
     const uint64_t oTilingOffset = AlignUp(hTilingSize, TILING_ALIGNMENT);
-    const uint64_t phase5TrailerEnd = oTilingOffset + sizeof(GDN::ChunkFwdOTilingData) +
-                                      sizeof(GDN::ChunkRecomputeWUFwdHOTrailer);
-    const uint64_t phase6TrailerOffset = AlignUp(phase5TrailerEnd, TILING_ALIGNMENT);
+    const uint64_t defTilingEnd = oTilingOffset + sizeof(GDN::ChunkFwdOTilingData) +
+                                  sizeof(GDN::ChunkGdnCoreDefTrailer);
+    const uint64_t phase6TrailerOffset = AlignUp(defTilingEnd, TILING_ALIGNMENT);
     auto *rawTiling = context->GetRawTilingData();
     OP_CHECK_NULL_WITH_CONTEXT(context, rawTiling);
     const uint64_t rawTilingSize = phase6TrailerOffset + sizeof(trailer);

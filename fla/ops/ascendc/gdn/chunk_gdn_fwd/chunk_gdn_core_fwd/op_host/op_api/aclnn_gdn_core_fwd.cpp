@@ -4,7 +4,7 @@
  */
 #include "aclnn_gdn_core_fwd.h"
 
-#include "../../../chunk_gdn_core_fwd/op_host/op_api/chunk_gdn_core_fwd.h"
+#include "chunk_gdn_core_fwd.h"
 
 #include "acl/acl.h"
 #include "aclnn/aclnn_base.h"

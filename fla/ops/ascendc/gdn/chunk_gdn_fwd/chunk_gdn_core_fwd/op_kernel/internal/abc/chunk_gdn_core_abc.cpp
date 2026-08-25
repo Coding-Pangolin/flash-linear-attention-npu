@@ -1,5 +1,5 @@
-#include "chunk_kkt_cube.h"
-#include "chunk_scaled_dot_kkt_fused_cumsum.h"
+#include "chunk_gdn_core_kkt_cube.h"
+#include "chunk_gdn_core_cumsum_kkt.h"
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 #include "arch35/solve_tri_ascend950.h"
 #else

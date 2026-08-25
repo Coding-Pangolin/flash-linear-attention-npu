@@ -23,7 +23,7 @@ using namespace AscendC;
 using GDN::RecomputeWUFwdTilingData;
 
 template <typename kType, typename betaType, bool kFlattenHeadTasks = false,
-          bool kAbcTaskOrder = false>
+          bool kCoefficientGenerationTaskOrder = false>
 class RecomputeWUFwdVectorProcess {
 public:
     /** @brief constructor */
@@ -85,18 +85,18 @@ private:
 
 };
 
-template <typename kType, typename betaType, bool kFlattenHeadTasks, bool kAbcTaskOrder>
+template <typename kType, typename betaType, bool kFlattenHeadTasks, bool kCoefficientGenerationTaskOrder>
 __aicore__ inline RecomputeWUFwdVectorProcess<kType, betaType,
-                                               kFlattenHeadTasks, kAbcTaskOrder>::RecomputeWUFwdVectorProcess(
+                                               kFlattenHeadTasks, kCoefficientGenerationTaskOrder>::RecomputeWUFwdVectorProcess(
     GM_ADDR k_, GM_ADDR v_, GM_ADDR beta_, GM_ADDR A_, GM_ADDR g_,
     GM_ADDR cu_seqlens_, GM_ADDR chunk_indices_, GM_ADDR w_, GM_ADDR u_,
     GM_ADDR workspace_)
     : k(k_), v(v_), beta(beta_), A(A_), g(g_), cu_seqlens(cu_seqlens_),
       chunk_indices(chunk_indices_), w(w_), u(u_), workspace(workspace_){};
 
-template <typename kType, typename betaType, bool kFlattenHeadTasks, bool kAbcTaskOrder>
+template <typename kType, typename betaType, bool kFlattenHeadTasks, bool kCoefficientGenerationTaskOrder>
 __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType, kFlattenHeadTasks,
-                                                   kAbcTaskOrder>::Init(
+                                                   kCoefficientGenerationTaskOrder>::Init(
     const RecomputeWUFwdTilingData &tiling, AscendC::TPipe *pipe_)
 {
     pipe = pipe_;
@@ -120,9 +120,9 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType, kFlattenHead
     return;
 }
 
-template <typename kType, typename betaType, bool kFlattenHeadTasks, bool kAbcTaskOrder>
+template <typename kType, typename betaType, bool kFlattenHeadTasks, bool kCoefficientGenerationTaskOrder>
 __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType, kFlattenHeadTasks,
-                                                   kAbcTaskOrder>::Process()
+                                                   kCoefficientGenerationTaskOrder>::Process()
 {
     //计算K * Beta[:None]
     ProcessVb();
@@ -133,9 +133,9 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType, kFlattenHead
 }
 
 
-template <typename kType, typename betaType, bool kFlattenHeadTasks, bool kAbcTaskOrder>
+template <typename kType, typename betaType, bool kFlattenHeadTasks, bool kCoefficientGenerationTaskOrder>
 __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType,
-                                                    kFlattenHeadTasks, kAbcTaskOrder>::ProcessVb()
+                                                    kFlattenHeadTasks, kCoefficientGenerationTaskOrder>::ProcessVb()
 {
     uint32_t coreLoops = kFlattenHeadTasks ? chunkNum * Hv : chunkNum;
     uint32_t coreIdx = GetBlockIdx() / GetSubBlockNum();
@@ -164,7 +164,7 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType,
     uint32_t loopBegin = coreIdx;
     uint32_t loopEnd = coreLoops;
     uint32_t loopStep = coreNumAic;
-    if constexpr (kAbcTaskOrder) {
+    if constexpr (kCoefficientGenerationTaskOrder) {
         // Phase 6 coefficient generation assigns a contiguous task range to each AIC. Keep the
         // recompute consumer on the same core so A is locally produced first.
         const uint32_t tasksPerCore = (coreLoops + coreNumAic - 1) / coreNumAic;
@@ -176,7 +176,7 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType,
         uint32_t chunkIdx = 0;
         uint32_t hBegin = 0;
         uint32_t hEnd = 0;
-        DecodeRecomputeTask<kFlattenHeadTasks, kAbcTaskOrder>(
+        DecodeRecomputeTask<kFlattenHeadTasks, kCoefficientGenerationTaskOrder>(
             loopIdx, cu_seqlens, Hv, T, chunkSize, chunkNum, chunkIdx, hBegin, hEnd);
         GetChunkOffset(cu_seqlens, chunk_indices, B, Hv, T, chunkSize, chunkIdx, bos, eos);
         uint32_t curChunkSize = eos - bos;
@@ -248,9 +248,9 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType,
     return;
 }
 
-template <typename kType, typename betaType, bool kFlattenHeadTasks, bool kAbcTaskOrder>
+template <typename kType, typename betaType, bool kFlattenHeadTasks, bool kCoefficientGenerationTaskOrder>
 __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType,
-                                                    kFlattenHeadTasks, kAbcTaskOrder>::ProcessKbgExp()
+                                                    kFlattenHeadTasks, kCoefficientGenerationTaskOrder>::ProcessKbgExp()
 {
     uint32_t coreLoops = kFlattenHeadTasks ? chunkNum * Hv : chunkNum;
     uint32_t coreIdx = GetBlockIdx() / GetSubBlockNum();
@@ -280,7 +280,7 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType,
     uint32_t loopBegin = coreIdx;
     uint32_t loopEnd = coreLoops;
     uint32_t loopStep = coreNumAic;
-    if constexpr (kAbcTaskOrder) {
+    if constexpr (kCoefficientGenerationTaskOrder) {
         const uint32_t tasksPerCore = (coreLoops + coreNumAic - 1) / coreNumAic;
         loopBegin = coreIdx * tasksPerCore;
         loopEnd = (loopBegin + tasksPerCore) < coreLoops ? loopBegin + tasksPerCore : coreLoops;
@@ -290,7 +290,7 @@ __aicore__ void inline RecomputeWUFwdVectorProcess<kType, betaType,
         uint32_t chunkIdx = 0;
         uint32_t hBegin = 0;
         uint32_t hEnd = 0;
-        DecodeRecomputeTask<kFlattenHeadTasks, kAbcTaskOrder>(
+        DecodeRecomputeTask<kFlattenHeadTasks, kCoefficientGenerationTaskOrder>(
             loopIdx, cu_seqlens, Hv, T, chunkSize, chunkNum, chunkIdx, hBegin, hEnd);
         GetChunkOffset(cu_seqlens, chunk_indices, B, Hv, T, chunkSize, chunkIdx, bos, eos);
         uint32_t curChunkSize = eos - bos;

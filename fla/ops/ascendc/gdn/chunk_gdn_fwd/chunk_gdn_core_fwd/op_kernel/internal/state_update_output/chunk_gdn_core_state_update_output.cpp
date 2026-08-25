@@ -194,7 +194,7 @@ __aicore__ inline void RunFwdO(GM_ADDR q, GM_ADDR k, GM_ADDR vNew, GM_ADDR h, GM
 }
 
 template <typename kType, typename betaType, int VDim, typename TileShapes,
-          bool kAbcTaskOrder = false>
+          bool kCoefficientGenerationTaskOrder = false>
 __aicore__ inline void RunRecompute(
     GM_ADDR k, GM_ADDR v, GM_ADDR beta, GM_ADDR A, GM_ADDR g, GM_ADDR cuSeqlens,
     GM_ADDR chunkIndices, GM_ADDR w, GM_ADDR u, GM_ADDR workspace,
@@ -202,21 +202,21 @@ __aicore__ inline void RunRecompute(
 {
     if ASCEND_IS_AIC {
         RecomputeWUFwdProcess<kType, betaType, typename TileShapes::L1TileShape,
-                              typename TileShapes::L0TileShape, true, kAbcTaskOrder>
+                              typename TileShapes::L0TileShape, true, kCoefficientGenerationTaskOrder>
             process(k, v, beta, A, g, cuSeqlens, chunkIndices, w, u, workspace);
         process.Init(*tiling);
         process.Process();
     }
     if ASCEND_IS_AIV {
         AscendC::TPipe pipe;
-        RecomputeWUFwdVectorProcess<kType, betaType, true, kAbcTaskOrder> process(
+        RecomputeWUFwdVectorProcess<kType, betaType, true, kCoefficientGenerationTaskOrder> process(
             k, v, beta, A, g, cuSeqlens, chunkIndices, w, u, workspace);
         process.Init(*tiling, &pipe);
         process.Process();
     }
 }
 
-template <typename kType, typename betaType, int VDim, bool kAbcTaskOrder = false>
+template <typename kType, typename betaType, int VDim, bool kCoefficientGenerationTaskOrder = false>
 __aicore__ inline void DispatchRecompute(
     GM_ADDR k, GM_ADDR v, GM_ADDR beta, GM_ADDR A, GM_ADDR g, GM_ADDR cuSeqlens,
     GM_ADDR chunkIndices, GM_ADDR w, GM_ADDR u, GM_ADDR workspace,
@@ -224,11 +224,11 @@ __aicore__ inline void DispatchRecompute(
 {
     if constexpr (VDim == 256) {
         RunRecompute<kType, betaType, VDim,
-                     GDN::RecomputeWUFwdTileShapes256<kType, betaType>, kAbcTaskOrder>(
+                     GDN::RecomputeWUFwdTileShapes256<kType, betaType>, kCoefficientGenerationTaskOrder>(
             k, v, beta, A, g, cuSeqlens, chunkIndices, w, u, workspace, tiling);
     } else {
         RunRecompute<kType, betaType, VDim,
-                     GDN::RecomputeWUFwdTileShapes128<kType, betaType>, kAbcTaskOrder>(
+                     GDN::RecomputeWUFwdTileShapes128<kType, betaType>, kCoefficientGenerationTaskOrder>(
             k, v, beta, A, g, cuSeqlens, chunkIndices, w, u, workspace, tiling);
     }
 }

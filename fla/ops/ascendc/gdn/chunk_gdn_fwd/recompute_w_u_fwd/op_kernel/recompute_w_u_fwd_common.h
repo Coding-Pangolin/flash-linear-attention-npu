@@ -46,7 +46,7 @@ __aicore__ void inline GetChunkOffset(GM_ADDR cu_seqlens, GM_ADDR chunk_indices,
 
     return;
 }
-template <bool kFlattenHeadTasks, bool kAbcTaskOrder>
+template <bool kFlattenHeadTasks, bool kCoefficientGenerationTaskOrder>
 __aicore__ inline void DecodeRecomputeTask(
     uint32_t loopIdx, GM_ADDR cuSeqlens, uint64_t H, uint64_t T, uint64_t chunkSize,
     uint64_t chunkNum, uint32_t &chunkIdx, uint32_t &hBegin, uint32_t &hEnd)
@@ -57,7 +57,7 @@ __aicore__ inline void DecodeRecomputeTask(
         hEnd = static_cast<uint32_t>(H);
         return;
     }
-    if constexpr (!kAbcTaskOrder) {
+    if constexpr (!kCoefficientGenerationTaskOrder) {
         chunkIdx = loopIdx / static_cast<uint32_t>(H);
         hBegin = loopIdx % static_cast<uint32_t>(H);
         hEnd = hBegin + 1;

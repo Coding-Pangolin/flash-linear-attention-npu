@@ -24,6 +24,12 @@ Layout matches CANN_3RD_LIB_PATH detection:
     pkg/eigen-5.0.0.tar.gz            pkg/googletest-1.14.0.tar.gz
     pkg/makeself-release-2.5.0-patch1.tar.gz
     json/include/    eigen/Eigen/    makeself/    opbase/    catlass/include/
+
+The bundle is defined as self-contained: every component and archive listed in
+``_COMPONENTS`` / ``_ARCHIVES`` is required for an offline (re)build.  Missing
+any of them aborts with a non-zero exit before an incomplete bundle can be
+produced, and the generated bundle is re-verified against the manifest before a
+success is reported.  This keeps a wheel from shipping a partial offline bundle.
 """
 
 from __future__ import annotations
@@ -74,6 +80,30 @@ def _copy_dir(src: Path, dst_root: Path, target: str, prune: list[str]) -> None:
                 item.unlink()
 
 
+def _missing_components(cache: Path) -> list[str]:
+    """Return human-readable list of required components missing from the cache."""
+    missing: list[str] = []
+    for name, src_path, _, _ in _COMPONENTS:
+        if not (cache / src_path).is_dir():
+            missing.append(f"source dir {name!r} ({cache / src_path})")
+    for archive in _ARCHIVES:
+        if not (cache / archive).is_file() and not (cache / "pkg" / archive).is_file():
+            missing.append(f"archive {archive!r} (cache root or cache/pkg)")
+    return missing
+
+
+def _verify_bundle(out: Path, pkg: Path) -> list[str]:
+    """Re-check the produced bundle against the manifest before claiming success."""
+    problems: list[str] = []
+    for name, _, target, _ in _COMPONENTS:
+        if not (out / target).is_dir():
+            problems.append(f"missing built component dir {target!r} ({name})")
+    for archive in _ARCHIVES:
+        if not (pkg / archive).is_file():
+            problems.append(f"missing built archive {archive!r}")
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -100,6 +130,15 @@ def main() -> int:
     if not cache.is_dir():
         raise SystemExit(f"cache directory not found: {cache}")
 
+    # Hard-fail on any missing required component so an incomplete bundle is
+    # never treated as a valid self-contained offline release artifact.
+    missing = _missing_components(cache)
+    if missing:
+        raise SystemExit(
+            "cannot build a self-contained offline bundle; missing required "
+            "third-party components:\n  - " + "\n  - ".join(missing)
+        )
+
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -107,21 +146,22 @@ def main() -> int:
     pkg.mkdir(parents=True, exist_ok=True)
 
     for name, src_path, target, prune in _COMPONENTS:
-        src = cache / src_path
-        if not src.is_dir():
-            print(f"[warn] missing '{name}' source at {src}; skipping", flush=True)
-            continue
-        _copy_dir(src, out, target, prune)
-        print(f"[ok] {name}: {src} -> {out / target}", flush=True)
+        _copy_dir(cache / src_path, out, target, prune)
+        print(f"[ok] {name}: {cache / src_path} -> {out / target}", flush=True)
 
     for archive in _ARCHIVES:
-        src_candidates = [cache / archive, cache / "pkg" / archive]
-        src = next((c for c in src_candidates if c.is_file()), None)
-        if src is None:
-            print(f"[warn] missing archive '{archive}' in cache", flush=True)
-            continue
+        src = next(c for c in (cache / archive, cache / "pkg" / archive) if c.is_file())
         shutil.copy2(src, pkg / archive)
         print(f"[ok] archive {archive}", flush=True)
+
+    # Post-generation verification: refuse to report success / ship a bundle
+    # that does not match the manifest (defends against copy/rmtree failures).
+    problems = _verify_bundle(out, pkg)
+    if problems:
+        raise SystemExit(
+            "offline bundle is incomplete after generation:\n  - "
+            + "\n  - ".join(problems)
+        )
 
     print(f"\n[fla-npu] offline bundle ready: {out}")
     size_mb = sum(

@@ -7,7 +7,7 @@
 #include <type_traits>
 
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-#include "arch35/chunk_scaled_dot_kkt_vector.h"
+#include "chunk_gdn_core_kkt_vector.h"
 #endif
 
 struct ChunkScaledDotKktTilingData;
@@ -265,16 +265,16 @@ private:
         LocalTensor<float> gateLocal = gateBuf_.Get<float>();
         LocalTensor<float> rowBrcbLocal = rowBrcbBuf_.Get<float>();
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-        if (BT_ == static_cast<int64_t>(NsChunkScaledDotKkt::KKT_A5_BT64) &&
-            btAlign_ == static_cast<int64_t>(NsChunkScaledDotKkt::KKT_A5_BT64) &&
-            valid == static_cast<int64_t>(NsChunkScaledDotKkt::KKT_A5_BT64)) {
+        if (BT_ == static_cast<int64_t>(NsGdnCoreKkt::KKT_A5_BT64) &&
+            btAlign_ == static_cast<int64_t>(NsGdnCoreKkt::KKT_A5_BT64) &&
+            valid == static_cast<int64_t>(NsGdnCoreKkt::KKT_A5_BT64)) {
             CopyScoreTile(scoreBaseOffset, scoreTileLocal, valid);
             WaitMte2ToV();
             auto scoreAddr = reinterpret_cast<uint64_t>(scoreTileLocal.GetPhyAddr());
             auto outAddr = reinterpret_cast<uint64_t>(outTileLocal.GetPhyAddr());
             auto gAddr = reinterpret_cast<uint64_t>(gLocal.GetPhyAddr());
             auto betaAddr = reinterpret_cast<uint64_t>(betaLocal.GetPhyAddr());
-            asc_vf_call<NsChunkScaledDotKkt::ProcessKktEpilogue64VF>(
+            asc_vf_call<NsGdnCoreKkt::ProcessKktEpilogue64VF>(
                 (__ubuf__ float *)outAddr, (__ubuf__ float *)scoreAddr,
                 (__ubuf__ float *)gAddr, (__ubuf__ float *)betaAddr,
                 0, static_cast<uint16_t>(valid), static_cast<uint16_t>(valid),

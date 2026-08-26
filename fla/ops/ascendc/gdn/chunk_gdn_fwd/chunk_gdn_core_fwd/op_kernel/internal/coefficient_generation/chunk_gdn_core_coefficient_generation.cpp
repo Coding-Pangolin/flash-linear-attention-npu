@@ -1,10 +1,10 @@
 #include "chunk_gdn_core_kkt_cube.h"
 #include "chunk_gdn_core_cumsum_kkt.h"
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-#include "arch35/solve_tri_ascend950.h"
+#include "gdn_core_solve_tri/arch35/solve_tri_ascend950.h"
 #else
-#include "solve_tri_cube.h"
-#include "solve_tri_vector.h"
+#include "gdn_core_solve_tri/solve_tri_cube.h"
+#include "gdn_core_solve_tri/solve_tri_vector.h"
 #endif
 
 using namespace AscendC;

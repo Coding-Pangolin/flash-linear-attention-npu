@@ -12,3 +12,24 @@ if (( ${#wheels[@]} != 1 )); then
     exit 1
 fi
 python3 -m pip install "${wheels[0]}" --force-reinstall --no-deps --no-cache-dir
+
+# The fla_npu runtime loads libcust_opapi.so from the OPP tree embedded in the
+# installed package (fla_npu/opp/vendors/fla_npu_transformer). The standalone
+# wheel only ships the OPP skeleton, so overlay the compiled custom OPP from the
+# just-built run package into the installed package and refresh the wheel RECORD
+# before any consumer imports fla_npu.
+run_pkg=""
+shopt -s nullglob
+for cand in ../../build_out/fla-npu-*.run ../../build/fla-npu-*.run; do
+    if [ -n "$cand" ] && [ -s "$cand" ]; then
+        run_pkg="$cand"
+        break
+    fi
+done
+shopt -u nullglob
+if [ -z "$run_pkg" ]; then
+    echo "[ERROR] No fla-npu-*.run package found to overlay the embedded OPP into the installed wheel." >&2
+    exit 1
+fi
+chmod +x "$run_pkg"
+"$run_pkg" --install --quiet

@@ -1,5 +1,8 @@
 #include "chunk_gdn_core_kkt_cube.h"
 #include "chunk_gdn_core_cumsum_kkt.h"
+// This translation unit uses the private PR340 SolveTri copy below. The public
+// solve_tri operator remains independently registered and keeps the same
+// high-precision implementation.
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 #include "gdn_core_solve_tri/arch35/solve_tri_ascend950.h"
 #else

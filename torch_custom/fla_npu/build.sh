@@ -10,9 +10,10 @@ pip3 install ./dist/fla_npu-1.0.0-*.whl --force-reinstall --no-deps
 # wheel built here ships only the OPP skeleton, so importing fla_npu fails with
 # FileNotFoundError once the external-vendor runtime fallback was removed (PR #322).
 # Overlay the compiled custom OPP from the just-built fla-npu-*.run package into
-# the installed package before any consumer imports fla_npu. Unlike main, the
-# v26.6.0 run installer has no --install wheel-merge, so we install the OPP
-# directly into the package-local opp/ tree.
+# the installed package, then refresh the installed wheel RECORD so pip uninstall
+# also removes the embedded OPP. Unlike main, the v26.6.0 run installer has no
+# --install wheel-merge, so we install the OPP directly into the package-local
+# opp/ tree and finalize the RECORD ourselves.
 run_pkg=""
 shopt -s nullglob
 for cand in ../../build_out/fla-npu-*.run ../../build/fla-npu-*.run; do
@@ -27,5 +28,6 @@ if [ -z "$run_pkg" ]; then
     exit 1
 fi
 chmod +x "$run_pkg"
-opp_root="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/fla_npu/opp"
-"$run_pkg" --quiet --install-path="$opp_root"
+pkg_dir="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')/fla_npu"
+"$run_pkg" --quiet --install-path="$pkg_dir/opp"
+python3 "$(dirname "$0")/finalize_wheel_opp.py" --package-dir "$pkg_dir"

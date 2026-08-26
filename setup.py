@@ -28,6 +28,10 @@ except Exception:
 REPO_ROOT = Path(__file__).resolve().parent
 TORCH_EXTENSION_DIR = REPO_ROOT / "torch_custom" / "fla_npu"
 FLA_NPU_PACKAGE_DIR = TORCH_EXTENSION_DIR / "fla_npu"
+# The Triton core sources live outside torch_custom/fla_npu (in fla/), so the
+# root find_packages(where=TORCH_EXTENSION_DIR) cannot discover them. Mirror the
+# mapping used by torch_custom/fla_npu/setup.py so the root wheel also ships
+# fla_npu.ops.triton.triton_core.
 TRITON_CORE_PACKAGE = "fla_npu.ops.triton.triton_core"
 TRITON_CORE_SOURCE = REPO_ROOT / "fla" / "ops" / "triton" / "triton_core"
 
@@ -344,6 +348,7 @@ def _install_run_package(run_file, install_path):
 
 def _build_run_package():
     soc = os.getenv("FLA_NPU_SOC", DEFAULT_SOC)
+    ops_filter = os.getenv("FLA_NPU_OPS", "").strip()
     build_out = REPO_ROOT / "build_out"
     if build_out.exists():
         shutil.rmtree(build_out)
@@ -354,6 +359,8 @@ def _build_run_package():
         "--pkg",
         f"--vendor_name={DEFAULT_VENDOR_NAME}",
     ]
+    if ops_filter:
+        cmd.append(f"--ops={ops_filter}")
     build_args = os.getenv("FLA_NPU_BUILD_ARGS", "").strip()
     if build_args:
         cmd.extend(shlex.split(build_args))
@@ -571,6 +578,7 @@ class BinaryDistribution(Distribution):
 
 
 CMDCLASS = {"build_py": FlaNpuBuildPy}
+
 
 if _bdist_wheel is not None:
     class FlaNpuBdistWheel(_bdist_wheel):

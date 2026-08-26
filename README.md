@@ -101,6 +101,7 @@ FLA_NPU_SOC=ascend910b python scripts/build_wheel.py
 | --------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | `FLA_NPU_SOC`                   | `ascend910b` / `ascend910_93` / `ascend950` | 目标芯片；按实际运行机器选择                                                                                                       | `ascend910b` |
 | `FLA_NPU_OPS`                   | 算子名，逗号分隔（如 `chunk_fwd_o,chunk_bwd_dv_local`） | 只构建指定算子的 wheel；适合已安装完整 wheel 后快速替换少量算子的 Ascend C 产物，未设置则全量构建 | 空（全量） |
+| `FLA_NPU_BUILD_OFFLINE_BUNDLE` | `TRUE` / `FALSE` | 是否在 wheel 内嵌离线 third-party bundle 供离线二次编译；需 `third_party/` 缓存完整，否则打包阶段报错 | `FALSE` |
 | `FLA_NPU_DISABLE_LOCAL_VERSION` | `TRUE` / `FALSE`                              | wheel 版本号不追加 SOC/torch/ABI 本地版本；内部统一发版需要固定版本号时可设`TRUE`，日常构建建议保持 `FALSE` 以区分产物兼容范围 | `FALSE`      |
 
 布尔变量设为 `TRUE` 时也接受 `1`、`YES`、`ON`；未设置或其他值按 `FALSE` 处理。

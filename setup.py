@@ -567,7 +567,17 @@ def _stage_offline_bundle(build_lib: Path) -> None:
 
     When the repository ``third_party/`` cache is absent (e.g. a build that never
     fetched it), the bundle is skipped and the wheel still works for normal use.
+
+    The bundle only ships when ``FLA_NPU_BUILD_OFFLINE_BUNDLE=1`` so ordinary
+    builds (e.g. CI) do not need to carry a complete offline third-party cache;
+    a cache that is present but incomplete aborts the build loudly rather than
+    embedding a partial bundle.
     """
+    if not _env_flag("FLA_NPU_BUILD_OFFLINE_BUNDLE"):
+        print("[fla-npu build] offline bundle disabled "
+              "(set FLA_NPU_BUILD_OFFLINE_BUNDLE=1 to embed)", flush=True)
+        return
+
     cache = REPO_ROOT / "third_party"
     if not cache.is_dir() or not any(cache.iterdir()):
         print("[fla-npu build] third_party cache not found; skipping offline bundle", flush=True)

@@ -1,4 +1,4 @@
-FROM swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:8.5.0-910b-ubuntu22.04-py3.10-ops
+FROM swr.cn-south-1.myhuaweicloud.com/ascendhub/cann:9.1.0-910b-ubuntu22.04-py3.12-devel
 
 ARG INSTALL_TEST_REQUIREMENTS=false
 ARG PREWARM_THIRD_PARTY=true
@@ -7,9 +7,9 @@ ARG ASCEND_PYTORCH_RELEASE_VERSION=v26.1.0-beta.1
 ARG TORCH_VERSION=2.7.1
 ARG TORCH_NPU_VERSION=2.7.1.post5
 ARG TORCH_NPU_RELEASE_TAG=v26.1.0-beta.1-pytorch2.7.1
-ARG TORCH_NPU_WHL=torch_npu-2.7.1.post5-cp310-cp310-manylinux_2_28_aarch64.whl
+ARG TORCH_NPU_WHL=torch_npu-2.7.1.post5-cp312-cp312-manylinux_2_28_aarch64.whl
 ARG TORCH_NPU_WHL_URL=
-ARG TRITON_ASCEND_VERSION=3.2.0
+ARG TRITON_ASCEND_VERSION=3.2.1
 
 ENV DEBIAN_FRONTEND=noninteractive \
     ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit/latest \
@@ -44,10 +44,10 @@ RUN apt-get update && \
       python3-setuptools \
       python3-wheel \
       valgrind && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    git lfs install
 
 COPY requirements.txt /tmp/fla-ci/requirements.txt
-COPY tests/requirements.txt /tmp/fla-ci/tests-requirements.txt
 
 RUN set -e; \
     python3 -m pip install --upgrade pip setuptools wheel; \
@@ -68,16 +68,14 @@ RUN set -e; \
       python3 -c 'import importlib; [importlib.import_module(name) for name in ("torchnpugen.gen_op_plugin_functions", "torchnpugen.gen_backend_stubs", "torchnpugen.struct.gen_struct_opapi")]; print("torchnpugen OK")'; \
     fi; \
     python3 -m pip uninstall -y triton || true; \
-    python3 -m pip install "triton-ascend==${TRITON_ASCEND_VERSION}"; \
-    python3 -m pip uninstall -y triton || true; \
+    python3 -m pip install "triton-ascend==${TRITON_ASCEND_VERSION}" --extra-index-url=https://triton-ascend.osinfra.cn/pypi/simple; \
     python3 -m pip install --target=/tmp/pybind11-target pybind11; \
-    cp -a /tmp/pybind11-target/. /usr/local/lib/python3.10/dist-packages/; \
+    SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])"); \
+    cp -a /tmp/pybind11-target/. "$SITE_PACKAGES/"; \
     rm -rf /tmp/pybind11-target; \
     python3 -c "import pybind11; print(pybind11.__file__)"; \
-    if [[ "${INSTALL_TEST_REQUIREMENTS}" == "true" ]]; then \
-      grep -v -E '^[[:space:]]*(#|$|valgrind[[:space:]]*$)' /tmp/fla-ci/tests-requirements.txt \
-        | python3 -m pip install -r /dev/stdin; \
-    fi
+    python3 -c "from triton import Config; print('triton Config OK')"; \
+    python3 -c "import site; p=site.getsitepackages()[0]+'/torchnpugen/api/cpp.py'; s=open(p).read(); old='    raise AssertionError(f\"unrecognized return type {t}\")'; new='    elif isinstance(t, OptionalType):\n        return OptionalCType(returntype_type(t.elem, mutable=False))\n    raise AssertionError(f\"unrecognized return type {t}\")'; assert old in s, 'patch target not found'; open(p,'w').write(s.replace(old,new,1)); print('torchnpugen OptionalType return patch applied')"
 
 RUN if [[ "${PREWARM_THIRD_PARTY}" == "true" ]]; then \
       mkdir -p /opt/fla-ci/third_party/pkg; \

@@ -30,6 +30,7 @@ ASCENDC_NAMES = (
     "prepare_wy_repr_bwd_da",
     "prepare_wy_repr_bwd_full",
     "recompute_w_u_fwd",
+    "recurrent_gated_delta_rule",
     "solve_tri",
 )
 
@@ -43,6 +44,15 @@ TRITON_NAMES = (
     "input_guard",
     "l2norm",
     "solve_tril",
+)
+REQUIRED_TRITON_SOURCES = (
+    "__init__.py",
+    "causal_conv1d.py",
+    "chunk_scaled_dot_kkt.py",
+    "cumsum.py",
+    "l2norm.py",
+    "solve_tril_fast.py",
+    "utils.py",
 )
 REQUIRED_ASCENDC_CONFIGS = (
     "recompute_w_u_fwd.json",
@@ -87,6 +97,21 @@ def _require_packaged_opp_configs(fla_npu_module) -> None:
         raise AssertionError(
             "packaged OPP kernel configs still contain deprecated aliases: "
             + ", ".join(unexpected)
+        )
+
+
+def _require_packaged_triton_sources(fla_npu_module) -> None:
+    package_root = Path(fla_npu_module.__file__).resolve().parent
+    triton_core = package_root / "ops" / "triton" / "triton_core"
+    missing = [
+        source_name
+        for source_name in REQUIRED_TRITON_SOURCES
+        if not (triton_core / source_name).is_file()
+    ]
+    if missing:
+        raise AssertionError(
+            "packaged Triton sources are missing from "
+            f"{triton_core}: {', '.join(missing)}"
         )
 
 
@@ -173,6 +198,7 @@ def main() -> int:
 
     _require_packaged_opp_configs(fla_npu)
     _require_safe_packaged_opapi(fla_npu)
+    _require_packaged_triton_sources(fla_npu)
 
     if ascendc.BACKWARD_OPS.get("causal_conv1d") != "causal_conv1d_bwd":
         raise AssertionError("causal_conv1d backward binding metadata is missing")

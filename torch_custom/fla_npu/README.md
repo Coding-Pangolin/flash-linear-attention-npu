@@ -105,8 +105,9 @@ torch.ops.npu.npu_xxx(...)
 3. 在 wrapper 内申请输出 tensor，并把输出传给 `_call_aclnn(...)`。
 4. 如果 aclnn 参数里有 `char *`、字符串、或 ctypes 不能安全自动转换的参数，在 `_GET_WORKSPACE_ARGTYPES` 中补充 `GetWorkspaceSize` 的 `argtypes`。
 5. 在 `fla_npu/ops/ascendc/__init__.py` 的 `_ASCENDC_OPS` 中加入 `npu_xxx`，这样会自动导出 `npu_xxx` 和去掉 `npu_` 前缀后的短名。
-6. 如果存在明确的正反向关系，在 `BACKWARD_OPS` 中补充映射；需要 autograd 自动绑定时，在 `__init__.py` 中增加对应 `torch.autograd.Function` 包装。
-7. 新增或更新测试，默认调用 `fla_npu.ops.ascendc` 路径。
+6. 如果存在明确的正反向关系，在 `BACKWARD_OPS` 中补充映射（例如 `causal_conv1d` → `causal_conv1d_bwd`）；需要 autograd 自动绑定时，在 `__init__.py` 中增加对应 `torch.autograd.Function` 包装。
+7. 如果算子会就地修改某个输入 tensor（例如 `causal_conv1d` 会更新 `conv_states`），在 `MUTATED_ARGUMENTS` 中登记对应参数名。ctypes 直接写 tensor storage 时 PyTorch 无法从 Python 调用自动发现副作用，登记后 wrapper 会负责 grad 限制与版本计数（mutation 契约测试参考 `test/test_ascendc_mutation_contract.py`）。
+8. 新增或更新测试，默认调用 `fla_npu.ops.ascendc` 路径。
 
 新增算子通常不需要修改 `_runtime.py`，也不需要感知 `_AclTensor`、`_AclIntArray`、workspace 申请或 stream launch 细节。只有公共 ctypes 调发框架本身需要演进时，才修改 `_runtime.py`。
 
@@ -134,7 +135,9 @@ def npu_my_op(x, weight, *, scale=1.0, indices=None):
 
 ```bash
 python3 setup.py bdist_wheel
-python3 -m pip install --force-reinstall --no-deps dist/flash_linear_attention_npu-*.whl
+# WHEEL_PATH 使用构建日志输出的准确文件名（勿用通配符，避免匹配多个产物）
+WHEEL_PATH="dist/<准确wheel文件名>.whl"
+python3 -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
 ```
 
 这个 standalone wheel 会先安装 Python runtime 和空的 OPP vendor 骨架：
@@ -157,7 +160,9 @@ bash build.sh --pkg --soc=ascend910b --vendor_name=fla_npu
 
 ```bash
 FLA_NPU_SOC=ascend910b python3 -m pip wheel --no-build-isolation --no-deps . -w dist
-python3 -m pip install --force-reinstall --no-deps dist/flash_linear_attention_npu-*.whl
+# WHEEL_PATH 使用构建日志输出的准确文件名（勿用通配符，避免匹配多个产物）
+WHEEL_PATH="dist/<准确wheel文件名>.whl"
+python3 -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
 python3 scripts/check_packaged_wheel_api.py
 ```
 
@@ -171,6 +176,8 @@ bash build.sh --pkg --soc=ascend910b --vendor_name=fla_npu --ops=chunk_fwd_o
 安装器会列出 scoped run 包覆盖后的算子状态。`WARNING` 表示安装后不可用，`NOTICE` 表示需要人工关注，`OK` 表示 ABI 一致并继续可用。
 覆盖完成后只保留 `libcust_opapi.so`，并同步刷新已安装 wheel 的 `RECORD`；重复安装
 同一个 run 包不会重复追加 OPP 路径。
+
+> 安装流程看护（PR #274 新增）：`scripts/check_install_workflows.py` 用于校验 wheel / run 包 / 安装流程是否符合约定。构建与安装完成后执行 `python scripts/check_install_workflows.py`，CI 也会自动运行该检查。
 
 ## legacy torch_npu / torch.ops.npu 路径
 
@@ -208,6 +215,8 @@ legacy 路径会生成或使用：
 - `npu_custom.yaml`、`test_native_functions.yaml`、`deprecated.yaml`
 
 这些兼容路径不会默认使能。`torch.ops.npu` legacy extension 会重新绑定 PyTorch、Python、C++ ABI 和 torch_npu dispatcher 行为，因此只用于历史接口兼容或专项验证。新增算子默认不要以 legacy extension 作为唯一调用方式。
+
+`torch.ops.npu.*` / `torch_npu.ops.*` 只支持到 v26.6.0，从旧版本迁移到最新版本的完整步骤见[兼容与迁移指南](../../docs/兼容与迁移指南.md)。新代码请勿使用 legacy 路径。
 
 ## 测试要求
 

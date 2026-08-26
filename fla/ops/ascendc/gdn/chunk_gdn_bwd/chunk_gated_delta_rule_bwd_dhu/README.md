@@ -34,7 +34,7 @@ aclnnStatus aclnnChunkGatedDeltaRuleBwdDhuGetWorkspaceSize(
     const aclTensor *gOptional, const aclTensor *gkOptional,
     const aclTensor *h0Optional, const aclTensor *dhtOptional,
     const aclIntArray *cuSeqlensOptional, const aclIntArray *chunkIndicesOptional,
-    double scale, int64_t chunkSize,
+    double scale, int64_t chunkSize, bool useExp2,
     const aclTensor *dhOut, const aclTensor *dh0Out, const aclTensor *dv2Out,
     uint64_t *workspaceSize, aclOpExecutor **executor);
 
@@ -73,6 +73,7 @@ aclnnStatus aclnnChunkGatedDeltaRuleBwdDhu(
 |---|---|---|---|---|---|---|
 | `scale` | 输入 | 可选属性，接口侧必传 | 缩放系数 | 推荐设置为 `1 / sqrt(K)` | `double` | 建议按 `1 / sqrt(K)` 设置 |
 | `chunkSize` | 输入 | 可选属性，接口侧必传 | 分块大小 | 默认值为 `64`，仅支持 `64` 或 `128` | `int64_t` | 仅支持 `64` / `128` |
+| `use_exp2` | 输入 | 可选属性，接口侧必传 | 指数门控实现 | `g` 支持 `true`/`false`；`gk` 必须为 `true` | `bool` | `true` / `false` |
 
 ### 3.3 输出参数（Outputs）
 
@@ -97,8 +98,8 @@ aclnnStatus aclnnChunkGatedDeltaRuleBwdDhu(
 - `h0Optional`、`dhtOptional` 的形状必须为 `[B, HV, K, V]`（若提供）。
 - `dhOut` 的形状必须为 `[B, HV, NT, K, V]`。
 - **GVA 约束**：`HV % HK == 0`；读 `q`/`k` 时使用 `hq = hv / (HV / HK)`，读/写 `w`/`dO`/`dv`/`g`/`dh`/`dv2` 使用 value head 索引 `hv`。
-- 当前实现要求 `K ≤ 128`。
-- 当前实现要求 `V ≤ 256`（Cube tile 原生按 `V` 上限 256 设计，**无**按 V 维切换的 TilingKey）。
+- 当前实现仅支持 `K = 128`；其他 `K` 尺寸会在 tiling 阶段被拒绝。
+- 当前实现仅支持 `V = 128` 或 `V = 256`；其他 `V` 尺寸会在 tiling 阶段被拒绝（Cube tile 原生按 `V` 上限 256 设计，**无**按 V 维切换的 TilingKey）。
 - **TilingKey**：`g` 与 `q` 同 dtype 时为 Key=1，`g` 为 FP32 时为 Key=2（与 V 维无关）。
 - `chunkSize` 当前仅支持 `64` 或 `128`。
 - 当启用变长模式时，`cuSeqlensOptional` 和 `chunkIndicesOptional` 须同时提供，且仅支持 `B = 1`。
@@ -134,8 +135,8 @@ aclnnStatus aclnnChunkGatedDeltaRuleBwdDhu(
 
 额外限制：
 
-- `K ≤ 128`
-- `V ≤ 256`（支持 `V = 256`）
+- `K = 128`
+- `V ∈ {128, 256}`
 - `chunkSize ∈ {64, 128}`
 
 ---

@@ -306,7 +306,7 @@ bool ResolveChunkLocalCumsumOutputDtype(
         q, k, w, d_o, dv,
         g_, gK_, h0_, dht_,
         cu_seqlens, chunk_indices,
-        scale, chunk_size,
+        scale, chunk_size, static_cast<bool>(use_exp2.value_or(gK_.defined())),
         dh, dh0, dv2
     );
     return std::make_tuple(dh, dh0, dv2);
@@ -895,7 +895,7 @@ at::Tensor npu_chunk_scaled_dot_kkt(
     at::Tensor k_contig = k.contiguous();
     at::Tensor g_contig = g.contiguous();
     at::Tensor beta_contig = beta.contiguous();
-    at::Tensor A = at::empty({B, Hk, T, chunk_size}, k.options().dtype(c10::ScalarType::Float));
+    at::Tensor A = at::empty({B, Hv, T, chunk_size}, k.options().dtype(c10::ScalarType::Float));
 
     EXEC_NPU_CMD_EXT(
         aclnnChunkScaledDotKkt,

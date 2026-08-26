@@ -14,17 +14,23 @@ out = ascendc_ops.npu_chunk_fwd_o(...)
 from fla_npu.ops.ascendc import chunk_fwd_o
 ```
 
-默认路径通过 Python `ctypes` 直调当前 `fla_npu` 包内 OPP 的
-`libcust_opapi.so`，不依赖 PyTorch dispatcher 注册，也不会默认编译或加载
-`torch_npu` 自定义扩展。旧的 `torch.ops.npu.*` / `torch_npu.ops.*` 兼容路径仍可做，
-但只作为迁移期可选能力，不推荐新增代码使用，也不会默认使能。
+默认路径通过 Python `ctypes` 直调当前 `fla_npu` 包内 OPP 的 `libcust_opapi.so`，不依赖 PyTorch dispatcher 注册，也不会默认编译或加载 `torch_npu` 自定义扩展。旧的 `torch.ops.npu.*` / `torch_npu.ops.*` 兼容路径仍可做，但只作为迁移期可选能力，不推荐新增代码使用，也不会默认使能。
 
-`import fla_npu` 会立即局部加载 CANN `libopapi.so` 和当前包内 OPP 的
-`libcust_opapi.so`。导入前必须先 source CANN 的 `set_env.sh`；使用方式 B standalone
-wheel 时，还必须先用 run 包默认安装流程补齐 wheel 内的 OPP。CANN 环境未初始化、
-包内 OPP 不完整或动态库加载失败时，import 会直接报错。FLA 自定义 op_api 只使用
-包内 `libcust_opapi.so`，不会从 CANN 或环境变量指向的 vendor 目录回退加载其他副本。
-不要在 custom OPP 的 `op_api/lib` 目录创建会遮蔽 CANN 运行库的 `libopapi.so` 别名。
+## 导入契约
+
+`import fla_npu` 会定位 OPP 并加载 `libcust_opapi.so`。**导入 / 构建前请先 source CANN 的 `set_env.sh`**（默认路径为 `/usr/local/Ascend/ascend-toolkit/set_env.sh`；自定义安装路径时替换为实际路径下对应的 `set_env.sh`）；CANN 环境未初始化、OPP 不完整或动态库加载失败时，import 会直接报错：
+
+```sh
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+```
+
+| 现象 | 原因 / 处理 |
+|---|---|
+| 导入失败，`fla_npu/opp/vendors/fla_npu_transformer` 下找不到 `libcust_opapi.so` | 安装的是 standalone wheel（不内嵌 OPP）：需先用 run 包默认安装流程（`--install` / `--full`）补齐 wheel 内嵌 OPP（见[开发者指南](../../docs/开发者指南.md) 场景 1） |
+| `dlopen` 报错、找不到依赖库 | 未 source CANN `set_env.sh`，或新开 shell 后环境变量丢失，需要重新 source |
+| 安装 run 包后调用接口报 ABI / 行为异常 | 已加载的 `libcust_opapi.so` 不会在同一 Python 进程内热替换，请重启 Python 进程 |
+
+FLA 自定义 op_api 只使用 `libcust_opapi.so`，不要在 custom OPP 的 `op_api/lib` 目录创建会遮蔽 CANN 运行库的 `libopapi.so` 别名。
 
 ## 默认交付件
 
@@ -38,7 +44,7 @@ python3 setup.py bdist_wheel
 
 会生成纯 Python wheel，核心内容包括：
 
-- `fla_npu/__init__.py`：定位并加载内嵌或外部 OPP。
+- `fla_npu/__init__.py`：定位并加载当前包内嵌 OPP（package-only，不对外部 OPP 回退）。
 - `fla_npu/ops/ascendc/__init__.py`：稳定 Python 调用入口、短名导出和正反向自动绑定。
 - `fla_npu/ops/ascendc/_aclnn_ctypes.py`：具体算子的 Python wrapper，只描述输入输出、标量转换和算子级 ABI 特例。
 - `fla_npu/ops/ascendc/_runtime.py`：公共 ctypes runtime，封装 aclTensor/aclIntArray 描述符、workspace、stream 和异步 launch 生命周期。
@@ -54,16 +60,10 @@ fla_npu/opp/vendors/fla_npu_transformer
 
 关键产物包括：
 
-- `opp/vendors/fla_npu_transformer/op_api/lib/libcust_opapi.so`：保持标准 vendor
-  安装位置，由 `fla_npu` 从当前模块的 `__file__` 推导绝对路径并局部加载。
-- `opp/vendors/fla_npu_transformer/op_api/include`：aclnn 头文件。
+- `op_api/lib/libcust_opapi.so`：自定义 aclnn op_api 动态库。
 - `op_api/include/aclnnop/aclnn_*.h`：Python ctypes ABI 对齐依据。
 - `op_impl/ai_core/tbe/op_host/...`、`op_tiling/...`、`op_proto/...`：host、tiling、proto 动态库。
 - `op_impl/ai_core/tbe/kernel/...`：AI Core kernel `.o` 和 config。
-
-包内 `op_api/lib` 不加入 `LD_LIBRARY_PATH`，因此不会改变 `torch_npu` 或其他 CANN
-算子包的通用动态库搜索路径。各 opapi 使用方都以 `RTLD_LOCAL` 加载自己的库时，
-彼此不会向全局符号域发布内部符号；该方案不支持 `RTLD_GLOBAL` custom opapi。
 
 ## 推荐调用方式
 

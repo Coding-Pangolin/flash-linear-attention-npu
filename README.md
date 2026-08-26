@@ -124,57 +124,19 @@ python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
 
 wheel 不安装或执行 shell 环境钩子。无论使用系统 Python、Conda、venv
 还是 Docker，每次进入新的 shell 后都需要先按 Step 1 手工 source CANN 的
-`set_env.sh`。`import fla_npu` 会先局部加载 CANN 的 `libopapi.so`，再通过绝对路径
-局部加载当前 Python 包
-`opp/vendors/fla_npu_transformer/op_api/lib/libcust_opapi.so`。这个绝对路径从已导入
-模块的 `__file__` 推导，不受 CANN vendor 或环境变量重定向。符号查找按 custom、
-CANN 的顺序逐句柄进行，同名 `aclnn*` 优先使用 custom 实现；两个库都不会被发布
-到进程全局符号域。如果旧版 run 包曾在 wheel 中遗留自定义 `libopapi.so` 别名，
+`set_env.sh`。调用 `fla_npu.ops.ascendc` 算子时会在当前 Python 进程内定位并加载
+wheel 内嵌 OPP；wheel 通过绝对路径加载 `libcust_opapi.so`，不会再生成或加载
+可能覆盖 CANN 运行库的自定义 `libopapi.so`。如果旧版 run 包曾在 wheel 中遗留该别名，
 新 runtime 会在首次加载 OPP 时删除它；目录不可写时会给出明确的手工清理提示。
 
-#### 方式 B 产物安装
-
-先确认方式 A 的完整 wheel 已经安装到当前 Python 环境，然后安装 run 包。安装器会在覆盖前列出当前 run 包携带的算子，并标出安装后的算子状态：`WARNING` 表示安装后不可用，包括不在当前 run 包范围内但会受局部 `libcust_opapi.so`、tiling so、proto so 整体替换影响的算子，以及当前 run 包内但 aclnn ABI 修改或删除的算子；`NOTICE` 表示新增或无法完整确认的 ABI，需要确认当前 Python wheel 是否已有对应 wrapper；`OK` 表示当前 run 包内且 aclnn ABI 一致的算子。`op_api/include/aclnnop` 中新增、删除、修改的 aclnn ABI 头文件会合并显示到对应算子的状态原因里；删除只按当前 run 包携带的算子范围判断，非 `--quiet` 模式只在状态表后确认一次。
-
-```sh
-# 覆盖当前 Python 环境中 flash-linear-attention-npu wheel 内嵌的 OPP
-# （无参数直接运行 .run 也是同样的行为，等价于 --install / --full）
-./build_out/fla-npu-*.run --install
-# 或等价写法
-./build_out/fla-npu-*.run --full
-
-# 如需供独立 aclnn/CANN OPP 流程使用，可安装到 CANN OPP 目录；
-# fla_npu Python runtime 不会从该目录加载 libcust_opapi.so
-# ./build_out/fla-npu-*.run --cann
-
-# 如果 Python wrapper 也有修改，再安装单独编译出的 wheel
-WHEEL_PATH="dist/本轮构建生成的-wheel-文件名.whl"
-python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
-```
-
-run 包覆盖完成后会重写幂等的 `set_env.bash`，并把实际 OPP 文件清单刷新到 wheel
-的 `RECORD`。因此重复覆盖同一个 run 包不会累积环境变量或文件记录，后续
-`pip --force-reinstall` 也能先清理 run 包增加的文件，再安装新 wheel。
-
-`import fla_npu` 会从当前 `site-packages/fla_npu/opp` 定位 custom OPP，并加载
-CANN `libopapi.so` 和包内 `libcust_opapi.so`。执行前必须先 source CANN 的
-`set_env.sh`；CANN 环境未初始化、包内 OPP 不完整或动态库加载失败时，import 会
-直接报错。该过程不会自动导入 `torch` / `torch_npu`，也不会注册 `torch.ops.npu`。
+`import fla_npu` 会定位 OPP 并加载 `libcust_opapi.so`。执行前必须先 source CANN
+的 `set_env.sh`；CANN 环境未初始化、OPP 不完整或动态库加载失败时，import 会直接
+报错。该过程不会自动导入 `torch` / `torch_npu`，也不会注册 `torch.ops.npu`。
 默认 wheel 通过 Python ctypes 直调 aclnn/opapi，推荐使用 `fla_npu.ops.ascendc`；
 只有用 `FLA_NPU_BUILD_LEGACY_EXTENSION=1` 额外编出 legacy 扩展时，才可显式调用
 `fla_npu.load_legacy_torch_ops()` 兼容旧 `torch.ops.npu.*`。
 
-`fla_npu.ops.ascendc` 只使用当前 Python 包内嵌的 custom OPP，不会从
-`FLA_NPU_OPP_PATH`、`ASCEND_CUSTOM_OPP_PATH`、`ASCEND_OPP_PATH` 或 CANN 的
-`vendors` 目录回退查找其他 `libcust_opapi.so`。单独构建的 run 包应使用默认
-`--install` / `--full` 流程覆盖当前 wheel 内的 OPP。
-
-包内 `libcust_opapi.so` 保持原有标准安装位置，安装流程不移动该文件，也不新增
-私有动态库目录。FLA 不把包内 `op_api/lib` 加入 `LD_LIBRARY_PATH`，只对固定绝对
-路径执行 `RTLD_LOCAL` 加载；`torch_npu.ops.*` 或 `cann-ops-transformer.ops.*` 因而
-仍按各自已 source 的 CANN vendor 环境查找并局部加载自己的 `libcust_opapi.so`。
-该隔离规则要求同进程内的 opapi 使用方都遵守局部加载；不支持预先用
-`RTLD_GLOBAL` 发布 custom opapi 符号的用法。
+`fla_npu.ops.ascendc` 只使用当前 wheel 内嵌的 custom OPP，不从 `FLA_NPU_OPP_PATH`、`ASCEND_CUSTOM_OPP_PATH`、`ASCEND_OPP_PATH` 或 CANN 的 `vendors` 目录回退查找其他 `libcust_opapi.so`。外部 OPP 仅用于 CANN 侧的 host、tiling 与 kernel 发现，不再作为 Python runtime 加载 `libcust_opapi.so` 的来源。单独构建的 run 包应使用默认 `--install` / `--full` 流程覆盖当前 wheel 内的 OPP（见[开发者指南](docs/开发者指南.md) 场景 1）。
 
 > 已安装完整 wheel 后，如需用单算子 run 包快速替换部分算子的 Ascend C 产物（含安装器
 > 的算子状态说明），见[开发者指南](docs/开发者指南.md) 场景 1。

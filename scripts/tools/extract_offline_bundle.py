@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
-"""Extract the wheel's embedded offline third-party bundle into a source tree.
+"""将 wheel 内嵌的离线 third-party bundle 还原到源码树。
 
-The wheel ships two things: a prebuilt OPP (for offline use) and an embedded
-offline third-party bundle under ``fla_npu/offline/third_party``.  This script
-copies that bundle into a source tree's ``third_party/`` (CANN_3RD_LIB_PATH), so
-the same machine can then (re)build the wheel/project fully offline without
-reaching gitcode/gitee for the third-party components.
+wheel 携带两部分：预编译的 OPP（用于离线使用），以及一份内嵌的离线 third-party
+bundle（位于 ``fla_npu/offline/third_party``）。本脚本把该 bundle 复制回源码树的
+``third_party/``（即 ``CANN_3RD_LIB_PATH``），从而能在完全离线（不访问
+gitcode/gitee）的情况下，从该源码树重新编译项目。
 
-Usage:
+用法：
 
-    python scripts/tools/extract_offline_bundle.py --src <repo/clone-path>
+    python scripts/tools/extract_offline_bundle.py --src <仓库/克隆路径>
 
-The bundle layout matches exactly what ``cmake/third_party/*.cmake`` probes for
-offline (abseil-cpp/, protobuf/, json/, eigen/, makeself/, opbase/,
-catlass/include/, pkg/*.tar.gz), so a configure after extraction stays offline.
+bundle 的目录布局与 ``cmake/third_party/*.cmake`` 离线探测的期望一致
+（abseil-cpp/、protobuf/、json/、eigen/、makeself/、opbase/、
+catlass/include/、pkg/*.tar.gz），因此还原后再 configure 全程保持离线。
 
-Safety: ``--src`` must point at a source tree (a directory containing
-``CMakeLists.txt`` and ``build.sh``).  Existing third-party content under that
-tree's ``third_party/`` is intentionally overwritten so every component matches
-the wheel's pinned versions; mixing locally cached and wheel versions can break
-the build.  The script never touches system paths or the installed package.
+安全约束：``--src`` 必须指向源码树（即包含 ``CMakeLists.txt`` 与 ``build.sh``
+的目录）。该目录下已有的 ``third_party/`` 内容会被有意覆盖，以保证每个组件都匹配
+wheel 固化的版本；混用本地缓存与 wheel 版本可能破坏构建。本脚本绝不改动系统路径
+或已安装的软件包。
 """
 
 from __future__ import annotations

@@ -1,35 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
-"""Prepare a self-contained offline third-party bundle for embedding in the wheel.
+"""为打包进 wheel 准备一份自包含的离线 third-party bundle。
 
-The wheel ships a prebuilt OPP so ``pip install`` works offline for end users.
-Developers who need to (re)build the wheel from the matching sources can extract
-this offline bundle into the source tree's ``third_party/`` (CANN_3RD_LIB_PATH)
-to compile fully offline, without reaching gitcode/gitee for the third-party
-components.
+wheel 内已经携带预编译 OPP，用户 ``pip install`` 后即可离线使用。需要从匹配源码
+(重) 编译 wheel 的开发者，可以先把这份离线 bundle 还原到源码树的 ``third_party/``
+（即 ``CANN_3RD_LIB_PATH``），从而在完全离线（不访问 gitcode/gitee）的情况下编译。
 
-The bundle keeps only the **minimal source subset** needed to (re)build:
+bundle 只保留 (重) 编译所需的最小源码子集：
 
-- header-only libs (json / eigen / catlass) ship just their include trees;
-- makeself ships its few files (probed by ``makeself.sh`` / ``makeself-header.sh``);
-- abseil / protobuf are built by ``ExternalProject`` from the ``pkg/`` sources
-  tarballs (not from a pre-laid source dir), so the bundle keeps only their
-  ``pkg/*.tar.gz`` archives and leaves the CMake side to extract + patch them into
-  the source tree at configure/build time.
-- opbase ships its full source (it is compiled directly), with non-build dirs pruned.
+- 纯头文件库（json / eigen / catlass）只带 include 目录；
+- makeself 只带其少量必需文件（由 ``makeself.sh`` / ``makeself-header.sh`` 探测）；
+- abseil / protobuf 通过 ``ExternalProject`` 从 ``pkg/`` 源码归档构建（而不是预置
+  的源码目录），所以 bundle 只保留它们的 ``pkg/*.tar.gz`` 归档，由 CMake 在
+  configure/build 时解压并 patch 进源码树；
+- opbase 携带完整源码（直接参与编译），并裁剪掉非构建目录。
 
-Layout matches CANN_3RD_LIB_PATH detection:
+目录布局与 CANN_3RD_LIB_PATH 探测一致：
 
     pkg/abseil-cpp-20230802.1.tar.gz   pkg/protobuf-25.1.tar.gz   pkg/include.zip
     pkg/eigen-5.0.0.tar.gz            pkg/googletest-1.14.0.tar.gz
     pkg/makeself-release-2.5.0-patch1.tar.gz
     json/include/    eigen/Eigen/    makeself/    opbase/    catlass/include/
 
-The bundle is defined as self-contained: every component and archive listed in
-``_COMPONENTS`` / ``_ARCHIVES`` is required for an offline (re)build.  Missing
-any of them aborts with a non-zero exit before an incomplete bundle can be
-produced, and the generated bundle is re-verified against the manifest before a
-success is reported.  This keeps a wheel from shipping a partial offline bundle.
+bundle 被定义为“自包含”：``_COMPONENTS`` / ``_ARCHIVES`` 中列出的每个组件和归档
+都是离线 (重) 编译所必需的。任一缺失都会在产出不完整 bundle 之前以非零退出，并且
+生成完成后会按清单复核 bundle，成功前不会放行不完整产物，避免把缺件的离线 bundle
+打进 wheel。
 """
 
 from __future__ import annotations

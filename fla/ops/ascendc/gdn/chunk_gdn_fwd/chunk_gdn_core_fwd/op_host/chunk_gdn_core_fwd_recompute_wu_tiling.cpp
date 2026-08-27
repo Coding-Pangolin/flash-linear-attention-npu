@@ -2,11 +2,11 @@
  * Copyright (c) 2026 Tianjin University, Ltd.
  * CANN Open Software License Agreement Version 2.0.
  */
-#include "../../chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling.h"
-#include "../../chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling_processor.h"
-#include "../../chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
+#include "../op_kernel/internal/operators/chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling.h"
+#include "../op_kernel/internal/operators/chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling_processor.h"
+#include "../op_kernel/internal/operators/chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
 #include "../op_kernel/internal/state_update_output/chunk_gdn_core_state_update_output_struct.h"
-#include "../../recompute_w_u_fwd/op_host/op_tiling/recompute_w_u_fwd_tiling_processor.h"
+#include "../op_kernel/internal/operators/recompute_w_u_fwd/op_host/op_tiling/recompute_w_u_fwd_tiling_processor.h"
 
 #include "securec.h"
 #include "tiling_base/tiling_templates_registry.h"

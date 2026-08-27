@@ -2,18 +2,18 @@
  * Copyright (c) 2026 Tianjin University, Ltd.
  * CANN Open Software License Agreement Version 2.0.
  */
-#include "../../../../chunk_gated_delta_rule_fwd_h/op_kernel/chunk_gated_delta_rule_fwd_h_struct.h"
+#include "../operators/chunk_gated_delta_rule_fwd_h/op_kernel/chunk_gated_delta_rule_fwd_h_struct.h"
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-#include "../../../../chunk_gated_delta_rule_fwd_h/op_kernel/arch35/gemm/kernel/gdn_fwd_h_kernel.hpp"
+#include "../operators/chunk_gated_delta_rule_fwd_h/op_kernel/arch35/gemm/kernel/gdn_fwd_h_kernel.hpp"
 #else
-#include "../../../../chunk_gated_delta_rule_fwd_h/op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp"
+#include "../operators/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp"
 #endif
 #undef CATLASS_ARCH
-#include "../../../../chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
-#include "../../../../chunk_fwd_o/op_kernel/gemm/kernel/gdn_fwd_o_kernel.hpp"
-#include "../../../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_common.h"
-#include "../../../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_cube.h"
-#include "../../../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_vector.h"
+#include "../operators/chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
+#include "../operators/chunk_fwd_o/op_kernel/gemm/kernel/gdn_fwd_o_kernel.hpp"
+#include "../operators/recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_common.h"
+#include "../operators/recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_cube.h"
+#include "../operators/recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_vector.h"
 #include "chunk_gdn_core_state_update_output_struct.h"
 #include "kernel_operator.h"
 #include "lib/matmul_intf.h"

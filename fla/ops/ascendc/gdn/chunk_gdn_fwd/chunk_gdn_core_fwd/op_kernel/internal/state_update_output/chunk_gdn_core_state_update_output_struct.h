@@ -7,7 +7,7 @@
 
 #include <cstdint>
 
-#include "../../../../recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_struct.h"
+#include "../operators/recompute_w_u_fwd/op_kernel/recompute_w_u_fwd_struct.h"
 
 namespace GDN {
 

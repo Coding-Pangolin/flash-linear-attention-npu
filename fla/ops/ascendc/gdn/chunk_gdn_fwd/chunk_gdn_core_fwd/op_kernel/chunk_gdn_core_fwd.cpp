@@ -8,7 +8,7 @@
 #include "internal/coefficient_generation/chunk_gdn_core_coefficient_generation.cpp"
 
 #define GDN_CHUNK_LOCAL_CUMSUM_IMPL_ONLY
-#include "../../chunk_local_cumsum/op_kernel/chunk_local_cumsum.cpp"
+#include "internal/operators/chunk_local_cumsum/op_kernel/chunk_local_cumsum.cpp"
 #undef GDN_CHUNK_LOCAL_CUMSUM_IMPL_ONLY
 
 namespace GDN {

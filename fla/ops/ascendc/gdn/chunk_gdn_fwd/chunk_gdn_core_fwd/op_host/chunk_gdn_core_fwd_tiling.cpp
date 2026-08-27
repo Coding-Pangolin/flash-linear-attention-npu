@@ -4,9 +4,9 @@
  */
 #include "chunk_gdn_core_fwd_tiling.h"
 
-#include "../../chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
-#include "../../chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling.h"
-#include "../../chunk_gated_delta_rule_fwd_h/op_kernel/chunk_gated_delta_rule_fwd_h_struct.h"
+#include "../op_kernel/internal/operators/chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
+#include "../op_kernel/internal/operators/chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling.h"
+#include "../op_kernel/internal/operators/chunk_gated_delta_rule_fwd_h/op_kernel/chunk_gated_delta_rule_fwd_h_struct.h"
 #include "../op_kernel/internal/state_update_output/chunk_gdn_core_state_update_output_struct.h"
 #include "../op_kernel/chunk_gdn_core_fwd_struct.h"
 

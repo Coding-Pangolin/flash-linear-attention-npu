@@ -43,10 +43,21 @@ def get_sources():
         os.path.join(aten_dir, "python_functionsEverything.cpp"),
         os.path.join(aten_dir, "RegisterFunctionalizationEverything.cpp"),
         os.path.join(ops_dir, "OpInterfaceEverything.cpp"),
+        os.path.join(ops_dir, "OpInterface.cpp"),
         os.path.join(ops_dir, "ops", "opapi", "StructKernelNpuOpApiEverything.cpp"),
+        os.path.join(ops_dir, "ops", "opapi", "StructKernelNpuOpApi.cpp"),
     ]
 
-    sources_new = [cur_file for cur_file in sources if cur_file not in BUILD_EXCLUDE_LIST]
+    sources_new = []
+    seen = set()
+    for cur_file in sources:
+        if cur_file in BUILD_EXCLUDE_LIST:
+            continue
+        rp = os.path.realpath(cur_file)
+        if rp in seen:
+            continue
+        seen.add(rp)
+        sources_new.append(cur_file)
     print("====sources_new:", sources_new)
 
     return sources_new

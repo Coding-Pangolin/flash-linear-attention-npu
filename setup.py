@@ -562,7 +562,8 @@ def _stage_run_package(run_file, opp_root):
 
 def _build_torch_extension_inplace():
     if not _env_flag("FLA_NPU_SKIP_TORCH_GEN"):
-        _run(["bash", "gen.sh", "npu_custom.yaml"], TORCH_EXTENSION_DIR)
+        _run(["bash", "gen.sh", "npu_custom.yaml"], TORCH_EXTENSION_DIR,
+             env={**os.environ, "PYTHON": sys.executable})
 
     build_dir = TORCH_EXTENSION_DIR / "build"
     if build_dir.exists():

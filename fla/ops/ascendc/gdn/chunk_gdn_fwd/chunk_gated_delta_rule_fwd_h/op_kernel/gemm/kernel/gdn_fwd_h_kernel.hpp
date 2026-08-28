@@ -671,8 +671,9 @@ public:
             uint32_t subBlockNum = AscendC::GetSubBlockNum();
             uint32_t coreIdx = AscendC::GetBlockIdx() / subBlockNum;
             uint32_t coreNum = AscendC::GetBlockNum();
-            uint32_t taskCount =
+            uint32_t logicalHeadTasks =
                 (isVariedLen ? vecBlockScheduler.tokenBatch : shapeBatch) * vNumHead;
+            uint32_t taskCount = logicalHeadTasks * vecBlockScheduler.vBlockCount;
             uint32_t rowsPerSubBlock = (kHeadDim + subBlockNum - 1) / subBlockNum;
             uint32_t rowBegin = subBlockIdx * rowsPerSubBlock;
             uint32_t rowEnd = Min(rowBegin + rowsPerSubBlock, kHeadDim);
@@ -701,18 +702,30 @@ public:
                 AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID0);
                 AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID1);
                 if (taskIdx < taskCount) {
-                    uint32_t batchIdx = taskIdx / vNumHead;
-                    uint32_t vHeadIdx = taskIdx % vNumHead;
+                    uint32_t vBlockIdx = taskIdx / logicalHeadTasks;
+                    uint32_t logicalTask = taskIdx % logicalHeadTasks;
+                    uint32_t batchIdx = logicalTask / vNumHead;
+                    uint32_t vHeadIdx = logicalTask % vNumHead;
+                    uint32_t vBlockOffset = vBlockIdx * vecBlockScheduler.vBlockSize;
+                    uint32_t vBlockDim = Min(
+                        vecBlockScheduler.vBlockSize, vHeadDim - vBlockOffset);
                     uint32_t chunkOffset =
                         isVariedLen ? vecBlockScheduler.GetVarlenChunkOffset(batchIdx) : 0;
                     uint32_t shapeBatchIdx = isVariedLen ? 0 : batchIdx;
                     uint32_t hBaseOffset =
                         (shapeBatchIdx * vNumHead * totalChunks + vHeadIdx * totalChunks + chunkOffset) *
-                        stateBlockSize;
-                    uint32_t initialStateBaseOffset = taskIdx * stateBlockSize;
-                    for (uint32_t rowOffset = rowBegin; rowOffset < rowEnd; rowOffset += rowsPerTile) {
-                        uint32_t rowsThisTile = Min(rowsPerTile, rowEnd - rowOffset);
-                        uint32_t stateTileElems = rowsThisTile * vHeadDim;
+                        stateBlockSize + vBlockOffset;
+                    uint32_t initialStateBaseOffset =
+                        (batchIdx * vNumHead + vHeadIdx) * stateBlockSize + vBlockOffset;
+                    // A split V block is strided by the original vHeadDim in
+                    // GM. Process one state row at a time so both 128-wide
+                    // blocks retain the original row layout.
+                    uint32_t stateRowsPerStep =
+                        vBlockDim == vHeadDim ? rowsPerTile : 1;
+                    for (uint32_t rowOffset = rowBegin; rowOffset < rowEnd;
+                         rowOffset += stateRowsPerStep) {
+                        uint32_t rowsThisTile = Min(stateRowsPerStep, rowEnd - rowOffset);
+                        uint32_t stateTileElems = rowsThisTile * vBlockDim;
                         uint32_t hOffset = hBaseOffset + rowOffset * vHeadDim;
                         AscendC::LocalTensor<ElementInitialState> stateUbTensor =
                             pingpongFlag ? stateUbTensorPing : stateUbTensorPong;

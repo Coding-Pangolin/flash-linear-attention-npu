@@ -66,6 +66,7 @@ struct GDNFwdHOffsets {
 };
 
 struct GDNFwdHStream {
+    uint32_t vBlockIdx;
     uint32_t batchIdx;
     uint32_t chunkIdx{0};
     uint32_t vHeadIdx;
@@ -109,6 +110,7 @@ struct BlockSchedulerGdnFwdH {
     uint32_t taskStride;
     uint32_t cubeCoreIdx;
     uint32_t cubeCoreNum;
+    uint32_t vBlockCount;
     uint32_t taskNum;
     uint32_t headGroups;
     uint32_t totalChunks;
@@ -208,8 +210,12 @@ struct BlockSchedulerGdnFwdH {
 
         cubeCoreIdx = coreIdx;
         cubeCoreNum = coreNum;
-        vBlockSize = vHeadDim;
-        taskNum = batch * vNumHead;
+        // Keep a V=256 task within a 128-column L0C block. The previous
+        // 128x256 FP32 accumulator consumed the full A2 L0C and could expose
+        // an unstable suffix publication in fused execution.
+        vBlockSize = Min(vHeadDim, static_cast<uint32_t>(128));
+        vBlockCount = CeilDiv(vHeadDim, vBlockSize);
+        taskNum = vBlockCount * batch * vNumHead;
         headGroups = vNumHead / kNumHead;
         InitTaskWave(0);
 
@@ -271,8 +277,11 @@ struct BlockSchedulerGdnFwdH {
 
     CATLASS_DEVICE
     void InitNewStream(GDNFwdHStream& newStream) {
-        newStream.batchIdx = taskIdx / vNumHead;
-        newStream.vHeadIdx = taskIdx % vNumHead;
+        const uint32_t tasksPerVBlock = batch * vNumHead;
+        const uint32_t logicalTask = taskIdx % tasksPerVBlock;
+        newStream.vBlockIdx = taskIdx / tasksPerVBlock;
+        newStream.batchIdx = logicalTask / vNumHead;
+        newStream.vHeadIdx = logicalTask % vNumHead;
         newStream.kHeadIdx = newStream.vHeadIdx / headGroups;
         newStream.shapeBatchIdx = isVariedLen ? 0 : newStream.batchIdx;
         newStream.tokenBatchIdx = isVariedLen ? newStream.batchIdx : 0;
@@ -312,8 +321,8 @@ struct BlockSchedulerGdnFwdH {
 
         offset.isInitialState = stream.chunkIdx == 0;
         offset.isFinalState = stream.chunkIdx == (stream.batchChunks - 1);
-        uint32_t vBlockOffset = 0;
-        uint32_t vBlockDim = vBlockSize;
+        uint32_t vBlockOffset = stream.vBlockIdx * vBlockSize;
+        uint32_t vBlockDim = Min(vBlockSize, vHeadDim - vBlockOffset);
         offset.initialStateOffset = (stream.batchIdx * vNumHead + stream.vHeadIdx) * kHeadDim * vHeadDim + vBlockOffset;
         offset.finalStateOffset = (stream.batchIdx * vNumHead + stream.vHeadIdx) * kHeadDim * vHeadDim + vBlockOffset;
         offset.hSrcOffset = (stream.shapeBatchIdx * vNumHead * totalChunks + stream.vHeadIdx * totalChunks + stream.chunkOffset + stream.chunkIdx) * kHeadDim * vHeadDim + vBlockOffset;

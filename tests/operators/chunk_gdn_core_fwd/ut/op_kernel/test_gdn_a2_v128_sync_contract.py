@@ -4,16 +4,20 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[5]
-FWD_H_SCHEDULER = ROOT / (
-    "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/"
+ARCH32_OPERATORS = ROOT / (
+    "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gdn_core_fwd/"
+    "op_kernel/internal/arch32/operators/"
+)
+FWD_H_SCHEDULER = ARCH32_OPERATORS / (
+    "chunk_gated_delta_rule_fwd_h/"
     "op_kernel/gemm/block/block_scheduler_gdn_fwd_h.hpp"
 )
-FWD_H_KERNEL = ROOT / (
-    "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/"
+FWD_H_KERNEL = ARCH32_OPERATORS / (
+    "chunk_gated_delta_rule_fwd_h/"
     "op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp"
 )
-FWD_O_KERNEL = ROOT / (
-    "fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_fwd_o/"
+FWD_O_KERNEL = ARCH32_OPERATORS / (
+    "chunk_fwd_o/"
     "op_kernel/gemm/kernel/gdn_fwd_o_kernel.hpp"
 )
 

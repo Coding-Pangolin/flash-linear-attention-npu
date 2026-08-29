@@ -5,11 +5,11 @@
 #include "chunk_gdn_core_fwd_struct.h"
 
 #define GDN_CHUNK_RECOMPUTE_WU_FWD_HO_IMPL_ONLY
-#include "../../chunk_recompute_wu_fwd_ho/op_kernel/chunk_recompute_wu_fwd_ho.cpp"
+#include "internal/arch32/operators/chunk_recompute_wu_fwd_ho/op_kernel/chunk_recompute_wu_fwd_ho.cpp"
 #undef GDN_CHUNK_RECOMPUTE_WU_FWD_HO_IMPL_ONLY
 
 #define GDN_CHUNK_CUMSUM_KKT_SOLVE_IMPL_ONLY
-#include "../../chunk_kkt_solve_tri/op_kernel/chunk_cumsum_kkt_solve_tri.cpp"
+#include "internal/arch32/operators/chunk_kkt_solve_tri/op_kernel/chunk_cumsum_kkt_solve_tri.cpp"
 #undef GDN_CHUNK_CUMSUM_KKT_SOLVE_IMPL_ONLY
 
 namespace GDN {

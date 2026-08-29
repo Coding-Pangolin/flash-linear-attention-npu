@@ -4,10 +4,10 @@
  */
 #include "chunk_gdn_core_fwd_tiling.h"
 
-#include "../../chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
-#include "../../chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling.h"
-#include "../../chunk_gated_delta_rule_fwd_h/op_kernel/chunk_gated_delta_rule_fwd_h_struct.h"
-#include "../../chunk_recompute_wu_fwd_ho/op_kernel/chunk_recompute_wu_fwd_ho_struct.h"
+#include "../op_kernel/internal/arch32/operators/chunk_fwd_o/op_kernel/chunk_fwd_o_struct.h"
+#include "../op_kernel/internal/arch32/operators/chunk_gated_delta_rule_fwd_h/op_host/chunk_gated_delta_rule_fwd_h_tiling.h"
+#include "../op_kernel/internal/arch32/operators/chunk_gated_delta_rule_fwd_h/op_kernel/chunk_gated_delta_rule_fwd_h_struct.h"
+#include "../op_kernel/internal/arch32/operators/chunk_recompute_wu_fwd_ho/op_kernel/chunk_recompute_wu_fwd_ho_struct.h"
 #include "../op_kernel/chunk_gdn_core_fwd_struct.h"
 
 #include "securec.h"
@@ -19,7 +19,7 @@
 
 namespace optiling {
 
-ge::graphStatus Tiling4ChunkRecomputeWUFwdHO(gert::TilingContext *context);
+ge::graphStatus Tiling4ChunkGdnCoreFwdArch32StateOutput(gert::TilingContext *context);
 
 namespace {
 
@@ -213,7 +213,7 @@ ge::graphStatus Tiling4ChunkGdnCoreFwd(gert::TilingContext *context)
     OP_CHECK_IF(!IsShape(aShape, {batch, valueHeads, tokens, *chunkSize}),
                 OP_LOGE(context->GetNodeName(), "Phase 6 requires a_storage=[B,Hv,T,chunk_size]."),
                 return ge::GRAPH_FAILED);
-    OP_CHECK_IF(Tiling4ChunkRecomputeWUFwdHO(context) != ge::GRAPH_SUCCESS,
+    OP_CHECK_IF(Tiling4ChunkGdnCoreFwdArch32StateOutput(context) != ge::GRAPH_SUCCESS,
                 OP_LOGE(context->GetNodeName(), "Reuse of the accepted Phase 5 suffix tiling failed."),
                 return ge::GRAPH_FAILED);
 

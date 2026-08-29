@@ -10,8 +10,11 @@ ARCH32 = CORE / "op_kernel/internal/arch32"
 ENTRY = CORE / "op_kernel/chunk_gdn_core_fwd.cpp"
 HOST_TILING = CORE / "op_host/chunk_gdn_core_fwd_tiling.cpp"
 HOST_CMAKE = CORE / "op_host/CMakeLists.txt"
+OPTILING_CMAKE = ROOT / "cmake/obj_func.cmake"
 ARCH32_STATE_TILING = (
-    CORE / "op_host/arch32/chunk_gdn_core_fwd_arch32_state_output_tiling.cpp"
+    CORE
+    / "op_host/op_tiling/arch32/"
+    "chunk_gdn_core_fwd_arch32_state_output_tiling.cpp"
 )
 
 
@@ -110,3 +113,14 @@ def test_arch32_state_tiling_keeps_frozen_a2_body():
         "Tiling4ChunkRecomputeWUFwdHO start.",
     )
     assert internal_body == source_body
+
+
+def test_arch32_state_tiling_is_discovered_by_host_build():
+    framework = OPTILING_CMAKE.read_text(encoding="utf-8")
+
+    assert ARCH32_STATE_TILING.is_file()
+    assert ARCH32_STATE_TILING.parent == CORE / "op_host/op_tiling/arch32"
+    assert (
+        "file(GLOB_RECURSE SUB_OPTILING_SRC ${SOURCE_DIR}/op_tiling/*.cpp)"
+        in framework
+    )

@@ -31,6 +31,11 @@ ARCH32_STATE_TILING = (
     / "op_host/op_tiling/arch32/"
     "chunk_gdn_core_fwd_arch32_state_output_tiling.cpp"
 )
+ARCH32_FUSED_SOLVE = (
+    ARCH32
+    / "operators/chunk_kkt_solve_tri/op_kernel/"
+    "chunk_cumsum_kkt_solve_tri.cpp"
+)
 
 A2_KERNEL_SHA256 = {
     "chunk_fwd_o/op_kernel/epilogue/block/block_epilogue_gdn_fwdo_output.hpp":
@@ -143,6 +148,17 @@ def test_arch32_contains_no_arch35_implementation_or_reference():
     assert files
     assert all("arch35" not in path.parts for path in files)
     assert all("arch35" not in path.read_text(encoding="utf-8") for path in files)
+
+
+def test_arch32_fused_solve_uses_only_private_headers():
+    source = ARCH32_FUSED_SOLVE.read_text(encoding="utf-8")
+
+    assert '#include "../../chunk_scaled_dot_kkt/op_kernel/chunk_scaled_dot_kkt.h"' in source
+    assert '#include "../../solve_tri/op_kernel/solve_tri_cube.h"' in source
+    assert '#include "../../solve_tri/op_kernel/solve_tri_vector.h"' in source
+    assert '#include "chunk_scaled_dot_kkt.h"' not in source
+    assert '#include "solve_tri_cube.h"' not in source
+    assert '#include "solve_tri_vector.h"' not in source
 
 
 def test_frozen_a2_kernels_remain_private_and_a5_public_kernels_unchanged():

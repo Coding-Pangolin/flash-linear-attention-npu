@@ -1,7 +1,7 @@
 #include "chunk_kkt_cube.h"
-#include "chunk_scaled_dot_kkt.h"
-#include "solve_tri_cube.h"
-#include "solve_tri_vector.h"
+#include "../../chunk_scaled_dot_kkt/op_kernel/chunk_scaled_dot_kkt.h"
+#include "../../solve_tri/op_kernel/solve_tri_cube.h"
+#include "../../solve_tri/op_kernel/solve_tri_vector.h"
 
 using namespace AscendC;
 

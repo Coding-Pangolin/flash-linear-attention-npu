@@ -121,6 +121,16 @@ WHEEL_PATH="dist/<准确wheel文件名>.whl"
 python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
 ```
 
+发布到 PyPI 后，也可以直接从 PyPI 安装（仍需先按 Step 1/Step 2 准备 CANN 与
+`torch` / `torch_npu` / `triton-ascend` 环境，wheel 内嵌 OPP 但**不打包**这些运行时依赖）：
+
+```sh
+python -m pip install flash-linear-attention-npu
+```
+
+PyPI 上按目标芯片与架构区分 wheel 文件；不同芯片（A2/A3/A5）的产物清单见
+[Release](https://github.com/flashserve/flash-linear-attention-npu/releases) 页面。
+
 > 重新构建的 wheel 版本号与已安装的旧 wheel 可能相同。版本号相同时，不带 `--force-reinstall` 的 `pip install` 会认为"已是最新版本"而跳过，导致实际仍是旧代码。上面的命令已带 `--force-reinstall` 强制覆盖；若想先清理再装，可先执行 `python -m pip uninstall -y flash-linear-attention-npu`。
 
 wheel 不安装或执行 shell 环境钩子。无论使用系统 Python、Conda、venv

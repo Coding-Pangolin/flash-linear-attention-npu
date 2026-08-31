@@ -37,7 +37,11 @@ TRITON_CORE_PACKAGE = "fla_npu.ops.triton.triton_core"
 TRITON_CORE_SOURCE = REPO_ROOT / "fla" / "ops" / "triton" / "triton_core"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
-from fla_npu_artifacts import get_package_version, get_wheel_build_tag  # noqa: E402
+from fla_npu_artifacts import (  # noqa: E402
+    get_package_version,
+    get_wheel_build_tag,
+    get_wheel_platform_tag,
+)
 
 
 DEFAULT_SOC = "ascend910b"
@@ -646,6 +650,12 @@ if _bdist_wheel is not None:
             if build_tag:
                 self.build_number = build_tag
 
+        def get_tag(self):
+            python_tag, abi_tag, plat_tag = super().get_tag()
+            if _env_flag("FLA_NPU_PYPI"):
+                return (python_tag, "none", get_wheel_platform_tag())
+            return (python_tag, abi_tag, plat_tag)
+
         def run(self):
             super().run()
             _cleanup_build_residuals()
@@ -659,6 +669,19 @@ setup(
     description="High-performance linear attention operators for Ascend NPU",
     long_description=(REPO_ROOT / "README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
+    classifiers=[
+        "Development Status :: 4 - Beta",
+        "Intended Audience :: Developers",
+        "Operating System :: POSIX :: Linux",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3 :: Only",
+        "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    ],
+    project_urls={
+        "Homepage": "https://github.com/flashserve/flash-linear-attention-npu",
+        "Source Code": "https://github.com/flashserve/flash-linear-attention-npu",
+        "Bug Tracker": "https://github.com/flashserve/flash-linear-attention-npu/issues",
+    },
     packages=_packages(),
     package_dir=_package_dir(),
     package_data={"fla_npu": ["opp/**/*", "offline/third_party/**/*"]},

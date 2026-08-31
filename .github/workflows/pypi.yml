@@ -1,0 +1,83 @@
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      pypi_repo:
+        description: "Target index: testpypi or pypi"
+        type: choice
+        options:
+          - testpypi
+          - pypi
+        default: testpypi
+      dry_run:
+        description: "Only build wheels, skip upload"
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write  # required for trusted publishing (OIDC) to PyPI
+
+jobs:
+  build:
+    name: "build ${{ matrix.soc }} / ${{ matrix.arch }}"
+    runs-on: [self-hosted, linux, npu]
+    strategy:
+      fail-fast: false
+      matrix:
+        soc: [ascend910b, ascend910_93, ascend950]
+        arch: [aarch64, x86_64]
+    # NOTE: matrix.arch must match the runner's real CPU arch (wheel embeds arch-specific OPP binaries);
+    # FLA_NPU_ARCH only labels the wheel, it cannot cross-compile binaries.
+    env:
+      FLA_NPU_PYPI: "TRUE"
+      FLA_NPU_DISABLE_LOCAL_VERSION: "TRUE"
+      FLA_NPU_SOC: ${{ matrix.soc }}
+      FLA_NPU_ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Prepare env
+        run: |
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          python -m pip install -q --upgrade pip setuptools wheel
+          python -m pip install -q -r requirements.txt
+      - name: Build wheel
+        run: |
+          source /usr/local/Ascend/ascend-toolkit/set_env.sh
+          python scripts/build_wheel.py
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.soc }}-${{ matrix.arch }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  publish:
+    name: "Publish to ${{ github.event_name == 'push' && 'PyPI' || 'TestPyPI' }}"
+    needs: build
+    if: ${{ github.event_name == 'push' || !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    # Configure matching PyPI trusted publishers (OIDC) for this workflow:
+    #   - environment "pypi"    -> pypi.org/project/flash-linear-attention-npu/
+    #   - environment "testpypi" -> test.pypi.org/project/flash-linear-attention-npu/
+    environment: ${{ github.event_name == 'push' && 'pypi' || 'testpypi' }}
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: twine check
+        run: |
+          python -m pip install -q twine
+          python -m twine check dist/*.whl
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          repository-url: ${{ github.event_name == 'push' && 'https://upload.pypi.org/legacy/' || 'https://test.pypi.org/legacy/' }}

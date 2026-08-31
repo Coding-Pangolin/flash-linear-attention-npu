@@ -11,10 +11,6 @@ cd $CDIR
 # Use the interpreter passed by the caller (root setup.py sets PYTHON=sys.executable)
 # so we don't depend on whatever 'python3' resolves to via PATH.
 PY="${FLA_NPU_PYTHON:-${PYTHON:-python3}}"
-if ! "$PY" -c "import torch, torchnpugen" >/dev/null 2>&1; then
-    echo "[gen.sh] error: $PY does not provide torch/torchnpugen" >&2
-    exit 1
-fi
 
 # check if the file exists
 if [ ! -f "$YAML_FILE" ]; then

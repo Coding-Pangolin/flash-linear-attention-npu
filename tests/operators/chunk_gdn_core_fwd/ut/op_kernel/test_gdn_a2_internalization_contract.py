@@ -10,6 +10,7 @@ ARCH32 = CORE / "op_kernel/internal/arch32"
 ENTRY = CORE / "op_kernel/chunk_gdn_core_fwd.cpp"
 HOST_TILING = CORE / "op_host/chunk_gdn_core_fwd_tiling.cpp"
 HOST_CMAKE = CORE / "op_host/CMakeLists.txt"
+OP_DEF = CORE / "op_host/chunk_gdn_core_fwd_def.cpp"
 OPTILING_CMAKE = ROOT / "cmake/obj_func.cmake"
 ARCH32_STATE_TILING = (
     CORE
@@ -124,3 +125,11 @@ def test_arch32_state_tiling_is_discovered_by_host_build():
         "file(GLOB_RECURSE SUB_OPTILING_SRC ${SOURCE_DIR}/op_tiling/*.cpp)"
         in framework
     )
+
+
+def test_phase6_op_def_registers_a2_a3_and_a5():
+    op_def = OP_DEF.read_text(encoding="utf-8")
+
+    assert 'AddConfig("ascend910b", config)' in op_def
+    assert 'AddConfig("ascend910_93", config)' in op_def
+    assert 'AddConfig("ascend950", config)' in op_def

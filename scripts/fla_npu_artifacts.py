@@ -98,6 +98,15 @@ def get_arch() -> str:
     return _compact_tag(arch) or "unknown"
 
 
+def get_wheel_platform_tag() -> str:
+    """PyPI-compatible wheel platform tag for the current arch.
+
+    aarch64 is the canonical name for arm64; PyPI/pip recognize
+    manylinux_2_28_aarch64 / manylinux_2_28_x86_64 (PEP 600).
+    """
+    return f"manylinux_2_28_{get_arch()}"
+
+
 def get_vendor_name() -> str:
     return DEFAULT_VENDOR_NAME
 
@@ -144,6 +153,15 @@ def get_wheel_build_tag(repo_root: Path, public_version: str | None = None) -> s
         if build_tag and not build_tag[0].isdigit():
             return f"1{build_tag}"
         return build_tag
+    if env_flag("FLA_NPU_PYPI"):
+        product_tag = get_product_tag()
+        arch_tag = get_arch()
+        if not product_tag or not arch_tag:
+            return ""
+        build_tag = ".".join([product_tag, arch_tag])
+        if build_tag and not build_tag[0].isdigit():
+            build_tag = f"1{build_tag}"
+        return build_tag
     if env_flag("FLA_NPU_DISABLE_LOCAL_VERSION"):
         return ""
 
@@ -163,7 +181,7 @@ def get_local_version(repo_root: Path, public_version: str | None = None) -> str
     explicit = os.getenv("FLA_NPU_LOCAL_VERSION", "").strip()
     if explicit:
         return _normalize_local_version(explicit)
-    if env_flag("FLA_NPU_DISABLE_LOCAL_VERSION"):
+    if env_flag("FLA_NPU_PYPI") or env_flag("FLA_NPU_DISABLE_LOCAL_VERSION"):
         return ""
 
     if get_branch_name(repo_root) != "main":
@@ -185,9 +203,10 @@ def get_wheel_filename(repo_root: Path) -> str:
     public_version = read_public_version(repo_root)
     package_version = get_package_version(repo_root)
     build_tag = get_wheel_build_tag(repo_root, public_version)
+    platform_tag = get_wheel_platform_tag() if env_flag("FLA_NPU_PYPI") else "any"
     if build_tag:
-        return f"{WHEEL_DIST_NAME}-{package_version}-{build_tag}-py3-none-any.whl"
-    return f"{WHEEL_DIST_NAME}-{package_version}-py3-none-any.whl"
+        return f"{WHEEL_DIST_NAME}-{package_version}-{build_tag}-py3-none-{platform_tag}.whl"
+    return f"{WHEEL_DIST_NAME}-{package_version}-py3-none-{platform_tag}.whl"
 
 
 def get_platform_name() -> str:

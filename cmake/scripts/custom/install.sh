@@ -440,6 +440,8 @@ install_wheel_opp_package() {
     update_wheel_vendors_config "${wheel_opp_root}/vendors"
     finalize_wheel_opp "${wheel_opp_root}"
 
+    log "[INFO] fla_npu custom OPP installed to: ${dst_vendor}"
+    log "[INFO] using requirements: when custom module install finished or before you run the custom module, execute the command [ export ASCEND_CUSTOM_OPP_PATH=${dst_vendor}:${dst_vendor}/op_api/lib:\${ASCEND_CUSTOM_OPP_PATH:-} ] to set the environment path"
     log "[INFO] FLA NPU wheel OPP update completed. Restart Python processes to load the new libcust_opapi.so and kernels."
     echo "SUCCESS"
     exit 0

@@ -31,6 +31,11 @@ COV="false"
 CLANG="false"
 VERBOSE="false"
 OOM="false"
+# 构建过程禁用已安装 fla_npu wheel 的 .pth 自动 export（FLA_NPU_DISABLE_PTH）：
+# 当前 python 环境若装有其他版本 fla_npu wheel，其 .pth 会在每个 python3 子进程
+# （cmake、asc_opc 等）启动时把该 wheel 的 OPP prepend 进 ASCEND_CUSTOM_OPP_PATH，
+# 造成 op store 与本次源码输入数不一致（如 ChunkGatedDeltaRuleFwdH 7 vs 8）。
+export FLA_NPU_DISABLE_PTH=1
 THREAD_NUM=$(grep -c ^processor /proc/cpuinfo)
 ENABLE_VALGRIND=FALSE
 ENABLE_CREATE_LIB=FALSE

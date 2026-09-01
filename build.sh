@@ -1398,6 +1398,13 @@ if [ -n "$KERNEL_TEMPLATE_INPUT" ]; then
     fi
 fi
 
+if [[ "${ENABLE_BUILD_PKG}" == "TRUE" && "${ENABLE_BUILT_CUSTOM}" != "TRUE" ]]; then
+    # --pkg 未显式指定 vendor 时，默认与 --vendor_name=fla_npu 一致：编 fla_npu 自定义 OPP 包。
+    vendor_name="${vendor_name:-fla_npu}"
+    ENABLE_BUILT_CUSTOM=TRUE
+    ENABLE_BUILT_IN=FALSE
+fi
+
 if [ -n "${vendor_name}" ];then
     CUSTOM_OPTION="${CUSTOM_OPTION} -DVENDOR_NAME=${vendor_name}"
 fi

@@ -158,6 +158,10 @@ bash tests/atk/run_test_cpu.sh -op=causal_conv1d
 bash tests/atk/run_test_cpu.sh -op=<op_name> -scope=accuracy
 ```
 
+`chunk_gated_delta_rule_fwd` 使用 NPU DUT、六 ACLNN NPU benchmark 和 CPU FP64 golden
+三路双标杆，精度入口为该算子 `README.md` 中的 `scripts/run_matrix.sh`；统一脚本仍用于其
+性能、确定性和 mssanitizer。
+
 性能测试使用 ATK `performance_device`：
 
 ```bash

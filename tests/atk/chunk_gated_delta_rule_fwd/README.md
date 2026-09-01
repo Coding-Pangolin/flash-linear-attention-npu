@@ -48,7 +48,14 @@ A5 模型 shape 分别来源于 `推理model.csv` 和 `训练model.csv`，原文
 
 ## 执行
 
-双标杆精度使用算子专用三节点入口：
+正式 500 条双标杆精度使用可恢复分片入口；默认每 25 条启动一个 fresh ATK 进程，避免
+六算子 benchmark 长进程状态累积：
+
+```bash
+bash tests/atk/chunk_gated_delta_rule_fwd/scripts/run_matrix.sh 0
+```
+
+冒烟或单分片可直接使用三节点入口（默认 `-mt 5`）：
 
 ```bash
 bash tests/atk/chunk_gated_delta_rule_fwd/scripts/run_double_benchmark.sh 0
@@ -58,7 +65,7 @@ bash tests/atk/chunk_gated_delta_rule_fwd/scripts/run_double_benchmark.sh 0
 
 ```bash
 GDN_ATK_CASE_JSON="$PWD/tests/atk/chunk_gated_delta_rule_fwd/scripts/cases/legacy500_adapted.json" \
-bash tests/atk/chunk_gated_delta_rule_fwd/scripts/run_double_benchmark.sh 0
+bash tests/atk/chunk_gated_delta_rule_fwd/scripts/run_matrix.sh 0
 ```
 
 性能、确定性和内存检测仍使用仓内统一入口：

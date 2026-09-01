@@ -5,7 +5,8 @@ from __future__ import annotations
 
 
 RUNTIME_ROLE_ORDER = ("dut", "benchmark", "golden")
-DUT_NODE_NAMES = ("phase6", "npu_dut")
+DUT_NODE_NAME = "phase6"
+DUT_NODE_NAMES = (DUT_NODE_NAME, "npu_dut")
 BENCHMARK_NODE_NAME = "gold"
 METRIC_TENSOR_PAIRS = {
     "Actual": ("dut", "golden"),

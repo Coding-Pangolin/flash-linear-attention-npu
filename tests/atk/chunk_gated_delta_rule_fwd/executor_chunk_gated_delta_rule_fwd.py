@@ -71,8 +71,128 @@ def _cu_seqlens(specification: str, tokens: int, enabled: bool):
     return values
 
 
+def build_inputs(values: dict[str, Any]):
+    """把 ATK 原始输入冻结为三路共用的公开输入和执行合同。"""
+
+    dtype_name = _text(values["qkv_dtype"]).lower()
+    try:
+        public_dtype = DTYPES[dtype_name]
+    except KeyError as exc:
+        raise ValueError(f"qkv_dtype 仅支持 {sorted(DTYPES)}，实际为 {dtype_name}") from exc
+
+    q, k, v, g, beta = effective_inputs(
+        values["q"],
+        values["k"],
+        values["v"],
+        values["g"],
+        values["beta"],
+        public_dtype,
+    )
+    is_varlen = _bool(values["is_varlen"])
+    scenario = _text(values["scenario"]).lower()
+    case = GdnCase(
+        batch=q.shape[0],
+        k_heads=q.shape[1],
+        v_heads=v.shape[1],
+        tokens=q.shape[2],
+        key_dim=q.shape[3],
+        value_dim=v.shape[3],
+        chunk_size=_int(values["chunk_size"]),
+        scale=_float(values["scale"]),
+        scenario=scenario,
+        cu_seqlens=_cu_seqlens(
+            _text(values["cu_seqlens_spec"]), q.shape[2], is_varlen
+        ),
+    )
+    case.validate()
+    if scenario == "dense" and is_varlen:
+        raise ValueError("dense 场景不能设置 is_varlen=true")
+    if scenario == "varlen" and not is_varlen:
+        raise ValueError("varlen 场景必须设置 is_varlen=true")
+    return case, public_dtype, (q, k, v, g, beta)
+
+
+def _npu_device(device_id: int):
+    import torch_npu  # noqa: F401
+
+    # ATK 的 NPU worker 已绑定 node 中的设备；这里只构造显式 device，
+    # 不修改进程级 current device。
+    return torch.device(f"npu:{device_id}")
+
+
+def _public_outputs(outputs, case: GdnCase, target: str):
+    o, final_state, g_cumsum, a = outputs
+    if case.output_final_state:
+        if final_state is None:
+            raise RuntimeError(f"请求 final_state，但 {target} 返回 None")
+        return o, final_state, g_cumsum, a
+    return o, g_cumsum, a
+
+
+def run_cpu(inputs, case: GdnCase, public_dtype):
+    """运行 CPU FP64 golden。"""
+
+    return run_golden_reference(*inputs, case, public_dtype)
+
+
+def run_npu(role: str, inputs, case: GdnCase):
+    """运行融合 DUT 或真实六 ACLNN NPU benchmark。"""
+
+    from fla_npu.ops import ascendc
+
+    q, k, v, g, beta = inputs
+    initial_state = deterministic_initial_state(case)
+    if initial_state is not None:
+        initial_state = initial_state.to(q.device).contiguous()
+
+    if role == "benchmark":
+        missing = [name for name in SIX_ACLNN_OPS if not hasattr(ascendc, name)]
+        if missing:
+            raise RuntimeError(f"当前 fla_npu 缺少六 ACLNN 接口：{missing}")
+        return _public_outputs(
+            run_six_aclnn_core(
+                ascendc,
+                q,
+                k,
+                v,
+                g,
+                beta,
+                initial_state=initial_state,
+                output_final_state=case.output_final_state,
+                chunk_size=case.chunk_size,
+                cu_seqlens=case.cu_seqlens,
+                scale=case.scale,
+            ),
+            case,
+            "六 ACLNN benchmark",
+        )
+    if role != "dut":
+        raise RuntimeError(f"run_npu 不支持角色：{role}")
+    if not hasattr(ascendc, "chunk_gated_delta_rule_fwd"):
+        raise RuntimeError("当前 fla_npu 包未提供 chunk_gated_delta_rule_fwd")
+    cu_values = None if case.cu_seqlens is None else list(case.cu_seqlens)
+    chunk_indices = canonical_chunk_indices(case.cu_seqlens, case.chunk_size)
+    return _public_outputs(
+        ascendc.chunk_gated_delta_rule_fwd(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            initial_state=initial_state,
+            output_final_state=case.output_final_state,
+            chunk_size=case.chunk_size,
+            cu_seqlens=cu_values,
+            chunk_indices=chunk_indices,
+            scale=case.scale,
+        ),
+        case,
+        "融合算子",
+    )
+
+
 @register("executor_chunk_gated_delta_rule_fwd")
-class ChunkGatedDeltaRuleFwdApi(BaseApi):
+class FunctionApi(BaseApi):
     def __init__(self, task_result: TaskResult):
         super().__init__(task_result)
         self._task_name = str(task_result.name or "")
@@ -82,57 +202,18 @@ class ChunkGatedDeltaRuleFwdApi(BaseApi):
         self._public_dtype = None
         self._inputs = None
         self._role = "uninitialized"
-        self._forward = None
+        self._npu_inputs = None
         self._output_names = ()
         self._execution_device_id = None
 
-    def _npu_device(self, device_id: int):
-        import torch_npu  # noqa: F401
-
-        # ATK 的 NPU solo worker 已绑定 node.yaml 中的设备。执行器只构造
-        # 显式 device 并让张量携带路由，不再修改进程级 current device。
-        return torch.device(f"npu:{device_id}")
-
     def init_by_input_data(self, input_data: InputDataset):
         values = input_data.kwargs
-        dtype_name = _text(values["qkv_dtype"]).lower()
-        try:
-            public_dtype = DTYPES[dtype_name]
-        except KeyError as exc:
-            raise ValueError(f"qkv_dtype 仅支持 {sorted(DTYPES)}，实际为 {dtype_name}") from exc
-
-        q, k, v, g, beta = effective_inputs(
-            values["q"],
-            values["k"],
-            values["v"],
-            values["g"],
-            values["beta"],
-            public_dtype,
-        )
-        is_varlen = _bool(values["is_varlen"])
-        scenario = _text(values["scenario"]).lower()
-        cu_spec = _text(values["cu_seqlens_spec"])
-        case = GdnCase(
-            batch=q.shape[0],
-            k_heads=q.shape[1],
-            v_heads=v.shape[1],
-            tokens=q.shape[2],
-            key_dim=q.shape[3],
-            value_dim=v.shape[3],
-            chunk_size=_int(values["chunk_size"]),
-            scale=_float(values["scale"]),
-            scenario=scenario,
-            cu_seqlens=_cu_seqlens(cu_spec, q.shape[2], is_varlen),
-        )
-        case.validate()
-        if scenario == "dense" and is_varlen:
-            raise ValueError("dense 场景不能设置 is_varlen=true")
-        if scenario == "varlen" and not is_varlen:
-            raise ValueError("varlen 场景必须设置 is_varlen=true")
+        case, public_dtype, inputs = build_inputs(values)
+        q, k, v, g, beta = inputs
 
         self._case = case
         self._public_dtype = public_dtype
-        self._inputs = (q, k, v, g, beta)
+        self._inputs = inputs
         self._output_names = output_names(case)
 
         # 保存并复用三路完全一致的有效输入，而不是生成器的 raw g/beta。
@@ -157,44 +238,10 @@ class ChunkGatedDeltaRuleFwdApi(BaseApi):
 
         device_id = int(self.device_id)
         self._execution_device_id = device_id
-        device = self._npu_device(device_id)
-        q_npu = q.to(device).contiguous()
-        k_npu = k.to(device).contiguous()
-        v_npu = v.to(device).contiguous()
-        g_npu = g.to(device).contiguous()
-        beta_npu = beta.to(device).contiguous()
-        initial_state = deterministic_initial_state(case)
-        if initial_state is not None:
-            initial_state = initial_state.to(device).contiguous()
+        device = _npu_device(device_id)
+        self._npu_inputs = tuple(tensor.to(device).contiguous() for tensor in inputs)
 
         if self._role == "benchmark":
-            def benchmark_forward():
-                from fla_npu.ops import ascendc
-
-                missing = [name for name in SIX_ACLNN_OPS if not hasattr(ascendc, name)]
-                if missing:
-                    raise RuntimeError(f"当前 fla_npu 缺少六 ACLNN 接口：{missing}")
-                outputs = run_six_aclnn_core(
-                    ascendc,
-                    q_npu,
-                    k_npu,
-                    v_npu,
-                    g_npu,
-                    beta_npu,
-                    initial_state=initial_state,
-                    output_final_state=case.output_final_state,
-                    chunk_size=case.chunk_size,
-                    cu_seqlens=case.cu_seqlens,
-                    scale=case.scale,
-                )
-                o, final_state, g_cumsum, a = outputs
-                if case.output_final_state:
-                    if final_state is None:
-                        raise RuntimeError("请求 final_state，但六 ACLNN benchmark 返回 None")
-                    return o, final_state, g_cumsum, a
-                return o, g_cumsum, a
-
-            self._forward = benchmark_forward
             print(
                 f"[gdn-double-atk] case={self._case_id} "
                 "role=benchmark target=six_aclnn_npu "
@@ -203,36 +250,6 @@ class ChunkGatedDeltaRuleFwdApi(BaseApi):
                 flush=True,
             )
             return
-
-        cu_values = None if case.cu_seqlens is None else list(case.cu_seqlens)
-        chunk_indices = canonical_chunk_indices(case.cu_seqlens, case.chunk_size)
-
-        def dut_forward():
-            from fla_npu.ops import ascendc
-
-            if not hasattr(ascendc, "chunk_gated_delta_rule_fwd"):
-                raise RuntimeError("当前 fla_npu 包未提供 chunk_gated_delta_rule_fwd")
-            outputs = ascendc.chunk_gated_delta_rule_fwd(
-                q_npu,
-                k_npu,
-                v_npu,
-                g_npu,
-                beta_npu,
-                initial_state=initial_state,
-                output_final_state=case.output_final_state,
-                chunk_size=case.chunk_size,
-                cu_seqlens=cu_values,
-                chunk_indices=chunk_indices,
-                scale=case.scale,
-            )
-            o, final_state, g_cumsum, a = outputs
-            if case.output_final_state:
-                if final_state is None:
-                    raise RuntimeError("请求 final_state，但 NPU core 返回 None")
-                return o, final_state, g_cumsum, a
-            return o, g_cumsum, a
-
-        self._forward = dut_forward
         print(
             f"[gdn-double-atk] case={self._case_id} "
             "role=dut target=chunk_gated_delta_rule_fwd "
@@ -245,15 +262,11 @@ class ChunkGatedDeltaRuleFwdApi(BaseApi):
             raise RuntimeError("GDN ATK 执行器尚未初始化")
         with torch.no_grad():
             if self._role in {"dut", "benchmark"}:
-                if self._forward is None:
-                    raise RuntimeError(f"{self._role} forward 未初始化")
-                outputs = self._forward()
+                if self._npu_inputs is None:
+                    raise RuntimeError(f"{self._role} NPU 输入未初始化")
+                outputs = run_npu(self._role, self._npu_inputs, self._case)
             elif self._role == "golden":
-                outputs = run_golden_reference(
-                    *self._inputs,
-                    self._case,
-                    self._public_dtype,
-                )
+                outputs = run_cpu(self._inputs, self._case, self._public_dtype)
             else:
                 raise RuntimeError(f"未知执行角色：{self._role}")
 

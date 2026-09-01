@@ -692,7 +692,7 @@ fi
 if [ -n "${INSTALL_PATH}" ] && [ -d ${INSTALL_PATH} ]; then
     _ASCEND_CUSTOM_OPP_PATH=${targetdir}/${vendordir}
     bin_path="${_ASCEND_CUSTOM_OPP_PATH}/bin"
-    set_env_variable="#!/bin/bash\nexport ASCEND_CUSTOM_OPP_PATH=${_ASCEND_CUSTOM_OPP_PATH}:\${ASCEND_CUSTOM_OPP_PATH}"
+    set_env_variable="#!/bin/bash\nexport ASCEND_CUSTOM_OPP_PATH=${_ASCEND_CUSTOM_OPP_PATH}:${_ASCEND_CUSTOM_OPP_PATH}/op_api/lib:\${ASCEND_CUSTOM_OPP_PATH}"
     if [ ! -d ${bin_path} ]; then
         mkdir -p ${bin_path} >> /dev/null 2>&1
         if [ $? -ne 0 ]; then
@@ -705,11 +705,8 @@ if [ -n "${INSTALL_PATH}" ] && [ -d ${INSTALL_PATH} ]; then
         log "[ERROR] write ASCEND_CUSTOM_OPP_PATH to set_env.bash failed"
         exit 1
     else
-        log "[INFO] using requirements: when custom module install finished or before you run the custom module, \
-        execute the command [ source ${bin_path}/set_env.bash ] to set the environment path"
         log "[INFO] fla_npu custom OPP installed to: ${_ASCEND_CUSTOM_OPP_PATH}"
-        log "[INFO] If the process initializes CANN before importing fla_npu, set before starting the process:"
-        log "[INFO]   export ASCEND_CUSTOM_OPP_PATH=${_ASCEND_CUSTOM_OPP_PATH}:${_ASCEND_CUSTOM_OPP_PATH}/op_api/lib:\${ASCEND_CUSTOM_OPP_PATH:-}"
+        log "[INFO] using requirements: when custom module install finished or before you run the custom module, execute the command [ export ASCEND_CUSTOM_OPP_PATH=${_ASCEND_CUSTOM_OPP_PATH}:${_ASCEND_CUSTOM_OPP_PATH}/op_api/lib:\${ASCEND_CUSTOM_OPP_PATH:-} ] to set the environment path"
         log "[WARNING] --install-path=${INSTALL_PATH} was specified; CANN will not auto-discover this custom OPP, please export ASCEND_CUSTOM_OPP_PATH as above and restart the process."
     fi
 else
@@ -735,8 +732,7 @@ else
         chmod 755 ${config_file}
     fi
     log "[INFO] fla_npu custom OPP installed to: ${_ASCEND_CUSTOM_OPP_PATH}"
-    log "[INFO] If the process initializes CANN before importing fla_npu, set before starting the process:"
-    log "[INFO]   export ASCEND_CUSTOM_OPP_PATH=${_ASCEND_CUSTOM_OPP_PATH}:${_ASCEND_CUSTOM_OPP_PATH}/op_api/lib:\${ASCEND_CUSTOM_OPP_PATH:-}"
+    log "[INFO] using requirements: when custom module install finished or before you run the custom module, execute the command [ export ASCEND_CUSTOM_OPP_PATH=${_ASCEND_CUSTOM_OPP_PATH}:${_ASCEND_CUSTOM_OPP_PATH}/op_api/lib:\${ASCEND_CUSTOM_OPP_PATH:-} ] to set the environment path"
 fi
 
 if [ -d ${targetdir}/$vendordir/op_impl/cpu/aicpu_kernel/impl/ ]; then

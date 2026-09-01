@@ -14,6 +14,7 @@ FLA_NPU_PYTHON="$PY" bash gen.sh npu_custom.yaml
 # 会先初始化 CANN，需要在进程启动前设置该变量，否则可能出现 SelectBin 找不到 kernel
 # （如 aclnnStatus=561103）。
 _fla_npu_site="$("$PY" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+_fla_npu_vendor="${_fla_npu_site}/fla_npu/opp/vendors/fla_npu_transformer"
 echo ""
 echo "[fla-npu] 若使用 fla_npu 的进程会先初始化 CANN（Python/ATK/Celery 等），请在启动前执行："
-echo "[fla-npu]   export ASCEND_CUSTOM_OPP_PATH=\"${_fla_npu_site}/fla_npu/opp/vendors/fla_npu_transformer:\${ASCEND_CUSTOM_OPP_PATH:-}\""
+echo "[fla-npu]   export ASCEND_CUSTOM_OPP_PATH=\"${_fla_npu_vendor}:${_fla_npu_vendor}/op_api/lib:\${ASCEND_CUSTOM_OPP_PATH:-}\""

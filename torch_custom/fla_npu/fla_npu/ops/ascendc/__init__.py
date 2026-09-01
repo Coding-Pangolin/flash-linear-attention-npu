@@ -40,7 +40,7 @@ _ASCENDC_OPS = (
     "npu_chunk_gated_delta_rule_fwd_h",
     "npu_recompute_w_u_fwd",
     "npu_recurrent_gated_delta_rule",
-    "npu_gdn_core_fwd_phase6",
+    "npu_chunk_gated_delta_rule_fwd",
     "npu_chunk_local_cumsum",
     "npu_chunk_scaled_dot_kkt",
     "npu_solve_tri",

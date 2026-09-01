@@ -30,7 +30,7 @@ from fla_npu.ops.ascendc import (
     chunk_bwd_dqkwg as ascendc_chunk_bwd_dqkwg,
     chunk_bwd_dv_local as ascendc_chunk_bwd_dv_local,
     chunk_fwd_o as ascendc_chunk_fwd_o,
-    gdn_core_fwd_phase6 as ascendc_gdn_core_fwd,
+    chunk_gated_delta_rule_fwd as ascendc_chunk_gated_delta_rule_fwd,
     chunk_gated_delta_rule_bwd_dhu as ascendc_chunk_gated_delta_rule_bwd_dhu,
     chunk_gated_delta_rule_fwd_h as ascendc_chunk_gated_delta_rule_fwd_h,
     chunk_local_cumsum as ascendc_chunk_local_cumsum,
@@ -815,7 +815,7 @@ def flash_chunk_gated_delta_rule_fwd(
     cu_list = cu_seqlens_list
     chunk_list = _chunk_list(chunk_indices_list, chunk_size)
     if use_composite_core:
-        o, final_state, g, A = ascendc_gdn_core_fwd(
+        o, final_state, g, A = ascendc_chunk_gated_delta_rule_fwd(
             q,
             k,
             v,
@@ -1918,7 +1918,7 @@ def _main():
         dest="use_composite_core",
         action="store_false",
         default=True,
-        help="Use the legacy unfused Python path instead of aclnnGdnCoreFwdPhase6.",
+        help="Use the legacy unfused Python path instead of aclnnChunkGatedDeltaRuleFwd.",
     )
     parser.add_argument("--conv-kernel", type=int, default=4, help="depthwise causal conv kernel size")
     parser.add_argument("--accuracy-check", action="store_true")

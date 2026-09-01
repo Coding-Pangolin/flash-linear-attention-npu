@@ -6,6 +6,18 @@ from setuptools import setup, Extension, find_packages
 import torch
 import torch_npu
 from torch.utils.cpp_extension import BuildExtension, CppExtension
+from pathlib import Path
+from setuptools.command.build_py import build_py as _build_py
+
+
+class FlaNpuBuildPy(_build_py):
+    def run(self):
+        super().run()
+        src_dir = Path(__file__).resolve().parent
+        for name in ("fla_npu_opp_env.py", "fla_npu_opp_env.pth"):
+            src = src_dir / name
+            if src.exists():
+                self.copy_file(str(src), str(Path(self.build_lib) / name))
 
 # Get PyTorch version
 PYTORCH_VERSION = subprocess.check_output([sys.executable, '-c', 'import torch; print(torch.__version__.split("+")[0])']).decode('utf-8').strip()
@@ -174,6 +186,7 @@ setup(
     ext_modules=extensions,
     cmdclass={
         'build_ext': BuildExtension,
+        'build_py': FlaNpuBuildPy,
     },
     zip_safe=False,
     install_requires=[

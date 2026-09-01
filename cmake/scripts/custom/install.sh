@@ -519,17 +519,14 @@ upgrade()
 	          fi
             grep -q $file_b <<<`ls ${targetdir}/$vendordir/$1`;
             if [[ $? -eq 0 ]]; then
-                echo -n "${file_b} "
+                echo "  - ${file_b}"
                 has_same_file=0
             fi
         done
         if [ 0 -eq $has_same_file ]; then
             echo
             if test $QUIET = "n"; then
-                echo "[INFO]: has old version in ${targetdir}/$vendordir/$1, \
-                you want to Overlay Installation , please enter:[o]; \
-                or replace directory installation , please enter: [r]; \
-                or not install , please enter:[n]."
+                echo "[INFO]: has old version in ${targetdir}/$vendordir/$1, you want to Overlay Installation, please enter:[o]; or replace directory installation, please enter:[r]; or not install, please enter:[n]."
 
                 while true
                 do

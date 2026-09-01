@@ -29,8 +29,8 @@ def _setup() -> None:
     # 只处理 wheel 内嵌 OPP；skeleton（未 overlay）时静默跳过。
     if not _VENDOR_DIR.is_dir():
         return
-    _prepend("ASCEND_CUSTOM_OPP_PATH", _VENDOR_DIR)
     _prepend("ASCEND_CUSTOM_OPP_PATH", _VENDOR_DIR / "op_api" / "lib")
+    _prepend("ASCEND_CUSTOM_OPP_PATH", _VENDOR_DIR)
 
 
 _setup()

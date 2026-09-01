@@ -114,16 +114,9 @@ def _warn_if_embedded_opp_not_preconfigured() -> None:
     if str(vendor_dir) in parts:
         return
     warnings.warn(
-        "ASCEND_CUSTOM_OPP_PATH does not contain the custom OPP embedded in the "
-        "currently imported fla_npu wheel.\n\n"
-        "CANN discovers custom operator host, tiling, and kernel binaries when the "
-        "runtime is initialized. If CANN or torch_npu has already been initialized, "
-        "configuring this path in the current process may be too late and can cause "
-        "SelectBin failures, including "
-        "aclnnRecurrentGatedDeltaRuleGetWorkspaceSize failing with status 561103.\n\n"
-        f"Before starting Python, ATK, Celery, or any other NPU worker process, run:\n\n"
-        f"  export ASCEND_CUSTOM_OPP_PATH=\"{vendor_dir}:${{ASCEND_CUSTOM_OPP_PATH:-}}\"\n\n"
-        "Then restart any process that may already have initialized CANN.",
+        "[fla-npu] ASCEND_CUSTOM_OPP_PATH does not contain the custom OPP implements "
+        "before import fla_npu, If you need to use fla_npu operators,  run:\n\n"
+        f"  export ASCEND_CUSTOM_OPP_PATH=\"{vendor_dir}:{vendor_dir / 'op_api' / 'lib'}:${{ASCEND_CUSTOM_OPP_PATH:-}}\"",
         RuntimeWarning,
         stacklevel=2,
     )

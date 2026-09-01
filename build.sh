@@ -560,7 +560,7 @@ function build_example()
                     -o test_aclnn_${EXAMPLE_NAME}
             elif [[ "${PKG_MODE}" == "cust" ]]; then
                 if [[ "${vendor_name}" == "" ]]; then
-                    vendor_name="custom"
+                    vendor_name="fla_npu"
                 fi
                 echo "pkg_mode:${PKG_MODE} vendor_name:${vendor_name}"
                 export CUST_LIBRARY_PATH="${ASCEND_OPP_PATH}/vendors/${vendor_name}_transformer/op_api/lib"     # 仅自定义算子需要
@@ -1137,7 +1137,7 @@ while [[ $# -gt 0 ]]; do
         PR_CHANGED_FILES="$2"
         ENABLE_SMOKE=TRUE
         PKG_MODE="cust"
-        vendor_name="custom"
+        vendor_name="fla_npu"
         CI_MODE=TRUE
         shift 2
         ;;

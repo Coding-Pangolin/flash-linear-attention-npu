@@ -17,7 +17,7 @@ target_custom=0
 sourcedir=$PWD/packages
 vendordir=vendors/$vendor_name
 
-QUIET="n"
+QUIET="y"
 INSTALL_FOR_ALL="n"
 WHEEL_INSTALL="y"
 MODE_SET="n"

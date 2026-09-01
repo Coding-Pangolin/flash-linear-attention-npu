@@ -39,11 +39,11 @@ def gen_compile_options(compile_options_file: str, op_type: str, \
     opc_debug_config = []
     opc_tiling_keys = ""
     for opts in compile_options:
-        # Match the standalone build switch only.  Include paths may contain
-        # the substring "oom" (for example, a workspace directory named
-        # "oomfix") and must remain ordinary compiler options.
-        if opts == "--oom":
-            opc_debug_config.append("oom")
+        if "oom" in opts:
+            if opts == "--oom":
+                opc_debug_config.append("oom")
+            else:
+                raise RuntimeError(f"Unknown oom option format {opts}")
         elif "--save-temp-files" in opts:
             opc_debug_config.append("dump_cce")
         elif opts.startswith("--op_relocatable_kernel_binary"):
@@ -55,6 +55,11 @@ def gen_compile_options(compile_options_file: str, op_type: str, \
             keys_str = ";".join([key for key in keys])
             opc_tiling_keys = keys_str
         else:
+            # 其余选项（如 -g、-sanitizer）保留为普通编译选项，经
+            # custom_compile_options.ini 传入 bisheng 编译器。kernel
+            # sanitizer（--cce-enable-sanitizer）即依据编译选项中的
+            # "-sanitizer" 触发（见 CANN ascendc_compile_base.py
+            # is_enable_sanitizer）。
             compile_opt.append(opts)
     if len(compile_opt) > 0:
         options_str = ';'.join([opt for opt in compile_opt])

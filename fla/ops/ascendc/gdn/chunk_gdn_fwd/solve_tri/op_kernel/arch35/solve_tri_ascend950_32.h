@@ -10,15 +10,13 @@ using namespace AscendC;
 // ============================================================================
 // SolveTri32 —— chunk=32，ascend950：单 Vector VCS + 一层 MBH，全程 FP32
 //
-// 一轮 AIC 处理 2 个互相独立的 32×32 chunk（只开 Vector0，与 chunk64 相同）：
-//   4 个 16×16 叶子打成 16×64：
-//     leaf0/1 = tile0 的 TL/BR 16×16
-//     leaf2/3 = tile1 的 TL/BR 16×16
-//   FullA 是 64×64 块对角：diag(-A_tile0, -A_tile1)
-//   只做 16→32 一层 MBH（cur=64），L0C 上得到两个 32×32 逆，分别 Fixpipe 写出
+// 与 chunk64 相同：只开 Vector0，每个 tile 独立做 16×16 VCS +（actual>16 时）一层
+// 16→32 MBH。一轮 AIC 仍调度 2 个 tile，但必须串行完成，不能把两个 32×32 打进
+// 一块 64×64 做 MBH：L0C 上 BR 32×32 的 NZ 偏移与 ChannelSplit 布局不一致，
+// 大 shape 下会把 tile1 写成垃圾，ATK 双标杆失败。
 //
-// 不能走双 chunk 路径时（缺 tile / actual≤16）退回单 tile：
-//   工作区仍是 64×64，MBH 的 cur = ChunkAlign(actual) ∈ {16,32}
+// 工作区仍是 64×64；MBH 的 cur = ChunkAlign(actual) ∈ {16,32}
+// L1 清零走 L0C→L1 直写（与 chunk64 FixpipeZeroToL1 相同），不经 GM 中转
 // ============================================================================
 
 constexpr uint32_t kChunk32 = 32;
@@ -35,9 +33,8 @@ constexpr int64_t kTilesPerAicBatch32 = 2;
 template <typename InDtype, typename OutDtype>
 class SolveTri32 {
 public:
-    template <typename TilingData>
     __aicore__ inline void Init(GM_ADDR aGm, GM_ADDR cu_seqlens, GM_ADDR chunk_indices, GM_ADDR outGm,
-                                GM_ADDR workspace, const TilingData *tilingData)
+                                GM_ADDR workspace, const SolveTriTilingData *tilingData)
     {
         gm_a.SetGlobalBuffer(reinterpret_cast<__gm__ InDtype *>(aGm));
         gm_cu_seqlens.SetGlobalBuffer(reinterpret_cast<__gm__ int64_t *>(cu_seqlens));
@@ -162,6 +159,19 @@ public:
         SetFlag<AscendC::HardEvent::FIX_MTE2>(0);
         WaitFlag<AscendC::HardEvent::FIX_MTE2>(0);
         CopyGmNz64RectToL1(l1Tensor, blockSize, blockSize);
+    }
+
+    // 全零：L0C→L1 直写，铺满 64×64 工作区（与 chunk64 相同，避免 GM 中转残留）
+    __aicore__ inline void FixpipeZeroToL1(AscendC::LocalTensor<float> l1Tensor)
+    {
+        AscendC::FixpipeParamsArch3510<AscendC::CO2Layout::NZ> p;
+        p.nSize = kWsSide32;
+        p.mSize = kWsSide32;
+        p.srcStride = kWsSide32;
+        p.dstStride = kWsSide32 * 16;
+        p.quantPre = QuantMode_t::NoQuant;
+        p.isChannelSplit = false;
+        AscendC::Fixpipe<float, float, CFG_NZ_L1>(l1Tensor, l0c_Zero, p);
     }
 
     __aicore__ inline void FixpipeL0cToGM(AscendC::GlobalTensor<OutDtype> gmTensor,
@@ -540,8 +550,8 @@ public:
 
     __aicore__ inline void AicClearAndHandshake()
     {
-        FixpipeL0cToL1MBH(l1_X, l0c_Zero, kWsSide32, kWsSide32);
-        FixpipeL0cToL1MBH(l1_INPUT, l0c_Zero, kWsSide32, kWsSide32);
+        FixpipeZeroToL1(l1_X);
+        FixpipeZeroToL1(l1_INPUT);
         SetFlag<AscendC::HardEvent::FIX_MTE1>(1);
         WaitFlag<AscendC::HardEvent::FIX_MTE1>(1);
         AscendC::CrossCoreSetFlag<0x4, PIPE_FIX>(0x1);
@@ -586,17 +596,11 @@ public:
                         ComputeTile(tile1, off1, cur1, actual1);
                     }
 
-                    bool pair = has1 && (actual0 > 16) && (actual1 > 16);
-                    if (pair) {
-                        AivVcsTwoTiles(off0, actual0, off1, actual1, row_stride);
-                        AivFinishOneTile(kWsSide32, actual0, off0, row_stride, drvStart, othStart);
-                    } else {
-                        AivVcsOneTile(off0, row_stride, cur0, actual0);
-                        AivFinishOneTile(cur0, actual0, off0, row_stride, drvStart, othStart);
-                        if (has1 && actual1 > 0) {
-                            AivVcsOneTile(off1, row_stride, cur1, actual1);
-                            AivFinishOneTile(cur1, actual1, off1, row_stride, drvStart, othStart);
-                        }
+                    AivVcsOneTile(off0, row_stride, cur0, actual0);
+                    AivFinishOneTile(cur0, actual0, off0, row_stride, drvStart, othStart);
+                    if (has1 && actual1 > 0) {
+                        AivVcsOneTile(off1, row_stride, cur1, actual1);
+                        AivFinishOneTile(cur1, actual1, off1, row_stride, drvStart, othStart);
                     }
                 }
             }
@@ -624,21 +628,9 @@ public:
                     WaitFlag<AscendC::HardEvent::M_FIX>(0);
                 }
 
-                bool pair = has1 && (actual0 > 16) && (actual1 > 16);
-                if (pair) {
-                    AicClearAndHandshake();
-                    MbhLevelComputeY(kWsSide32);
-                    FixpipeL0cToGM(gm_out[off0], l0c_Y,
-                                   static_cast<uint32_t>(actual0), kChunk32,
-                                   kWsSide32, static_cast<uint32_t>(row_stride));
-                    FixpipeL0cToGM(gm_out[off1], l0c_Y[kBrNzOffL0C32],
-                                   static_cast<uint32_t>(actual1), kChunk32,
-                                   kWsSide32, static_cast<uint32_t>(row_stride));
-                } else {
-                    AicFinishOneTile(cur0, actual0, off0, row_stride);
-                    if (has1 && actual1 > 0) {
-                        AicFinishOneTile(cur1, actual1, off1, row_stride);
-                    }
+                AicFinishOneTile(cur0, actual0, off0, row_stride);
+                if (has1 && actual1 > 0) {
+                    AicFinishOneTile(cur1, actual1, off1, row_stride);
                 }
             }
         }

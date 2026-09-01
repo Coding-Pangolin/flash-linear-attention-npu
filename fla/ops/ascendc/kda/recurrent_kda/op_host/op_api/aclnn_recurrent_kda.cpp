@@ -23,6 +23,7 @@
 #include "opdev/tensor_view_utils.h"
 
 #include <cstring>
+#include <limits>
 
 using namespace op;
 
@@ -47,7 +48,7 @@ struct RecurrentKdaParams {
     const aclTensor *value = nullptr;
     const aclTensor *gate = nullptr;
     const aclTensor *beta = nullptr;
-    const aclTensor *initialStateRef = nullptr;
+    aclTensor *initialStateRef = nullptr;
     const aclTensor *cuSeqlensOptional = nullptr;
     const aclTensor *ssmStateIndicesOptional = nullptr;
     const aclTensor *aLogOptional = nullptr;
@@ -113,6 +114,87 @@ static bool ParseLayout(const char *layout, RecurrentKdaLayout &parsed)
     }
     OP_LOGE(ACLNN_ERR_PARAM_INVALID, "npu_recurrent_kda: layout must be BSND or TND.");
     return false;
+}
+
+bool IsSupportedQkvView(const aclTensor *tensor, RecurrentKdaLayout layout)
+{
+    if (tensor == nullptr) {
+        return false;
+    }
+    const size_t expectedRank = layout == RecurrentKdaLayout::TND ? 3 : 4;
+    const auto &strides = tensor->GetViewStrides();
+    if (Rank(tensor) != expectedRank || strides.size() != expectedRank) {
+        return false;
+    }
+    for (size_t i = 0; i < expectedRank; ++i) {
+        if (strides[i] <= 0) {
+            return false;
+        }
+    }
+
+    const size_t tokenDim = layout == RecurrentKdaLayout::TND ? DIM0 : DIM1;
+    const size_t headDim = layout == RecurrentKdaLayout::TND ? DIM1 : DIM2;
+    const size_t featureDim = layout == RecurrentKdaLayout::TND ? DIM2 : DIM3;
+    const int64_t headCount = Dim(tensor, headDim);
+    const int64_t featureCount = Dim(tensor, featureDim);
+    const int64_t tokenStride = strides[tokenDim];
+    const int64_t headStride = strides[headDim];
+    if (strides[featureDim] != 1 || headStride < featureCount) {
+        return false;
+    }
+    const int64_t maxInt64 = std::numeric_limits<int64_t>::max();
+    if (headCount > 1 && headStride > (maxInt64 - featureCount) / (headCount - 1)) {
+        return false;
+    }
+    const int64_t minTokenStride = (headCount - 1) * headStride + featureCount;
+    if (tokenStride < minTokenStride) {
+        return false;
+    }
+    const uint64_t srcGapElements = static_cast<uint64_t>(tokenStride - featureCount);
+    if (srcGapElements > std::numeric_limits<uint32_t>::max() / sizeof(uint16_t)) {
+        return false;
+    }
+
+    if (layout == RecurrentKdaLayout::BSND && Dim(tensor, DIM0) > 1) {
+        const int64_t seqLen = Dim(tensor, DIM1);
+        if (tokenStride > maxInt64 / seqLen || strides[DIM0] != seqLen * tokenStride) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool CheckQkvMaterializationSafety(
+    const aclTensor *tensor, RecurrentKdaLayout layout, const char *name)
+{
+    const size_t expectedRank = layout == RecurrentKdaLayout::TND ? 3 : 4;
+    const auto &strides = tensor->GetViewStrides();
+    if (Rank(tensor) != expectedRank || strides.size() != expectedRank) {
+        return true;
+    }
+    const size_t tokenDim = layout == RecurrentKdaLayout::TND ? DIM0 : DIM1;
+    const size_t headDim = layout == RecurrentKdaLayout::TND ? DIM1 : DIM2;
+    const size_t featureDim = layout == RecurrentKdaLayout::TND ? DIM2 : DIM3;
+    const int64_t headCount = Dim(tensor, headDim);
+    const int64_t featureCount = Dim(tensor, featureDim);
+    const int64_t tokenStride = strides[tokenDim];
+    const int64_t headStride = strides[headDim];
+    if (strides[featureDim] != 1 || tokenStride <= 0 || headStride <= 0 ||
+        tokenStride < featureCount || headStride < featureCount) {
+        return true;
+    }
+    const int64_t maxInt64 = std::numeric_limits<int64_t>::max();
+    if (headCount > 1 && headStride > (maxInt64 - featureCount) / (headCount - 1)) {
+        OP_LOGE(ACLNN_ERR_PARAM_INVALID, "npu_recurrent_kda: %s head span overflows.", name);
+        return false;
+    }
+    const int64_t minTokenStride = (headCount - 1) * headStride + featureCount;
+    if (tokenStride < minTokenStride) {
+        OP_LOGE(ACLNN_ERR_PARAM_INVALID,
+                "npu_recurrent_kda: %s token/head axis order or overlap is unsupported.", name);
+        return false;
+    }
+    return true;
 }
 
 bool CheckCuSeqlensShape(const aclTensor *cuSeqlens, const char *opName)
@@ -324,22 +406,33 @@ aclnnStatus DataContiguous(const aclTensor *&tensor, aclOpExecutor *executor)
     return ACLNN_SUCCESS;
 }
 
+aclnnStatus DataContiguousIfNeeded(
+    const aclTensor *&tensor, bool needsContiguous, aclOpExecutor *executor)
+{
+    if (!needsContiguous) {
+        return ACLNN_SUCCESS;
+    }
+    return DataContiguous(tensor, executor);
+}
+
+aclnnStatus CreateViewIfNonContiguous(const aclTensor *&tensor, aclOpExecutor *executor)
+{
+    if (tensor == nullptr || IsContiguous(tensor)) {
+        return ACLNN_SUCCESS;
+    }
+    const aclTensor *view = executor->CreateView(
+        tensor, tensor->GetViewShape(), tensor->GetStorageShape(),
+        tensor->GetViewStrides(), tensor->GetViewOffset());
+    CHECK_RET(view != nullptr, ACLNN_ERR_INNER_NULLPTR);
+    tensor = view;
+    return ACLNN_SUCCESS;
+}
+
 void SetTensorOriginalShape(const aclTensor *tensor)
 {
     if (tensor != nullptr) {
         tensor->SetOriginalShape(tensor->GetViewShape());
     }
-}
-
-void SetTensorNdFormat(const aclTensor *tensor)
-{
-    if (tensor == nullptr) {
-        return;
-    }
-    auto *mutableTensor = const_cast<aclTensor *>(tensor);
-    mutableTensor->SetStorageFormat(Format::FORMAT_ND);
-    mutableTensor->SetViewFormat(Format::FORMAT_ND);
-    mutableTensor->SetOriginalFormat(Format::FORMAT_ND);
 }
 
 void SetInputOriginalShape(RecurrentKdaParams &params)
@@ -357,12 +450,20 @@ void SetInputOriginalShape(RecurrentKdaParams &params)
     SetTensorOriginalShape(params.numAcceptedTokensOptional);
 }
 
-aclnnStatus PreProcess(RecurrentKdaParams &params, aclOpExecutor *executor)
+aclnnStatus PreProcess(
+    RecurrentKdaParams &params,
+    bool queryNeedsContiguous,
+    bool keyNeedsContiguous,
+    bool valueNeedsContiguous,
+    aclOpExecutor *executor)
 {
     SetInputOriginalShape(params);
-    CHECK_RET(DataContiguous(params.query, executor) == ACLNN_SUCCESS, ACLNN_ERR_INNER_NULLPTR);
-    CHECK_RET(DataContiguous(params.key, executor) == ACLNN_SUCCESS, ACLNN_ERR_INNER_NULLPTR);
-    CHECK_RET(DataContiguous(params.value, executor) == ACLNN_SUCCESS, ACLNN_ERR_INNER_NULLPTR);
+    CHECK_RET(DataContiguousIfNeeded(params.query, queryNeedsContiguous, executor) == ACLNN_SUCCESS,
+              ACLNN_ERR_INNER_NULLPTR);
+    CHECK_RET(DataContiguousIfNeeded(params.key, keyNeedsContiguous, executor) == ACLNN_SUCCESS,
+              ACLNN_ERR_INNER_NULLPTR);
+    CHECK_RET(DataContiguousIfNeeded(params.value, valueNeedsContiguous, executor) == ACLNN_SUCCESS,
+              ACLNN_ERR_INNER_NULLPTR);
     CHECK_RET(DataContiguous(params.gate, executor) == ACLNN_SUCCESS, ACLNN_ERR_INNER_NULLPTR);
     CHECK_RET(DataContiguous(params.beta, executor) == ACLNN_SUCCESS, ACLNN_ERR_INNER_NULLPTR);
     CHECK_RET(DataContiguous(params.cuSeqlensOptional, executor) == ACLNN_SUCCESS, ACLNN_ERR_INNER_NULLPTR);
@@ -385,7 +486,7 @@ aclnnStatus aclnnRecurrentKdaGetWorkspaceSize(
     const aclTensor *value,
     const aclTensor *gate,
     const aclTensor *beta,
-    const aclTensor *initialStateRef,
+    aclTensor *initialStateRef,
     const aclTensor *cuSeqlensOptional,
     const aclTensor *ssmStateIndicesOptional,
     const aclTensor *aLogOptional,
@@ -430,9 +531,33 @@ aclnnStatus aclnnRecurrentKdaGetWorkspaceSize(
     RecurrentKdaLayout parsedLayout = RecurrentKdaLayout::BSND;
     CHECK_RET(ParseLayout(params.layout, parsedLayout), ACLNN_ERR_PARAM_INVALID);
     CHECK_RET(CheckShape(params, parsedLayout), ACLNN_ERR_PARAM_INVALID);
-    CHECK_RET(PreProcess(params, executorPtr) == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID);
+    CHECK_RET(CheckQkvMaterializationSafety(params.query, parsedLayout, "query") &&
+                  CheckQkvMaterializationSafety(params.key, parsedLayout, "key") &&
+                  CheckQkvMaterializationSafety(params.value, parsedLayout, "value"),
+              ACLNN_ERR_PARAM_INVALID);
+    const bool querySupportsDirect = IsSupportedQkvView(params.query, parsedLayout);
+    const bool keySupportsDirect = IsSupportedQkvView(params.key, parsedLayout);
+    const bool valueSupportsDirect = IsSupportedQkvView(params.value, parsedLayout);
+    const bool queryUsesDirectView = !IsContiguous(params.query) && querySupportsDirect;
+    const bool keyUsesDirectView = !IsContiguous(params.key) && keySupportsDirect;
+    const bool valueUsesDirectView = !IsContiguous(params.value) && valueSupportsDirect;
+    const bool queryNeedsContiguous = !querySupportsDirect;
+    const bool keyNeedsContiguous = !keySupportsDirect;
+    const bool valueNeedsContiguous = !valueSupportsDirect;
+    CHECK_RET(PreProcess(params, queryNeedsContiguous, keyNeedsContiguous, valueNeedsContiguous, executorPtr) ==
+                  ACLNN_SUCCESS,
+              ACLNN_ERR_PARAM_INVALID);
+    if (queryUsesDirectView) {
+        CHECK_RET(CreateViewIfNonContiguous(params.query, executorPtr) == ACLNN_SUCCESS, ACLNN_ERR_INNER_NULLPTR);
+    }
+    if (keyUsesDirectView) {
+        CHECK_RET(CreateViewIfNonContiguous(params.key, executorPtr) == ACLNN_SUCCESS, ACLNN_ERR_INNER_NULLPTR);
+    }
+    if (valueUsesDirectView) {
+        CHECK_RET(CreateViewIfNonContiguous(params.value, executorPtr) == ACLNN_SUCCESS, ACLNN_ERR_INNER_NULLPTR);
+    }
 
-    const aclTensor *initialStateForKernel = params.initialStateRef;
+    aclTensor *initialStateForKernel = params.initialStateRef;
     if (!IsContiguous(initialStateForKernel)) {
         initialStateForKernel = executorPtr->CreateView(
             initialStateForKernel,
@@ -453,9 +578,6 @@ aclnnStatus aclnnRecurrentKdaGetWorkspaceSize(
         CHECK_RET(finalStateForKernel != nullptr, ACLNN_ERR_INNER_NULLPTR);
     }
 
-    SetTensorNdFormat(initialStateForKernel);
-    SetTensorNdFormat(finalStateForKernel);
-
     auto result = l0op::RecurrentKda(
         params.query, params.key, params.value, params.gate, params.beta, initialStateForKernel,
         params.cuSeqlensOptional, params.ssmStateIndicesOptional, params.aLogOptional,
@@ -468,7 +590,7 @@ aclnnStatus aclnnRecurrentKdaGetWorkspaceSize(
               ACLNN_ERR_INNER_NULLPTR);
     if (params.inplaceFinalState && params.outputFinalState &&
         params.finalState != params.initialStateRef) {
-        CHECK_RET(l0op::ViewCopy(result[1], finalStateForKernel, executorPtr) != nullptr,
+        CHECK_RET(l0op::ViewCopy(result[1], params.finalState, executorPtr) != nullptr,
                   ACLNN_ERR_INNER_NULLPTR);
     }
 

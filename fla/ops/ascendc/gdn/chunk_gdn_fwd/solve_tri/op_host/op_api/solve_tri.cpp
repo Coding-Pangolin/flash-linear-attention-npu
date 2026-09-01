@@ -8,10 +8,10 @@
  #include "aclnn_solve_tri.h"
  #include <string>
  
-using namespace op;
-
-namespace l0op {
-OP_TYPE_REGISTER(SolveTri);
+ using namespace op;
+ 
+ namespace l0op {
+ OP_TYPE_REGISTER(SolveTri);
  
  const aclTensor* SolveTri(
      const aclTensor *x,
@@ -41,7 +41,7 @@ OP_TYPE_REGISTER(SolveTri);
  
      // layout string -> std::string for OP_ATTR
      std::string layoutStr(layout ? layout : "bsnd");
-
+ 
      auto ret = ADD_TO_LAUNCHER_LIST_AICORE(SolveTri,
          OP_INPUT(x, actualCuSeqlens, actualChunkIndices),
          OP_OUTPUT(xOut),
@@ -51,5 +51,6 @@ OP_TYPE_REGISTER(SolveTri);
      }
      return xOut;
  }
-
+ 
  }  // namespace l0op
+ 

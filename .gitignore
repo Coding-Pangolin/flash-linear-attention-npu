@@ -24,6 +24,10 @@ cmake-build-*
 /build_out/
 /output/
 /.ci-cache/
+/dist/
+
+# Offline third-party bundle produced by scripts/tools/prepare_offline_bundle.py
+/offline_bundle/
 
 # binary files
 *.so
@@ -46,6 +50,11 @@ torch_custom/fla_npu/op_plugin/SparseOpsInterface.h
 torch_custom/fla_npu/op_plugin/config/
 torch_custom/fla_npu/op_plugin/ops/opapi/StructKernelNpuOpApi.cpp
 torch_custom/fla_npu/torch_npu/
+/tests/atk/**/result/
+/tests/atk/**/atk_output/
+/tests/atk/**/runs/
+/tests/atk/**/*.xlsx
+/tests/atk/**/*.log
 
 #gdn cache
 # third_party：CMake FetchContent / ExternalProject 等在线拉取的依赖目录，不纳入仓库（含 catlass）

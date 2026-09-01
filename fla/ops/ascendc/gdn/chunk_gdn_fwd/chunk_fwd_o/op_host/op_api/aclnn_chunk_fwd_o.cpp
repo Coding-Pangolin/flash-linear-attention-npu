@@ -133,7 +133,8 @@ aclnnStatus aclnnChunkFwdOGetWorkspaceSize(
 {
     ChunkFwdOParams params{q, k, v, h, g, cuSeqlensOptional, chunkOffsetsOptional, scale, chunkSize, oOut};
     // Standard syntax, Check parameters.
-    L2_DFX_PHASE_1(aclnnChunkFwdO, DFX_IN(q, k, v, h, g, cuSeqlensOptional, chunkOffsetsOptional),
+    L2_DFX_PHASE_1(aclnnChunkFwdO,
+                   DFX_IN(q, k, v, h, g, cuSeqlensOptional, chunkOffsetsOptional, scale, chunkSize),
                    DFX_OUT(oOut));
     // 固定写法，创建OpExecutor
     auto uniqueExecutor = CREATE_EXECUTOR();

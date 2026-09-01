@@ -41,10 +41,8 @@ constexpr uint32_t kSlotFp32_64 = kWsElems64 * static_cast<uint32_t>(sizeof(floa
 template <typename InDtype, typename OutDtype>
 class SolveTri64 {
 public:
-    template <typename TilingData>
     __aicore__ inline void Init(GM_ADDR aGm, GM_ADDR cu_seqlens, GM_ADDR chunk_indices, GM_ADDR outGm,
-                                GM_ADDR workspace, const TilingData *tilingData,
-                                bool workspaceIsUser = false, bool contiguousSchedule = false)
+                                GM_ADDR workspace, const SolveTriTilingData *tilingData)
     {
         gm_a.SetGlobalBuffer(reinterpret_cast<__gm__ InDtype *>(aGm));
         gm_cu_seqlens.SetGlobalBuffer(reinterpret_cast<__gm__ int64_t *>(cu_seqlens));
@@ -56,7 +54,6 @@ public:
         chunk_size = tilingData->chunkSize;
         chunk_num_in_seq = tilingData->numChunks;
         chunk_num_total = tilingData->totalTiles;
-        tiles_per_core = tilingData->tilesPerCore;
         mode = tilingData->layoutMode;
         is_lower = tilingData->isLower;
         total_tokens = tilingData->totalTokens;
@@ -108,13 +105,9 @@ public:
         if ASCEND_IS_AIV {
             wsCore = core_idx / 2;
         }
-        GM_ADDR userWs = workspaceIsUser ? workspace : AscendC::GetUserWorkspace(workspace);
-        if (workspaceIsUser) {
-            wsCore = 0;
-        }
+        GM_ADDR userWs = AscendC::GetUserWorkspace(workspace);
         gm_ws.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(userWs) +
                               static_cast<uint64_t>(wsCore) * kWsElems64);
-        contiguous_schedule = contiguousSchedule;
         aux_ready = 0;
     }
 
@@ -526,12 +519,7 @@ public:
 
         if ASCEND_IS_AIV {
             if (sub_block_idx == 0) {
-                const int64_t begin = contiguous_schedule ? (core_idx / 2) * tiles_per_core : core_idx / 2;
-                const int64_t end = contiguous_schedule
-                    ? (begin + tiles_per_core < chunk_num_total ? begin + tiles_per_core : chunk_num_total)
-                    : chunk_num_total;
-                const int64_t step = contiguous_schedule ? 1 : num_core;
-                for (int64_t loop_idx = begin; loop_idx < end; loop_idx += step) {
+                for (int64_t loop_idx = core_idx / 2; loop_idx < chunk_num_total; loop_idx += num_core) {
                     int64_t x_gm_offset = 0;
                     int64_t cur = 0;
                     int64_t actual_size = 0;
@@ -567,17 +555,12 @@ public:
         }
 
         if ASCEND_IS_AIC {
-            const int64_t begin = contiguous_schedule ? core_idx * tiles_per_core : core_idx;
-            const int64_t end = contiguous_schedule
-                ? (begin + tiles_per_core < chunk_num_total ? begin + tiles_per_core : chunk_num_total)
-                : chunk_num_total;
-            const int64_t step = contiguous_schedule ? 1 : num_core;
-            for (int64_t loop_idx = begin; loop_idx < end; loop_idx += step) {
+            for (int64_t loop_idx = core_idx; loop_idx < chunk_num_total; loop_idx += num_core) {
                 int64_t x_gm_offset = 0;
                 int64_t cur = 0;
                 int64_t actual_size = 0;
                 ComputeTile(loop_idx, x_gm_offset, cur, actual_size);
-                if (loop_idx == begin) {
+                if (loop_idx == core_idx) {
                     AscendC::CrossCoreWaitFlag<0x4>(0x3);
                     MbhMatmulToL0C(l1_Zero, l1_Zero, l0a_X, l0b_X, l0c_Zero, kChunk64, true);
                     SetFlag<AscendC::HardEvent::M_FIX>(0);
@@ -641,7 +624,6 @@ private:
     int64_t chunk_size;
     int64_t chunk_num_in_seq;
     int64_t chunk_num_total;
-    int64_t tiles_per_core;
     int64_t mode;
     int64_t is_lower;
     int64_t total_tokens;
@@ -650,7 +632,6 @@ private:
     int64_t core_idx;
     int64_t sub_block_idx;
     int64_t aux_ready;
-    bool contiguous_schedule;
 };
 
 #endif  // SOLVE_TRI_ASCEND950_64_H

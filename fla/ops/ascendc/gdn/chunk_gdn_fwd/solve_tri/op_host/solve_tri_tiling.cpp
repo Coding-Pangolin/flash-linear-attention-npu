@@ -169,13 +169,13 @@ constexpr uint32_t ATTR_LAYOUT_IDX = 0;
     tiling.set_dtypeMode(dtypeMode);
     tiling.set_totalTokens(totalTokens);
  
-    // tilingKey = chunkSize（16/32/64/128）；按 key 分发到固定尺寸 kernel 类。
-    // 不支持的尺寸必须显式拒绝，不能回退到 64 后继续使用错误的矩阵模板。
-    if (!(chunkSize == 16 || chunkSize == 32 || chunkSize == 64 || chunkSize == 128)) {
-        return ge::GRAPH_FAILED;
-    }
-    uint64_t tilingKey = static_cast<uint64_t>(chunkSize);
-    context->SetTilingKey(tilingKey);
+     // tilingKey = chunkSize（16/32/64/128）；ascend950 按 key 分发到不同 kernel 类
+     // 910b 路径同样按 chunkSize 设 key，kernel 入口按 key 进入统一实现
+     uint64_t tilingKey = static_cast<uint64_t>(chunkSize);
+     if (!(chunkSize == 16 || chunkSize == 32 || chunkSize == 64 || chunkSize == 128)) {
+         tilingKey = 64;
+     }
+     context->SetTilingKey(tilingKey);
      tiling.SaveToBuffer(context->GetRawTilingData()->GetData(),
                          context->GetRawTilingData()->GetCapacity());
      context->GetRawTilingData()->SetDataSize(tiling.GetDataSize());
@@ -198,12 +198,18 @@ constexpr uint32_t ATTR_LAYOUT_IDX = 0;
     userWorkspaceSize = ((userWorkspaceSize + 511) / 512) * 512;
     ws[0] = userWorkspaceSize + sysWorkspaceSize;
 #else
-     size_t sharedSize = 3 * chunkSize * chunkSize * sizeof(uint16_t);  // I + -I + ZERO
-     size_t perCoreSize = 2 * chunkSize * chunkSize * sizeof(uint16_t);  // 每核 2 个中转区（X 流 + Y 流双缓冲）
-     size_t userWorkspaceSize = sharedSize + usedCoreNum * perCoreSize;
-     // 对齐到 512 字节
+     size_t userWorkspaceSize;
+     if (chunkSize == 64) {
+         constexpr size_t fp32WorkspaceSlots = 4;
+         constexpr size_t fp32WorkspaceStride = 64;
+         userWorkspaceSize =
+             usedCoreNum * fp32WorkspaceSlots * chunkSize * fp32WorkspaceStride * sizeof(float);
+     } else {
+         size_t sharedSize = 3 * chunkSize * chunkSize * sizeof(uint16_t);
+         size_t perCoreSize = 2 * chunkSize * chunkSize * sizeof(uint16_t);
+         userWorkspaceSize = sharedSize + usedCoreNum * perCoreSize;
+     }
      userWorkspaceSize = ((userWorkspaceSize + 511) / 512) * 512;
-     // 总 workspace = 用户 workspace + 系统 workspace
      ws[0] = userWorkspaceSize + sysWorkspaceSize;
 #endif
      return ge::GRAPH_SUCCESS;
@@ -221,4 +227,4 @@ constexpr uint32_t ATTR_LAYOUT_IDX = 0;
      .TilingParse<SolveTriCompileInfo>(SolveTriTilingParse);
  
  }  // namespace optiling
-
+ 

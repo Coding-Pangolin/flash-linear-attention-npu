@@ -5,11 +5,11 @@
 
  #ifndef SOLVE_TRI_ASCEND950_COMMON_H
  #define SOLVE_TRI_ASCEND950_COMMON_H
-
+ 
  #include "kernel_operator.h"
-
+ 
  using namespace AscendC;
-
+ 
  // 8x16 ND 块对角 mask
  // [0] = ODD  (奇数条带, 对角在 col 8..15)
  // [1] = EVEN (偶数条带, 对角在 col 0..7)
@@ -17,7 +17,7 @@
      { 0x0800040002000100ULL, 0x8000400020001000ULL },  // ODD
      { 0x0008000400020001ULL, 0x0080004000200010ULL }   // EVEN
  };
-
+ 
  constexpr AscendC::FixpipeConfig CFG_NZ_L1 = {AscendC::CO2Layout::NZ, false};
  constexpr AscendC::FixpipeConfig CFG_NZ_UB = {AscendC::CO2Layout::NZ, true};
  constexpr int64_t DATA_BLOCK_COUNT = 16;
@@ -35,13 +35,13 @@
  constexpr uint32_t kVcsPackedElems32 = kVcs32 * kVcsPack32; // 2048
  constexpr uint32_t kLeavesPerVec32 = 2;
  constexpr uint32_t kVcs32NzElems = kVcs32 * kVcs32; // 1024，单叶 32×32 NZ
-
+ 
  // tilingKey = chunkSize
  constexpr uint64_t SOLVE_TRI_TILING_KEY_16 = 16;
  constexpr uint64_t SOLVE_TRI_TILING_KEY_32 = 32;
  constexpr uint64_t SOLVE_TRI_TILING_KEY_64 = 64;
  constexpr uint64_t SOLVE_TRI_TILING_KEY_128 = 128;
-
+ 
  template <typename T>
  __aicore__ inline void TransposeB16(LocalTensor<T> dst, LocalTensor<T> src, uint32_t curTileLen)
  {
@@ -62,8 +62,8 @@
      }
      AscendC::TransDataTo5HD<T>(dstLocalList, srcLocalList, params);
  }
-
-
+ 
+ 
  template <typename T>
  __aicore__ inline void TransposeB32(LocalTensor<T> dst, LocalTensor<T> src, uint32_t curTileALen)
  {
@@ -72,7 +72,7 @@
          TransDataTo5HDParams params;
          LocalTensor<T> srcLocalList[DATA_BLOCK_COUNT];
          LocalTensor<T> dstLocalList[DATA_BLOCK_COUNT];
-
+ 
          uint32_t aRepeartTimes = (curTileALen + static_cast<uint32_t>(DATA_BLOCK_COUNT) - 1) /
                                   static_cast<uint32_t>(DATA_BLOCK_COUNT);
          params.repeatTimes = aRepeartTimes;
@@ -88,11 +88,11 @@
              dstLocalList[j * CONST_TWO] = dst[offset];
              dstLocalList[j * CONST_TWO + 1] = dst[offset + DATA_BLOCK_COUNT_HALF * DATA_BLOCK_COUNT_HALF * rRepeartTimes];
          }
-
+ 
          AscendC::TransDataTo5HD(dstLocalList, srcLocalList, params);
      }
  }
-
+ 
  // UB 上 FP32 NZ 16×16 分型重排为 cube 所需的 16×8 分型。
  // 每个 16-wide 列拆成 2 个 8-wide 列：blockLen=1（8 个 float），srcStride=1 跳过另一半。
  template <typename T>
@@ -106,7 +106,7 @@
          }
      }
  }
-
+ 
  // VCS 结果经 TransposeB16 后为 NZ；每个叶子 16×16 连续占 kFracLen。
  // 一步 MTE3 DataCopy 写 GM（高维切分）：blockCount=actualRows, blockLen=1,
  // srcStride=0（叶子内连续）, dstStride=rowStride/16-1。
@@ -121,7 +121,7 @@
                        AscendC::DataCopyParams(static_cast<uint16_t>(actualRows), 1,
                                                0, dstBlkStride));
  }
-
+ 
  // VF：mul + reduceSum + scatter；一次处理 64 个 FP32（256B），scatterCount=4
  template <typename T, typename U>
  __simd_vf__ inline void MulReduceScatterVF(__ubuf__ T *dstAddr, __ubuf__ T *src0Addr, __ubuf__ T *src1Addr,
@@ -133,7 +133,7 @@
      AscendC::Reg::RegTensor<T> dstReduceBlkReg;
      AscendC::Reg::RegTensor<T> dstReducePairReg;
      AscendC::Reg::RegTensor<U> scatterIdxReg;
-
+ 
      uint32_t maskCount = oneRepeatSize;
      AscendC::Reg::MaskReg inputMask;
      AscendC::Reg::MaskReg scatterMask;
@@ -153,7 +153,7 @@
          AscendC::Reg::LocalMemBar<AscendC::Reg::MemType::VEC_STORE, AscendC::Reg::MemType::VEC_LOAD>();
      }
  }
-
+ 
  // 32×32 叶子 VF。单叶：oneRepeatSize=32，scatterCount=1 → 1 个标量。
  // 两叶打包 32×64：oneRepeatSize=64，scatterCount=2 → 一次 mul/reduce 出 2 个标量再 scatter。
  // pairMask = 2 * scatterCount：32 元素收成 1 个，或 64 元素收成 2 个。
@@ -168,7 +168,7 @@
      AscendC::Reg::RegTensor<T> dstReducePairReg;
      AscendC::Reg::RegTensor<T> dstReducePairReg2;
      AscendC::Reg::RegTensor<U> scatterIdxReg;
-
+ 
      uint32_t maskCount = oneRepeatSize;
      uint32_t pairMaskCount = scatterCount * 2;
      AscendC::Reg::MaskReg inputMask;
@@ -192,7 +192,7 @@
          AscendC::Reg::LocalMemBar<AscendC::Reg::MemType::VEC_STORE, AscendC::Reg::MemType::VEC_LOAD>();
      }
  }
-
+ 
  // chunk128：单个 32×32 ND → 32×32 NZ 16×16。tmp 需 16×32。
  template <typename T>
  __aicore__ inline void TransposeB32Vcs32Leaf(LocalTensor<T> dstNz32, LocalTensor<T> srcNd32,
@@ -215,7 +215,7 @@
      SetFlag<AscendC::HardEvent::MTE3_V>(2);
      WaitFlag<AscendC::HardEvent::MTE3_V>(2);
  }
-
+ 
  // 打包 32×64 ND（VF 双叶结果）→ 两个连续 32×32 NZ（与 TransposeB32Vcs32Leaf 布局一致）。
  // TransposeB32 一次处理 16 行×64 列，故 32 行调两次；tmp 需 64×32。
  template <typename T>
@@ -239,5 +239,6 @@
      SetFlag<AscendC::HardEvent::MTE3_V>(2);
      WaitFlag<AscendC::HardEvent::MTE3_V>(2);
  }
-
+ 
  #endif  // SOLVE_TRI_ASCEND950_COMMON_H
+ 

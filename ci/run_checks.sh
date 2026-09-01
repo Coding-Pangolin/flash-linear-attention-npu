@@ -105,6 +105,27 @@ elif [[ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ]]; then
     set -u
 fi
 
+# AscendNPU-IR (Bisheng compiler) environment
+if [[ -f /usr/local/Ascend/cann-9.1.0/share/info/ascendnpu-ir/bin/set_env.sh ]]; then
+    # shellcheck disable=SC1091
+    set +u
+    source /usr/local/Ascend/cann-9.1.0/share/info/ascendnpu-ir/bin/set_env.sh
+    set -u
+elif [[ -f /usr/local/Ascend/cann-9.0.0/share/info/ascendnpu-ir/bin/set_env.sh ]]; then
+    # shellcheck disable=SC1091
+    set +u
+    source /usr/local/Ascend/cann-9.0.0/share/info/ascendnpu-ir/bin/set_env.sh
+    set -u
+fi
+
+# NNAL (ATB) environment
+if [[ -f /usr/local/Ascend/nnal/atb/set_env.sh ]]; then
+    # shellcheck disable=SC1091
+    set +u
+    source /usr/local/Ascend/nnal/atb/set_env.sh
+    set -u
+fi
+
 if command -v npu-smi >/dev/null 2>&1; then
     if [[ -n "${NPU_SELECTED_DEVICE:-}" ]]; then
         if ! summary="$(bash ci/detect_npu.sh --summary 2>&1)"; then

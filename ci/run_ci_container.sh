@@ -14,7 +14,7 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
 
-image="${CI_IMAGE:-fla-npu-ci:8.5.0-910b}"
+image="${CI_IMAGE:-fla-npu-ci:9.1.0-910b}"
 container_name="${CI_CONTAINER_NAME:-fla-npu-ci-$(date +%s)}"
 cache_root="${CI_CACHE_ROOT:-}"
 npu_lock_fd=""

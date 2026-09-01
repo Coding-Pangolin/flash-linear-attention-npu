@@ -617,8 +617,13 @@ class FlaNpuBuildPy(_build_py):
             shutil.rmtree(built_package_dir)
         super().run()
         run_package = _RUN_PACKAGE or _find_single_run_package()
-        _stage_run_package(run_package, Path(self.build_lib) / "fla_npu" / "opp")
-        _stage_offline_bundle(Path(self.build_lib))
+          _stage_run_package(run_package, Path(self.build_lib) / "fla_npu" / "opp")
+          _stage_offline_bundle(Path(self.build_lib))
+          opp_env_src = REPO_ROOT / "torch_custom" / "fla_npu"
+          for name in ("fla_npu_opp_env.py", "fla_npu_opp_env.pth"):
+              src = opp_env_src / name
+              if src.exists():
+                  shutil.copyfile(str(src), str(Path(self.build_lib) / name))
 
 
 class BinaryDistribution(Distribution):

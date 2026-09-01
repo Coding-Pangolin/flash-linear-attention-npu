@@ -168,5 +168,8 @@ setup(
     install_requires=[
         f"torch=={PYTORCH_VERSION}"
     ],
-    packages=find_packages()
+    # 显式列出包，避免 find_packages() 把构建目录里残留的杂包（如从 main 工作区混入的
+    # fla/）一并打进 wheel：那会让卸载删除 site-packages/fla/__init__.py，而干净重建后
+    # 重装无法还原，导致运行时提示缺少 __version__。
+    packages=["fla_npu"],
 )

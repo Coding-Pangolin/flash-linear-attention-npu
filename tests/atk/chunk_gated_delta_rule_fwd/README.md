@@ -48,6 +48,17 @@ A5 模型 shape 分别来源于 `推理model.csv` 和 `训练model.csv`，原文
 
 ## 执行
 
+先执行不依赖 NPU/ATK 的 ACLNN ABI 合同，确认公开参数顺序、ctypes 类型和默认路径映射：
+
+```bash
+python3 tests/atk/chunk_gated_delta_rule_fwd/aclnn_abi_contract.py
+```
+
+公开 `aclnnChunkGatedDeltaRuleFwd` 保留完整扩展 ABI。当前 Phase6 默认路径使用
+`layout=BNSD`、`useExp2=false`、`allowNegEigval=false`、`stateVFirst=false`，且
+`aLog/dtBias` 与扩展中间输出为空；`finalStateOutOptional` 是否为空决定是否输出 final state。
+尚未实现的扩展组合会显式返回参数错误，不会静默忽略。
+
 正式 500 条双标杆精度使用可恢复分片入口；默认每 25 条启动一个 fresh ATK 进程，避免
 六算子 benchmark 长进程状态累积：
 

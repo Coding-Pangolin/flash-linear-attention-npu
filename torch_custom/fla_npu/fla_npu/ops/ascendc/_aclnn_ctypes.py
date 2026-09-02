@@ -85,16 +85,27 @@ _GET_WORKSPACE_ARGTYPES = {
         ctypes.c_void_p,  # v
         ctypes.c_void_p,  # g
         ctypes.c_void_p,  # beta
+        ctypes.c_void_p,  # aLogOptional
+        ctypes.c_void_p,  # dtBiasOptional
         ctypes.c_void_p,  # initialStateOptional
-        ctypes.c_bool,  # outputFinalState
-        ctypes.c_int64,  # chunkSize
         ctypes.c_void_p,  # cuSeqlensOptional
         ctypes.c_void_p,  # chunkIndicesOptional
+        ctypes.c_char_p,  # layout
         ctypes.c_double,  # scale
+        ctypes.c_int64,  # chunkSize
+        ctypes.c_bool,  # useExp2
+        ctypes.c_bool,  # allowNegEigval
+        ctypes.c_bool,  # stateVFirst
         ctypes.c_void_p,  # oOut
         ctypes.c_void_p,  # finalStateOutOptional
-        ctypes.c_void_p,  # gCumsumOut
-        ctypes.c_void_p,  # aOut
+        ctypes.c_void_p,  # qHatOutOptional
+        ctypes.c_void_p,  # kHatOutOptional
+        ctypes.c_void_p,  # qRstdOutOptional
+        ctypes.c_void_p,  # kRstdOutOptional
+        ctypes.c_void_p,  # betaEffOutOptional
+        ctypes.c_void_p,  # gCumsumOutOptional
+        ctypes.c_void_p,  # aOutOptional
+        ctypes.c_void_p,  # hOutOptional
         ctypes.POINTER(ctypes.c_uint64),  # workspaceSize
         ctypes.POINTER(ctypes.c_void_p),  # executor
     ],
@@ -1317,6 +1328,7 @@ def npu_chunk_gated_delta_rule_fwd(
         else:
             state_dtype = initial_state.dtype
         final_state = _empty((seq_num, v_heads, k_dim, v_dim), q, dtype=state_dtype)
+    layout_buffer = ctypes.create_string_buffer(b"BNSD")
     outputs = (o, final_state, g_cumsum, A)
     return _call_aclnn(
         "aclnnChunkGatedDeltaRuleFwd",
@@ -1326,16 +1338,27 @@ def npu_chunk_gated_delta_rule_fwd(
             ctx.tensor(v, "v"),
             ctx.tensor(g, "g"),
             ctx.tensor(beta, "beta"),
+            ctx.tensor(None, "a_log"),
+            ctx.tensor(None, "dt_bias"),
             ctx.tensor(initial_state, "initial_state"),
-            ctypes.c_bool(output_final_state),
-            ctypes.c_int64(int(chunk_size)),
             ctx.int_array(cu_seqlens),
             ctx.int_array(chunk_indices),
+            ctypes.cast(layout_buffer, ctypes.c_char_p),
             ctypes.c_double(scale),
+            ctypes.c_int64(int(chunk_size)),
+            ctypes.c_bool(False),
+            ctypes.c_bool(False),
+            ctypes.c_bool(False),
             ctx.tensor(o, "o"),
             ctx.tensor(final_state, "final_state"),
+            ctx.tensor(None, "q_hat"),
+            ctx.tensor(None, "k_hat"),
+            ctx.tensor(None, "q_rstd"),
+            ctx.tensor(None, "k_rstd"),
+            ctx.tensor(None, "beta_eff"),
             ctx.tensor(g_cumsum, "g_cumsum"),
             ctx.tensor(A, "A"),
+            ctx.tensor(None, "h"),
         ],
         outputs,
     )

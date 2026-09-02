@@ -19,6 +19,7 @@
 #include "opdev/op_executor.h"
 #include "opdev/op_log.h"
 #include "opdev/tensor_view_utils.h"
+#include <cstring>
 #include <initializer_list>
 
 using namespace op;
@@ -39,16 +40,27 @@ struct ChunkGatedDeltaRuleFwdParams {
     const aclTensor *v = nullptr;
     const aclTensor *g = nullptr;
     const aclTensor *beta = nullptr;
+    const aclTensor *aLogOptional = nullptr;
+    const aclTensor *dtBiasOptional = nullptr;
     const aclTensor *initialStateOptional = nullptr;
-    bool outputFinalState = false;
-    int64_t chunkSize = CHUNK_GATED_DELTA_RULE_FWD_CHUNK_64;
     const aclIntArray *cuSeqlensOptional = nullptr;
     const aclIntArray *chunkIndicesOptional = nullptr;
+    const char *layout = nullptr;
     double scale = 1.0;
+    int64_t chunkSize = CHUNK_GATED_DELTA_RULE_FWD_CHUNK_64;
+    bool useExp2 = false;
+    bool allowNegEigval = false;
+    bool stateVFirst = false;
     const aclTensor *oOut = nullptr;
     const aclTensor *finalStateOutOptional = nullptr;
-    const aclTensor *gCumsumOut = nullptr;
-    const aclTensor *aOut = nullptr;
+    const aclTensor *qHatOutOptional = nullptr;
+    const aclTensor *kHatOutOptional = nullptr;
+    const aclTensor *qRstdOutOptional = nullptr;
+    const aclTensor *kRstdOutOptional = nullptr;
+    const aclTensor *betaEffOutOptional = nullptr;
+    const aclTensor *gCumsumOutOptional = nullptr;
+    const aclTensor *aOutOptional = nullptr;
+    const aclTensor *hOutOptional = nullptr;
 };
 
 static op::Shape MakeShape(std::initializer_list<int64_t> dims)
@@ -193,16 +205,50 @@ static aclnnStatus CheckRank(const aclTensor *tensor, size_t rank, const char *n
     return ACLNN_SUCCESS;
 }
 
+static aclnnStatus CheckOptionalRank(const aclTensor *tensor, size_t rank, const char *name)
+{
+    return tensor == nullptr ? ACLNN_SUCCESS : CheckRank(tensor, rank, name);
+}
+
+static aclnnStatus CheckSupportedL2Contract(const ChunkGatedDeltaRuleFwdParams &params)
+{
+    CHECK_COND(params.layout != nullptr, ACLNN_ERR_PARAM_NULLPTR, "layout must not be nullptr.");
+    CHECK_COND(std::strcmp(params.layout, "BNSD") == 0, ACLNN_ERR_PARAM_INVALID,
+               "The current Phase 6 implementation supports layout=BNSD only.");
+    CHECK_COND(params.aLogOptional == nullptr && params.dtBiasOptional == nullptr, ACLNN_ERR_PARAM_INVALID,
+               "aLogOptional and dtBiasOptional are reserved by the stable ABI but are not supported yet.");
+    CHECK_COND(!params.useExp2, ACLNN_ERR_PARAM_INVALID,
+               "useExp2=true is reserved by the stable ABI but is not supported yet.");
+    CHECK_COND(!params.allowNegEigval, ACLNN_ERR_PARAM_INVALID,
+               "allowNegEigval=true is reserved by the stable ABI but is not supported yet.");
+    CHECK_COND(!params.stateVFirst, ACLNN_ERR_PARAM_INVALID,
+               "stateVFirst=true is reserved by the stable ABI but is not supported yet.");
+    CHECK_COND(params.qHatOutOptional == nullptr && params.kHatOutOptional == nullptr &&
+                   params.qRstdOutOptional == nullptr && params.kRstdOutOptional == nullptr,
+               ACLNN_ERR_PARAM_INVALID,
+               "Q/K L2Norm intermediate outputs are reserved by the stable ABI but are not supported yet.");
+    CHECK_COND(params.betaEffOutOptional == nullptr, ACLNN_ERR_PARAM_INVALID,
+               "betaEffOutOptional is reserved by the stable ABI but is not supported yet.");
+    CHECK_COND(params.hOutOptional == nullptr, ACLNN_ERR_PARAM_INVALID,
+               "hOutOptional is reserved by the stable ABI but is not supported yet.");
+    return ACLNN_SUCCESS;
+}
+
 static aclnnStatus CheckParams(const ChunkGatedDeltaRuleFwdParams &params)
 {
+    const aclnnStatus supportedContractStatus = CheckSupportedL2Contract(params);
+    if (supportedContractStatus != ACLNN_SUCCESS) {
+        return supportedContractStatus;
+    }
     CHECK_RET(CheckRank(params.q, 4, "q") == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID);
     CHECK_RET(CheckRank(params.k, 4, "k") == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID);
     CHECK_RET(CheckRank(params.v, 4, "v") == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID);
     CHECK_RET(CheckRank(params.g, 3, "g") == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID);
     CHECK_RET(CheckRank(params.beta, 3, "beta") == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID);
     CHECK_RET(CheckRank(params.oOut, 4, "oOut") == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID);
-    CHECK_RET(CheckRank(params.gCumsumOut, 3, "gCumsumOut") == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID);
-    CHECK_RET(CheckRank(params.aOut, 4, "aOut") == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID);
+    CHECK_RET(CheckOptionalRank(params.gCumsumOutOptional, 3, "gCumsumOutOptional") == ACLNN_SUCCESS,
+              ACLNN_ERR_PARAM_INVALID);
+    CHECK_RET(CheckOptionalRank(params.aOutOptional, 4, "aOutOptional") == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID);
 
     const int64_t batch = Dim(params.q, 0);
     const int64_t hq = Dim(params.q, 1);
@@ -232,13 +278,18 @@ static aclnnStatus CheckParams(const ChunkGatedDeltaRuleFwdParams &params)
     CHECK_COND(Dim(params.oOut, 0) == batch && Dim(params.oOut, 1) == hv &&
                    Dim(params.oOut, 2) == seqlen && Dim(params.oOut, 3) == vDim,
                ACLNN_ERR_PARAM_INVALID, "oOut must have shape [B,Hv,T,V].");
-    CHECK_COND(Dim(params.gCumsumOut, 0) == batch && Dim(params.gCumsumOut, 1) == seqlen &&
-                   Dim(params.gCumsumOut, 2) == hv,
-               ACLNN_ERR_PARAM_INVALID, "gCumsumOut must have shape [B,T,Hv].");
-    CHECK_COND(Dim(params.aOut, 0) == batch && Dim(params.aOut, 1) == hv &&
-                   Dim(params.aOut, 2) == seqlen && Dim(params.aOut, 3) == params.chunkSize,
-               ACLNN_ERR_PARAM_INVALID, "aOut must have shape [B,Hv,T,chunkSize].");
-    CHECK_COND(params.chunkSize == CHUNK_GATED_DELTA_RULE_FWD_CHUNK_64 || params.chunkSize == CHUNK_GATED_DELTA_RULE_FWD_CHUNK_128,
+    if (params.gCumsumOutOptional != nullptr) {
+        CHECK_COND(Dim(params.gCumsumOutOptional, 0) == batch && Dim(params.gCumsumOutOptional, 1) == seqlen &&
+                       Dim(params.gCumsumOutOptional, 2) == hv,
+                   ACLNN_ERR_PARAM_INVALID, "gCumsumOutOptional must have shape [B,T,Hv].");
+    }
+    if (params.aOutOptional != nullptr) {
+        CHECK_COND(Dim(params.aOutOptional, 0) == batch && Dim(params.aOutOptional, 1) == hv &&
+                       Dim(params.aOutOptional, 2) == seqlen && Dim(params.aOutOptional, 3) == params.chunkSize,
+                   ACLNN_ERR_PARAM_INVALID, "aOutOptional must have shape [B,Hv,T,chunkSize].");
+    }
+    CHECK_COND(params.chunkSize == CHUNK_GATED_DELTA_RULE_FWD_CHUNK_64 ||
+                   params.chunkSize == CHUNK_GATED_DELTA_RULE_FWD_CHUNK_128,
                ACLNN_ERR_PARAM_INVALID, "chunkSize must be 64 or 128.");
     CHECK_COND((params.cuSeqlensOptional == nullptr) == (params.chunkIndicesOptional == nullptr),
                ACLNN_ERR_PARAM_INVALID, "cuSeqlens and chunkIndices must be both present or both absent.");
@@ -250,7 +301,7 @@ static aclnnStatus CheckParams(const ChunkGatedDeltaRuleFwdParams &params)
     CHECK_RET(CheckStateShape(params.initialStateOptional, "initialState", seqNum, hv, kDim, vDim) ==
                   ACLNN_SUCCESS,
               ACLNN_ERR_PARAM_INVALID);
-    if (params.outputFinalState) {
+    if (params.finalStateOutOptional != nullptr) {
         CHECK_RET(CheckStateShape(params.finalStateOutOptional, "finalStateOut", seqNum, hv, kDim, vDim) ==
                       ACLNN_SUCCESS,
                   ACLNN_ERR_PARAM_INVALID);
@@ -260,21 +311,20 @@ static aclnnStatus CheckParams(const ChunkGatedDeltaRuleFwdParams &params)
     CHECK_COND(dtype == DataType::DT_FLOAT16 || dtype == DataType::DT_BF16,
                ACLNN_ERR_PARAM_INVALID, "q/k/v must be float16 or bfloat16.");
     CHECK_COND(params.k->GetDataType() == dtype && params.v->GetDataType() == dtype &&
-                   params.oOut->GetDataType() == dtype && params.aOut->GetDataType() == dtype,
-               ACLNN_ERR_PARAM_INVALID, "q/k/v/oOut/aOut must have the same dtype.");
+                   params.oOut->GetDataType() == dtype &&
+                   (params.aOutOptional == nullptr || params.aOutOptional->GetDataType() == dtype),
+               ACLNN_ERR_PARAM_INVALID, "q/k/v/oOut/aOutOptional must have the same dtype.");
     CHECK_COND((params.beta->GetDataType() == DataType::DT_FLOAT || params.beta->GetDataType() == dtype) &&
                    params.g->GetDataType() == DataType::DT_FLOAT,
                ACLNN_ERR_PARAM_INVALID, "beta must be float32 or match q/k/v, and g must be float32.");
-    CHECK_COND(params.gCumsumOut->GetDataType() == DataType::DT_FLOAT, ACLNN_ERR_PARAM_INVALID,
-               "gCumsumOut must be float32.");
-    CHECK_COND(!params.outputFinalState || params.finalStateOutOptional != nullptr,
-               ACLNN_ERR_PARAM_NULLPTR, "finalStateOut is required when outputFinalState is true.");
+    CHECK_COND(params.gCumsumOutOptional == nullptr || params.gCumsumOutOptional->GetDataType() == DataType::DT_FLOAT,
+               ACLNN_ERR_PARAM_INVALID, "gCumsumOutOptional must be float32.");
     if (params.initialStateOptional != nullptr) {
         const DataType stateDtype = params.initialStateOptional->GetDataType();
         CHECK_COND(stateDtype == DataType::DT_FLOAT || stateDtype == dtype, ACLNN_ERR_PARAM_INVALID,
                    "initialState dtype must be float32 or match q/k/v.");
     }
-    if (params.outputFinalState) {
+    if (params.finalStateOutOptional != nullptr) {
         const DataType expectedStateDtype = params.initialStateOptional == nullptr
                                                 ? DataType::DT_FLOAT
                                                 : params.initialStateOptional->GetDataType();
@@ -285,7 +335,7 @@ static aclnnStatus CheckParams(const ChunkGatedDeltaRuleFwdParams &params)
     return ACLNN_SUCCESS;
 }
 
-}  // namespace
+} // namespace
 
 static aclnnStatus ChunkGatedDeltaRuleFwdGetWorkspaceSizeImpl(
     const aclTensor *q,
@@ -293,22 +343,36 @@ static aclnnStatus ChunkGatedDeltaRuleFwdGetWorkspaceSizeImpl(
     const aclTensor *v,
     const aclTensor *g,
     const aclTensor *beta,
+    const aclTensor *aLogOptional,
+    const aclTensor *dtBiasOptional,
     const aclTensor *initialStateOptional,
-    bool outputFinalState,
-    int64_t chunkSize,
     const aclIntArray *cuSeqlensOptional,
     const aclIntArray *chunkIndicesOptional,
+    const char *layout,
     double scale,
+    int64_t chunkSize,
+    bool useExp2,
+    bool allowNegEigval,
+    bool stateVFirst,
     const aclTensor *oOut,
     const aclTensor *finalStateOutOptional,
-    const aclTensor *gCumsumOut,
-    const aclTensor *aOut,
+    const aclTensor *qHatOutOptional,
+    const aclTensor *kHatOutOptional,
+    const aclTensor *qRstdOutOptional,
+    const aclTensor *kRstdOutOptional,
+    const aclTensor *betaEffOutOptional,
+    const aclTensor *gCumsumOutOptional,
+    const aclTensor *aOutOptional,
+    const aclTensor *hOutOptional,
     uint64_t *workspaceSize,
     aclOpExecutor **executor)
 {
-    ChunkGatedDeltaRuleFwdParams params{q, k, v, g, beta, initialStateOptional, outputFinalState, chunkSize,
-                            cuSeqlensOptional, chunkIndicesOptional, scale, oOut, finalStateOutOptional,
-                            gCumsumOut, aOut};
+    ChunkGatedDeltaRuleFwdParams params{
+        q, k, v, g, beta, aLogOptional, dtBiasOptional, initialStateOptional,
+        cuSeqlensOptional, chunkIndicesOptional, layout, scale, chunkSize, useExp2,
+        allowNegEigval, stateVFirst, oOut, finalStateOutOptional, qHatOutOptional,
+        kHatOutOptional, qRstdOutOptional, kRstdOutOptional, betaEffOutOptional,
+        gCumsumOutOptional, aOutOptional, hOutOptional};
     CHECK_COND(workspaceSize != nullptr && executor != nullptr, ACLNN_ERR_PARAM_NULLPTR,
                "workspaceSize and executor must not be nullptr.");
     auto uniqueExecutor = CREATE_EXECUTOR();
@@ -328,11 +392,24 @@ static aclnnStatus ChunkGatedDeltaRuleFwdGetWorkspaceSizeImpl(
     const int64_t seqlen = Dim(params.v, 2);
     auto aStorageBhtc = executorPtr->AllocTensor(MakeShape({batch, hv, seqlen, params.chunkSize}),
                                                   params.k->GetDataType(), Format::FORMAT_ND);
-    auto finalState = params.finalStateOutOptional;
-    if (!params.outputFinalState) {
+    const bool outputFinalState = params.finalStateOutOptional != nullptr;
+    const aclTensor *finalState = params.finalStateOutOptional;
+    if (!outputFinalState) {
         finalState = executorPtr->AllocTensor(MakeShape({1}), DataType::DT_FLOAT, Format::FORMAT_ND);
     }
-    GDN_STAGE_CHECK(aStorageBhtc != nullptr && finalState != nullptr, 169101);
+    const aclTensor *gCumsumCompute = params.gCumsumOutOptional;
+    if (gCumsumCompute == nullptr) {
+        gCumsumCompute =
+            executorPtr->AllocTensor(MakeShape({batch, seqlen, hv}), DataType::DT_FLOAT, Format::FORMAT_ND);
+    }
+    const aclTensor *aCompute = params.aOutOptional;
+    if (aCompute == nullptr) {
+        aCompute = executorPtr->AllocTensor(MakeShape({batch, hv, seqlen, params.chunkSize}), params.q->GetDataType(),
+                                            Format::FORMAT_ND);
+    }
+    GDN_STAGE_CHECK(aStorageBhtc != nullptr && finalState != nullptr &&
+                        gCumsumCompute != nullptr && aCompute != nullptr,
+                    169101);
 
     const aclTensor *gBht = TransposeContiguous(params.g, {0, 2, 1}, executorPtr);
     const aclTensor *betaFloat = params.beta->GetDataType() == DataType::DT_FLOAT
@@ -346,8 +423,8 @@ static aclnnStatus ChunkGatedDeltaRuleFwdGetWorkspaceSizeImpl(
     auto phase6Result = l0op::ChunkGatedDeltaRuleFwd(
         params.q, params.k, params.v, betaBht, aStorageBhtc, gBht, nullptr,
         params.initialStateOptional, params.cuSeqlensOptional, params.chunkIndicesOptional,
-        params.outputFinalState, params.chunkSize, params.scale, params.oOut, finalState,
-        params.gCumsumOut, params.aOut, executorPtr);
+        outputFinalState, params.chunkSize, params.scale, params.oOut, finalState,
+        gCumsumCompute, aCompute, executorPtr);
     GDN_STAGE_CHECK(phase6Result[0] != nullptr && phase6Result[2] != nullptr &&
                         phase6Result[3] != nullptr,
                     169112);
@@ -357,25 +434,47 @@ static aclnnStatus ChunkGatedDeltaRuleFwdGetWorkspaceSizeImpl(
     return ACLNN_SUCCESS;
 }
 
-#define CHUNK_GATED_DELTA_RULE_FWD_GET_WORKSPACE_ARGS \
-    q, k, v, g, beta, initialStateOptional, outputFinalState, chunkSize, cuSeqlensOptional, \
-        chunkIndicesOptional, scale, oOut, finalStateOutOptional, gCumsumOut, aOut, workspaceSize, executor
-
 aclnnStatus aclnnChunkGatedDeltaRuleFwdGetWorkspaceSize(
-    const aclTensor *q, const aclTensor *k, const aclTensor *v, const aclTensor *g, const aclTensor *beta,
-    const aclTensor *initialStateOptional, bool outputFinalState, int64_t chunkSize,
-    const aclIntArray *cuSeqlensOptional, const aclIntArray *chunkIndicesOptional, double scale,
-    const aclTensor *oOut, const aclTensor *finalStateOutOptional, const aclTensor *gCumsumOut,
-    const aclTensor *aOut, uint64_t *workspaceSize, aclOpExecutor **executor)
+    const aclTensor *q,
+    const aclTensor *k,
+    const aclTensor *v,
+    const aclTensor *g,
+    const aclTensor *beta,
+    const aclTensor *aLogOptional,
+    const aclTensor *dtBiasOptional,
+    const aclTensor *initialStateOptional,
+    const aclIntArray *cuSeqlensOptional,
+    const aclIntArray *chunkIndicesOptional,
+    const char *layout,
+    double scale,
+    int64_t chunkSize,
+    bool useExp2,
+    bool allowNegEigval,
+    bool stateVFirst,
+    const aclTensor *oOut,
+    const aclTensor *finalStateOutOptional,
+    const aclTensor *qHatOutOptional,
+    const aclTensor *kHatOutOptional,
+    const aclTensor *qRstdOutOptional,
+    const aclTensor *kRstdOutOptional,
+    const aclTensor *betaEffOutOptional,
+    const aclTensor *gCumsumOutOptional,
+    const aclTensor *aOutOptional,
+    const aclTensor *hOutOptional,
+    uint64_t *workspaceSize,
+    aclOpExecutor **executor)
 {
     L2_DFX_PHASE_1(aclnnChunkGatedDeltaRuleFwd,
-                   DFX_IN(q, k, v, g, beta, initialStateOptional, cuSeqlensOptional, chunkIndicesOptional),
-                   DFX_OUT(oOut, finalStateOutOptional, gCumsumOut, aOut));
+                   DFX_IN(q, k, v, g, beta, aLogOptional, dtBiasOptional, initialStateOptional, cuSeqlensOptional,
+                          chunkIndicesOptional, layout, scale, chunkSize, useExp2, allowNegEigval, stateVFirst),
+                   DFX_OUT(oOut, finalStateOutOptional, qHatOutOptional, kHatOutOptional, qRstdOutOptional,
+                           kRstdOutOptional, betaEffOutOptional, gCumsumOutOptional, aOutOptional, hOutOptional));
     return ChunkGatedDeltaRuleFwdGetWorkspaceSizeImpl(
-        CHUNK_GATED_DELTA_RULE_FWD_GET_WORKSPACE_ARGS);
+        q, k, v, g, beta, aLogOptional, dtBiasOptional, initialStateOptional, cuSeqlensOptional, chunkIndicesOptional,
+        layout, scale, chunkSize, useExp2, allowNegEigval, stateVFirst, oOut, finalStateOutOptional, qHatOutOptional,
+        kHatOutOptional, qRstdOutOptional, kRstdOutOptional, betaEffOutOptional, gCumsumOutOptional, aOutOptional,
+        hOutOptional, workspaceSize, executor);
 }
-
-#undef CHUNK_GATED_DELTA_RULE_FWD_GET_WORKSPACE_ARGS
 
 aclnnStatus aclnnChunkGatedDeltaRuleFwd(
     void *workspace, uint64_t workspaceSize, aclOpExecutor *executor, aclrtStream stream)

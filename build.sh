@@ -1366,6 +1366,11 @@ while [[ $# -gt 0 ]]; do
         ;;
     esac
 done
+# vendor_name 固定为 fla_npu：不启用自定义 vendor，忽略 --vendor_name 传入值。
+if [ -n "${vendor_name}" ] && [ "${vendor_name}" != "fla_npu" ]; then
+    echo "[INFO] --vendor_name is not supported; forcing vendor_name=fla_npu (ignored: ${vendor_name})"
+fi
+vendor_name="fla_npu"
 set_ut_mode
 
 if [ -n "$KERNEL_TEMPLATE_INPUT" ]; then

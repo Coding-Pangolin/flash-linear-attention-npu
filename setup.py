@@ -316,12 +316,12 @@ def _check_build_environment():
 
 
 def _find_single_run_package():
-    run_files = sorted((REPO_ROOT / "build_out").glob("fla-npu-*.run"))
+    run_files = sorted((REPO_ROOT / "build_out").glob("fla_npu_linux-*.run"))
     if not run_files:
-        raise RuntimeError("No fla-npu-*.run package found in build_out")
+        raise RuntimeError("No fla_npu_linux-*.run package found in build_out")
     if len(run_files) > 1:
         raise RuntimeError(
-            "Multiple fla-npu-*.run packages found in build_out: "
+            "Multiple fla_npu_linux-*.run packages found in build_out: "
             + ", ".join(str(path) for path in run_files)
         )
     return run_files[0]

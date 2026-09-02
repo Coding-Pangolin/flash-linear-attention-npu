@@ -29,7 +29,7 @@ echo "[fla-npu]   export ASCEND_CUSTOM_OPP_PATH=\"${_fla_npu_vendor}:${_fla_npu_
 # before any consumer imports fla_npu.
 run_pkg=""
 shopt -s nullglob
-for cand in ../../build_out/fla-npu-*.run ../../build/fla-npu-*.run; do
+for cand in ../../build_out/fla_npu_linux-*.run ../../build/fla_npu_linux-*.run; do
     if [ -n "$cand" ] && [ -s "$cand" ]; then
         run_pkg="$cand"
         break
@@ -37,7 +37,7 @@ for cand in ../../build_out/fla-npu-*.run ../../build/fla-npu-*.run; do
 done
 shopt -u nullglob
 if [ -z "$run_pkg" ]; then
-    echo "[ERROR] No fla-npu-*.run package found to overlay the embedded OPP into the installed wheel." >&2
+    echo "[ERROR] No fla_npu_linux-*.run package found to overlay the embedded OPP into the installed wheel." >&2
     exit 1
 fi
 chmod +x "$run_pkg"

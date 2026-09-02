@@ -39,6 +39,22 @@ from ._runtime import (
 # strings or otherwise ambiguous scalar conversion are listed here to prevent
 # ctypes from narrowing or mis-converting arguments.
 _GET_WORKSPACE_ARGTYPES = {
+    "aclnnChunkFwdO": [
+        ctypes.c_void_p,  # q
+        ctypes.c_void_p,  # k
+        ctypes.c_void_p,  # v
+        ctypes.c_void_p,  # h
+        ctypes.c_void_p,  # g
+        ctypes.c_void_p,  # cuSeqlensOptional
+        ctypes.c_void_p,  # chunkOffsetsOptional
+        ctypes.c_double,  # scale
+        ctypes.c_int64,  # chunkSize
+        ctypes.c_bool,  # useExp2
+        ctypes.c_char_p,  # outputLayout
+        ctypes.c_void_p,  # oOut
+        ctypes.POINTER(ctypes.c_uint64),  # workspaceSize
+        ctypes.POINTER(ctypes.c_void_p),  # executor
+    ],
     "aclnnPrepareWyReprBwd": [
         ctypes.c_void_p,
         ctypes.c_void_p,
@@ -543,10 +559,25 @@ def npu_chunk_fwd_o(
     chunk_indices=None,
     chunk_size=None,
     transpose_state_layout=False,
+    use_exp2=False,
+    output_layout="BNSD",
 ):
     del g_gamma, transpose_state_layout
     chunk_size = _optional_int(chunk_size, 64)
-    out = _empty_like(v)
+    use_exp2 = _optional_bool(use_exp2, False)
+    output_layout = str(output_layout)
+
+    batch, hv, seqlen, value_dim = _shape(v)
+    if output_layout == "BNSD":
+        out_shape = (batch, hv, seqlen, value_dim)
+    elif output_layout == "BSND":
+        out_shape = (batch, seqlen, hv, value_dim)
+    elif output_layout == "TND":
+        out_shape = (seqlen, hv, value_dim)
+    else:
+        out_shape = (hv, seqlen, value_dim)
+    out = _empty(out_shape, v)
+    layout_buffer = ctypes.create_string_buffer(output_layout.encode("utf-8"))
     return _call_aclnn(
         "aclnnChunkFwdO",
         lambda ctx: [
@@ -559,6 +590,8 @@ def npu_chunk_fwd_o(
             ctx.int_array(chunk_indices),
             ctypes.c_double(float(scale)),
             ctypes.c_int64(chunk_size),
+            ctypes.c_bool(use_exp2),
+            ctypes.cast(layout_buffer, ctypes.c_char_p),
             ctx.tensor(out, "out"),
         ],
         out,

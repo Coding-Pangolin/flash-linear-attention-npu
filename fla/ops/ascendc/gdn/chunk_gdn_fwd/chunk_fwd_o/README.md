@@ -42,6 +42,8 @@
  * chunkOffsetsOptional : optional
  * scale : required
  * chunkSize : required
+ * useExp2 : required
+ * outputLayout : required
  * oOut : required
  * workspaceSize : size of workspace(output).
  * executor : executor context(output).
@@ -57,6 +59,8 @@ aclnnStatus aclnnChunkFwdOGetWorkspaceSize(
     const aclIntArray *chunkOffsetsOptional,
     double scale,
     int64_t chunkSize,
+    bool useExp2,
+    const char *outputLayout,
     const aclTensor *oOut,
     uint64_t *workspaceSize,
     aclOpExecutor **executor);
@@ -98,19 +102,21 @@ aclnnStatus aclnnChunkFwdO(
 |---|---|---|---|---|---|
 | `scale` | 输入 | 必选 | 缩放系数 | `double` | 建议按 `1 / sqrt(K)` 设置 |
 | `chunkSize` | 输入 | 必选 | 分块大小 | `int64_t` | 仅支持 `64` / `128` |
+| `useExp2` | 输入 | 必选 | Gate 指数是否使用以 2 为底的语义 | `bool` | `true` 仅支持 A5 的 `BSND` / `TND` 新路径；`false` 走兼容旧路径 |
+| `outputLayout` | 输入 | 必选 | 输出布局，大小写敏感 | `const char *` | `BNSD` / `BSND` / `TND` / `NTD`，具体组合见下表 |
 
 ### 3.3 输出参数（Outputs）
 
 | 参数名 | 输入/输出 | 描述 | 数据类型 | 数据格式 | 维度（Shape） | 非连续 Tensor |
 |---|---|---|---|---|---|---|
-| `oOut` | 输出 | 前向注意力输出张量 | `FLOAT16`、`BFLOAT16` | `ND` | `[B, HV, T, V]` | 支持 |
+| `oOut` | 输出 | 前向注意力输出张量 | `FLOAT16`、`BFLOAT16` | `ND` | 由 `outputLayout` 决定 | 支持 |
 | `workspaceSize` | 输出 | Device 侧所需 workspace 大小 | `uint64_t` | - | 标量 | - |
 | `executor` | 输出 | 算子执行器，封装了计算流程 | `aclOpExecutor*` | - | - | - |
 
 ### 3.4 形状与约束
 
 - `q`、`k` 的形状必须为 `[B, HK, T, K]`，二者完全同形。
-- `v`、`oOut` 的形状必须为 `[B, HV, T, V]`。
+- `v` 的形状必须为 `[B, HV, T, V]`；`oOut` 形状由下表决定。
 - `q` 和 `v` 的 `B`、`T` 必须一致，head 数允许不同。
 - `g` 的形状必须为 `[B, HV, T]`，head 维与 `v` 对齐。
 - `h` 的形状必须为 `[B, HV, numChunks, K, V]`，head 维与 `v` 对齐，`K` 维与 `q/k` 对齐，`V` 维与 `v` 对齐。
@@ -119,6 +125,14 @@ aclnnStatus aclnnChunkFwdO(
 - 当前实现要求 `V = 128` 或 `256`。
 - `chunkSize` 当前仅支持 `64` 或 `128`。
 - 当启用变长模式时，`cuSeqlensOptional` 和 `chunkOffsetsOptional` 用于描述变长分块；二者需要同时提供，且当前实现仅支持 `B = 1`。
+- A5 路径进一步要求 `BFLOAT16`、`chunkSize = 64` 且 `K = V = 128`。
+
+| 芯片路径 | 模式 | `useExp2` | `outputLayout` | `oOut` 形状 |
+|---|---|---:|---|---|
+| A5 | 定长 | `true` | `BSND` | `[B, T, HV, V]` |
+| A5 | 变长 | `true` | `TND` | `[T, HV, V]` |
+| 所有支持芯片（含 A5） | 定长 | `false` | `BNSD` | `[B, HV, T, V]` |
+| 所有支持芯片（含 A5） | 变长 | `false` | `NTD` | `[HV, T, V]` |
 
 ---
 
@@ -129,13 +143,15 @@ aclnnStatus aclnnChunkFwdO(
 - `cuSeqlensOptional` 和 `chunkOffsetsOptional`：
   - 二者任意一个出现时进入变长模式，当前实现要求二者同时提供
   - 变长模式仅支持 `B = 1`
+- Torch 公开接口的 `use_exp2` 和 `output_layout` 默认值分别为 `False` 和 `"BNSD"`，用于保持旧路径调用兼容。A5 新路径调用必须显式传入对应组合。
 
 ### 4.2 形状约束（强约束）
 
 必须满足以下条件：
 
 - `q, k`: `[B, HK, T, K]`
-- `v, oOut`: `[B, HV, T, V]`
+- `v`: `[B, HV, T, V]`
+- `oOut`: 按 `outputLayout` 为 `[B, HV, T, V]`、`[B, T, HV, V]`、`[T, HV, V]` 或 `[HV, T, V]`
 - `g`: `[B, HV, T]`
 - `h`: `[B, HV, numChunks, K, V]`
 - `HV % HK == 0`
@@ -186,6 +202,7 @@ USE_G_GAMMA = False
 import torch
 import torch_npu
 import math
+from fla_npu.ops import ascendc as ascendc_ops
 
 def test_chunk_fwd_o_fixed_len():
     # 参数设置
@@ -204,7 +221,7 @@ def test_chunk_fwd_o_fixed_len():
     g = torch.randn(B, HV, T, device=device, dtype=dtype)
 
     # 调用算子（定长：cu_seqlens / chunk_indices 传 None）
-    o = torch.ops.npu.npu_chunk_fwd_o(
+    o = ascendc_ops.npu_chunk_fwd_o(
         q, k, v, h, scale,
         g=g,
         g_gamma=None,
@@ -212,10 +229,12 @@ def test_chunk_fwd_o_fixed_len():
         chunk_indices=None,
         chunk_size=chunk_size,
         transpose_state_layout=False,
+        use_exp2=True,
+        output_layout="BSND",
     )
 
     print("o shape:", o.shape)
-    assert o.shape == v.shape
+    assert o.shape == (B, T, HV, V)
     print("Execution Successful!")
 
 if __name__ == "__main__":
@@ -230,6 +249,7 @@ if __name__ == "__main__":
 import torch
 import torch_npu
 import math
+from fla_npu.ops import ascendc as ascendc_ops
 
 def test_chunk_fwd_o_varlen():
     # 参数设置：变长模式仅支持 B = 1
@@ -252,7 +272,7 @@ def test_chunk_fwd_o_varlen():
         n_chunks = math.ceil(s / chunk_size)
         for c in range(n_chunks):
             chunk_indices_pairs.append([tb, c])
-    num_chunks = len(chunk_indices_pairs)         # 注意：要求为偶数
+    num_chunks = len(chunk_indices_pairs)
     chunk_indices_flat = [x for pair in chunk_indices_pairs for x in pair]
 
     # 构造输入
@@ -263,7 +283,7 @@ def test_chunk_fwd_o_varlen():
     g = torch.randn(B, HV, T, device=device, dtype=dtype)
 
     # 调用算子
-    o = torch.ops.npu.npu_chunk_fwd_o(
+    o = ascendc_ops.npu_chunk_fwd_o(
         q, k, v, h, scale,
         g=g,
         g_gamma=None,
@@ -271,10 +291,12 @@ def test_chunk_fwd_o_varlen():
         chunk_indices=chunk_indices_flat,         # 扁平化的 [tb, c] 列表
         chunk_size=chunk_size,
         transpose_state_layout=False,
+        use_exp2=True,
+        output_layout="TND",
     )
 
     print("o shape:", o.shape)
-    assert o.shape == v.shape
+    assert o.shape == (T, HV, V)
     print("Execution Successful!")
 
 if __name__ == "__main__":

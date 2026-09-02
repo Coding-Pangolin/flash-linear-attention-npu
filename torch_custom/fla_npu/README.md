@@ -8,6 +8,11 @@ from fla_npu.ops import ascendc as ascendc_ops
 out = ascendc_ops.npu_chunk_fwd_o(...)
 ```
 
+`npu_chunk_fwd_o` 的 `use_exp2` 和 `output_layout` 是可选参数，默认为
+`False` 和 `"BNSD"`，该默认组合在包括 A5 在内的支持芯片上走旧路径。
+A5 新路径定长调用需显式使用 `True, "BSND"`，变长调用需同时提供
+`cu_seqlens` / `chunk_indices` 并使用 `True, "TND"`。
+
 也可以按公开短名导入：
 
 ```python

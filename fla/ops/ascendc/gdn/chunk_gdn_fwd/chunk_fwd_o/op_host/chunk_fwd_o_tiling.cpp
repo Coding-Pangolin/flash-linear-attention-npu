@@ -14,6 +14,7 @@
 
 #include "chunk_fwd_o_tiling.h"
 #include "chunk_fwd_o_tiling_processor.h"
+#include <cstring>
 #include <register/op_impl_registry.h>
 #include "tiling_base/data_copy_transpose_tiling.h"
 #include "tiling_base/tiling_templates_registry.h"
@@ -72,10 +73,16 @@ ge::graphStatus Tiling4ChunkFwdO(gert::TilingContext *context)
     const auto ascendcPlatform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
     uint32_t aicCoreNum = ascendcPlatform.GetCoreNumAic();
     size_t sysWorkspaceSize = ascendcPlatform.GetLibApiWorkSpaceSize();
-    NpuArch npuArch = ascendcPlatform.GetCurNpuArch();
     const bool *useExp2Ptr = attrPtr->GetAttrPointer<bool>(CHUNK_FWD_O_ATTR_USE_EXP2_IDX);
     const bool useExp2 = useExp2Ptr != nullptr ? *useExp2Ptr : false;
     const char *outputLayout = attrPtr->GetStr(CHUNK_FWD_O_ATTR_OUTPUT_LAYOUT_IDX);
+    const bool useA5Path =
+        useExp2 && outputLayout != nullptr &&
+        (std::strcmp(outputLayout, "BSND") == 0 || std::strcmp(outputLayout, "TND") == 0);
+    OP_CHECK_IF(useA5Path && ascendcPlatform.GetCurNpuArch() != NpuArch::DAV_3510,
+                OP_LOGE(context->GetNodeName(),
+                        "use_exp2=true with output_layout=BSND/TND is supported only on A5."),
+                return ge::GRAPH_FAILED);
 
     ChunkFwdOTilingContext ctx{
         context->GetNodeName(),
@@ -92,7 +99,6 @@ ge::graphStatus Tiling4ChunkFwdO(gert::TilingContext *context)
         gDataType,
         useExp2,
         outputLayout,
-        npuArch,
         aicCoreNum,
         sysWorkspaceSize,
     };
@@ -100,10 +106,6 @@ ge::graphStatus Tiling4ChunkFwdO(gert::TilingContext *context)
     ChunkFwdOTilingProcessor processor(ctx, *tiling);
     OP_CHECK_IF(processor.Process() != ge::GRAPH_SUCCESS, , return ge::GRAPH_FAILED);
     context->SetTilingKey(processor.GetTilingKey());
-
-    if (npuArch == NpuArch::DAV_3510) {
-        context->SetScheduleMode(1);
-    }
 
     context->SetBlockDim(aicCoreNum);
     size_t *currentWorkspace = context->GetWorkspaceSizes(1);

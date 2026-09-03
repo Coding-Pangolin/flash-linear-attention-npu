@@ -5,7 +5,7 @@
  * A5 L1<->UB chunk_fwd_o path.
  *
  * Stage1/2: validated (precision passed); do not regress.
- * Stage2 (AIC): L0/L1 streamSlot ping-pong + ordered CrossCore ready chains (PR404).
+ * Stage2 (AIC): L0/L1 streamSlot ping-pong + ordered CrossCore ready chains.
  * AIV stages run in separate head rounds: S1(all heads), S3(all heads), then S5(all heads).
  * Stage3 uses mode=0x2 pair handshakes and independent A-prime/V-to-MTE3 ping-pong,
  *   without a global barrier.

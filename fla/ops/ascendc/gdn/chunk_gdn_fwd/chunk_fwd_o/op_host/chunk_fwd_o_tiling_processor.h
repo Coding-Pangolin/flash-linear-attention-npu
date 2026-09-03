@@ -94,7 +94,6 @@ struct ChunkFwdOTilingContext {
     int64_t gDataType;
     bool useExp2;
     const char *outputLayout;
-    NpuArch npuArch;
     uint32_t aicCoreNum;
     size_t sysWorkspaceSize;
 };
@@ -117,7 +116,7 @@ public:
 
     bool UseA5Path() const
     {
-        return ctx_.npuArch == NpuArch::DAV_3510 && ctx_.useExp2 &&
+        return ctx_.useExp2 &&
                (tiling_.outputLayout == GDN::CHUNK_FWD_O_LAYOUT_BSND ||
                 tiling_.outputLayout == GDN::CHUNK_FWD_O_LAYOUT_TND);
     }
@@ -325,10 +324,6 @@ public:
         OP_CHECK_IF(!useA5Path && !useLegacyPath,
                     OP_LOGE(ctx_.nodeName,
                             "use_exp2=true supports BSND/TND, while use_exp2=false supports BNSD/NTD."),
-                    return ge::GRAPH_FAILED);
-        OP_CHECK_IF(useA5Path && ctx_.npuArch != NpuArch::DAV_3510,
-                    OP_LOGE(ctx_.nodeName,
-                            "use_exp2=true with output_layout=BSND/TND is supported only on A5."),
                     return ge::GRAPH_FAILED);
         return ge::GRAPH_SUCCESS;
     }

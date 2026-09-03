@@ -42,8 +42,8 @@
  * chunkOffsetsOptional : optional
  * scale : required
  * chunkSize : required
- * useExp2 : required
- * outputLayout : required
+ * useExp2 : optional
+ * outputLayout : optional
  * oOut : required
  * workspaceSize : size of workspace(output).
  * executor : executor context(output).
@@ -125,14 +125,6 @@ aclnnStatus aclnnChunkFwdO(
 - 当前实现要求 `V = 128` 或 `256`。
 - `chunkSize` 当前仅支持 `64` 或 `128`。
 - 当启用变长模式时，`cuSeqlensOptional` 和 `chunkOffsetsOptional` 用于描述变长分块；二者需要同时提供，且当前实现仅支持 `B = 1`。
-- A5 路径进一步要求 `BFLOAT16`、`chunkSize = 64` 且 `K = V = 128`。
-
-| 芯片路径 | 模式 | `useExp2` | `outputLayout` | `oOut` 形状 |
-|---|---|---:|---|---|
-| A5 | 定长 | `true` | `BSND` | `[B, T, HV, V]` |
-| A5 | 变长 | `true` | `TND` | `[T, HV, V]` |
-| 所有支持芯片（含 A5） | 定长 | `false` | `BNSD` | `[B, HV, T, V]` |
-| 所有支持芯片（含 A5） | 变长 | `false` | `NTD` | `[HV, T, V]` |
 
 ---
 
@@ -143,7 +135,7 @@ aclnnStatus aclnnChunkFwdO(
 - `cuSeqlensOptional` 和 `chunkOffsetsOptional`：
   - 二者任意一个出现时进入变长模式，当前实现要求二者同时提供
   - 变长模式仅支持 `B = 1`
-- Torch 公开接口的 `use_exp2` 和 `output_layout` 默认值分别为 `False` 和 `"BNSD"`，用于保持旧路径调用兼容。A5 新路径调用必须显式传入对应组合。
+- Torch 公开接口的 `use_exp2` 和 `output_layout` 默认值分别为 `False` 和 `"BNSD"`。
 
 ### 4.2 形状约束（强约束）
 

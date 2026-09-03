@@ -110,7 +110,11 @@ __aicore__ inline GM_ADDR ChunkFwdOAPrimeGmOffset(GM_ADDR workspace, const Chunk
 constexpr uint32_t CHUNK_FWD_O_L1_Q_BASE = 0U;
 constexpr uint32_t CHUNK_FWD_O_L1_K_BASE = 64U * 1024U;
 constexpr uint32_t CHUNK_FWD_O_L1_H_BASE = 128U * 1024U;
-constexpr uint32_t CHUNK_FWD_O_L1_STREAM_BANK_BYTES = 256U * 1024U;
+constexpr uint32_t CHUNK_FWD_O_L1_Q_SLOT_BYTES = 16U * 1024U;
+constexpr uint32_t CHUNK_FWD_O_L1_K_SLOT_BYTES = 16U * 1024U;
+constexpr uint32_t CHUNK_FWD_O_L1_H_SLOT_BYTES = 32U * 1024U;
+constexpr uint32_t CHUNK_FWD_O_L1_STAGE2_END =
+    CHUNK_FWD_O_L1_H_BASE + CHUNK_FWD_O_STREAM_BANK_COUNT * CHUNK_FWD_O_L1_H_SLOT_BYTES;
 constexpr uint32_t CHUNK_FWD_O_L1_APRIME_BASE = 256U * 1024U;
 constexpr uint32_t CHUNK_FWD_O_L1_APRIME_SLOT_BYTES = CHUNK_FWD_O_APRIME_SLOT_BYTES;
 constexpr uint32_t CHUNK_FWD_O_L1_V_BASE = 288U * 1024U;
@@ -122,24 +126,19 @@ constexpr uint32_t CHUNK_FWD_O_L0_A_BYTES = 32U * 1024U;
 constexpr uint32_t CHUNK_FWD_O_L0_B_BYTES = 32U * 1024U;
 constexpr uint32_t CHUNK_FWD_O_L0_C_BYTES = 128U * 1024U;
 
-__aicore__ inline uint32_t ChunkFwdOL1StreamBankBase(uint32_t streamSlot)
-{
-    return streamSlot * CHUNK_FWD_O_L1_STREAM_BANK_BYTES;
-}
-
 __aicore__ inline uint32_t ChunkFwdOL1QOffset(uint32_t streamSlot)
 {
-    return ChunkFwdOL1StreamBankBase(streamSlot) + CHUNK_FWD_O_L1_Q_BASE;
+    return CHUNK_FWD_O_L1_Q_BASE + streamSlot * CHUNK_FWD_O_L1_Q_SLOT_BYTES;
 }
 
 __aicore__ inline uint32_t ChunkFwdOL1KOffset(uint32_t streamSlot)
 {
-    return ChunkFwdOL1StreamBankBase(streamSlot) + CHUNK_FWD_O_L1_K_BASE;
+    return CHUNK_FWD_O_L1_K_BASE + streamSlot * CHUNK_FWD_O_L1_K_SLOT_BYTES;
 }
 
 __aicore__ inline uint32_t ChunkFwdOL1HOffset(uint32_t streamSlot)
 {
-    return ChunkFwdOL1StreamBankBase(streamSlot) + CHUNK_FWD_O_L1_H_BASE;
+    return CHUNK_FWD_O_L1_H_BASE + streamSlot * CHUNK_FWD_O_L1_H_SLOT_BYTES;
 }
 
 __aicore__ inline uint32_t ChunkFwdOL1APrimeOffset(uint32_t headOffset)
@@ -167,7 +166,7 @@ __aicore__ inline uint32_t ChunkFwdOL0COffset(uint32_t slot)
     return slot * CHUNK_FWD_O_L0_C_BYTES;
 }
 
-// PR404-style ordered chains. Both sides walk every stage round in the same
+// Ordered chains require both sides to walk every stage round in the same
 // head order, so one fixed flag per direction is sufficient.
 constexpr uint64_t CHUNK_FWD_O_VEC_TO_CUBE_READY_FLAG = 1;
 constexpr uint64_t CHUNK_FWD_O_CUBE_TO_VEC_READY_FLAG = 3;

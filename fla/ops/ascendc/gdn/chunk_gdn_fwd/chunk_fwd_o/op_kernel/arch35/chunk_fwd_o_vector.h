@@ -77,60 +77,92 @@ __simd_vf__ inline void Stage1Gate64VF(__ubuf__ float *gateAAddr, __ubuf__ float
     }
 }
 
-__simd_vf__ inline void Stage3Gate64VF(__ubuf__ bfloat16_t *aPrimeAddr, __ubuf__ float *oSPrimeAddr,
-                                      __ubuf__ float *aRawAddr, __ubuf__ float *oSRawAddr,
-                                      __ubuf__ float *gateAAddr, __ubuf__ float *gateOAddr,
-                                      uint16_t validRows)
+__simd_vf__ inline void Stage3Gate64VF(__ubuf__ bfloat16_t *aPrimeAddr, __ubuf__ float *oSAddr,
+                                      __ubuf__ float *aRawAddr, __ubuf__ float *gateAAddr,
+                                      __ubuf__ float *gateOAddr, uint16_t validRows)
 {
     constexpr uint16_t kBt = static_cast<uint16_t>(CHUNK_FWD_O_A5_BT);
     RegTensor<float> zeroReg;
     MaskReg floatMask = CreateMask<float, MaskPattern::ALL>();
     Duplicate(zeroReg, 0.0f, floatMask);
 
+    // Phase 1 computes A'. Its registers are dead before the O_s' phase starts,
+    // allowing the compiler to reuse the same physical register bank.
     {
         MaskReg lowerMask0;
+        MaskReg lowerMask1;
+        MaskReg lowerMask2;
+        MaskReg lowerMask3;
         RegTensor<float> aRawReg0;
         RegTensor<float> aRawReg1;
+        RegTensor<float> aRawReg2;
+        RegTensor<float> aRawReg3;
         RegTensor<float> gateAReg0;
         RegTensor<float> gateAReg1;
+        RegTensor<float> gateAReg2;
+        RegTensor<float> gateAReg3;
         RegTensor<float> aPrimeReg0;
         RegTensor<float> aPrimeReg1;
+        RegTensor<float> aPrimeReg2;
+        RegTensor<float> aPrimeReg3;
         RegTensor<bfloat16_t> aPrimeBf16Reg0;
         RegTensor<bfloat16_t> aPrimeBf16Reg1;
+        RegTensor<bfloat16_t> aPrimeBf16Reg2;
+        RegTensor<bfloat16_t> aPrimeBf16Reg3;
         uint16_t rowLoop = 0;
-        const uint16_t rowLoopCount = validRows / 2U;
-        const uint16_t tailLoopCount = validRows % 2U;
-        const uint16_t tailRowBase = rowLoopCount * 2U;
+        const uint16_t rowLoopCount = validRows / 4U;
+        const uint16_t tailLoopCount = validRows % 4U;
+        const uint16_t tailRowBase = rowLoopCount * 4U;
         uint16_t rowBase = 0;
         uint32_t rowOffset0 = 0;
         uint32_t rowOffset1 = 0;
+        uint32_t rowOffset2 = 0;
+        uint32_t rowOffset3 = 0;
         uint32_t lowerCount0 = 0;
         uint32_t lowerCount1 = 0;
+        uint32_t lowerCount2 = 0;
+        uint32_t lowerCount3 = 0;
 
-        // The main loop handles complete valid row pairs to expose two
-        // independent load/compute/store chains to the VF scheduler.
+        // Four independent rows expose parallel load/compute/store chains.
         for (rowLoop = 0; rowLoop < rowLoopCount; ++rowLoop) {
-            rowBase = static_cast<uint16_t>(rowLoop * 2U);
+            rowBase = static_cast<uint16_t>(rowLoop * 4U);
             rowOffset0 = static_cast<uint32_t>(rowBase) * kBt;
             rowOffset1 = static_cast<uint32_t>(rowBase + 1U) * kBt;
+            rowOffset2 = static_cast<uint32_t>(rowBase + 2U) * kBt;
+            rowOffset3 = static_cast<uint32_t>(rowBase + 3U) * kBt;
             lowerCount0 = static_cast<uint32_t>(rowBase + 1U);
             lowerCount1 = static_cast<uint32_t>(rowBase + 2U);
+            lowerCount2 = static_cast<uint32_t>(rowBase + 3U);
+            lowerCount3 = static_cast<uint32_t>(rowBase + 4U);
+            lowerMask0 = UpdateMask<float>(lowerCount0);
+            lowerMask1 = UpdateMask<float>(lowerCount1);
+            lowerMask2 = UpdateMask<float>(lowerCount2);
+            lowerMask3 = UpdateMask<float>(lowerCount3);
 
             LoadAlign(aRawReg0, aRawAddr + rowOffset0);
-            LoadAlign(gateAReg0, gateAAddr + rowOffset0);
-            Mul(aPrimeReg0, aRawReg0, gateAReg0, floatMask);
-            lowerMask0 = UpdateMask<float>(lowerCount0);
-            Select(aPrimeReg0, aPrimeReg0, zeroReg, lowerMask0);
-            Cast<bfloat16_t, float, CHUNK_FWD_O_FP32_TO_B16_PACK>(aPrimeBf16Reg0, aPrimeReg0, floatMask);
-            StoreAlign<bfloat16_t, StoreDist::DIST_PACK_B32>(aPrimeAddr + rowOffset0, aPrimeBf16Reg0, floatMask);
-
             LoadAlign(aRawReg1, aRawAddr + rowOffset1);
+            LoadAlign(aRawReg2, aRawAddr + rowOffset2);
+            LoadAlign(aRawReg3, aRawAddr + rowOffset3);
+            LoadAlign(gateAReg0, gateAAddr + rowOffset0);
             LoadAlign(gateAReg1, gateAAddr + rowOffset1);
+            LoadAlign(gateAReg2, gateAAddr + rowOffset2);
+            LoadAlign(gateAReg3, gateAAddr + rowOffset3);
+            Mul(aPrimeReg0, aRawReg0, gateAReg0, floatMask);
             Mul(aPrimeReg1, aRawReg1, gateAReg1, floatMask);
-            lowerMask0 = UpdateMask<float>(lowerCount1);
-            Select(aPrimeReg1, aPrimeReg1, zeroReg, lowerMask0);
+            Mul(aPrimeReg2, aRawReg2, gateAReg2, floatMask);
+            Mul(aPrimeReg3, aRawReg3, gateAReg3, floatMask);
+            Select(aPrimeReg0, aPrimeReg0, zeroReg, lowerMask0);
+            Select(aPrimeReg1, aPrimeReg1, zeroReg, lowerMask1);
+            Select(aPrimeReg2, aPrimeReg2, zeroReg, lowerMask2);
+            Select(aPrimeReg3, aPrimeReg3, zeroReg, lowerMask3);
+            Cast<bfloat16_t, float, CHUNK_FWD_O_FP32_TO_B16_PACK>(aPrimeBf16Reg0, aPrimeReg0, floatMask);
             Cast<bfloat16_t, float, CHUNK_FWD_O_FP32_TO_B16_PACK>(aPrimeBf16Reg1, aPrimeReg1, floatMask);
+            Cast<bfloat16_t, float, CHUNK_FWD_O_FP32_TO_B16_PACK>(aPrimeBf16Reg2, aPrimeReg2, floatMask);
+            Cast<bfloat16_t, float, CHUNK_FWD_O_FP32_TO_B16_PACK>(aPrimeBf16Reg3, aPrimeReg3, floatMask);
+            StoreAlign<bfloat16_t, StoreDist::DIST_PACK_B32>(aPrimeAddr + rowOffset0, aPrimeBf16Reg0, floatMask);
             StoreAlign<bfloat16_t, StoreDist::DIST_PACK_B32>(aPrimeAddr + rowOffset1, aPrimeBf16Reg1, floatMask);
+            StoreAlign<bfloat16_t, StoreDist::DIST_PACK_B32>(aPrimeAddr + rowOffset2, aPrimeBf16Reg2, floatMask);
+            StoreAlign<bfloat16_t, StoreDist::DIST_PACK_B32>(aPrimeAddr + rowOffset3, aPrimeBf16Reg3, floatMask);
         }
 
         for (rowLoop = 0; rowLoop < tailLoopCount; ++rowLoop) {
@@ -155,31 +187,64 @@ __simd_vf__ inline void Stage3Gate64VF(__ubuf__ bfloat16_t *aPrimeAddr, __ubuf__
         }
     }
 
-    RegTensor<float> oSRawReg;
+    // Phase 2 handles two rows per loop while explicitly reusing one row's registers.
+    RegTensor<float> oSReg00;
+    RegTensor<float> oSReg01;
     RegTensor<float> gateOVectorReg;
-    RegTensor<float> gateORowReg;
-    RegTensor<uint32_t> rowIndexReg;
+    RegTensor<float> gateORowReg0;
+    RegTensor<uint32_t> rowIndexReg0;
     LoadAlign(gateOVectorReg, gateOAddr);
 
-    for (uint16_t row = 0; row < kBt; ++row) {
-        Duplicate(rowIndexReg, static_cast<uint32_t>(row), floatMask);
-        Gather(gateORowReg, gateOVectorReg, rowIndexReg);
-        for (uint16_t tile = 0; tile < CHUNK_FWD_O_A5_V / CHUNK_FWD_O_A5_BT; ++tile) {
-            const uint32_t offset = static_cast<uint32_t>(row) * static_cast<uint16_t>(CHUNK_FWD_O_A5_V) +
-                                    static_cast<uint32_t>(tile) * kBt;
-            if (row < validRows) {
-                LoadAlign(oSRawReg, oSRawAddr + offset);
-                Mul(oSRawReg, oSRawReg, gateORowReg, floatMask);
-                StoreAlign(oSPrimeAddr + offset, oSRawReg, floatMask);
-            } else {
-                StoreAlign(oSPrimeAddr + offset, zeroReg, floatMask);
-            }
-        }
+    const uint16_t validRowPairCount = validRows / 2U;
+    for (uint16_t rowPair = 0; rowPair < validRowPairCount; ++rowPair) {
+        const uint16_t row0 = static_cast<uint16_t>(rowPair * 2U);
+        const uint16_t row1 = static_cast<uint16_t>(row0 + 1U);
+        const uint32_t offset00 = static_cast<uint32_t>(row0) * CHUNK_FWD_O_A5_V;
+        const uint32_t offset01 = offset00 + kBt;
+        const uint32_t offset10 = static_cast<uint32_t>(row1) * CHUNK_FWD_O_A5_V;
+        const uint32_t offset11 = offset10 + kBt;
+
+        Duplicate(rowIndexReg0, static_cast<uint32_t>(row0), floatMask);
+        Gather(gateORowReg0, gateOVectorReg, rowIndexReg0);
+        LoadAlign(oSReg00, oSAddr + offset00);
+        LoadAlign(oSReg01, oSAddr + offset01);
+        Mul(oSReg00, oSReg00, gateORowReg0, floatMask);
+        Mul(oSReg01, oSReg01, gateORowReg0, floatMask);
+        StoreAlign(oSAddr + offset00, oSReg00, floatMask);
+        StoreAlign(oSAddr + offset01, oSReg01, floatMask);
+
+        Duplicate(rowIndexReg0, static_cast<uint32_t>(row1), floatMask);
+        Gather(gateORowReg0, gateOVectorReg, rowIndexReg0);
+        LoadAlign(oSReg00, oSAddr + offset10);
+        LoadAlign(oSReg01, oSAddr + offset11);
+        Mul(oSReg00, oSReg00, gateORowReg0, floatMask);
+        Mul(oSReg01, oSReg01, gateORowReg0, floatMask);
+        StoreAlign(oSAddr + offset10, oSReg00, floatMask);
+        StoreAlign(oSAddr + offset11, oSReg01, floatMask);
+    }
+
+    if ((validRows & 1U) != 0U) {
+        const uint32_t offset0 = static_cast<uint32_t>(validRows - 1U) * CHUNK_FWD_O_A5_V;
+        const uint32_t offset1 = offset0 + kBt;
+        Duplicate(rowIndexReg0, static_cast<uint32_t>(validRows - 1U), floatMask);
+        Gather(gateORowReg0, gateOVectorReg, rowIndexReg0);
+        LoadAlign(oSReg00, oSAddr + offset0);
+        LoadAlign(oSReg01, oSAddr + offset1);
+        Mul(oSReg00, oSReg00, gateORowReg0, floatMask);
+        Mul(oSReg01, oSReg01, gateORowReg0, floatMask);
+        StoreAlign(oSAddr + offset0, oSReg00, floatMask);
+        StoreAlign(oSAddr + offset1, oSReg01, floatMask);
+    }
+
+    for (uint16_t row = validRows; row < kBt; ++row) {
+        const uint32_t offset0 = static_cast<uint32_t>(row) * CHUNK_FWD_O_A5_V;
+        StoreAlign(oSAddr + offset0, zeroReg, floatMask);
+        StoreAlign(oSAddr + offset0 + kBt, zeroReg, floatMask);
     }
 }
 
 __simd_vf__ inline void Stage5Fuse64VF(__ubuf__ bfloat16_t *oOutAddr, __ubuf__ float *oSPrimeAddr,
-                                       __ubuf__ float *oLAddr, float scale, uint16_t validRows)
+                                      __ubuf__ float *oLAddr, float scale, uint16_t validRows)
 {
     constexpr uint16_t kV = static_cast<uint16_t>(CHUNK_FWD_O_A5_V);
     constexpr uint16_t kTilesPerRow = static_cast<uint16_t>(CHUNK_FWD_O_A5_V / CHUNK_FWD_O_A5_BT);
@@ -208,7 +273,7 @@ class ChunkFwdOA5VectorProcess {
 public:
     using ArchTag = Catlass::Arch::Ascend950;
 
-    static constexpr uint32_t BANK_COUNT_2  = CHUNK_FWD_O_STREAM_BANK_COUNT;
+    static constexpr uint32_t BANK_COUNT_2 = CHUNK_FWD_O_STREAM_BANK_COUNT;
 
     __aicore__ inline ChunkFwdOA5VectorProcess(GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR h, GM_ADDR g,
                                                GM_ADDR cuSeqlens, GM_ADDR chunkOffsets, GM_ADDR o, GM_ADDR workspace)
@@ -234,9 +299,9 @@ public:
         }
     }
 
-    // Keep the AIV stage order in one place.  Cross-core and local pipeline
-    // events are intentionally adjacent to the head that consumes/produces
-    // the corresponding data, matching the PR404 execution style.
+    // Keep the AIV stage order in one place. Cross-core and local pipeline
+    // events are intentionally adjacent to the head that consumes or produces
+    // the corresponding data.
     __aicore__ inline void Process(uint32_t coreIdx, uint32_t coreNum)
     {
         const uint32_t subBlockIdx = AscendC::GetSubBlockIdx();
@@ -265,8 +330,6 @@ public:
                     if (ownerSubBlock != subBlockIdx) {
                         continue;
                     }
-                    // SetFlag<HardEvent::V_MTE2>(mte2ToV_[streamSlot_]);
-                    // WaitFlag<HardEvent::V_MTE2>(mte2ToV_[streamSlot_]);
                     LoadStage1G(loc, hvBase + headOffset, streamSlot_);
                     SetFlag<HardEvent::MTE2_V>(mte2ToV_[streamSlot_]);
                     WaitFlag<HardEvent::MTE2_V>(mte2ToV_[streamSlot_]);
@@ -289,8 +352,6 @@ public:
                             ubBuf_.GetWithOffset<float>(matrixElems, ChunkFwdOGateAOffset(streamSlot_));
                         LocalTensor<float> aRaw =
                             ubBuf_.GetWithOffset<float>(matrixElems, ChunkFwdOARawOffset(streamSlot_));
-                        LocalTensor<float> oSRaw =
-                            ubBuf_.GetWithOffset<float>(bt * vDim, ChunkFwdOOSRawOffset(streamSlot_));
                         LocalTensor<float> oSPrime =
                             ubBuf_.GetWithOffset<float>(bt * vDim, ChunkFwdOOsPrimeOffset(streamSlot_));
                         LocalTensor<bfloat16_t> aPrimeBf16 =
@@ -302,7 +363,6 @@ public:
                             reinterpret_cast<__ubuf__ bfloat16_t *>(aPrimeBf16.GetPhyAddr()),
                             reinterpret_cast<__ubuf__ float *>(oSPrime.GetPhyAddr()),
                             reinterpret_cast<__ubuf__ float *>(aRaw.GetPhyAddr()),
-                            reinterpret_cast<__ubuf__ float *>(oSRaw.GetPhyAddr()),
                             reinterpret_cast<__ubuf__ float *>(gateA.GetPhyAddr()),
                             reinterpret_cast<__ubuf__ float *>(gateO.GetPhyAddr()),
                             static_cast<uint16_t>(loc.chunkLen));

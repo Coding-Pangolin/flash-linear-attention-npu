@@ -79,7 +79,7 @@ def _chunk_bwd_dv_local_ref(inputs):
 
 
 def run_cpu(spec: dict[str, Any], high_precision: bool = False):
-    """运行 CPU 同精度或 fp64 高精度标杆。"""
+    """运行 CPU 高精度 golden。"""
     inputs = build_inputs(spec, torch.device("cpu"), high_precision=high_precision)
     return _chunk_bwd_dv_local_ref(inputs)
 
@@ -98,8 +98,7 @@ class FunctionApi(BaseApi):
 
     def __init__(self, task_result: TaskResult):
         super(FunctionApi, self).__init__(task_result)
-        self.is_benchmark_task = bool(task_result.is_benchmark_task)
-        self.high_precision = self.device == "cpu" and self.is_benchmark_task
+        self.high_precision = self.device == "cpu"
 
     def __call__(self, input_data: InputDataset, with_output: bool = False):
         spec = _case_spec(input_data, OP_NAME)
@@ -109,4 +108,4 @@ class FunctionApi(BaseApi):
             outputs = run_cpu(spec, self.high_precision)
         else:
             raise RuntimeError(f"{OP_NAME} 仅支持 NPU DUT 与 CPU 标杆节点，当前设备：{self.device!r}")
-        return _finite_tuple(outputs)
+        return _finite_tuple(outputs, golden=self.device == "cpu")

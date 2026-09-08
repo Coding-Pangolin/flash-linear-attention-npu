@@ -3,7 +3,7 @@
 Single source of truth shared by:
 - scripts/check_npu_env.py (build/runtime preflight)
 - the PyPI import guard embedded into tiered wheels at build time
-  (generated torch_custom/fla_npu/fla_npu/_compat.py)
+  (generated torch_custom/fla_npu/fla_npu/_compat.py; minimum-version tables)
 
 Keep the public promise aligned with the README: CANN >= 8.5.2, torch >= 2.6,
 torch_npu >= TORCH_NPU_GDN_FIX_MINIMUMS[torch], triton-ascend >= 3.2.1 on CANN
@@ -33,8 +33,10 @@ TORCH_NPU_GDN_FIX_MINIMUMS = {
 }
 MIN_TORCH_NPU_FUTURE_FIX_FAMILY = "2.13.0"
 # (CANN public version prefix, torch version) combos validated on real NPUs
-# before the v1 PyPI release. Combos inside the promised range but not listed
-# here trigger a runtime warning (supported-but-not-yet-validated).
+# before the v1 PyPI release. Informational only: the import-time guard checks
+# minimums, not this matrix. Combos above the documented minimums are usable
+# even when not listed here; scripts/check_npu_env.py and the README report the
+# validated matrix for users who want a QA-supported combination.
 VALIDATED_COMBOS = [
     ("9.1.0", "2.7.1"),
     ("9.1.0", "2.8.0"),

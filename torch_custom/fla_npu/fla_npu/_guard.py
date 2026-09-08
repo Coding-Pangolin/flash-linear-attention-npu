@@ -13,6 +13,11 @@ Notes:
 - Version tables mirror scripts/npu_compat.py through the build-generated
   ``_compat.py`` (single source of truth in the repo).
 - Version comparison is dependency-free (numeric tuple compare).
+- Only minimum-version gates run at import time. The release-validated matrix
+  (VALIDATED_COMBOS) is intentionally NOT enforced here: an environment above
+  the documented minimums is usable even when it was not part of the release
+  test matrix. That matrix stays informational (scripts/check_npu_env.py /
+  README) so import never warns about an untested-but-supported combination.
 """
 
 from __future__ import annotations
@@ -72,7 +77,6 @@ def _compat() -> dict:
             "_compat.py", "TORCH_NPU_GDN_FIX_MINIMUMS"
         )
         or {},
-        "VALIDATED_COMBOS": _load_module_value("_compat.py", "VALIDATED_COMBOS") or [],
     }
 
 
@@ -129,7 +133,6 @@ def _check_versions(compat: dict) -> None:
     if not min_cann or not min_torch:
         return  # legacy wheel without generated _compat.py
     table = compat.get("TORCH_NPU_GDN_FIX_MINIMUMS") or {}
-    validated = compat.get("VALIDATED_COMBOS") or []
 
     cann = detect_cann_version()
     if cann and _num(cann) < _num(min_cann):
@@ -157,17 +160,6 @@ def _check_versions(compat: dict) -> None:
                 f"torch_npu {torch_npu_version} is below the minimum "
                 f"{minimum} required for torch {torch_version} (GDN fixes). "
                 "See the README for the supported version matrix."
-            )
-
-    if cann:
-        cann_key = ".".join(str(part) for part in _num(cann)[:3])
-        torch_key = ".".join(str(part) for part in torch_nums[:3])
-        if (cann_key, torch_key) not in validated:
-            warnings.warn(
-                f"fla_npu: environment (CANN {cann}, torch {torch_version}) is "
-                "inside the supported range but not in the release-validated "
-                "matrix; run the README preflight checks before relying on it.",
-                RuntimeWarning,
             )
 
 

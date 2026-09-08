@@ -401,6 +401,28 @@ def _detect_cann_version() -> str:
     return "<unknown>"
 
 
+def _report_validated_combo(cann: str, torch_version: str) -> None:
+    """Report (informationally) whether this env is on the release-validated matrix.
+
+    Unlike the minimum-version checks this never fails: an environment above
+    the documented minimums is usable even when it is not part of the release
+    test matrix. The output is a QA/support hint only; the README matrix is the
+    canonical record.
+    """
+    cann_key = ".".join(str(part) for part in (_version_key(cann) or ()))
+    torch_key = ".".join(str(part) for part in (_version_key(torch_version) or ()))
+    if (cann_key, torch_key) in VALIDATED_COMBOS:
+        print(
+            f"[INFO] environment (CANN {cann}, torch {torch_version}) is on the "
+            "release-validated matrix"
+        )
+    else:
+        print(
+            f"[INFO] environment (CANN {cann}, torch {torch_version}) is not on "
+            "the release-validated matrix; minimum-version requirements still apply"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -466,6 +488,8 @@ def main() -> int:
         torch_version = getattr(torch, "__version__", "<unknown>")
         _ok(f"torch version: {torch_version}")
         _check_min_version(failures, "torch", torch_version, MIN_TORCH)
+        if ascend_home or ascend_opp:
+            _report_validated_combo(_detect_cann_version(), torch_version)
         if hasattr(torch, "npu"):
             try:
                 npu_available = bool(torch.npu.is_available())

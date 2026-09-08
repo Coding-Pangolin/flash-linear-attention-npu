@@ -546,7 +546,6 @@ def _write_runtime_meta() -> None:
                 f"MIN_CANN = {npu_compat.MIN_CANN_BY_TIER[tier]!r}\n",
                 f"MIN_TORCH = {npu_compat.MIN_TORCH!r}\n",
                 f"TORCH_NPU_GDN_FIX_MINIMUMS = {npu_compat.TORCH_NPU_GDN_FIX_MINIMUMS!r}\n",
-                f"VALIDATED_COMBOS = {npu_compat.VALIDATED_COMBOS!r}\n",
             ]
         ),
         encoding="utf-8",

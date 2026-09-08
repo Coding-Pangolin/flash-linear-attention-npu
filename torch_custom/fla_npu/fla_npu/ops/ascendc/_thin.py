@@ -7,6 +7,29 @@ from __future__ import annotations
 
 import os
 
+_CURRENT_STREAM_PTR = None
+_STREAM_PATCHED = False
+
+
+def _ensure_stream_tracking() -> None:
+    """Track torch.npu.set_stream so thin ops avoid the expensive
+    torch.npu.current_stream() object construction on every call."""
+
+    global _STREAM_PATCHED, _CURRENT_STREAM_PTR
+    if _STREAM_PATCHED:
+        return
+    import torch
+
+    original = torch.npu.set_stream
+
+    def tracking_set_stream(stream):
+        global _CURRENT_STREAM_PTR
+        _CURRENT_STREAM_PTR = int(stream.npu_stream)
+        return original(stream)
+
+    torch.npu.set_stream = tracking_set_stream
+    _STREAM_PATCHED = True
+
 
 def _extension() -> "module":
     import fla_npu._C_thin as ext
@@ -23,7 +46,11 @@ def _extension() -> "module":
 def _current_stream_ptr() -> int:
     import torch
 
-    return int(torch.npu.current_stream().npu_stream)
+    global _CURRENT_STREAM_PTR
+    _ensure_stream_tracking()
+    if _CURRENT_STREAM_PTR is None:
+        _CURRENT_STREAM_PTR = int(torch.npu.current_stream().npu_stream)
+    return _CURRENT_STREAM_PTR
 
 
 def npu_recurrent_gated_delta_rule(

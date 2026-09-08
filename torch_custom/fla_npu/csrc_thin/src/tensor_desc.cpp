@@ -83,7 +83,10 @@ AclTensorView::AclTensorView(const at::Tensor& t, bool force_nd) {
 
   auto fn = reinterpret_cast<AclCreateTensorFn>(
       Runtime::instance().symbol("aclCreateTensor"));
-  void* data = t.data_ptr();
+  // aclCreateTensor expects the storage base address; storage_offset is passed
+  // separately (Tensor::data_ptr() already includes the offset and would double
+  // it for strided views).
+  void* data = t.storage().data_ptr().get();
   ptr_ = fn(view_dims.data(), static_cast<uint64_t>(ndim),
             acl_dtype(t.scalar_type()), view_strides.data(), offset,
             force_nd ? kAclFormatNd : kAclFormatNd, storage_dims.data(),

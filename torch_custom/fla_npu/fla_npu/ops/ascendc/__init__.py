@@ -185,31 +185,45 @@ def _wrap_mutable_direct_op(name: str, op: Callable) -> Callable:
         return op
 
     signature = inspect.signature(op)
+    predicate = MUTATION_PREDICATES.get(name)
+    parameters = list(signature.parameters.values())
+    mutated_positions = [
+        i for i, param in enumerate(parameters) if param.name in mutated_names
+    ]
+    can_fast_path = predicate is None and mutated_positions
 
     @functools.wraps(op)
     def wrapper(*args, **kwargs):
-        bound = signature.bind(*args, **kwargs)
-        bound.apply_defaults()
-        active_mutated_names = mutated_names
-        predicate = MUTATION_PREDICATES.get(name)
-        if predicate is not None and not predicate(bound.arguments):
-            active_mutated_names = ()
-        mutated_tensors = [bound.arguments[arg_name] for arg_name in active_mutated_names]
-
         try:
             import torch
         except Exception as exc:
             raise RuntimeError("Mutable Ascend C operators require the torch Python runtime.") from exc
 
-        mutated_tensors = [tensor for tensor in mutated_tensors if isinstance(tensor, torch.Tensor)]
+        if (
+            can_fast_path
+            and not any(key in kwargs for key in mutated_names)
+            and len(args) > max(mutated_positions)
+        ):
+            raw_mutated = [args[pos] for pos in mutated_positions]
+        else:
+            bound = signature.bind(*args, **kwargs)
+            bound.apply_defaults()
+            active_mutated_names = mutated_names
+            if predicate is not None and not predicate(bound.arguments):
+                active_mutated_names = ()
+            raw_mutated = [
+                bound.arguments[arg_name] for arg_name in active_mutated_names
+            ]
+
+        mutated_tensors = [
+            tensor for tensor in raw_mutated if isinstance(tensor, torch.Tensor)
+        ]
         requiring_grad = [
-            arg_name for arg_name in active_mutated_names
-            if getattr(bound.arguments[arg_name], "requires_grad", False)
+            tensor for tensor in mutated_tensors if tensor.requires_grad
         ]
         if requiring_grad:
-            names = ", ".join(requiring_grad)
             raise RuntimeError(
-                f"{name} mutates {names} in place through ctypes. Mutable state tensors "
+                f"{name} mutates state tensors in place. Mutable state tensors "
                 "must not require gradients; use a functional state API for training."
             )
 

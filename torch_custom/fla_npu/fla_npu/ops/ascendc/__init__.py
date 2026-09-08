@@ -166,7 +166,8 @@ _THIN_SUPPORTED_OPS = frozenset(
 def _get_thin_op(name: str):
     """Return the thin C++ adapter for *name* when enabled, else None."""
 
-    if os.environ.get("FLA_NPU_THIN_LAUNCHER", "0") != "1":
+    flag = os.environ.get("FLA_NPU_THIN_LAUNCHER")
+    if flag is not None and flag.upper() in {"0", "FALSE", "NO", "OFF"}:
         return None
     canonical = name if name.startswith("npu_") else f"npu_{name}"
     if canonical not in _THIN_SUPPORTED_OPS:

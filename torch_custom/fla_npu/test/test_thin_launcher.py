@@ -79,11 +79,14 @@ class TestThinLauncher(unittest.TestCase):
     def test_dispatch_gating(self):
         from fla_npu.ops.ascendc import _get_thin_op
 
+        os.environ.pop("FLA_NPU_THIN_LAUNCHER", None)
+        self.assertIsNotNone(_get_thin_op("recurrent_gated_delta_rule"))
         os.environ["FLA_NPU_THIN_LAUNCHER"] = "1"
         self.assertIsNotNone(_get_thin_op("recurrent_gated_delta_rule"))
         os.environ["FLA_NPU_THIN_LAUNCHER"] = "0"
         self.assertIsNone(_get_thin_op("recurrent_gated_delta_rule"))
         self.assertIsNone(_get_thin_op("npu_chunk_fwd_o"))
+        os.environ.pop("FLA_NPU_THIN_LAUNCHER", None)
 
     def test_recurrent_parity_with_ctypes(self):
         import fla_npu._C_thin as thin_ext

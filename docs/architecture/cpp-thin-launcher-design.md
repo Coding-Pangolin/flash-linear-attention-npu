@@ -42,10 +42,17 @@ gap=16384 elements，offset=12288 elements：
 
 - 把 `recurrent_gated_delta_rule` 与 `causal_conv1d`（含 update/decode 形态）的
   host enqueue 降到与 vLLM-Ascend custom 路径同一量级（~0.05-0.08 ms/调用）。
-- 编译型薄层作为 fla_npu 的**可选**路径，默认不改变现有纯 Python wheel 与 ctypes
-  调用语义；kernel 继续使用 fla_npu 自带 OPP（`libcust_opapi.so`）。
+- 编译型薄层**默认编译、编译成功且算子已适配时默认启用**（可通过
+  `FLA_NPU_BUILD_THIN=0` 关闭编译、`FLA_NPU_THIN_LAUNCHER=0` 关闭运行时分发）；
+  kernel 继续使用 fla_npu 自带 OPP（`libcust_opapi.so`）。未适配/未编译时自动
+  回退 ctypes，保证功能可用。
 - 薄层 .so **不依赖 torch_npu 头文件/库/ABI**（编译期），只依赖 torch(C++ ABI)
   + CANN acl；stream 由调用方显式传入。
+
+兼容性说明：薄层是性能路径，只保证**输入合法**时与 ctypes 逐位等价；非法输入的
+报错类型/文案不保证与 ctypes 一致（ctypes 会先做 Python 校验抛 TypeError 等，
+薄层通常表现为 aclnn RuntimeError）。已通过客户视角兼容性测试
+（`test_thin_customer_compat.py`）覆盖有效输入签名/数值/mutation/stream 顺序。
 
 非目标（本阶段）：
 
@@ -85,7 +92,7 @@ fla_npu.ops.ascendc.npu_xxx(...)          # Python 入口（保持不变）
    的路径约定（`FLA_NPU_OP_API_LIB` 指向包内 `libcust_opapi.so`），C++ 侧
    `dlopen` 同一路径并缓存 `dlsym` 结果，等价 ctypes `_AclnnRuntime.symbol()`。
 5. **ctypes 作为 fallback**：薄层未编译、import 失败或算子未实现时，自动回退
-   现有 ctypes 路径，保证任何环境不破坏现状。
+   现有 ctypes 路径，保证任何环境不破坏现状（默认开关见目标节）。
 
 ### 3.2 每个算子的 ABI 事实（落地前必须逐字核对 OPP 头）
 
@@ -170,7 +177,7 @@ torch_custom/fla_npu/csrc_thin/
 ```bash
 source /usr/local/Ascend/ascend-toolkit/set_env.sh   # 或本机 CANN 路径
 cd torch_custom/fla_npu
-FLA_NPU_BUILD_THIN=1 python setup.py build_ext --inplace
+python setup.py build_ext --inplace    # 默认编译薄层；FLA_NPU_BUILD_THIN=0 关闭
 ```
 
 - OPP（`libcust_opapi.so`）仍由 run 包流程安装到

@@ -178,11 +178,9 @@ FLA_NPU_BUILD_THIN=1 python setup.py build_ext --inplace
 
 ## 8. Open Questions
 
-1. `causal_conv1d_update` 入口：上游 main 的 `fla_npu.ops.ascendc` 目前只导出
-   `causal_conv1d`（`npu_causal_conv1d`），服务侧复现脚本使用的
-   `causal_conv1d_update(x, state, weight, ..., activation="silu",
-   conv_state_indices, max_query_len, null_block_id, out=...)` 尚未在仓库出现，
-   需要先确认它对应的 aclnn 调用/OPP 头，再落地 conv1d 薄层（M2 前置）。
+1. ~~`causal_conv1d_update` 入口~~：已确认即现有 `causal_conv1d`
+   （`npu_causal_conv1d`）的别名/调用形态，run_mode=1（update/decode）由同一
+   aclnn 入口覆盖；M2 直接基于现有 wrapper 语义落地，不再等待新入口。
 2. device/event +22~31% 未在隔离复现中出现：落地后用同版本 FLA wheel + 服务级
    profiling 复核；若仍存在再开 kernel 专项。
 3. torch_npu 版本差异（复现机 2.9.0.post2 vs issue 2.10.0.post4）可能影响 FLA

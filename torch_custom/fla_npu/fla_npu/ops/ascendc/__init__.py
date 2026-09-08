@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import os
 import types
 import warnings
 from typing import Callable, Optional
@@ -147,11 +148,34 @@ def _get_torch_op(name: str):
 @functools.lru_cache(maxsize=None)
 def _get_direct_op(name: str):
     _prepare_direct_runtime()
+    thin_op = _get_thin_op(name)
+    if thin_op is not None:
+        return _wrap_mutable_direct_op(name, thin_op)
     try:
         op = ASCENDC_CTYPES_OPS[name]
     except KeyError as exc:
         raise AttributeError(f"fla_npu.ops.ascendc has no ctypes Ascend C op {name}.") from exc
     return _wrap_mutable_direct_op(name, op)
+
+
+_THIN_SUPPORTED_OPS = frozenset(
+    {"npu_recurrent_gated_delta_rule", "npu_causal_conv1d"}
+)
+
+
+def _get_thin_op(name: str):
+    """Return the thin C++ adapter for *name* when enabled, else None."""
+
+    if os.environ.get("FLA_NPU_THIN_LAUNCHER", "0") != "1":
+        return None
+    canonical = name if name.startswith("npu_") else f"npu_{name}"
+    if canonical not in _THIN_SUPPORTED_OPS:
+        return None
+    try:
+        from . import _thin
+    except Exception:
+        return None
+    return getattr(_thin, canonical, None)
 
 
 def _wrap_mutable_direct_op(name: str, op: Callable) -> Callable:

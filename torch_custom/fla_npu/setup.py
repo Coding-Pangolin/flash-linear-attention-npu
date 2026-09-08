@@ -249,7 +249,16 @@ def _setup_legacy_extension():
     )
 
 
-if _env_flag("FLA_NPU_BUILD_THIN"):
+def _thin_build_enabled() -> bool:
+    """Thin launcher is compiled by default; disable with FLA_NPU_BUILD_THIN=0."""
+
+    value = os.getenv("FLA_NPU_BUILD_THIN")
+    if value is None:
+        return True
+    return value.upper() not in {"0", "FALSE", "NO", "OFF"}
+
+
+if _thin_build_enabled():
     _setup_thin_extension()
 elif _env_flag("FLA_NPU_BUILD_LEGACY_EXTENSION"):
     _setup_legacy_extension()

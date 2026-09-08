@@ -1,6 +1,12 @@
 #include <ATen/ATen.h>
 #include <torch/extension.h>
 
+// NOTE(M2): this adapter mirrors the upstream-main aclnnCausalConv1d ABI
+// (int-array metadata). The service currently runs flash-linear-attention-npu
+// PR #390, whose aclnnCausalConv1d ABI differs (device tensor + *_cpu int-array
+// dual channels, char* activation, null_block_id/max_query_len). Rewrite this
+// adapter against PR #390 before enabling causal_conv1d in the thin launcher.
+
 #include <cstdint>
 #include <memory>
 #include <vector>

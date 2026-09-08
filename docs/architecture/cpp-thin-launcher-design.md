@@ -96,9 +96,17 @@ ABI 唯一权威是包内 OPP 的 `op_api/include/aclnnop/aclnn_*.h`（当前仓
 - `aclnnRecurrentGatedDeltaRule`：query/key/value/state/beta/actual_seq_lengths/
   ssm_state_indices/g/gk/num_accepted_tokens 为 tensor（可选以空描述符表示），
   `scale` 为 **float**，输出 out 为 tensor。
-- `aclnnCausalConv1d`（FLA 侧 run_mode=0 形态）：x/weight/bias/conv_states +
+- `aclnnCausalConv1d`（上游 main 旧形态）：x/weight/bias/conv_states +
   `query_start_loc/cache_indices/initial_state_mode/num_accepted_tokens` 四组
   int-array + activation/pad_slot/run_mode/head_num 标量 + out。
+- `aclnnCausalConv1d`（**PR #390 新形态**，FLA 服务实际使用，见
+  [flash-linear-attention-npu#390](https://github.com/flashserve/flash-linear-attention-npu/pull/390)）：
+  x/weight/bias/conv_states + 四组 device tensor metadata
+  （query_start_loc/cache_indices/has_initial_state/num_accepted_tokens）+
+  对应 `*_cpu` int-array + `activation` 为 char* 字符串 +
+  pad_slot_id/null_block_id/run_mode/head_num/max_query_len 标量 + out。
+  `causal_conv1d_update` 即该 ABI 的 update 形态（run_mode=1，preallocated
+  out）。vLLM-Ascend custom 侧对应 PR #8256 kernel。
 - vLLM-Ascend 最新 main 的同名 aclnn 为另一套 ABI（四组 metadata 是可选
   tensor），二者不可混用；薄层必须跟 **FLA 自己 OPP** 的签名。
 
@@ -178,9 +186,13 @@ FLA_NPU_BUILD_THIN=1 python setup.py build_ext --inplace
 
 ## 8. Open Questions
 
-1. ~~`causal_conv1d_update` 入口~~：已确认即现有 `causal_conv1d`
-   （`npu_causal_conv1d`）的别名/调用形态，run_mode=1（update/decode）由同一
-   aclnn 入口覆盖；M2 直接基于现有 wrapper 语义落地，不再等待新入口。
+1. `causal_conv1d_update` 入口来源已确认：**flash-linear-attention-npu PR #390**
+   （feat(causal_conv1d): add fn/update APIs and device metadata，未合入）。
+   它把 `aclnnCausalConv1d` 升级为"device tensor + `*_cpu` int-array 双通道 +
+   activation 字符串 + null_block_id/max_query_len"的 ABI。FLA 侧用 #390、
+   vLLM-Ascend 侧用 #8256。因此 M2 的 conv1d 薄层必须以 #390 ABI 为准
+   （当前 `ops_causal_conv1d.cpp` 只是上游旧形态占位，M2 需重写），且依赖
+   #390 合入后对应 OPP 重建。
 2. device/event +22~31% 未在隔离复现中出现：落地后用同版本 FLA wheel + 服务级
    profiling 复核；若仍存在再开 kernel 专项。
 3. torch_npu 版本差异（复现机 2.9.0.post2 vs issue 2.10.0.post4）可能影响 FLA

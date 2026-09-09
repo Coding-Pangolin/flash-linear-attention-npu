@@ -367,3 +367,27 @@ def npu_chunk_fwd_o(q, k, v, h, scale, *, g=None, cu_seqlens=None, chunk_indices
         str(output_layout),
         _current_stream_ptr(),
     )
+
+
+def npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, d_o, dv, scale, chunk_size, *, g=None, gK=None, h0=None, dht=None, cu_seqlens=None, chunk_indices=None, use_exp2=False):
+    ext = _extension()
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    result = ext.npu_chunk_gated_delta_rule_bwd_dhu(
+        q,
+        k,
+        w,
+        d_o,
+        dv,
+        g,
+        gK,
+        h0,
+        dht,
+        cu_seqlens,
+        chunk_indices,
+        float(scale),
+        int(chunk_size),
+        bool(use_exp2),
+        _current_stream_ptr(),
+    )
+    return (result[0], (result[1] if h0 is not None else None), result[2])

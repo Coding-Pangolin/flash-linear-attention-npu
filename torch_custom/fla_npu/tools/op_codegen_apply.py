@@ -155,7 +155,8 @@ def patch_thin(spec: dict) -> None:
             terms = []
             for i, out_name in enumerate(out_names):
                 if i in whens:
-                    terms.append(f"(result[{i}] if {whens[i]} else None)")
+                    py_when = outputs_spec[i].get("when_py", whens[i])
+                    terms.append(f"(result[{i}] if {py_when} else None)")
                 else:
                     terms.append(f"result[{i}]")
             body += "\n    return (" + ", ".join(terms) + ")"

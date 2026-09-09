@@ -81,6 +81,7 @@ def normalize(kinds: list[str]) -> list[str]:
     aliases = {
         "optional_tensor": "tensor",
         "cpu_int_array": "int_array",
+        "out_tensor": "tensor",
     }
     return [aliases.get(kind, kind) for kind in kinds]
 

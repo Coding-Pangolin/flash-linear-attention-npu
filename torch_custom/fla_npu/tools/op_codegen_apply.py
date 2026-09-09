@@ -96,16 +96,8 @@ def patch_thin(spec: dict) -> None:
 
 
 def patch_whitelist(spec: dict) -> None:
-    name = spec["python_name"]
-    path = THIN / "__init__.py"
-    text = path.read_text(encoding="utf-8")
-    if name in text.split("_THIN_SUPPORTED_OPS")[1]:
-        return
-    text = text.replace(
-        '        "npu_recurrent_gated_delta_rule",\n',
-        '        "npu_recurrent_gated_delta_rule",\n'
-        f'        "{name}",\n', 1)
-    path.write_text(text, encoding="utf-8")
+    # Whitelist is derived dynamically from _thin module functions; no patch.
+    return
 
 
 def main() -> int:
@@ -116,8 +108,14 @@ def main() -> int:
     sys.path.insert(0, str(Path(__file__).parent))
     from op_spec_codegen import generate
 
-    (CSRC / f"ops_{spec['python_name']}.cpp").write_text(
-        generate(spec), encoding="utf-8")
+    generated_path = CSRC / "ops_generated.cpp"
+    text = generated_path.read_text(encoding="utf-8")
+    if f"at::Tensor {spec['python_name']}(" not in text:
+        with generated_path.open("a", encoding="utf-8") as fh:
+            fh.write("\n// ============ generated from "
+                     f"{spec['aclnn_name']} ============\n")
+            fh.write(generate(spec))
+            fh.write("\n")
     patch_pybind(spec)
     patch_thin(spec)
     patch_whitelist(spec)

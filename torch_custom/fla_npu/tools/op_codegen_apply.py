@@ -150,6 +150,7 @@ def patch_thin(spec: dict) -> None:
         body += f"\n    result = {call}"
         outputs_spec = spec.get("outputs", [])
         out_names = [a["name"] for a in spec["args"] if a["kind"] == "out_tensor"]
+        return_suffix = py.get("return_suffix", [])
         return_order = py.get("return_order")
         if return_order is not None:
             if sorted(return_order) != sorted(out_names):
@@ -160,6 +161,7 @@ def patch_thin(spec: dict) -> None:
                        for i in range(len(out_names))]
             terms = [f"result[{aclnn_idx}]"
                      for _, aclnn_idx in sorted(ordered)]
+            terms.extend(return_suffix)
             body += "\n    return (" + ", ".join(terms) + ")"
             text = text.rstrip() + "\n" + body + "\n"
             path.write_text(text, encoding="utf-8")
@@ -179,9 +181,15 @@ def patch_thin(spec: dict) -> None:
                     terms.append(f"(result[{i}] if {py_when} else None)")
                 else:
                     terms.append(f"result[{i}]")
+            terms.extend(return_suffix)
             body += "\n    return (" + ", ".join(terms) + ")"
         else:
-            body += "\n    return tuple(result)"
+            if return_suffix:
+                terms = [f"result[{i}]" for i in range(len(out_names))]
+                terms.extend(return_suffix)
+                body += "\n    return (" + ", ".join(terms) + ")"
+            else:
+                body += "\n    return tuple(result)"
     else:
         out_entry = spec.get("output", {})
         when = out_entry.get("when")

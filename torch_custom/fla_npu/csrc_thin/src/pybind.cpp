@@ -319,6 +319,25 @@ std::vector<at::Tensor> npu_chunk_kda_fwd(
     bool state_v_first,
     uint64_t stream);
 
+
+std::vector<at::Tensor> npu_chunk_kda_bwd_intra(
+    const at::Tensor& q,
+    const at::Tensor& k,
+    const at::Tensor& gk,
+    const at::Tensor& beta,
+    const at::Tensor& dAqk,
+    const at::Tensor& dAkk,
+    const at::Tensor& dq,
+    const at::Tensor& dk,
+    const at::Tensor& db,
+    const at::Tensor& dg,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    int64_t chunk_size,
+    bool safe_gate,
+    const std::string& layout,
+    uint64_t stream);
+
 }  // namespace fla_npu_thin
 
 PYBIND11_MODULE(_C_thin, m) {
@@ -602,5 +621,23 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("lower_bound"),
       py::arg("use_gate_in_kernel"),
       py::arg("state_v_first"),
+      py::arg("stream"));
+  m.def(
+      "npu_chunk_kda_bwd_intra",
+      &npu_chunk_kda_bwd_intra, py::arg("q"),
+      py::arg("k"),
+      py::arg("gk"),
+      py::arg("beta"),
+      py::arg("dAqk"),
+      py::arg("dAkk"),
+      py::arg("dq"),
+      py::arg("dk"),
+      py::arg("db"),
+      py::arg("dg"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("chunk_size"),
+      py::arg("safe_gate"),
+      py::arg("layout"),
       py::arg("stream"));
 }

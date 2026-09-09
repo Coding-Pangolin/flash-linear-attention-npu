@@ -204,3 +204,41 @@ def npu_prepare_wy_repr_bwd(k, v, beta, A, dw, du, g, chunk_size, *, cu_seqlens=
         _current_stream_ptr(),
     )
     return tuple(result)
+
+
+def npu_chunk_bwd_dv_local(q, k, d_o, g, scale, chunk_size, *, g_gamma=None, A=None, cu_seqlens=None, chunk_indices=None):
+    ext = _extension()
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    return ext.npu_chunk_bwd_dv_local(
+        q,
+        k,
+        d_o,
+        g,
+        g_gamma,
+        A,
+        cu_seqlens,
+        chunk_indices,
+        float(scale),
+        int(chunk_size),
+        _current_stream_ptr(),
+    )
+
+
+def npu_prepare_wy_repr_bwd_da(k, v, beta, A, dw, du, g, *, cu_seqlens=None, chunk_indices=None, chunk_size=None):
+    ext = _extension()
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    return ext.npu_prepare_wy_repr_bwd_da(
+        k,
+        v,
+        beta,
+        A,
+        dw,
+        du,
+        g,
+        cu_seqlens,
+        chunk_indices,
+        int(chunk_size),
+        _current_stream_ptr(),
+    )

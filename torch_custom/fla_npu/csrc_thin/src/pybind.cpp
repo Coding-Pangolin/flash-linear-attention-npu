@@ -370,6 +370,33 @@ std::vector<at::Tensor> npu_chunk_kda_bwd(
     bool state_v_first,
     uint64_t stream);
 
+
+std::vector<at::Tensor> npu_chunk_gated_delta_rule_bwd_finalize(
+    const at::Tensor& q,
+    const at::Tensor& k,
+    const at::Tensor& v,
+    const at::Tensor& v_new,
+    const at::Tensor& do,
+    const at::Tensor& du,
+    const at::Tensor& g,
+    const at::Tensor& beta,
+    const at::Tensor& h,
+    const at::Tensor& dh,
+    const at::Tensor& a,
+    const c10::optional<at::Tensor>& q_rstd,
+    const c10::optional<at::Tensor>& k_rstd,
+    const c10::optional<at::Tensor>& beta_raw,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    double scale,
+    int64_t chunk_size,
+    bool use_qk_l2_norm_in_kernel,
+    bool use_beta_sigmoid_in_kernel,
+    bool use_gate_in_kernel,
+    bool state_v_first,
+    bool use_exp2,
+    uint64_t stream);
+
 }  // namespace fla_npu_thin
 
 PYBIND11_MODULE(_C_thin, m) {
@@ -702,5 +729,31 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("disable_recompute"),
       py::arg("use_exp2"),
       py::arg("state_v_first"),
+      py::arg("stream"));
+  m.def(
+      "npu_chunk_gated_delta_rule_bwd_finalize",
+      &npu_chunk_gated_delta_rule_bwd_finalize, py::arg("q"),
+      py::arg("k"),
+      py::arg("v"),
+      py::arg("v_new"),
+      py::arg("do"),
+      py::arg("du"),
+      py::arg("g"),
+      py::arg("beta"),
+      py::arg("h"),
+      py::arg("dh"),
+      py::arg("a"),
+      py::arg("q_rstd"),
+      py::arg("k_rstd"),
+      py::arg("beta_raw"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("scale"),
+      py::arg("chunk_size"),
+      py::arg("use_qk_l2_norm_in_kernel"),
+      py::arg("use_beta_sigmoid_in_kernel"),
+      py::arg("use_gate_in_kernel"),
+      py::arg("state_v_first"),
+      py::arg("use_exp2"),
       py::arg("stream"));
 }

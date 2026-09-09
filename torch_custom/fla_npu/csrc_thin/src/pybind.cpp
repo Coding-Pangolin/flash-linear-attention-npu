@@ -242,6 +242,32 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_bwd_dhu(
     bool use_exp2,
     uint64_t stream);
 
+
+std::vector<at::Tensor> npu_recurrent_kda(
+    const at::Tensor& q,
+    const at::Tensor& k,
+    const at::Tensor& v,
+    const at::Tensor& g,
+    const at::Tensor& beta,
+    const c10::optional<at::Tensor>& initial_state,
+    const c10::optional<at::Tensor>& cu_seqlens,
+    const c10::optional<at::Tensor>& ssm_state_indices,
+    const c10::optional<at::Tensor>& A_log,
+    const c10::optional<at::Tensor>& dt_bias,
+    const c10::optional<at::Tensor>& num_accepted_tokens,
+    const std::string& layout,
+    double scale,
+    bool output_final_state,
+    bool inplace_final_state,
+    bool use_qk_l2norm_in_kernel,
+    bool use_gate_in_kernel,
+    bool use_beta_sigmoid_in_kernel,
+    bool allow_neg_eigval,
+    bool safe_gate,
+    double lower_bound,
+    bool state_v_first,
+    uint64_t stream);
+
 }  // namespace fla_npu_thin
 
 PYBIND11_MODULE(_C_thin, m) {
@@ -452,5 +478,30 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("scale"),
       py::arg("chunk_size"),
       py::arg("use_exp2"),
+      py::arg("stream"));
+  m.def(
+      "npu_recurrent_kda",
+      &npu_recurrent_kda, py::arg("q"),
+      py::arg("k"),
+      py::arg("v"),
+      py::arg("g"),
+      py::arg("beta"),
+      py::arg("initial_state"),
+      py::arg("cu_seqlens"),
+      py::arg("ssm_state_indices"),
+      py::arg("A_log"),
+      py::arg("dt_bias"),
+      py::arg("num_accepted_tokens"),
+      py::arg("layout"),
+      py::arg("scale"),
+      py::arg("output_final_state"),
+      py::arg("inplace_final_state"),
+      py::arg("use_qk_l2norm_in_kernel"),
+      py::arg("use_gate_in_kernel"),
+      py::arg("use_beta_sigmoid_in_kernel"),
+      py::arg("allow_neg_eigval"),
+      py::arg("safe_gate"),
+      py::arg("lower_bound"),
+      py::arg("state_v_first"),
       py::arg("stream"));
 }

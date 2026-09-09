@@ -95,8 +95,7 @@ def patch_thin(spec: dict) -> None:
     python_pre = py.get("pre")
     if python_pre:
         for raw_line in python_pre.splitlines():
-            lines.append(("    " + raw_line.strip()) if raw_line.strip()
-                         else "")
+            lines.append(("    " + raw_line) if raw_line.strip() else "")
     # Scalar kwargs that mirror ctypes' ``_optional_*(v, default)`` handling:
     # keep the Python default ``None`` but resolve the semantic default here so
     # omitting the kwarg behaves exactly like the ctypes wrapper.
@@ -152,9 +151,11 @@ def patch_thin(spec: dict) -> None:
         outputs_spec = spec.get("outputs", [])
         out_names = [a["name"] for a in spec["args"] if a["kind"] == "out_tensor"]
         whens = {
-            i: outputs_spec[i].get("when")
+            i: (outputs_spec[i].get("when")
+                or outputs_spec[i].get("return_when"))
             for i in range(min(len(outputs_spec), len(out_names)))
-            if "when" in outputs_spec[i]
+            if ("when" in outputs_spec[i]
+                or "return_when" in outputs_spec[i])
         }
         if whens:
             terms = []

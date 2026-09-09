@@ -463,3 +463,21 @@ def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, *, a_lo
         _current_stream_ptr(),
     )
     return (result[4], result[5], result[6], result[7], result[8], result[0], result[1], result[2], result[3])
+
+
+def npu_causal_conv1d_bwd(x, y, weight, dy, initial_state, dht, *, query_start_loc=None, activation=0, input_layout="BSND"):
+    ext = _extension()
+    query_start_loc = [] if query_start_loc is None else [int(v) for v in query_start_loc]
+    result = ext.npu_causal_conv1d_bwd(
+        x,
+        y,
+        weight,
+        dy,
+        initial_state,
+        dht,
+        query_start_loc,
+        int(activation),
+        str(input_layout),
+        _current_stream_ptr(),
+    )
+    return tuple(result)

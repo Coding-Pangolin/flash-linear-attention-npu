@@ -622,3 +622,36 @@ def npu_chunk_gated_delta_rule_bwd_finalize(q, k, v, v_new, do, du, g, beta, h, 
         _current_stream_ptr(),
     )
     return tuple(result)
+
+
+def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, a_log=None, dt_bias=None, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BNSD", scale=None, chunk_size=64, use_exp2=False, use_qk_l2norm_in_kernel=False, allow_neg_eigval=False, state_v_first=False):
+    ext = _extension()
+    layout = str(layout)
+    if scale is None:
+        scale = float(q.shape[3]) ** -0.5
+    if not (layout == "BSND" and cu_seqlens is None and chunk_indices is None and not bool(output_final_state) and bool(output_a) and not bool(use_beta_sigmoid_in_kernel) and not bool(allow_neg_eigval) and not bool(use_gate_in_kernel) and initial_state is None and int(chunk_size) == 64):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, initial_state=initial_state, output_final_state=output_final_state, chunk_size=chunk_size, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, scale=scale, use_exp2=use_exp2, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, output_a=output_a, state_v_first=state_v_first, layout=layout)
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    result = ext.npu_chunk_gated_delta_rule_fwd(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        a_log,
+        dt_bias,
+        initial_state,
+        cu_seqlens,
+        chunk_indices,
+        str(layout),
+        float(scale),
+        int(chunk_size),
+        bool(use_exp2),
+        bool(use_qk_l2norm_in_kernel),
+        bool(allow_neg_eigval),
+        bool(state_v_first),
+        _current_stream_ptr(),
+    )
+    return (result[0], None, result[7], result[8])

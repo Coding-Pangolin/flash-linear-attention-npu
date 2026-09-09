@@ -64,12 +64,10 @@ thin 扩展基于 torch C++ extension，ABI 绑定 CPython 版本与
 - 221（910B3，w16 wheel，HEAD d03fcdc5）：regression_thin_ops 20 场景/37 组
   PASS；安装态 smoke 3/3、customer-compat + multi-stream 9 passed/13 subtests
   全绿。
-- 950（Ascend950PR 共享机）：先用 env950c wheel + 2 算子 OPP run 包
-  （solve_tri、chunk_local_cumsum）按 vendor 合并后验证：
-  chunk_local_cumsum 回归组 parity 0.0；solve_tri dense（fp16/bf16 ×
-  BT16/64/128 bsnd/bnsd）ext 直连 parity 0.0；kda_gate_cumsum / scaled_dot_kkt
-  单点探针 ct/thin OK；其余通用场景 + Ascend950-only 3 场景
-  （fwd_prepare/bwd_finalize/recurrent_kda）全 PASS。
-- 950 整 wheel 重编（使 op_api 含 aclnnSolveTri host 符号）四次均被共享机
-  /home 空间耗尽打断（长期 100%、kernel 编译期 ENOSPC，可用 <2G）；待磁盘
-  恢复后重跑完整 20 场景并更新本表。
+- 950（Ascend950PR 共享机，950d wheel，对应 HEAD 代码）：regression_thin_ops
+  20 场景/37 组 PASS（含 chunk_local_cumsum 与 solve_tri dense）；950-only 3
+  场景（fwd_prepare/bwd_finalize/recurrent_kda）PASS；安装态 smoke 3/3 OK；
+  solve_tri host P50 0.033 → 0.009 ms。
+- 说明：950 整 wheel 早期多次被共享机 /home 空间耗尽打断（可用 <2G，kernel
+  编译期 ENOSPC）；清理本机可再生成缓存（vscode-cpptools/pip/uv/ccache/
+  catlass/Trash 等约 69G）后以 -j2 重编成功，不再受环境限制。

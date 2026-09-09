@@ -419,7 +419,7 @@ at::Tensor npu_solve_tri(
   at::Tensor workspace;
   if (workspace_size != 0) {
     workspace = at::empty({static_cast<int64_t>(workspace_size)},
-                          at::TensorOptions().dtype(at::kByte).device(g.device()));
+                          at::TensorOptions().dtype(at::kByte).device(x.device()));
     workspace_ptr = workspace.data_ptr();
   }
   const int launch_ret =

@@ -37,6 +37,7 @@ THIN_OPS = (
     "chunk_fwd_o",
     "chunk_gated_delta_rule_bwd_dhu",
     "causal_conv1d_bwd",
+    "chunk_kda_fwd",
 )
 
 

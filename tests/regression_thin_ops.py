@@ -261,6 +261,25 @@ def scenario_conv1d_bwd_bnsd():
                   _thin.npu_causal_conv1d_bwd(**kw))
 
 
+def scenario_chunk_kda_fwd():
+    B, T, H, HV, K, V, cs = 1, 128, 4, 4, 128, 128, 64
+    dt = torch.bfloat16
+    q = torch.randn(B, T, H, K, dtype=dt, device="npu") * 5e-2
+    k = torch.randn(B, T, H, K, dtype=dt, device="npu") * 5e-2
+    v = torch.randn(B, T, HV, V, dtype=dt, device="npu") * 5e-2
+    g = torch.randn(B, T, HV, K, dtype=torch.float32, device="npu")
+    beta = torch.randn(B, T, HV, dtype=dt, device="npu")
+    A_log = torch.randn(HV, dtype=torch.float32, device="npu") * 0.1
+    dtb = torch.randn(HV * K, dtype=torch.float32, device="npu") * 0.5 - 3.0
+    torch.npu.synchronize()
+    kw = dict(layout="BSND", chunk_size=cs, scale=K ** -0.5, safe_gate=True,
+              use_gate_in_kernel=True, A_log=A_log, dt_bias=dtb,
+              disable_recompute=True)
+    assert_parity("chunk_kda_fwd(dense BSND)",
+                  ct.npu_chunk_kda_fwd(q, k, v, g, beta, **kw),
+                  _thin.npu_chunk_kda_fwd(q, k, v, g, beta, **kw))
+
+
 def main():
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
@@ -276,10 +295,11 @@ def main():
         scenario_chunk_fwd_o,
         scenario_bwd_dhu,
         scenario_conv1d_bwd_bnsd,
+        scenario_chunk_kda_fwd,
     ]
     for fn in scenarios:
         fn()
-    print("ALL PASS: 11 thin-op parity scenarios")
+    print("ALL PASS: 12 thin-op parity scenarios")
 
 
 if __name__ == "__main__":

@@ -110,6 +110,17 @@ def patch_thin(spec: dict) -> None:
             lines.append(
                 f"    {v} = [] if {v} is None else "
                 f"[int(v) for v in {v}]")
+    if py.get("derive_chunk_indices") and "chunk_size" in {
+            a["name"] for a in spec["args"]}:
+        # Mirror the ctypes wrappers: when cu_seqlens is provided but
+        # chunk_indices is omitted, synthesize the canonical sequence-major
+        # [seq, chunk] list before launching.
+        lines.append("    if cu_seqlens and not chunk_indices:")
+        lines.append("        chunk_indices = []")
+        lines.append("        for _seq in range(len(cu_seqlens) - 1):")
+        lines.append("            _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]")
+        lines.append("            for _c in range((_len + chunk_size - 1) // chunk_size):")
+        lines.append("                chunk_indices.extend((_seq, _c))")
     call_args = []
     for a in spec["args"]:
         if a["kind"] == "out_tensor":
@@ -129,9 +140,32 @@ def patch_thin(spec: dict) -> None:
     call = "ext.%s(\n        %s,\n        _current_stream_ptr(),\n    )" % (
         name, ",\n        ".join(call_args))
     if n_out > 1:
-        body += f"\n    result = {call}\n    return tuple(result)"
+        body += f"\n    result = {call}"
+        outputs_spec = spec.get("outputs", [])
+        out_names = [a["name"] for a in spec["args"] if a["kind"] == "out_tensor"]
+        whens = {
+            i: outputs_spec[i].get("when")
+            for i in range(min(len(outputs_spec), len(out_names)))
+            if "when" in outputs_spec[i]
+        }
+        if whens:
+            terms = []
+            for i, out_name in enumerate(out_names):
+                if i in whens:
+                    terms.append(f"(result[{i}] if {whens[i]} else None)")
+                else:
+                    terms.append(f"result[{i}]")
+            body += "\n    return (" + ", ".join(terms) + ")"
+        else:
+            body += "\n    return tuple(result)"
     else:
-        body += f"\n    return {call}"
+        out_entry = spec.get("output", {})
+        when = out_entry.get("when")
+        if when:
+            body += f"\n    result = {call}"
+            body += f"\n    return None if not {when} else result"
+        else:
+            body += f"\n    return {call}"
     text = text.rstrip() + "\n" + body + "\n"
     path.write_text(text, encoding="utf-8")
 

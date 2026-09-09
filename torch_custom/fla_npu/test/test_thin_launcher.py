@@ -83,6 +83,9 @@ class TestThinLauncher(unittest.TestCase):
         self.assertIsNotNone(_get_thin_op("recurrent_gated_delta_rule"))
         os.environ["FLA_NPU_THIN_LAUNCHER"] = "1"
         self.assertIsNotNone(_get_thin_op("recurrent_gated_delta_rule"))
+        # conv1d is intentionally NOT thin-enabled until the PR #390 ABI
+        # adapter lands; it must always fall back to ctypes for now.
+        self.assertIsNone(_get_thin_op("npu_causal_conv1d"))
         os.environ["FLA_NPU_THIN_LAUNCHER"] = "0"
         self.assertIsNone(_get_thin_op("recurrent_gated_delta_rule"))
         self.assertIsNone(_get_thin_op("npu_chunk_fwd_o"))

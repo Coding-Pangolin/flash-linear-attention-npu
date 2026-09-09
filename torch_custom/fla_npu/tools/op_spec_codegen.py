@@ -97,7 +97,7 @@ def generate(spec: dict) -> str:
     lines.append("")
     lines.append(f"at::Tensor {fn}(")
     lines.append("    " + ",\n    ".join(params) + ") {")
-    lines.append(f"  auto output = at::empty(g.sizes(), g.options().dtype(at::kFloat));")
+    lines.extend(_output_alloc_lines(spec))
     lines.append("")
     lines.append("  std::vector<std::unique_ptr<AclTensorView>> views;")
     lines.append("  views.reserve(8);")
@@ -159,6 +159,27 @@ def generate(spec: dict) -> str:
     lines.append("}  // namespace fla_npu_thin")
     lines.append("")
     return "\n".join(lines)
+
+
+def _output_alloc_lines(spec: dict) -> list[str]:
+    output = spec.get("output", {})
+    source = output.get("source", spec["args"][0]["name"])
+    dtype = output.get("dtype", "float32")
+    if dtype == "same":
+        return [f"  auto output = at::empty_like({source});"]
+    if dtype == "output_dtype":
+        return [
+            f"  auto output = (output_dtype == \"float32\")",
+            f"      ? at::empty({source}.sizes(), {source}.options().dtype(at::kFloat))",
+            f"      : at::empty({source}.sizes(), {source}.options().dtype(at::kBFloat16));",
+        ]
+    aten = {"float32": "at::kFloat", "bfloat16": "at::kBFloat16"}.get(dtype)
+    if aten is None:
+        raise ValueError(f"unsupported output dtype: {dtype}")
+    return [
+        f"  auto output = at::empty({source}.sizes(), "
+        f"{source}.options().dtype({aten}));"
+    ]
 
 
 def main() -> int:

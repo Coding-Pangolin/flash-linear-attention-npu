@@ -3,7 +3,7 @@
   "python_name": "npu_chunk_local_cumsum",
   "nd_only": true,
   "mutated": [],
-  "output": {"arg": "out", "alloc": "empty_like_g_output_dtype"},
+  "output": {"arg": "out", "source": "g", "dtype": "output_dtype"},
   "python": {
     "positional": ["g", "chunk_size"],
     "defaults": {

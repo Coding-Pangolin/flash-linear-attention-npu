@@ -76,6 +76,9 @@
 | npu_chunk_bwd_dqkwg | ✅ | ✅ | 0.0 | 0.73 → 0.097 ms |
 | npu_fast_gelu_custom | ✅（base aclnn） | - | 0.0 | 0.26 → 0.041 ms |
 | npu_fast_gelu_custom_backward | ✅（base aclnn） | - | 0.0 | 0.30 → 0.042 ms |
+| npu_chunk_gated_delta_rule_fwd_h | ✅（v3 when/alloc） | ✅ | 0.0（dense/final/varlen） | 0.57 → 0.131 ms |
+| npu_chunk_fwd_h | ✅（v3） | ✅ | 0.0（dense/final/varlen） | 0.63 → 0.127 ms |
+| npu_chunk_fwd_o | ✅（v3） | ✅ | 0.0（仅 BNSD 合法域） | 0.56 → 0.097 ms |
 | npu_solve_tri | spec 已建（enabled=false） | - | 待修（thin 输出稀疏非有限，已回退 ctypes） | - |
 
 ## 下一步

@@ -454,8 +454,9 @@ def scenario_scaled_dot_kkt():
     B, Hk, Hv, T, K, cs = 2, 4, 4, 128, 64, 64
     for dt, suffix in ((torch.float16, "fp16"), (torch.bfloat16, "bf16")):
         k = (torch.randn(B, Hk, T, K) * 0.2).to(dt).npu()
-        g = (torch.randn(B, Hv, T) * 0.02).to(dt).npu()
-        beta = torch.sigmoid(torch.randn(B, Hv, T)).to(dt).npu()
+        # The embedded OPP only ships k fp16/bf16 x g/beta fp32 variants.
+        g = (torch.randn(B, Hv, T) * 0.02).npu()
+        beta = torch.sigmoid(torch.randn(B, Hv, T)).npu()
         torch.npu.synchronize()
         assert_parity(
             f"chunk_scaled_dot_kkt({suffix})",

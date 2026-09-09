@@ -50,5 +50,8 @@ thin 扩展基于 torch C++ extension，ABI 绑定 CPython 版本与
 
 - `test_wheel_install_smoke.py`：安装态（`pip install --target` 或
   site-packages）下的扩展/OPP 加载与 dispatch 冒烟。
+- `tests/regression_thin_ops.py`：安装态数值回归，覆盖已迁移算子的
+  ctypes-vs-thin parity（逐元素差 0）。当前在 221（910B3，envw9 wheel）
+  实测：11 个场景/13 组函数 parity 全 PASS。
 - 每个算子的数值 parity/benchmark 以 [thin-migration-inventory.md](thin-migration-inventory.md)
   验证状态表为准（ctypes vs thin 输出差 0.0，host P50 已记录）。

@@ -481,3 +481,37 @@ def npu_causal_conv1d_bwd(x, y, weight, dy, initial_state, dht, *, query_start_l
         _current_stream_ptr(),
     )
     return tuple(result)
+
+
+def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size, *, A_log=None, dt_bias=None, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BSND", safe_gate=False, lower_bound=None, use_gate_in_kernel=False, state_v_first=False, disable_recompute=False, return_intermediate_states=False):
+    ext = _extension()
+    layout = str(layout)
+    if not (bool(disable_recompute) and not bool(output_final_state) and not bool(return_intermediate_states) and layout == "BSND" and cu_seqlens is None and chunk_indices is None):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size=chunk_size, layout=layout, initial_state=initial_state, output_final_state=output_final_state, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, safe_gate=safe_gate, lower_bound=lower_bound, use_gate_in_kernel=use_gate_in_kernel, A_log=A_log, dt_bias=dt_bias, disable_recompute=disable_recompute, return_intermediate_states=return_intermediate_states, state_v_first=state_v_first)
+    if scale is None:
+        scale = float(q.shape[3]) ** -0.5
+    lower_bound = -5.0 if lower_bound is None else float(lower_bound)
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    result = ext.npu_chunk_kda_fwd(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        A_log,
+        dt_bias,
+        initial_state,
+        cu_seqlens,
+        chunk_indices,
+        str(layout),
+        float(scale),
+        int(chunk_size),
+        bool(safe_gate),
+        float(lower_bound),
+        bool(use_gate_in_kernel),
+        bool(state_v_first),
+        _current_stream_ptr(),
+    )
+    return (result[0], (result[1] if output_final_state else None), result[2], result[3], result[4], result[5], result[6], result[7], result[8], result[9], result[10])

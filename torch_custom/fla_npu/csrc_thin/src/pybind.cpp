@@ -371,12 +371,13 @@ std::vector<at::Tensor> npu_chunk_kda_bwd(
     uint64_t stream);
 
 
+
 std::vector<at::Tensor> npu_chunk_gated_delta_rule_bwd_finalize(
     const at::Tensor& q,
     const at::Tensor& k,
     const at::Tensor& v,
     const at::Tensor& v_new,
-    const at::Tensor& do,
+    const at::Tensor& d_o,
     const at::Tensor& du,
     const at::Tensor& g,
     const at::Tensor& beta,

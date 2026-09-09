@@ -55,6 +55,12 @@ def _arg_token(kind: str, name: str, index: int) -> str:
     return name
 
 
+def _cpp_name(arg: dict) -> str:
+    """C++ identifier for a spec arg; defaults to the python-facing name."""
+
+    return arg.get("cpp", arg["name"])
+
+
 def _output_alloc(output: dict, default_source: str) -> str:
     """Return the C++ expression allocating an output tensor.
 
@@ -75,7 +81,7 @@ def generate(spec: dict) -> str:
         raise ValueError("codegen requires at least one out_tensor arg")
     op = spec["aclnn_name"]
     fn = spec["python_name"]
-    params = [_python_param(a["kind"], a["name"]) for a in args
+    params = [_python_param(a["kind"], _cpp_name(a)) for a in args
               if a["kind"] != "out_tensor"]
     params.append("uint64_t stream")
     scalar_params = [
@@ -83,7 +89,7 @@ def generate(spec: dict) -> str:
         for a in args if a["kind"] in _CPP_SCALAR
     ]
     anchor = next(
-        a["name"] for a in args
+        _cpp_name(a) for a in args
         if a["kind"] in ("tensor", "optional_tensor"))
 
     lines = []
@@ -153,7 +159,7 @@ def generate(spec: dict) -> str:
     out_idx = 0
     for i, a in enumerate(args):
         kind = a["kind"]
-        name = a["name"]
+        name = _cpp_name(a)
         if kind == "tensor":
             lines.append(f"  views.push_back(std::make_unique<AclTensorView>({name}));")
         elif kind == "out_tensor":
@@ -165,7 +171,7 @@ def generate(spec: dict) -> str:
             lines.append(
                 f"  views.push_back(std::make_unique<AclTensorView>("
                 f"{name}.has_value() && {name}->defined() ? *{name} : at::Tensor()));")
-    int_array_names = [a["name"] for a in args if a["kind"] == "int_array"]
+    int_array_names = [_cpp_name(a) for a in args if a["kind"] == "int_array"]
     for name in int_array_names:
         lines.append(f"  AclIntArrayView {name}_view({name});")
     lines.append("")
@@ -185,11 +191,11 @@ def generate(spec: dict) -> str:
             tokens.append(f"views[{view_i}]->get()")
             view_i += 1
         elif kind == "int_array":
-            tokens.append(f"{a['name']}_view.get()")
+            tokens.append(f"{_cpp_name(a)}_view.get()")
         elif kind == "char_ptr":
-            tokens.append(f"{a['name']}.c_str()")
+            tokens.append(f"{_cpp_name(a)}.c_str()")
         else:
-            tokens.append(a["name"])
+            tokens.append(_cpp_name(a))
     lines.append("  const int get_ret = get_ws(")
     lines.append("      " + ",\n      ".join(tokens) + ",")
     lines.append("      &workspace_size, &executor);")

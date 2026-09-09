@@ -41,6 +41,10 @@ THIN_OPS = (
     "chunk_kda_bwd_intra",
     "chunk_kda_bwd",
     "recurrent_kda",
+    "chunk_gated_delta_rule_fwd_prepare",
+    "chunk_gated_delta_rule_bwd_finalize",
+    "chunk_gated_delta_rule_fwd",
+    "solve_tri",
 )
 
 
@@ -58,8 +62,8 @@ class TestWheelInstallSmoke(unittest.TestCase):
         for name in THIN_OPS:
             self.assertIsNotNone(
                 _get_thin_op(name), f"{name} should resolve to thin")
-        # solve_tri 与 conv1d legacy 保持 ctypes
-        self.assertIsNone(_get_thin_op("npu_solve_tri"))
+        # conv1d legacy 保持 ctypes，直到上游 PR #390 合入统一 ABI；
+        # solve_tri dense 已原生 thin，varlen 在 _thin wrapper 内回退 ctypes。
         self.assertIsNone(_get_thin_op("npu_causal_conv1d"))
         os.environ["FLA_NPU_THIN_LAUNCHER"] = "0"
         for name in THIN_OPS:

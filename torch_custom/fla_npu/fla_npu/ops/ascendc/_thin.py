@@ -585,3 +585,40 @@ def npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o, sca
         _current_stream_ptr(),
     )
     return (result[0], result[1], result[2], result[3], result[4], (result[5] if False else None), (result[6] if False else None), (result[7] if False else None))
+
+
+def npu_chunk_gated_delta_rule_bwd_finalize(q, k, v, v_new, do, du, g, beta, h, dh, a, *, q_rstd=None, k_rstd=None, beta_raw=None, cu_seqlens=None, chunk_indices=None, scale=None, chunk_size=64, use_qk_l2_norm_in_kernel=False, use_beta_sigmoid_in_kernel=False, use_gate_in_kernel=False, state_v_first=False, use_exp2=True):
+    ext = _extension()
+    scale = (128.0 ** -0.5) if scale is None else float(scale)
+    if not (bool(use_qk_l2_norm_in_kernel) and bool(use_beta_sigmoid_in_kernel) and not bool(use_gate_in_kernel) and bool(use_exp2) and not bool(state_v_first) and int(chunk_size) == 64 and q_rstd is not None and k_rstd is not None and beta_raw is not None and cu_seqlens is None and chunk_indices is None):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_gated_delta_rule_bwd_finalize(q, k, v, v_new, do, du, g, beta, h, dh, a, q_rstd=q_rstd, k_rstd=k_rstd, beta_raw=beta_raw, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, scale=scale, chunk_size=chunk_size, use_qk_l2_norm_in_kernel=use_qk_l2_norm_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, use_gate_in_kernel=use_gate_in_kernel, state_v_first=state_v_first, use_exp2=use_exp2)
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    result = ext.npu_chunk_gated_delta_rule_bwd_finalize(
+        q,
+        k,
+        v,
+        v_new,
+        do,
+        du,
+        g,
+        beta,
+        h,
+        dh,
+        a,
+        q_rstd,
+        k_rstd,
+        beta_raw,
+        cu_seqlens,
+        chunk_indices,
+        float(scale),
+        int(chunk_size),
+        bool(use_qk_l2_norm_in_kernel),
+        bool(use_beta_sigmoid_in_kernel),
+        bool(use_gate_in_kernel),
+        bool(state_v_first),
+        bool(use_exp2),
+        _current_stream_ptr(),
+    )
+    return tuple(result)

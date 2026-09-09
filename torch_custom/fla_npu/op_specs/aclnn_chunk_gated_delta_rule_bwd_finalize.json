@@ -35,7 +35,7 @@
     {"name": "k", "kind": "tensor"},
     {"name": "v", "kind": "tensor"},
     {"name": "v_new", "kind": "tensor"},
-    {"name": "do", "kind": "tensor"},
+    {"name": "do", "cpp": "d_o", "kind": "tensor"},
     {"name": "du", "kind": "tensor"},
     {"name": "g", "kind": "tensor"},
     {"name": "beta", "kind": "tensor"},

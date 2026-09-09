@@ -44,6 +44,10 @@ def cpp_type(kind: str, name: str) -> str:
             "float": "float"}[kind] + f" {name}"
 
 
+def _arg_cpp_name(arg: dict) -> str:
+    return arg.get("cpp", arg["name"])
+
+
 def patch_pybind(spec: dict) -> None:
     name = spec["python_name"]
     args = [a for a in spec["args"] if a["kind"] != "out_tensor"]
@@ -56,7 +60,8 @@ def patch_pybind(spec: dict) -> None:
         if n_out > 1 and "#include <vector>" not in text:
             path.write_text(text, encoding="utf-8")
         return
-    params = ",\n    ".join(cpp_type(a["kind"], a["name"]) for a in args)
+    params = ",\n    ".join(
+        cpp_type(a["kind"], _arg_cpp_name(a)) for a in args)
     ret = "std::vector<at::Tensor>" if n_out > 1 else "at::Tensor"
     decl = (f"\n{ret} {name}(\n    {params},\n    uint64_t stream);\n"
             f"\n}}  // namespace fla_npu_thin")

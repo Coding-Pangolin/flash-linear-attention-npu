@@ -485,6 +485,24 @@ def scenario_solve_tri_dense():
             _thin.npu_solve_tri(a_bnsd, layout="bnsd"))
 
 
+def scenario_kda_gate_cumsum():
+    # Dense KDA gate cumsum: g is head-major [B,H,T,K] fp16/bf16, while
+    # A_log/dt_bias are fp32 (matches the embedded OPP kernel config).
+    B, H, T, K, cs = 1, 4, 128, 64, 64
+    for dt, suffix in ((torch.float16, "fp16"), (torch.bfloat16, "bf16")):
+        raw = (torch.randn(B, T, H, K) * 1.25).to(dt).npu()
+        g = raw.permute(0, 2, 1, 3).contiguous()
+        a_log = torch.randn(H, dtype=torch.float32, device="npu") * 0.12
+        dt_bias = (torch.randn(H * K, dtype=torch.float32) * 1.65 - 3.0).npu()
+        torch.npu.synchronize()
+        kw = dict(A_log=a_log, dt_bias=dt_bias,
+                  use_gate_in_kernel=True, safe_gate=False, lower_bound=-5.0)
+        assert_parity(
+            f"kda_gate_cumsum({suffix})",
+            ct.npu_kda_gate_cumsum(g, cs, **kw),
+            _thin.npu_kda_gate_cumsum(g, cs, **kw))
+
+
 def main():
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
@@ -508,10 +526,11 @@ def main():
         scenario_chunk_local_cumsum,
         scenario_scaled_dot_kkt,
         scenario_solve_tri_dense,
+        scenario_kda_gate_cumsum,
     ]
     for fn in scenarios:
         fn()
-    print("ALL PASS: 19 thin-op parity scenarios")
+    print("ALL PASS: 20 thin-op parity scenarios")
 
 
 if __name__ == "__main__":

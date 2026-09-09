@@ -122,3 +122,30 @@ def npu_causal_conv1d(
         int(head_num),
         _current_stream_ptr(),
     )
+
+
+def npu_kda_gate_cumsum(
+    g,
+    chunk_size,
+    *,
+    A_log=None,
+    dt_bias=None,
+    cu_seqlens=None,
+    use_gate_in_kernel=False,
+    safe_gate=False,
+    lower_bound=None,
+):
+    ext = _extension()
+    cu = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    lb = -5.0 if lower_bound is None else float(lower_bound)
+    return ext.npu_kda_gate_cumsum(
+        g,
+        A_log,
+        dt_bias,
+        cu,
+        int(chunk_size),
+        bool(use_gate_in_kernel),
+        bool(safe_gate),
+        lb,
+        _current_stream_ptr(),
+    )

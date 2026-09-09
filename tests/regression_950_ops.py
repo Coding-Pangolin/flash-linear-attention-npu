@@ -81,6 +81,28 @@ def scenario_bwd_finalize():
                       q, k, v, v_new, do, du, g, beta, h, dh, a, **kw))
 
 
+def scenario_recurrent_kda():
+    B, T, H, HV, K, V = 2, 2, 2, 4, 128, 128
+    dt = torch.bfloat16
+    q = torch.randn(B, T, H, K, dtype=dt, device="npu")
+    k = torch.randn(B, T, H, K, dtype=dt, device="npu")
+    v = torch.randn(B, T, HV, V, dtype=dt, device="npu")
+    g = -torch.rand(B, T, HV, K, dtype=torch.float32, device="npu") * 5 - 1e-3
+    beta = torch.rand(B, T, HV, dtype=torch.float32, device="npu") * 0.8 + 0.1
+    cu = torch.tensor([0, T, 2 * T], dtype=torch.int64, device="npu")
+    torch.npu.synchronize()
+    st_c = torch.zeros(B, HV, V, K, dtype=torch.float32, device="npu")
+    st_t = st_c.clone()
+    kw = dict(cu_seqlens=cu, scale=K ** -0.5, layout="BSND",
+              state_v_first=True)
+    oc = ct.npu_recurrent_kda(q, k, v, g, beta, st_c, **kw)
+    ot = _thin.npu_recurrent_kda(q, k, v, g, beta, st_t, **kw)
+    torch.npu.synchronize()
+    assert_parity("recurrent_kda(dense BSND)", oc, ot)
+    assert float((st_c.float() - st_t.float()).abs().max().item()) == 0.0
+    print("PASS recurrent_kda(state)")
+
+
 def main():
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
@@ -88,7 +110,8 @@ def main():
     assert "950" in device, f"requires Ascend950, got {device}"
     scenario_fwd_prepare()
     scenario_bwd_finalize()
-    print("ALL PASS: 2 Ascend950-only parity scenarios")
+    scenario_recurrent_kda()
+    print("ALL PASS: 3 Ascend950-only parity scenarios")
 
 
 if __name__ == "__main__":

@@ -40,6 +40,7 @@ THIN_OPS = (
     "chunk_kda_fwd",
     "chunk_kda_bwd_intra",
     "chunk_kda_bwd",
+    "recurrent_kda",
 )
 
 

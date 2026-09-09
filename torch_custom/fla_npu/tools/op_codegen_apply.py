@@ -16,6 +16,21 @@ CSRC = ROOT / "csrc_thin" / "src"
 THIN = ROOT / "fla_npu" / "ops" / "ascendc"
 
 
+_FN_DEF_RE = re.compile(
+    r"(?m)^(?:at::Tensor|std::vector<at::Tensor>)\s+(\w+)\s*\(")
+
+
+def has_fn_def(text: str, name: str) -> bool:
+    """True when *text* already defines a thin adapter function named *name*.
+
+    The aggregate file contains both single-output (``at::Tensor``) and
+    multi-output (``std::vector<at::Tensor>``) adapters, so the presence check
+    must accept either return type to stay idempotent.
+    """
+
+    return any(m.group(1) == name for m in _FN_DEF_RE.finditer(text))
+
+
 def cpp_type(kind: str, name: str) -> str:
     if kind == "tensor":
         return f"const at::Tensor& {name}"
@@ -116,12 +131,15 @@ def main() -> int:
     parser.add_argument("--spec", required=True, type=Path)
     args = parser.parse_args()
     spec = json.loads(args.spec.read_text(encoding="utf-8"))
+    if not spec.get("enabled", True):
+        print(f"skipped {spec['python_name']}: spec disabled (stays on ctypes)")
+        return 0
     sys.path.insert(0, str(Path(__file__).parent))
     from op_spec_codegen import generate
 
     generated_path = CSRC / "ops_generated.cpp"
     text = generated_path.read_text(encoding="utf-8")
-    if f"at::Tensor {spec['python_name']}(" not in text:
+    if not has_fn_def(text, spec["python_name"]):
         with generated_path.open("a", encoding="utf-8") as fh:
             fh.write("\n// ============ generated from "
                      f"{spec['aclnn_name']} ============\n")

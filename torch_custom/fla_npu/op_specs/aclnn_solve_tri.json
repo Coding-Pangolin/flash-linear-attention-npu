@@ -1,6 +1,7 @@
 {
   "aclnn_name": "aclnnSolveTri",
   "python_name": "npu_solve_tri",
+  "enabled": false,
   "nd_only": true,
   "mutated": [],
   "output": {"arg": "out", "source": "x", "dtype": "same"},

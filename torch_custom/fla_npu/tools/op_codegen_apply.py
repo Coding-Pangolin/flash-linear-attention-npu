@@ -89,6 +89,21 @@ def patch_thin(spec: dict) -> None:
             f"{k}={defaults.get(k, 'None')}" for k in kw)
     lines = [f"\n\ndef {name}({sig}):",
              "    ext = _extension()"]
+    # Scalar kwargs that mirror ctypes' ``_optional_*(v, default)`` handling:
+    # keep the Python default ``None`` but resolve the semantic default here so
+    # omitting the kwarg behaves exactly like the ctypes wrapper.
+    scalar_resolve = {
+        "int64": "int", "bool": "bool", "double": "float", "float": "float",
+    }
+    for a in spec["args"]:
+        kind = a["kind"]
+        arg_default = a.get("default")
+        if (kind not in scalar_resolve or arg_default is None
+                or defaults.get(a["name"]) != "None"):
+            continue
+        lines.append(
+            f"    {a['name']} = ({arg_default} if {a['name']} is None "
+            f"else {scalar_resolve[kind]}({a['name']}))")
     for a in spec["args"]:
         if a["kind"] == "int_array":
             v = a["name"]

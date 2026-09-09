@@ -242,3 +242,49 @@ def npu_prepare_wy_repr_bwd_da(k, v, beta, A, dw, du, g, *, cu_seqlens=None, chu
         int(chunk_size),
         _current_stream_ptr(),
     )
+
+
+def npu_fast_gelu_custom(self):
+    ext = _extension()
+    return ext.npu_fast_gelu_custom(
+        self,
+        _current_stream_ptr(),
+    )
+
+
+def npu_fast_gelu_custom_backward(grad, self):
+    ext = _extension()
+    return ext.npu_fast_gelu_custom_backward(
+        grad,
+        self,
+        _current_stream_ptr(),
+    )
+
+
+def npu_chunk_bwd_dqkwg(q, k, v, g, h, dox, dh, dv, chunk_size, *, cu_seqlens=None, chunk_indices=None, w=None, g_gamma=None, scale=None, use_exp2=None, transpose_state_layout=None):
+    ext = _extension()
+    scale = (1.0 if scale is None else float(scale))
+    use_exp2 = (False if use_exp2 is None else bool(use_exp2))
+    transpose_state_layout = (False if transpose_state_layout is None else bool(transpose_state_layout))
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    result = ext.npu_chunk_bwd_dqkwg(
+        q,
+        k,
+        v,
+        g,
+        h,
+        dox,
+        dh,
+        dv,
+        cu_seqlens,
+        chunk_indices,
+        w,
+        g_gamma,
+        float(scale),
+        int(chunk_size),
+        bool(use_exp2),
+        bool(transpose_state_layout),
+        _current_stream_ptr(),
+    )
+    return tuple(result)

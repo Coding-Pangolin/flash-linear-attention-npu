@@ -224,6 +224,24 @@ at::Tensor npu_chunk_fwd_o(
     const std::string& output_layout,
     uint64_t stream);
 
+
+std::vector<at::Tensor> npu_chunk_gated_delta_rule_bwd_dhu(
+    const at::Tensor& q,
+    const at::Tensor& k,
+    const at::Tensor& w,
+    const at::Tensor& d_o,
+    const at::Tensor& dv,
+    const c10::optional<at::Tensor>& g,
+    const c10::optional<at::Tensor>& gK,
+    const c10::optional<at::Tensor>& h0,
+    const c10::optional<at::Tensor>& dht,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    double scale,
+    int64_t chunk_size,
+    bool use_exp2,
+    uint64_t stream);
+
 }  // namespace fla_npu_thin
 
 PYBIND11_MODULE(_C_thin, m) {
@@ -417,5 +435,22 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("use_exp2"),
       py::arg("transpose_state_layout"),
       py::arg("output_layout"),
+      py::arg("stream"));
+  m.def(
+      "npu_chunk_gated_delta_rule_bwd_dhu",
+      &npu_chunk_gated_delta_rule_bwd_dhu, py::arg("q"),
+      py::arg("k"),
+      py::arg("w"),
+      py::arg("d_o"),
+      py::arg("dv"),
+      py::arg("g"),
+      py::arg("gK"),
+      py::arg("h0"),
+      py::arg("dht"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("scale"),
+      py::arg("chunk_size"),
+      py::arg("use_exp2"),
       py::arg("stream"));
 }

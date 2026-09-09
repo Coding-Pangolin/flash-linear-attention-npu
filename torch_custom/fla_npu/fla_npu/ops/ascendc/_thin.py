@@ -316,3 +316,54 @@ def npu_chunk_gated_delta_rule_fwd_h(k, w, u, g, *, gk=None, initial_state=None,
         _current_stream_ptr(),
     )
     return (result[0], result[1], (result[2] if output_final_state else None))
+
+
+def npu_chunk_fwd_h(k, w, u, *, g=None, gk=None, initial_state=None, output_final_state=False, chunk_size=64, save_new_value=True, cu_seqlens=None, chunk_indices=None, use_exp2=False, state_v_first=False):
+    ext = _extension()
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    if cu_seqlens and not chunk_indices:
+        chunk_indices = []
+        for _seq in range(len(cu_seqlens) - 1):
+            _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]
+            for _c in range((_len + chunk_size - 1) // chunk_size):
+                chunk_indices.extend((_seq, _c))
+    result = ext.npu_chunk_fwd_h(
+        k,
+        w,
+        u,
+        g,
+        gk,
+        initial_state,
+        bool(output_final_state),
+        int(chunk_size),
+        bool(save_new_value),
+        cu_seqlens,
+        chunk_indices,
+        bool(use_exp2),
+        bool(state_v_first),
+        _current_stream_ptr(),
+    )
+    return (result[0], result[1], (result[2] if output_final_state else None))
+
+
+def npu_chunk_fwd_o(q, k, v, h, scale, *, g=None, cu_seqlens=None, chunk_indices=None, chunk_size=None, use_exp2=False, transpose_state_layout=False, output_layout="BNSD", g_gamma=None):
+    ext = _extension()
+    chunk_size = (64 if chunk_size is None else int(chunk_size))
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    return ext.npu_chunk_fwd_o(
+        q,
+        k,
+        v,
+        h,
+        g,
+        cu_seqlens,
+        chunk_indices,
+        float(scale),
+        int(chunk_size),
+        bool(use_exp2),
+        bool(transpose_state_layout),
+        str(output_layout),
+        _current_stream_ptr(),
+    )

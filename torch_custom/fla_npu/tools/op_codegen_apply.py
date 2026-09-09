@@ -81,12 +81,15 @@ def patch_thin(spec: dict) -> None:
     py = spec.get("python", {})
     positional = py.get("positional", [])
     defaults = py.get("defaults", {})
+    ignored = py.get("ignored", [])
     kw = [a["name"] for a in spec["args"]
           if a["name"] not in positional and a["kind"] != "out_tensor"]
+    kw = [k for k in kw if k not in ignored]
+    sig_kw = list(kw) + [k for k in ignored if k not in kw]
     sig = ", ".join(positional)
-    if kw:
+    if sig_kw:
         sig += ", *, " + ", ".join(
-            f"{k}={defaults.get(k, 'None')}" for k in kw)
+            f"{k}={defaults.get(k, 'None')}" for k in sig_kw)
     lines = [f"\n\ndef {name}({sig}):",
              "    ext = _extension()"]
     # Scalar kwargs that mirror ctypes' ``_optional_*(v, default)`` handling:

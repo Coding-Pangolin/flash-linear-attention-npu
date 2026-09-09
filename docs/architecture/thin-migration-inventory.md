@@ -60,6 +60,15 @@
 > 精确迁移顺序最终以 host profile（调用次数 × 单次 host 时间）为准；
 > 上表 A-E 为工程候选顺序，非最终发布顺序。
 
+## 验证状态（持续更新）
+
+| 算子 | JSON-only | 头校验 | parity | host（ctypes → thin public） |
+|---|---|---|---|---|
+| npu_recurrent_gated_delta_rule | ✅ | ✅ | 0.0 | ~0.5 → ~0.10 ms |
+| npu_kda_gate_cumsum | ✅ | ✅ | 0.0 | 0.33 → 0.049 ms |
+| npu_chunk_local_cumsum | ✅ | ✅ | 0.0 | 0.37 → 0.089 ms |
+| npu_chunk_scaled_dot_kkt | ✅ | ✅ | 0.0 | 0.44 → 0.067 ms |
+
 ## 下一步
 
 1. Phase 0 试点：为 batch A 的 `npu_recurrent_kda`/`npu_kda_gate_cumsum` 补 spec +

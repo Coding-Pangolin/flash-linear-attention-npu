@@ -391,3 +391,49 @@ def npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, d_o, dv, scale, chunk_size, *, g
         _current_stream_ptr(),
     )
     return (result[0], (result[1] if h0 is not None else None), result[2])
+
+
+def npu_recurrent_kda(q, k, v, g, beta, initial_state, *, cu_seqlens=None, ssm_state_indices=None, A_log=None, dt_bias=None, num_accepted_tokens=None, layout="BSND", scale=None, output_final_state=False, inplace_final_state=True, use_qk_l2norm_in_kernel=False, use_gate_in_kernel=False, use_beta_sigmoid_in_kernel=False, allow_neg_eigval=False, safe_gate=False, lower_bound=None, state_v_first=False):
+    ext = _extension()
+    import torch as _torch
+    layout = str(layout)
+    if scale is None:
+        _kd = k.shape[2] if layout == "TND" else k.shape[3]
+        scale = _kd ** -0.5
+    inplace_final_state = True if inplace_final_state is None else bool(inplace_final_state)
+    if inplace_final_state and initial_state is None:
+        raise RuntimeError("npu_recurrent_kda: inplace_final_state=True requires initial_state.")
+    if initial_state is None:
+        _seq = 1 if layout == "TND" else q.shape[0]
+        _hv = v.shape[1] if layout == "TND" else v.shape[2]
+        _kk = k.shape[2] if layout == "TND" else k.shape[3]
+        _vv = v.shape[2] if layout == "TND" else v.shape[3]
+        _tail = (_vv, _kk) if state_v_first else (_kk, _vv)
+        initial_state = _torch.zeros((_seq, _hv) + _tail, dtype=_torch.float32, device=v.device)
+    lower_bound = (-5.0 if lower_bound is None else float(lower_bound))
+    result = ext.npu_recurrent_kda(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        initial_state,
+        cu_seqlens,
+        ssm_state_indices,
+        A_log,
+        dt_bias,
+        num_accepted_tokens,
+        str(layout),
+        float(scale),
+        bool(output_final_state),
+        bool(inplace_final_state),
+        bool(use_qk_l2norm_in_kernel),
+        bool(use_gate_in_kernel),
+        bool(use_beta_sigmoid_in_kernel),
+        bool(allow_neg_eigval),
+        bool(safe_gate),
+        float(lower_bound),
+        bool(state_v_first),
+        _current_stream_ptr(),
+    )
+    return (result[0], (result[1] if output_final_state else None))

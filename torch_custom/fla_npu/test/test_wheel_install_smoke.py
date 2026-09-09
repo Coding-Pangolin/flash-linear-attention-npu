@@ -39,6 +39,7 @@ THIN_OPS = (
     "causal_conv1d_bwd",
     "chunk_kda_fwd",
     "chunk_kda_bwd_intra",
+    "chunk_kda_bwd",
 )
 
 

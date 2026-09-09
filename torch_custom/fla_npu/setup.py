@@ -9,6 +9,7 @@
 # -----------------------------------------------------------------------------------------------------------
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -143,6 +144,8 @@ def _run_thin_spec_codegen():
     pybind_path = SETUP_DIR / "csrc_thin" / "src" / "pybind.cpp"
     if not spec_dir.is_dir() or not pybind_path.exists():
         return
+    fn_def_re = re.compile(
+        r"(?m)^(?:at::Tensor|std::vector<at::Tensor>)\s+(\w+)\s*\(")
     pybind_text = pybind_path.read_text(encoding="utf-8")
     for spec_path in sorted(spec_dir.glob("*.json")):
         try:
@@ -150,8 +153,9 @@ def _run_thin_spec_codegen():
             name = spec["python_name"]
         except Exception:
             continue
-        marker = f"at::Tensor {name}("
-        if marker in pybind_text:
+        if not spec.get("enabled", True):
+            continue
+        if any(m.group(1) == name for m in fn_def_re.finditer(pybind_text)):
             continue
         codegen = tools_dir / "op_codegen_apply.py"
         if not codegen.exists():

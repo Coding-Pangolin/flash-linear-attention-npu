@@ -415,6 +415,75 @@ def scenario_dqkwg():
                                             **kw))
 
 
+def scenario_chunk_local_cumsum():
+    # Dense rank-3 [B,H,T] domain: fixed length, reverse+scale, odd tail,
+    # and a full-length varlen (single sequence) metadata path.
+    for dt, suffix in ((torch.float16, "fp16"), (torch.bfloat16, "bf16")):
+        fixed = torch.randn(2, 3, 128, dtype=dt, device="npu")
+        torch.npu.synchronize()
+        assert_parity(
+            f"chunk_local_cumsum(fixed_{suffix})",
+            ct.npu_chunk_local_cumsum(fixed, chunk_size=64),
+            _thin.npu_chunk_local_cumsum(fixed, chunk_size=64))
+        odd = torch.randn(2, 3, 129, dtype=dt, device="npu")
+        torch.npu.synchronize()
+        assert_parity(
+            f"chunk_local_cumsum(odd_t_{suffix})",
+            ct.npu_chunk_local_cumsum(odd, chunk_size=64),
+            _thin.npu_chunk_local_cumsum(odd, chunk_size=64))
+    reverse = torch.randn(2, 3, 128, dtype=torch.float16, device="npu")
+    torch.npu.synchronize()
+    kw = dict(chunk_size=64, reverse=True, scale=0.25)
+    assert_parity(
+        "chunk_local_cumsum(reverse_scale_fp16)",
+        ct.npu_chunk_local_cumsum(reverse, **kw),
+        _thin.npu_chunk_local_cumsum(reverse, **kw))
+    varlen = torch.randn(1, 2, 128, dtype=torch.float16, device="npu")
+    cu = [0, 128]
+    ci = [0, 0]  # (seq_idx, chunk_idx) rows flattened for the single seq
+    torch.npu.synchronize()
+    assert_parity(
+        "chunk_local_cumsum(varlen_single_fp16)",
+        ct.npu_chunk_local_cumsum(varlen, chunk_size=64, cu_seqlens=cu,
+                                  chunk_indices_out=ci),
+        _thin.npu_chunk_local_cumsum(varlen, chunk_size=64, cu_seqlens=cu,
+                                     chunk_indices=ci))
+
+
+def scenario_scaled_dot_kkt():
+    B, Hk, Hv, T, K, cs = 2, 4, 4, 128, 64, 64
+    for dt, suffix in ((torch.float16, "fp16"), (torch.bfloat16, "bf16")):
+        k = (torch.randn(B, Hk, T, K) * 0.2).to(dt).npu()
+        g = (torch.randn(B, Hv, T) * 0.02).to(dt).npu()
+        beta = torch.sigmoid(torch.randn(B, Hv, T)).to(dt).npu()
+        torch.npu.synchronize()
+        assert_parity(
+            f"chunk_scaled_dot_kkt({suffix})",
+            ct.npu_chunk_scaled_dot_kkt(k, g, beta, chunk_size=cs),
+            _thin.npu_chunk_scaled_dot_kkt(k, g, beta, chunk_size=cs))
+
+
+def scenario_solve_tri_dense():
+    # Dense bsnd/bnsd is native thin; varlen (tnd/ntd) intentionally
+    # delegates to ctypes inside the _thin wrapper, so only dense is covered.
+    B, H, T = 2, 4, 128
+    for dt, suffix in ((torch.float16, "fp16"), (torch.bfloat16, "bf16")):
+        for bt in (16, 64, 128):
+            a_bsnd = (torch.randn(B, T, H, bt) * 0.1).to(dt).npu()
+            torch.npu.synchronize()
+            assert_parity(
+                f"solve_tri(bsnd_{suffix}_bt{bt})",
+                ct.npu_solve_tri(a_bsnd, layout="bsnd"),
+                _thin.npu_solve_tri(a_bsnd, layout="bsnd"))
+        a_bnsd = ((torch.randn(B, T, H, 64) * 0.1).to(dt).npu()
+                  .permute(0, 2, 1, 3).contiguous())
+        torch.npu.synchronize()
+        assert_parity(
+            f"solve_tri(bnsd_{suffix})",
+            ct.npu_solve_tri(a_bnsd, layout="bnsd"),
+            _thin.npu_solve_tri(a_bnsd, layout="bnsd"))
+
+
 def main():
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
@@ -435,10 +504,13 @@ def main():
         scenario_chunk_kda_bwd_intra,
         scenario_chunk_kda_bwd,
         scenario_dqkwg,
+        scenario_chunk_local_cumsum,
+        scenario_scaled_dot_kkt,
+        scenario_solve_tri_dense,
     ]
     for fn in scenarios:
         fn()
-    print("ALL PASS: 16 thin-op parity scenarios")
+    print("ALL PASS: 19 thin-op parity scenarios")
 
 
 if __name__ == "__main__":

@@ -285,6 +285,19 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd_prepare(
     bool output_a,
     uint64_t stream);
 
+
+std::vector<at::Tensor> npu_causal_conv1d_bwd(
+    const at::Tensor& x,
+    const c10::optional<at::Tensor>& y,
+    const at::Tensor& weight,
+    const at::Tensor& dy,
+    const c10::optional<at::Tensor>& initial_state,
+    const c10::optional<at::Tensor>& dht,
+    const std::vector<int64_t>& query_start_loc,
+    int64_t activation,
+    const std::string& input_layout,
+    uint64_t stream);
+
 }  // namespace fla_npu_thin
 
 PYBIND11_MODULE(_C_thin, m) {
@@ -536,5 +549,17 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("allow_neg_eigval"),
       py::arg("use_exp2"),
       py::arg("output_a"),
+      py::arg("stream"));
+  m.def(
+      "npu_causal_conv1d_bwd",
+      &npu_causal_conv1d_bwd, py::arg("x"),
+      py::arg("y"),
+      py::arg("weight"),
+      py::arg("dy"),
+      py::arg("initial_state"),
+      py::arg("dht"),
+      py::arg("query_start_loc"),
+      py::arg("activation"),
+      py::arg("input_layout"),
       py::arg("stream"));
 }

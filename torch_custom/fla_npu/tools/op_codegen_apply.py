@@ -32,12 +32,18 @@ def cpp_type(kind: str, name: str) -> str:
 def patch_pybind(spec: dict) -> None:
     name = spec["python_name"]
     args = [a for a in spec["args"] if a["kind"] != "out_tensor"]
+    n_out = sum(1 for a in spec["args"] if a["kind"] == "out_tensor")
     path = CSRC / "pybind.cpp"
     text = path.read_text(encoding="utf-8")
-    if f"at::Tensor {name}(" in text:
+    if n_out > 1 and "#include <vector>" not in text:
+        text = "#include <vector>\n" + text
+    if f"{name}(" in text:
+        if n_out > 1 and "#include <vector>" not in text:
+            path.write_text(text, encoding="utf-8")
         return
     params = ",\n    ".join(cpp_type(a["kind"], a["name"]) for a in args)
-    decl = (f"\nat::Tensor {name}(\n    {params},\n    uint64_t stream);\n"
+    ret = "std::vector<at::Tensor>" if n_out > 1 else "at::Tensor"
+    decl = (f"\n{ret} {name}(\n    {params},\n    uint64_t stream);\n"
             f"\n}}  // namespace fla_npu_thin")
     text = text.replace("}  // namespace fla_npu_thin", decl, 1)
     argnames = ",\n      ".join(
@@ -52,6 +58,7 @@ def patch_pybind(spec: dict) -> None:
 
 def patch_thin(spec: dict) -> None:
     name = spec["python_name"]
+    n_out = sum(1 for a in spec["args"] if a["kind"] == "out_tensor")
     path = THIN / "_thin.py"
     text = path.read_text(encoding="utf-8")
     if f"def {name}(" in text:
@@ -89,8 +96,12 @@ def patch_thin(spec: dict) -> None:
                     "double": "float", "float": "float"}[kind]
             call_args.append(f"{cast}({v})")
     body = "\n".join(lines)
-    body += "\n    return ext.%s(\n        %s,\n        _current_stream_ptr(),\n    )" % (
+    call = "ext.%s(\n        %s,\n        _current_stream_ptr(),\n    )" % (
         name, ",\n        ".join(call_args))
+    if n_out > 1:
+        body += f"\n    result = {call}\n    return tuple(result)"
+    else:
+        body += f"\n    return {call}"
     text = text.rstrip() + "\n" + body + "\n"
     path.write_text(text, encoding="utf-8")
 

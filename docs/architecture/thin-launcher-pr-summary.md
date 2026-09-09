@@ -38,7 +38,8 @@ fwd_prepare / bwd_finalize 与 solve_tri dense），host P50 明细见
 覆盖 20 场景/37 组 PASS 输出 parity，安装态 smoke
 （`torch_custom/fla_npu/test/test_wheel_install_smoke.py`）覆盖 25 个 thin
 模块函数 dispatch 门控与 `FLA_NPU_THIN_LAUNCHER=0` 全量回退，均全绿
-（910b wheel + Ascend950PR wheel）。
+（910b w16 wheel + Ascend950PR 950d wheel；950-only 3 场景另由
+regression_950_ops.py 覆盖）。
 
 ## 5. 边界与已知项
 

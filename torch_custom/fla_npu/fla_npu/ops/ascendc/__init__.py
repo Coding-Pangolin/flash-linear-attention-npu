@@ -166,7 +166,9 @@ def _get_direct_op(name: str):
     return _wrap_mutable_direct_op(name, op)
 
 
-_THIN_SUPPORTED_OPS = frozenset({"npu_recurrent_gated_delta_rule"})
+_THIN_SUPPORTED_OPS = frozenset(
+    {"npu_recurrent_gated_delta_rule", "npu_causal_conv1d_update"}
+)
 
 
 def _get_thin_op(name: str):

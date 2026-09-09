@@ -33,6 +33,23 @@ at::Tensor npu_causal_conv1d(
     int64_t head_num,
     uint64_t stream);
 
+at::Tensor npu_causal_conv1d_update(
+    const at::Tensor& x,
+    const at::Tensor& conv_state,
+    const at::Tensor& weight,
+    const c10::optional<at::Tensor>& bias,
+    const std::string& activation,
+    const c10::optional<at::Tensor>& conv_state_indices,
+    const c10::optional<at::Tensor>& num_accepted_tokens,
+    const c10::optional<at::Tensor>& query_start_loc,
+    const std::vector<int64_t>& conv_state_indices_cpu,
+    const std::vector<int64_t>& num_accepted_tokens_cpu,
+    const std::vector<int64_t>& query_start_loc_cpu,
+    int64_t max_query_len,
+    int64_t null_block_id,
+    c10::optional<at::Tensor> out,
+    uint64_t stream);
+
 }  // namespace fla_npu_thin
 
 PYBIND11_MODULE(_C_thin, m) {
@@ -55,5 +72,14 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("initial_state_mode"), py::arg("num_accepted_tokens"),
       py::arg("activation_mode"), py::arg("pad_slot_id"),
       py::arg("run_mode"), py::arg("head_num"),
+      py::arg("stream"));
+  m.def(
+      "npu_causal_conv1d_update",
+      &npu_causal_conv1d_update, py::arg("x"), py::arg("conv_state"),
+      py::arg("weight"), py::arg("bias"), py::arg("activation"),
+      py::arg("conv_state_indices"), py::arg("num_accepted_tokens"),
+      py::arg("query_start_loc"), py::arg("conv_state_indices_cpu"),
+      py::arg("num_accepted_tokens_cpu"), py::arg("query_start_loc_cpu"),
+      py::arg("max_query_len"), py::arg("null_block_id"), py::arg("out"),
       py::arg("stream"));
 }

@@ -81,6 +81,8 @@
 | npu_chunk_fwd_o | ✅（v3） | ✅ | 0.0（仅 BNSD 合法域） | 0.56 → 0.097 ms |
 | npu_chunk_gated_delta_rule_bwd_dhu | ✅（v3） | ✅ | 0.0（canonical ≥2 序列；单序列 dense 两条路径同 NaN，内核边界） | 0.71 → 0.139 ms |
 | npu_recurrent_kda | spec 已建（inplace alias/return_when/python pre） | ✅ | 待实机用例（Kimi K3 BSND smoke 组合；盲配触发 507035 向量越界，须按 design.md §12 构造） | - |
+| npu_chunk_gated_delta_rule_fwd_prepare | spec 已建（return_order + ctypes 委托） | ✅ | Ascend950-only（def 仅 AddConfig ascend950；910b 无 kernel config） | - |
+| npu_causal_conv1d_bwd | ✅ | ✅（按文档签名） | 0.0（BNSD 域）；BSH/TND 两路径同 NaN（该构建 kernel 边界待查） | 0.58 → 0.084 ms |
 | npu_solve_tri | spec 已建（enabled=false） | - | 待修（thin 输出稀疏非有限，已回退 ctypes） | - |
 
 ## 下一步

@@ -56,6 +56,16 @@ at::Tensor npu_chunk_local_cumsum(
     const std::string& output_dtype,
     uint64_t stream);
 
+
+at::Tensor npu_chunk_scaled_dot_kkt(
+    const at::Tensor& k,
+    const at::Tensor& g,
+    const at::Tensor& beta,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    int64_t chunk_size,
+    uint64_t stream);
+
 }  // namespace fla_npu_thin
 
 PYBIND11_MODULE(_C_thin, m) {
@@ -95,5 +105,14 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("scale"),
       py::arg("head_first"),
       py::arg("output_dtype"),
+      py::arg("stream"));
+  m.def(
+      "npu_chunk_scaled_dot_kkt",
+      &npu_chunk_scaled_dot_kkt, py::arg("k"),
+      py::arg("g"),
+      py::arg("beta"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("chunk_size"),
       py::arg("stream"));
 }

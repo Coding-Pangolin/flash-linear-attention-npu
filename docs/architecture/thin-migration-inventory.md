@@ -80,11 +80,23 @@
 | npu_chunk_fwd_h | ✅（v3） | ✅ | 0.0（dense/final/varlen） | 0.63 → 0.127 ms |
 | npu_chunk_fwd_o | ✅（v3） | ✅ | 0.0（仅 BNSD 合法域） | 0.56 → 0.097 ms |
 | npu_chunk_gated_delta_rule_bwd_dhu | ✅（v3） | ✅ | 0.0（canonical ≥2 序列；单序列 dense 两条路径同 NaN，内核边界） | 0.71 → 0.139 ms |
+| npu_recurrent_kda | spec 已建（inplace alias/return_when/python pre） | ✅ | 待实机用例（Kimi K3 BSND smoke 组合；盲配触发 507035 向量越界，须按 design.md §12 构造） | - |
 | npu_solve_tri | spec 已建（enabled=false） | - | 待修（thin 输出稀疏非有限，已回退 ctypes） | - |
 
 ## 下一步
 
-1. Phase 0 试点：为 batch A 的 `npu_recurrent_kda`/`npu_kda_gate_cumsum` 补 spec +
-   校验 + codegen 骨架，验证"spec→校验→生成→parity→benchmark"闭环；
-2. 跑一次服务 profile 校准批次优先级；
-3. #390 合入后统一 conv1d ABI，并入批次 B。
+已闭环 16 个算子（见验证状态表）。剩余算子及其所需能力：
+
+1. `npu_recurrent_kda`（A）：需 codegen alias/out（inplace final_state 别名）+ zero
+   initial_state 合成（python.pre 已支持）；仓库暂无现成 NPU 用例，需自建并覆盖
+   BSND/TND × inplace × output_final_state。
+2. conv1d 家族（B）：legacy `npu_causal_conv1d` 保持 ctypes 到 #390；`causal_conv1d_update`
+   适配在验证分支（PR #512），#390 合入后并入；`causal_conv1d_bwd` 需确认
+   aclnnCausalConv1dBwd 符号来源（仓库无 op_host 头）后再做 char*+4 输出适配。
+3. chunk 融合/准备（C）：`chunk_gated_delta_rule_fwd`、`fwd_prepare`（条件 descriptor、
+   beta 主机回退）、`bwd_finalize`（Ascend950-only，910b 无法 parity）。
+4. KDA chunk 家族（D）：`chunk_kda_fwd/bwd/bwd_intra`，布局矩阵
+   BSND/BNSD/TND/NTD + canonical indices + workspace 分段策略。
+5. `npu_solve_tri`：thin parity 待修（sparse/non-finite），spec 保持 disabled。
+6. 收尾：上述算子全量迁移后执行 wheel 安装态全量回归 + 发布矩阵（Python 版本 ×
+   linux x86/aarch64，wheel 含 cpXXX 平台标识属预期）。

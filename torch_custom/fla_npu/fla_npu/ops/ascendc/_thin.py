@@ -483,7 +483,7 @@ def npu_causal_conv1d_bwd(x, y, weight, dy, initial_state, dht, *, query_start_l
     return tuple(result)
 
 
-def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size, *, A_log=None, dt_bias=None, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BSND", safe_gate=False, lower_bound=None, use_gate_in_kernel=False, state_v_first=False, disable_recompute=False, return_intermediate_states=False):
+def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size, *, A_log=None, dt_bias=None, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BSND", safe_gate=False, lower_bound=None, use_gate_in_kernel=False, state_v_first=False, output_final_state=False, disable_recompute=False, return_intermediate_states=False):
     ext = _extension()
     layout = str(layout)
     if not (bool(disable_recompute) and not bool(output_final_state) and not bool(return_intermediate_states) and layout == "BSND" and cu_seqlens is None and chunk_indices is None):
@@ -514,4 +514,4 @@ def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size, *, A_log=None, dt_bia
         bool(state_v_first),
         _current_stream_ptr(),
     )
-    return (result[0], (result[1] if output_final_state else None), result[2], result[3], result[4], result[5], result[6], result[7], result[8], result[9], result[10])
+    return (result[0], (result[1] if output_final_state else None), result[2], result[3], result[4], result[5], result[6], result[7], result[8], result[9], result[10], initial_state)

@@ -28,6 +28,8 @@ def _aclnn_typename(kind: str) -> str:
         return "const aclTensor*"
     if kind == "int_array":
         return "const aclIntArray*"
+    if kind == "char_ptr":
+        return "const char*"
     return _CPP_SCALAR[kind]
 
 
@@ -38,6 +40,8 @@ def _python_param(kind: str, name: str) -> str:
         return f"const c10::optional<at::Tensor>& {name}"
     if kind == "int_array":
         return f"const std::vector<int64_t>& {name}"
+    if kind == "char_ptr":
+        return f"const std::string& {name}"
     return f"{_CPP_SCALAR[kind]} {name}"
 
 
@@ -46,6 +50,8 @@ def _arg_token(kind: str, name: str, index: int) -> str:
         return f"views[{index}]->get()"
     if kind == "int_array":
         return f"{name}.get()"
+    if kind == "char_ptr":
+        return f"{name}.c_str()"
     return name
 
 
@@ -72,6 +78,7 @@ def generate(spec: dict) -> str:
     lines.append("")
     lines.append("#include <cstdint>")
     lines.append("#include <memory>")
+    lines.append("#include <string>")
     lines.append("#include <vector>")
     lines.append("")
     lines.append('#include "thin_launcher/runtime.h"')

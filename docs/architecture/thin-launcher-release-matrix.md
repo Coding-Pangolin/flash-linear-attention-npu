@@ -64,9 +64,12 @@ thin 扩展基于 torch C++ extension，ABI 绑定 CPython 版本与
 - 221（910B3，w16 wheel，HEAD d03fcdc5）：regression_thin_ops 20 场景/37 组
   PASS；安装态 smoke 3/3、customer-compat + multi-stream 9 passed/13 subtests
   全绿。
-- 950（Ascend950PR 共享机）：env950c wheel 上 18 个通用场景 + Ascend950-only
-  3 场景（fwd_prepare/bwd_finalize/recurrent_kda）全 PASS，kda_gate_cumsum 与
-  scaled_dot_kkt 单点探针 ct/thin 均 OK；chunk_local_cumsum/solve_tri 两个新增
-  OPP 因该 wheel 未含内核未能跑。新 wheel（含两 OPP）编包三次被共享机环境阻断
-  （/home 与 / 长期 100%、负载 >100，ENOSPC/OOM），待磁盘与负载恢复后补跑并
-  更新本表。
+- 950（Ascend950PR 共享机）：先用 env950c wheel + 2 算子 OPP run 包
+  （solve_tri、chunk_local_cumsum）按 vendor 合并后验证：
+  chunk_local_cumsum 回归组 parity 0.0；solve_tri dense（fp16/bf16 ×
+  BT16/64/128 bsnd/bnsd）ext 直连 parity 0.0；kda_gate_cumsum / scaled_dot_kkt
+  单点探针 ct/thin OK；其余通用场景 + Ascend950-only 3 场景
+  （fwd_prepare/bwd_finalize/recurrent_kda）全 PASS。
+- 950 整 wheel 重编（使 op_api 含 aclnnSolveTri host 符号）四次均被共享机
+  /home 空间耗尽打断（长期 100%、kernel 编译期 ENOSPC，可用 <2G）；待磁盘
+  恢复后重跑完整 20 场景并更新本表。

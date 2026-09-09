@@ -66,7 +66,7 @@
 |---|---|---|---|---|
 | npu_recurrent_gated_delta_rule | ✅ | ✅ | 0.0 | ~0.5 → ~0.10 ms |
 | npu_kda_gate_cumsum | ✅ | ✅ | 0.0 | 0.33 → 0.049 ms |
-| npu_chunk_local_cumsum | ✅ | ✅ | 0.0 | 0.37 → 0.089 ms |
+| npu_chunk_local_cumsum | ✅ | ✅ | 0.0（910b w16 + 950 env950c/run merge） | 0.37 → 0.089 ms |
 | npu_chunk_scaled_dot_kkt | ✅ | ✅ | 0.0（k fp16/bf16 × g/beta fp32；OPP 仅编译该 dtype 域，fp16 g/beta 为 161002） | 0.44 → 0.067 ms |
 | npu_recompute_w_u_fwd | ✅ | ✅ | 0.0 | 0.58 → 0.115 ms |
 | npu_prepare_wy_repr_bwd_full | ✅ | ✅ | 0.0 | 0.77 → 0.135 ms |
@@ -88,7 +88,7 @@
 | npu_chunk_kda_fwd | ✅（dense BSND 合法域；其它布局/flag 委托 ctypes） | ✅ | 0.0（10 输出 + None 语义） | 1.04 → 0.114 ms |
 | npu_chunk_kda_bwd_intra | ✅（BNSD dense 单发射合法域；BSND 分段路径委托 ctypes） | ✅ | 0.0（4 输出） | 0.73 → 0.091 ms |
 | npu_chunk_kda_bwd | ✅（dense BNSD 简单域：偶数头、T%64=0、gate off；tail/奇头/varlen 回退委托 ctypes） | ✅ | 0.0（dq/dk/dv/db/dg + 3×None） | 0.88 → 0.111 ms |
-| npu_solve_tri | ✅（dense bsnd/bnsd 域，enabled） | ✅ | 0.0（fp16/bf16 × BT 16/32/64/128）；TND/NTD varlen thin 仍非有限 → 委托 ctypes | 0.372 → 0.098 ms（910b w16，dense bsnd fp16 BT64） |
+| npu_solve_tri | ✅（dense bsnd/bnsd 域，enabled） | ✅ | 0.0（fp16/bf16 × BT 16/32/64/128，910b w16；950 env950c/run merge ext 直连亦 0.0）；TND/NTD varlen thin 仍非有限 → 委托 ctypes | 0.372 → 0.098 ms（910b w16，dense bsnd fp16 BT64） |
 
 ## 下一步
 
@@ -105,6 +105,8 @@
 4. `npu_solve_tri` varlen（TND/NTD）：thin 直连结果非有限 → wrapper 已委托
    ctypes；dense bsnd/bnsd 已原生 thin 并多处验证 0.0。
 5. 收尾：regression_thin_ops 20 场景（37 组）已在 910b 最新 wheel（w16）上
-   全量执行并全绿；950 侧除 chunk_local_cumsum/solve_tri 两个新增 OPP 外同样
-   全绿，缺测项因共享机磁盘/负载（/home、/ 长期 100%）编包被阻断，待恢复后
-   补跑；发布矩阵与实测记录见 thin-launcher-release-matrix.md。
+   全量执行并全绿；950 侧通过 env950c + 2 算子 OPP run 合并验证了
+   chunk_local_cumsum（回归组 0.0）与 solve_tri dense（ext 直连 0.0），其余
+   通用与 950-only 场景全绿；整 wheel 重编四次因共享机 /home 长期 100%（可用
+   <2G，kernel 编译期 ENOSPC）中断，待磁盘恢复后补跑完整 20 场景；发布矩阵与
+   实测记录见 thin-launcher-release-matrix.md。

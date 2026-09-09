@@ -544,3 +544,44 @@ def npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg, *, cu_se
         _current_stream_ptr(),
     )
     return tuple(result)
+
+
+def npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o, scale, *, raw_g=None, A_log=None, dt_bias=None, initial_state=None, dht=None, cu_seqlens=None, chunk_indices=None, chunk_size=64, safe_gate=True, use_gate_in_kernel=False, lower_bound=-5.0, disable_recompute=True, use_exp2=True, state_v_first=False):
+    ext = _extension()
+    if not (cu_seqlens is None and chunk_indices is None and int(chunk_size) == 64 and bool(safe_gate) and not bool(use_gate_in_kernel) and bool(disable_recompute) and bool(use_exp2) and not bool(state_v_first) and raw_g is None and A_log is None and dt_bias is None and initial_state is None and dht is None and q.dim() == 4 and q.shape[1] % 2 == 0 and q.shape[2] % 64 == 0 and all(x is not None for x in (w, qg, kg, v_new, h))):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o, scale, raw_g=raw_g, A_log=A_log, dt_bias=dt_bias, initial_state=initial_state, dht=dht, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, chunk_size=chunk_size, safe_gate=safe_gate, lower_bound=lower_bound, use_gate_in_kernel=use_gate_in_kernel, disable_recompute=disable_recompute, use_exp2=use_exp2, state_v_first=state_v_first)
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    result = ext.npu_chunk_kda_bwd(
+        q,
+        k,
+        v,
+        beta,
+        gk,
+        Aqk,
+        Akk,
+        w,
+        qg,
+        kg,
+        v_new,
+        h,
+        d_o,
+        raw_g,
+        A_log,
+        dt_bias,
+        initial_state,
+        dht,
+        cu_seqlens,
+        chunk_indices,
+        float(scale),
+        int(chunk_size),
+        bool(safe_gate),
+        bool(use_gate_in_kernel),
+        float(lower_bound),
+        bool(disable_recompute),
+        bool(use_exp2),
+        bool(state_v_first),
+        _current_stream_ptr(),
+    )
+    return (result[0], result[1], result[2], result[3], result[4], (result[5] if False else None), (result[6] if False else None), (result[7] if False else None))

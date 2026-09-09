@@ -338,6 +338,38 @@ std::vector<at::Tensor> npu_chunk_kda_bwd_intra(
     const std::string& layout,
     uint64_t stream);
 
+
+std::vector<at::Tensor> npu_chunk_kda_bwd(
+    const at::Tensor& q,
+    const at::Tensor& k,
+    const at::Tensor& v,
+    const at::Tensor& beta,
+    const at::Tensor& gk,
+    const at::Tensor& Aqk,
+    const at::Tensor& Akk,
+    const c10::optional<at::Tensor>& w,
+    const c10::optional<at::Tensor>& qg,
+    const c10::optional<at::Tensor>& kg,
+    const c10::optional<at::Tensor>& v_new,
+    const c10::optional<at::Tensor>& h,
+    const at::Tensor& d_o,
+    const c10::optional<at::Tensor>& raw_g,
+    const c10::optional<at::Tensor>& A_log,
+    const c10::optional<at::Tensor>& dt_bias,
+    const c10::optional<at::Tensor>& initial_state,
+    const c10::optional<at::Tensor>& dht,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    double scale,
+    int64_t chunk_size,
+    bool safe_gate,
+    bool use_gate_in_kernel,
+    double lower_bound,
+    bool disable_recompute,
+    bool use_exp2,
+    bool state_v_first,
+    uint64_t stream);
+
 }  // namespace fla_npu_thin
 
 PYBIND11_MODULE(_C_thin, m) {
@@ -639,5 +671,36 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("chunk_size"),
       py::arg("safe_gate"),
       py::arg("layout"),
+      py::arg("stream"));
+  m.def(
+      "npu_chunk_kda_bwd",
+      &npu_chunk_kda_bwd, py::arg("q"),
+      py::arg("k"),
+      py::arg("v"),
+      py::arg("beta"),
+      py::arg("gk"),
+      py::arg("Aqk"),
+      py::arg("Akk"),
+      py::arg("w"),
+      py::arg("qg"),
+      py::arg("kg"),
+      py::arg("v_new"),
+      py::arg("h"),
+      py::arg("d_o"),
+      py::arg("raw_g"),
+      py::arg("A_log"),
+      py::arg("dt_bias"),
+      py::arg("initial_state"),
+      py::arg("dht"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("scale"),
+      py::arg("chunk_size"),
+      py::arg("safe_gate"),
+      py::arg("use_gate_in_kernel"),
+      py::arg("lower_bound"),
+      py::arg("disable_recompute"),
+      py::arg("use_exp2"),
+      py::arg("state_v_first"),
       py::arg("stream"));
 }

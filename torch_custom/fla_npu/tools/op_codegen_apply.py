@@ -158,14 +158,17 @@ def patch_thin(spec: dict) -> None:
         return_suffix = py.get("return_suffix", [])
         return_order = py.get("return_order")
         if return_order is not None:
-            if sorted(return_order) != sorted(out_names):
-                raise ValueError(
-                    f"{name}: return_order must be a permutation of output "
-                    f"args {out_names}")
-            ordered = [(return_order.index(out_names[i]), i)
-                       for i in range(len(out_names))]
-            terms = [f"result[{aclnn_idx}]"
-                     for _, aclnn_idx in sorted(ordered)]
+            terms = []
+            for item in return_order:
+                if isinstance(item, dict) and item.get("none"):
+                    terms.append("None")
+                    continue
+                item_name = item if isinstance(item, str) else item["name"]
+                if item_name not in out_names:
+                    raise ValueError(
+                        f"{name}: return_order item {item_name!r} is not an "
+                        f"output arg {out_names}")
+                terms.append(f"result[{out_names.index(item_name)}]")
             terms.extend(return_suffix)
             body += "\n    return (" + ", ".join(terms) + ")"
             text = text.rstrip() + "\n" + body + "\n"

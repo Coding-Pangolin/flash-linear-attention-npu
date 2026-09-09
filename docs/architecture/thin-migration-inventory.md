@@ -88,7 +88,7 @@
 | npu_chunk_kda_fwd | ✅（dense BSND 合法域；其它布局/flag 委托 ctypes） | ✅ | 0.0（10 输出 + None 语义） | 1.04 → 0.114 ms |
 | npu_chunk_kda_bwd_intra | ✅（BNSD dense 单发射合法域；BSND 分段路径委托 ctypes） | ✅ | 0.0（4 输出） | 0.73 → 0.091 ms |
 | npu_chunk_kda_bwd | ✅（dense BNSD 简单域：偶数头、T%64=0、gate off；tail/奇头/varlen 回退委托 ctypes） | ✅ | 0.0（dq/dk/dv/db/dg + 3×None） | 0.88 → 0.111 ms |
-| npu_solve_tri | spec 已建（enabled=false） | - | 待修（thin 输出稀疏非有限，已回退 ctypes） | - |
+| npu_solve_tri | ✅（dense bsnd/bnsd 域，enabled） | ✅ | 0.0（fp16/bf16 × BT 16/32/64/128）；TND/NTD varlen thin 仍非有限 → 委托 ctypes | host 待补 |
 
 ## 下一步
 

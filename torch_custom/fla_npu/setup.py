@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import json
 from pathlib import Path
 
 from setuptools import find_packages, setup
@@ -104,6 +105,7 @@ def _setup_thin_extension():
     """
     from torch.utils.cpp_extension import BuildExtension, CppExtension
 
+    _run_thin_spec_codegen()
     csrc_thin = SETUP_DIR / "csrc_thin"
     sources = sorted(str(p) for p in (csrc_thin / "src").glob("*.cpp"))
     include_dirs = [str(csrc_thin / "include")]
@@ -113,6 +115,37 @@ def _setup_thin_extension():
         include_dirs=include_dirs,
         extra_compile_args=["-std=c++17"],
     )
+
+
+def _run_thin_spec_codegen():
+    """Auto-generate thin adapters from op_specs/*.json (JSON-only workflow).
+
+    For every spec whose op is not registered yet, invoke op_codegen_apply.py so
+    a new operator only needs its spec JSON before the one-click build.
+    """
+
+    if not _thin_build_enabled():
+        return
+    spec_dir = SETUP_DIR / "op_specs"
+    tools_dir = SETUP_DIR / "tools"
+    pybind_path = SETUP_DIR / "csrc_thin" / "src" / "pybind.cpp"
+    if not spec_dir.is_dir() or not pybind_path.exists():
+        return
+    pybind_text = pybind_path.read_text(encoding="utf-8")
+    for spec_path in sorted(spec_dir.glob("*.json")):
+        try:
+            spec = json.loads(spec_path.read_text(encoding="utf-8"))
+            name = spec["python_name"]
+        except Exception:
+            continue
+        marker = f"at::Tensor {name}("
+        if marker in pybind_text:
+            continue
+        codegen = tools_dir / "op_codegen_apply.py"
+        if not codegen.exists():
+            continue
+        _run([sys.executable, str(codegen), "--spec", str(spec_path)], SETUP_DIR)
+        pybind_text = pybind_path.read_text(encoding="utf-8")
     setup(
         name=PACKAGE_NAME,
         version=_package_version(),

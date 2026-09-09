@@ -69,6 +69,10 @@
 | npu_chunk_local_cumsum | ✅ | ✅ | 0.0 | 0.37 → 0.089 ms |
 | npu_chunk_scaled_dot_kkt | ✅ | ✅ | 0.0 | 0.44 → 0.067 ms |
 | npu_recompute_w_u_fwd | ✅ | ✅ | 0.0 | 0.58 → 0.115 ms |
+| npu_prepare_wy_repr_bwd_full | ✅ | ✅ | 0.0 | 0.77 → 0.135 ms |
+| npu_prepare_wy_repr_bwd | ✅ | ✅ | 0.0（KH=4/VH=8、bf16+fp32） | 0.74 → 0.129 ms |
+| npu_chunk_bwd_dv_local | ✅ | ✅ | 0.0 | 0.48 → 0.105 ms |
+| npu_prepare_wy_repr_bwd_da | ✅ | ✅ | 0.0 | 0.69 → 0.135 ms |
 | npu_solve_tri | spec 已建（enabled=false） | - | 待修（thin 输出稀疏非有限，已回退 ctypes） | - |
 
 ## 下一步

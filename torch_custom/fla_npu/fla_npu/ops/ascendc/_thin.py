@@ -144,3 +144,22 @@ def npu_chunk_scaled_dot_kkt(k, g, beta, *, cu_seqlens=None, chunk_indices=None,
         int(chunk_size),
         _current_stream_ptr(),
     )
+
+
+def npu_recompute_w_u_fwd(k, v, beta, A, chunk_size, *, g=None, gk=None, cu_seqlens=None, chunk_indices=None):
+    ext = _extension()
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    result = ext.npu_recompute_w_u_fwd(
+        k,
+        v,
+        beta,
+        A,
+        g,
+        gk,
+        cu_seqlens,
+        chunk_indices,
+        int(chunk_size),
+        _current_stream_ptr(),
+    )
+    return tuple(result)

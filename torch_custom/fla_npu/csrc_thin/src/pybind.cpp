@@ -1,3 +1,4 @@
+#include <vector>
 #include <torch/extension.h>
 
 #include "thin_launcher/runtime.h"
@@ -74,6 +75,19 @@ at::Tensor npu_solve_tri(
     const std::string& layout,
     uint64_t stream);
 
+
+std::vector<at::Tensor> npu_recompute_w_u_fwd(
+    const at::Tensor& k,
+    const at::Tensor& v,
+    const at::Tensor& beta,
+    const at::Tensor& A,
+    const c10::optional<at::Tensor>& g,
+    const c10::optional<at::Tensor>& gk,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    int64_t chunk_size,
+    uint64_t stream);
+
 }  // namespace fla_npu_thin
 
 PYBIND11_MODULE(_C_thin, m) {
@@ -129,5 +143,17 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("cu_seqlens"),
       py::arg("chunk_indices"),
       py::arg("layout"),
+      py::arg("stream"));
+  m.def(
+      "npu_recompute_w_u_fwd",
+      &npu_recompute_w_u_fwd, py::arg("k"),
+      py::arg("v"),
+      py::arg("beta"),
+      py::arg("A"),
+      py::arg("g"),
+      py::arg("gk"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("chunk_size"),
       py::arg("stream"));
 }

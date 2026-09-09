@@ -57,9 +57,9 @@ def _arg_token(kind: str, name: str, index: int) -> str:
 
 def generate(spec: dict) -> str:
     args = spec["args"]
-    out_kinds = [a for a in args if a["kind"] == "out_tensor"]
-    if len(out_kinds) != 1:
-        raise ValueError("codegen v0 requires exactly one out_tensor arg")
+    out_args = [a for a in args if a["kind"] == "out_tensor"]
+    if not out_args:
+        raise ValueError("codegen requires at least one out_tensor arg")
     op = spec["aclnn_name"]
     fn = spec["python_name"]
     params = [_python_param(a["kind"], a["name"]) for a in args
@@ -98,19 +98,37 @@ def generate(spec: dict) -> str:
     lines.append("using LaunchFn = int (*)(void*, uint64_t, aclOpExecutor*, void*);")
     lines.append("}  // namespace")
     lines.append("")
-    lines.append(f"at::Tensor {fn}(")
+    multi = len(out_args) > 1
+    ret_type = "std::vector<at::Tensor>" if multi else "at::Tensor"
+    lines.append(f"{ret_type} {fn}(")
     lines.append("    " + ",\n    ".join(params) + ") {")
-    lines.extend(_output_alloc_lines(spec))
+    outputs_spec = spec.get("outputs", [spec.get("output", {}) for _ in out_args])
+    if len(outputs_spec) != len(out_args):
+        raise ValueError("outputs spec length mismatch")
+    default_source = next(
+        a["name"] for a in args if a["kind"] in ("tensor", "optional_tensor"))
+    if multi:
+        lines.append("  std::vector<at::Tensor> outputs;")
+        for item in outputs_spec:
+            expr = _output_expr(item, default_source)
+            lines.append(f"  outputs.push_back({expr});")
+    else:
+        lines.append("  at::Tensor output = "
+                     f"{_output_expr(outputs_spec[0], default_source)};")
     lines.append("")
     lines.append("  std::vector<std::unique_ptr<AclTensorView>> views;")
     lines.append("  views.reserve(8);")
+    out_idx = 0
     for i, a in enumerate(args):
         kind = a["kind"]
         name = a["name"]
         if kind == "tensor":
             lines.append(f"  views.push_back(std::make_unique<AclTensorView>({name}));")
         elif kind == "out_tensor":
-            lines.append(f"  views.push_back(std::make_unique<AclTensorView>(output));")
+            target = "outputs[" + str(out_idx) + "]" if multi else "output"
+            lines.append(
+                f"  views.push_back(std::make_unique<AclTensorView>({target}));")
+            out_idx += 1
         elif kind == "optional_tensor":
             lines.append(
                 f"  views.push_back(std::make_unique<AclTensorView>("
@@ -157,7 +175,10 @@ def generate(spec: dict) -> str:
     lines.append("      launch(workspace_ptr, workspace_size, executor,")
     lines.append("             reinterpret_cast<void*>(stream));")
     lines.append(f'  TORCH_CHECK(launch_ret == 0, "{op} failed: ", launch_ret);')
-    lines.append("  return output;")
+    if multi:
+        lines.append("  return outputs;")
+    else:
+        lines.append("  return output;")
     lines.append("}")
     lines.append("")
     lines.append("}  // namespace fla_npu_thin")
@@ -165,15 +186,14 @@ def generate(spec: dict) -> str:
     return "\n".join(lines)
 
 
-def _output_alloc_lines(spec: dict) -> list[str]:
-    output = spec.get("output", {})
-    source = output.get("source", spec["args"][0]["name"])
+def _output_expr(output: dict, default_source: str) -> str:
+    source = output.get("source", default_source)
     dtype = output.get("dtype", "float32")
     shape = output.get("shape")
     if dtype == "same":
         if shape:
             raise ValueError("output_dtype 'same' with explicit shape is unsupported")
-        return [f"  auto output = at::empty_like({source});"]
+        return f"at::empty_like({source})"
     if shape is not None:
         parts = []
         for item in shape:
@@ -184,32 +204,24 @@ def _output_alloc_lines(spec: dict) -> list[str]:
             else:
                 raise ValueError(f"bad output shape item: {item!r}")
         sizes = ", ".join(parts)
+        if dtype == "source":
+            return f"at::empty({{{sizes}}}, {source}.options())"
         if dtype == "output_dtype":
-            return [
-                f"  auto output = (output_dtype == \"float32\")",
-                f"      ? at::empty({{{sizes}}}, {source}.options().dtype(at::kFloat))",
-                f"      : at::empty({{{sizes}}}, {source}.options().dtype(at::kBFloat16));",
-            ]
+            return (f"(output_dtype == \"float32\")"
+                    f" ? at::empty({{{sizes}}}, {source}.options().dtype(at::kFloat))"
+                    f" : at::empty({{{sizes}}}, {source}.options().dtype(at::kBFloat16))")
         aten = {"float32": "at::kFloat", "bfloat16": "at::kBFloat16"}.get(dtype)
         if aten is None:
             raise ValueError(f"unsupported output dtype: {dtype}")
-        return [
-            f"  auto output = at::empty({{{sizes}}}, "
-            f"{source}.options().dtype({aten}));"
-        ]
+        return f"at::empty({{{sizes}}}, {source}.options().dtype({aten}))"
     if dtype == "output_dtype":
-        return [
-            f"  auto output = (output_dtype == \"float32\")",
-            f"      ? at::empty({source}.sizes(), {source}.options().dtype(at::kFloat))",
-            f"      : at::empty({source}.sizes(), {source}.options().dtype(at::kBFloat16));",
-        ]
+        return (f"(output_dtype == \"float32\")"
+                f" ? at::empty({source}.sizes(), {source}.options().dtype(at::kFloat))"
+                f" : at::empty({source}.sizes(), {source}.options().dtype(at::kBFloat16))")
     aten = {"float32": "at::kFloat", "bfloat16": "at::kBFloat16"}.get(dtype)
     if aten is None:
         raise ValueError(f"unsupported output dtype: {dtype}")
-    return [
-        f"  auto output = at::empty({source}.sizes(), "
-        f"{source}.options().dtype({aten}));"
-    ]
+    return f"at::empty({source}.sizes(), {source}.options().dtype({aten}))"
 
 
 def main() -> int:

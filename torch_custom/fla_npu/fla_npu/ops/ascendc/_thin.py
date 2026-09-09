@@ -515,3 +515,32 @@ def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size, *, A_log=None, dt_bia
         _current_stream_ptr(),
     )
     return (result[0], (result[1] if output_final_state else None), result[2], result[3], result[4], result[5], result[6], result[7], result[8], result[9], result[10], initial_state)
+
+
+def npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg, *, cu_seqlens=None, chunk_indices=None, chunk_size=64, safe_gate=True, layout="BSND"):
+    ext = _extension()
+    layout = str(layout)
+    if not (layout == "BNSD" and cu_seqlens is None and chunk_indices is None and int(chunk_size) == 64 and bool(safe_gate)):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, chunk_size=chunk_size, safe_gate=safe_gate, layout=layout)
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    result = ext.npu_chunk_kda_bwd_intra(
+        q,
+        k,
+        gk,
+        beta,
+        dAqk,
+        dAkk,
+        dq,
+        dk,
+        db,
+        dg,
+        cu_seqlens,
+        chunk_indices,
+        int(chunk_size),
+        bool(safe_gate),
+        str(layout),
+        _current_stream_ptr(),
+    )
+    return tuple(result)

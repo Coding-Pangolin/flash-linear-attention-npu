@@ -69,6 +69,57 @@ def scenario_fast_gelu():
                   _thin.npu_fast_gelu_custom_backward(grad, x))
 
 
+def scenario_recurrent_gated_delta_rule():
+    batch = 8
+    num_key_heads, num_value_heads, dim = 8, 16, 128
+    gap, offset = 16384, 12288
+    inner = num_value_heads * dim * dim
+    block_stride = inner + gap
+
+    def make_state():
+        backing = torch.empty(batch * block_stride * 4, dtype=torch.int8,
+                              device="npu")
+        typed = backing.view(torch.float32)
+        state = torch.as_strided(
+            typed,
+            size=(batch, num_value_heads, dim, dim),
+            stride=(block_stride, dim * dim, dim, 1),
+            storage_offset=offset,
+        )
+        state.zero_()
+        return state
+
+    def norm(t):
+        return torch.nn.functional.normalize(t, p=2, dim=-1)
+
+    query = norm(torch.randn(batch, num_key_heads, dim, device="npu")).to(
+        torch.bfloat16)
+    key = norm(torch.randn(batch, num_key_heads, dim, device="npu")).to(
+        torch.bfloat16)
+    value = torch.randn(batch, num_value_heads, dim, dtype=torch.bfloat16,
+                        device="npu")
+    beta = torch.rand(batch, num_value_heads, dtype=torch.bfloat16,
+                      device="npu")
+    g = torch.rand(batch, num_value_heads, dtype=torch.float32, device="npu")
+    actual_seq_lengths = torch.tensor([0] + [1] * batch, dtype=torch.int32,
+                                      device="npu")
+    ssm_state_indices = torch.arange(batch, dtype=torch.int32, device="npu")
+    torch.npu.synchronize()
+    state_c = make_state()
+    state_t = make_state()
+    kw = dict(beta=beta, g=g, scale=dim ** -0.5,
+              actual_seq_lengths=actual_seq_lengths,
+              ssm_state_indices=ssm_state_indices,
+              num_accepted_tokens=None)
+    out_c = ct.npu_recurrent_gated_delta_rule(query, key, value, state_c, **kw)
+    out_t = _thin.npu_recurrent_gated_delta_rule(query, key, value, state_t,
+                                                 **kw)
+    torch.npu.synchronize()
+    assert_parity("recurrent_gated_delta_rule", out_c, out_t)
+    assert float((state_c.float() - state_t.float()).abs().max().item()) == 0.0
+    print("PASS recurrent_gated_delta_rule(state)")
+
+
 def scenario_recompute():
     B, Hk, Hv, T, K, V, cs = 1, 2, 4, 256, 128, 256, 64
     dt = torch.float16
@@ -280,11 +331,43 @@ def scenario_chunk_kda_fwd():
                   _thin.npu_chunk_kda_fwd(q, k, v, g, beta, **kw))
 
 
+def scenario_dqkwg():
+    B, HK, HV, T, K, V, cs = 1, 4, 4, 1024, 128, 128, 64
+    NT = T // cs
+    dt = torch.float16
+
+    def make4(*shape, scale_):
+        return (torch.randn(shape) * scale_).to(dt).permute(
+            0, 2, 1, 3).contiguous().npu()
+
+    def make5(*shape, scale_):
+        return (torch.randn(shape) * scale_).to(dt).permute(
+            0, 2, 1, 3, 4).contiguous().npu()
+
+    q = make4(B, T, HK, K, scale_=5e-2)
+    k = make4(B, T, HK, K, scale_=5e-2)
+    v = make4(B, T, HV, V, scale_=5e-2)
+    do = make4(B, T, HV, V, scale_=5e-2)
+    dv = make4(B, T, HV, V, scale_=5e-1)
+    h = make5(B, NT, HV, K, V, scale_=5e-2)
+    dh = make5(B, NT, HV, K, V, scale_=5e-2)
+    g = (-torch.sort(torch.rand(B * T * HV), descending=False)[0]
+         .reshape(B, T, HV)).permute(0, 2, 1).to(dt).contiguous().npu()
+    torch.npu.synchronize()
+    kw = dict(cu_seqlens=None, chunk_indices=None, w=None, g_gamma=None,
+              scale=0.088, use_exp2=None, transpose_state_layout=None)
+    assert_parity("chunk_bwd_dqkwg",
+                  ct.npu_chunk_bwd_dqkwg(q, k, v, g, h, do, dh, dv, cs, **kw),
+                  _thin.npu_chunk_bwd_dqkwg(q, k, v, g, h, do, dh, dv, cs,
+                                            **kw))
+
+
 def main():
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
     scenarios = [
         scenario_fast_gelu,
+        scenario_recurrent_gated_delta_rule,
         scenario_recompute,
         scenario_pwy_full,
         scenario_pwy,
@@ -296,10 +379,11 @@ def main():
         scenario_bwd_dhu,
         scenario_conv1d_bwd_bnsd,
         scenario_chunk_kda_fwd,
+        scenario_dqkwg,
     ]
     for fn in scenarios:
         fn()
-    print("ALL PASS: 12 thin-op parity scenarios")
+    print("ALL PASS: 14 thin-op parity scenarios")
 
 
 if __name__ == "__main__":

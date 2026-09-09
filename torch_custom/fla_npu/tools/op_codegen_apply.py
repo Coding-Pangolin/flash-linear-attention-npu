@@ -92,6 +92,11 @@ def patch_thin(spec: dict) -> None:
             f"{k}={defaults.get(k, 'None')}" for k in sig_kw)
     lines = [f"\n\ndef {name}({sig}):",
              "    ext = _extension()"]
+    python_pre = py.get("pre")
+    if python_pre:
+        for raw_line in python_pre.splitlines():
+            lines.append(("    " + raw_line.strip()) if raw_line.strip()
+                         else "")
     # Scalar kwargs that mirror ctypes' ``_optional_*(v, default)`` handling:
     # keep the Python default ``None`` but resolve the semantic default here so
     # omitting the kwarg behaves exactly like the ctypes wrapper.

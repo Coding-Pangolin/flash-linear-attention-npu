@@ -108,7 +108,8 @@ shape：x `[8, 4096]` bf16，weight `[4, 4096]`，conv_state `(blocks, 6, 4096)`
 
 1. 非法输入报错类型不保证一致（薄层为速度跳过 Python 前置校验，只保证会报错）。
 2. 白名单外算子不享受薄层加速（仍 ctypes）。
-3. conv1d #390 update 形态在 #390 合入前不在 upstream 分支启用。
+3. conv1d（旧 ABI 的 `npu_causal_conv1d` 与 #390 的 `causal_conv1d_update`）在
+   #390 合入前均**不启用** thin，始终回退 ctypes。
 
 ## 6. 变更文件清单
 

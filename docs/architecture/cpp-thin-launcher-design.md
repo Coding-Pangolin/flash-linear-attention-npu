@@ -94,6 +94,9 @@ fla_npu.ops.ascendc.npu_xxx(...)          # Python 入口（保持不变）
 5. **ctypes 作为 fallback**：薄层未编译、import 失败或算子未实现时，自动回退
    现有 ctypes 路径，保证任何环境不破坏现状（默认开关见目标节）。
 
+> 注意：conv1d（旧 ABI 的 `npu_causal_conv1d`）当前**不在** thin 白名单内，
+> 始终回退 ctypes；待 PR #390 合入并按新 ABI 完成适配后再启用。
+
 ### 3.2 每个算子的 ABI 事实（落地前必须逐字核对 OPP 头）
 
 ABI 唯一权威是包内 OPP 的 `op_api/include/aclnnop/aclnn_*.h`（当前仓库源码不含

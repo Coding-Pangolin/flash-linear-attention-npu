@@ -331,6 +331,29 @@ def scenario_chunk_kda_fwd():
                   _thin.npu_chunk_kda_fwd(q, k, v, g, beta, **kw))
 
 
+def scenario_chunk_kda_bwd_intra():
+    B, H, T, K, cs = 2, 4, 256, 128, 64
+    dt = torch.bfloat16
+    q = torch.randn(B, H, T, K, dtype=dt, device="npu")
+    k = torch.randn(B, H, T, K, dtype=dt, device="npu")
+    gk = torch.randn(B, H, T, K, dtype=torch.float32, device="npu")
+    beta = torch.randn(B, H, T, dtype=torch.float32, device="npu")
+    dAqk = torch.randn(B, H, T, cs, dtype=torch.float32, device="npu")
+    dAkk = torch.randn(B, H, T, cs, dtype=torch.float32, device="npu")
+    dq = torch.randn(B, H, T, K, dtype=torch.float32, device="npu")
+    dk = torch.randn(B, H, T, K, dtype=torch.float32, device="npu")
+    db = torch.randn(B, H, T, dtype=torch.float32, device="npu")
+    dg = torch.randn(B, H, T, K, dtype=torch.float32, device="npu")
+    torch.npu.synchronize()
+    kw = dict(layout="BNSD", safe_gate=True, chunk_size=cs)
+    assert_parity(
+        "chunk_kda_bwd_intra(BNSD dense)",
+        ct.npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db,
+                                   dg, **kw),
+        _thin.npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db,
+                                      dg, **kw))
+
+
 def scenario_dqkwg():
     B, HK, HV, T, K, V, cs = 1, 4, 4, 1024, 128, 128, 64
     NT = T // cs
@@ -379,11 +402,12 @@ def main():
         scenario_bwd_dhu,
         scenario_conv1d_bwd_bnsd,
         scenario_chunk_kda_fwd,
+        scenario_chunk_kda_bwd_intra,
         scenario_dqkwg,
     ]
     for fn in scenarios:
         fn()
-    print("ALL PASS: 14 thin-op parity scenarios")
+    print("ALL PASS: 15 thin-op parity scenarios")
 
 
 if __name__ == "__main__":

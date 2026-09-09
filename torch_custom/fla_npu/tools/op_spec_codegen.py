@@ -190,9 +190,18 @@ def _output_expr(output: dict, default_source: str) -> str:
     source = output.get("source", default_source)
     dtype = output.get("dtype", "float32")
     shape = output.get("shape")
+    if dtype == "same" and shape is not None:
+        parts = []
+        for item in shape:
+            if "dim" in item:
+                parts.append(f"{item['arg']}.size({item['dim']})")
+            elif "arg" in item:
+                parts.append(item["arg"])
+            else:
+                raise ValueError(f"bad output shape item: {item!r}")
+        sizes = ", ".join(parts)
+        return f"at::empty({{{sizes}}}, {source}.options())"
     if dtype == "same":
-        if shape:
-            raise ValueError("output_dtype 'same' with explicit shape is unsupported")
         return f"at::empty_like({source})"
     if shape is not None:
         parts = []

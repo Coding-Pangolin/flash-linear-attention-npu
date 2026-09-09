@@ -145,6 +145,37 @@ at::Tensor npu_prepare_wy_repr_bwd_da(
     int64_t chunk_size,
     uint64_t stream);
 
+
+at::Tensor npu_fast_gelu_custom(
+    const at::Tensor& self,
+    uint64_t stream);
+
+
+at::Tensor npu_fast_gelu_custom_backward(
+    const at::Tensor& grad,
+    const at::Tensor& self,
+    uint64_t stream);
+
+
+std::vector<at::Tensor> npu_chunk_bwd_dqkwg(
+    const at::Tensor& q,
+    const at::Tensor& k,
+    const at::Tensor& v,
+    const at::Tensor& g,
+    const at::Tensor& h,
+    const at::Tensor& dox,
+    const at::Tensor& dh,
+    const at::Tensor& dv,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    const c10::optional<at::Tensor>& w,
+    const c10::optional<at::Tensor>& g_gamma,
+    float scale,
+    int64_t chunk_size,
+    bool use_exp2,
+    bool transpose_state_layout,
+    uint64_t stream);
+
 }  // namespace fla_npu_thin
 
 PYBIND11_MODULE(_C_thin, m) {
@@ -265,5 +296,33 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("cu_seqlens"),
       py::arg("chunk_indices"),
       py::arg("chunk_size"),
+      py::arg("stream"));
+  m.def(
+      "npu_fast_gelu_custom",
+      &npu_fast_gelu_custom, py::arg("self"),
+      py::arg("stream"));
+  m.def(
+      "npu_fast_gelu_custom_backward",
+      &npu_fast_gelu_custom_backward, py::arg("grad"),
+      py::arg("self"),
+      py::arg("stream"));
+  m.def(
+      "npu_chunk_bwd_dqkwg",
+      &npu_chunk_bwd_dqkwg, py::arg("q"),
+      py::arg("k"),
+      py::arg("v"),
+      py::arg("g"),
+      py::arg("h"),
+      py::arg("dox"),
+      py::arg("dh"),
+      py::arg("dv"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("w"),
+      py::arg("g_gamma"),
+      py::arg("scale"),
+      py::arg("chunk_size"),
+      py::arg("use_exp2"),
+      py::arg("transpose_state_layout"),
       py::arg("stream"));
 }

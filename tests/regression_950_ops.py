@@ -54,22 +54,22 @@ def scenario_fwd_prepare():
 
 def scenario_bwd_finalize():
     dt = torch.bfloat16
-    B, H, T, K, V, cs = 1, 4, 256, 128, 128, 64
+    B, HK, HV, T, K, V, cs = 1, 4, 8, 256, 128, 128, 64
     NT = T // cs
-    q = torch.randn(B, H, T, K, dtype=dt, device="npu")
-    k = torch.randn(B, H, T, K, dtype=dt, device="npu")
-    v = torch.randn(B, H, T, V, dtype=dt, device="npu")
-    v_new = torch.randn(B, H, T, V, dtype=dt, device="npu")
-    do = torch.randn(B, H, T, V, dtype=dt, device="npu")
-    du = torch.randn(B, H, T, V, dtype=dt, device="npu")
-    g = torch.randn(B, H, T, dtype=dt, device="npu")
-    beta = torch.randn(B, H, T, dtype=dt, device="npu")
-    h = torch.randn(B, H, NT, K, V, dtype=dt, device="npu")
-    dh = torch.randn(B, H, NT, K, V, dtype=dt, device="npu")
-    a = torch.randn(B, H, T, cs, dtype=dt, device="npu")
-    q_rstd = torch.randn(B, H, T, dtype=torch.float32, device="npu")
-    k_rstd = torch.randn(B, H, T, dtype=torch.float32, device="npu")
-    beta_raw = torch.randn(B, H, T, dtype=torch.float32, device="npu")
+    q = torch.randn(B, HK, T, K, dtype=dt, device="npu")
+    k = torch.randn(B, HK, T, K, dtype=dt, device="npu")
+    v = torch.randn(B, HV, T, V, dtype=dt, device="npu")
+    v_new = torch.randn(B, HV, T, V, dtype=dt, device="npu")
+    do = torch.randn(B, HV, T, V, dtype=dt, device="npu")
+    du = torch.randn(B, HV, T, V, dtype=dt, device="npu")
+    g = torch.randn(B, HV, T, dtype=torch.float32, device="npu")
+    beta = torch.randn(B, HV, T, dtype=torch.float32, device="npu")
+    h = torch.randn(B, HV, NT, K, V, dtype=dt, device="npu")
+    dh = torch.randn(B, HV, NT, K, V, dtype=dt, device="npu")
+    a = torch.randn(B, HV, T, cs, dtype=dt, device="npu")
+    q_rstd = torch.randn(B, HK, T, dtype=torch.float32, device="npu")
+    k_rstd = torch.randn(B, HK, T, dtype=torch.float32, device="npu")
+    beta_raw = torch.randn(B, HV, T, dtype=torch.float32, device="npu")
     torch.npu.synchronize()
     kw = dict(q_rstd=q_rstd, k_rstd=k_rstd, beta_raw=beta_raw,
               chunk_size=cs, use_qk_l2_norm_in_kernel=True,

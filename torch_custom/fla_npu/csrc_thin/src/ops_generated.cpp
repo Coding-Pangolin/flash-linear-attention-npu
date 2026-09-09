@@ -253,7 +253,7 @@ at::Tensor npu_chunk_local_cumsum(
       reverse,
       scale,
       head_first,
-      output_dtype,
+      output_dtype.c_str(),
       views[1]->get(),
       &workspace_size, &executor);
   TORCH_CHECK(get_ret == 0, "aclnnChunkLocalCumsumGetWorkspaceSize failed: ", get_ret);

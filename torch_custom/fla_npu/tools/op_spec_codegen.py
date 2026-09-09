@@ -133,6 +133,8 @@ def generate(spec: dict) -> str:
             view_i += 1
         elif kind == "int_array":
             tokens.append(f"{a['name']}_view.get()")
+        elif kind == "char_ptr":
+            tokens.append(f"{a['name']}.c_str()")
         else:
             tokens.append(a["name"])
     lines.append("  const int get_ret = get_ws(")

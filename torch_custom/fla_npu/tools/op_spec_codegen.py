@@ -165,8 +165,34 @@ def _output_alloc_lines(spec: dict) -> list[str]:
     output = spec.get("output", {})
     source = output.get("source", spec["args"][0]["name"])
     dtype = output.get("dtype", "float32")
+    shape = output.get("shape")
     if dtype == "same":
+        if shape:
+            raise ValueError("output_dtype 'same' with explicit shape is unsupported")
         return [f"  auto output = at::empty_like({source});"]
+    if shape is not None:
+        parts = []
+        for item in shape:
+            if "dim" in item:
+                parts.append(f"{item['arg']}.size({item['dim']})")
+            elif "arg" in item:
+                parts.append(item["arg"])
+            else:
+                raise ValueError(f"bad output shape item: {item!r}")
+        sizes = ", ".join(parts)
+        if dtype == "output_dtype":
+            return [
+                f"  auto output = (output_dtype == \"float32\")",
+                f"      ? at::empty({{{sizes}}}, {source}.options().dtype(at::kFloat))",
+                f"      : at::empty({{{sizes}}}, {source}.options().dtype(at::kBFloat16));",
+            ]
+        aten = {"float32": "at::kFloat", "bfloat16": "at::kBFloat16"}.get(dtype)
+        if aten is None:
+            raise ValueError(f"unsupported output dtype: {dtype}")
+        return [
+            f"  auto output = at::empty({{{sizes}}}, "
+            f"{source}.options().dtype({aten}));"
+        ]
     if dtype == "output_dtype":
         return [
             f"  auto output = (output_dtype == \"float32\")",

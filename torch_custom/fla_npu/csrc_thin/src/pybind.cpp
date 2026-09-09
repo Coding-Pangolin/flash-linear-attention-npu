@@ -33,6 +33,17 @@ at::Tensor npu_causal_conv1d(
     int64_t head_num,
     uint64_t stream);
 
+at::Tensor npu_kda_gate_cumsum(
+    const at::Tensor& g,
+    const c10::optional<at::Tensor>& A_log,
+    const c10::optional<at::Tensor>& dt_bias,
+    const std::vector<int64_t>& cu_seqlens,
+    int64_t chunk_size,
+    bool use_gate_in_kernel,
+    bool safe_gate,
+    double lower_bound,
+    uint64_t stream);
+
 }  // namespace fla_npu_thin
 
 PYBIND11_MODULE(_C_thin, m) {
@@ -56,4 +67,10 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("activation_mode"), py::arg("pad_slot_id"),
       py::arg("run_mode"), py::arg("head_num"),
       py::arg("stream"));
+  m.def(
+      "npu_kda_gate_cumsum",
+      &npu_kda_gate_cumsum, py::arg("g"), py::arg("A_log"),
+      py::arg("dt_bias"), py::arg("cu_seqlens"),
+      py::arg("chunk_size"), py::arg("use_gate_in_kernel"),
+      py::arg("safe_gate"), py::arg("lower_bound"), py::arg("stream"));
 }

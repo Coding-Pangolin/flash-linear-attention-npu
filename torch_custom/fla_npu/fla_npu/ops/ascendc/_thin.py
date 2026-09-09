@@ -655,3 +655,20 @@ def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, a_log=None, dt_bias=None
         _current_stream_ptr(),
     )
     return (result[0], None, result[7], result[8])
+
+
+def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
+    ext = _extension()
+    layout = str(layout)
+    if not (layout in ("bsnd", "bnsd") and cu_seqlens is None and chunk_indices is None):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_solve_tri(x, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, layout=layout)
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    return ext.npu_solve_tri(
+        x,
+        cu_seqlens,
+        chunk_indices,
+        str(layout),
+        _current_stream_ptr(),
+    )

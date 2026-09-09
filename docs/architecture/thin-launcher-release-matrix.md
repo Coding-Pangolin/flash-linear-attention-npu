@@ -51,7 +51,22 @@ thin 扩展基于 torch C++ extension，ABI 绑定 CPython 版本与
 - `test_wheel_install_smoke.py`：安装态（`pip install --target` 或
   site-packages）下的扩展/OPP 加载与 dispatch 冒烟。
 - `tests/regression_thin_ops.py`：安装态数值回归，覆盖已迁移算子的
-  ctypes-vs-thin parity（逐元素差 0）。当前在 221（910B3，envw9 wheel）
-  实测：11 个场景/13 组函数 parity 全 PASS。
+  ctypes-vs-thin parity（逐元素差 0）。HEAD 上为 20 个场景（37 组 PASS
+  输出）：fast_gelu、recurrent GDR、recompute、pwy bwd(full/da)、
+  dv_local、gated fwd_h、chunk_fwd_h/o、bwd_dhu、conv1d_bwd、KDA
+  fwd/bwd/intra、dqkwg、chunk_local_cumsum、scaled_dot_kkt、solve_tri(dense)、
+  kda_gate_cumsum。
 - 每个算子的数值 parity/benchmark 以 [thin-migration-inventory.md](thin-migration-inventory.md)
   验证状态表为准（ctypes vs thin 输出差 0.0，host P50 已记录）。
+
+## 5. 实测记录（截至 2026-09-09/10）
+
+- 221（910B3，w16 wheel，HEAD d03fcdc5）：regression_thin_ops 20 场景/37 组
+  PASS；安装态 smoke 3/3、customer-compat + multi-stream 9 passed/13 subtests
+  全绿。
+- 950（Ascend950PR 共享机）：env950c wheel 上 18 个通用场景 + Ascend950-only
+  3 场景（fwd_prepare/bwd_finalize/recurrent_kda）全 PASS，kda_gate_cumsum 与
+  scaled_dot_kkt 单点探针 ct/thin 均 OK；chunk_local_cumsum/solve_tri 两个新增
+  OPP 因该 wheel 未含内核未能跑。新 wheel（含两 OPP）编包三次被共享机环境阻断
+  （/home 与 / 长期 100%、负载 >100，ENOSPC/OOM），待磁盘与负载恢复后补跑并
+  更新本表。

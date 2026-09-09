@@ -85,6 +85,7 @@
 | npu_causal_conv1d_bwd | ✅ | ✅（按文档签名） | 0.0（BNSD 域）；BSH/TND 两路径同 NaN（该构建 kernel 边界待查） | 0.58 → 0.084 ms |
 | npu_chunk_kda_fwd | ✅（dense BSND 合法域；其它布局/flag 委托 ctypes） | ✅ | 0.0（10 输出 + None 语义） | 1.04 → 0.114 ms |
 | npu_chunk_kda_bwd_intra | ✅（BNSD dense 单发射合法域；BSND 分段路径委托 ctypes） | ✅ | 0.0（4 输出） | 0.73 → 0.091 ms |
+| npu_chunk_kda_bwd | 未接入 | 头存在、def 支持 910b | wrapper 为多发射主机语义（tail 补齐、910b 奇头复制、varlen V=256 分段回退、d_a/d_bias mask），单发射 thin 无法等价；需按客户真实调用（dense BNSD、偶数头、T%64=0、gate off）子集镜像 wrapper 后接入 | - |
 | npu_solve_tri | spec 已建（enabled=false） | - | 待修（thin 输出稀疏非有限，已回退 ctypes） | - |
 
 ## 下一步

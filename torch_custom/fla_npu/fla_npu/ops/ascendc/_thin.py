@@ -149,3 +149,20 @@ def npu_kda_gate_cumsum(
         lb,
         _current_stream_ptr(),
     )
+
+
+def npu_chunk_local_cumsum(g, chunk_size, *, cu_seqlens=None, chunk_indices=None, reverse=False, scale=1.0, head_first=True, output_dtype="float32"):
+    ext = _extension()
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    return ext.npu_chunk_local_cumsum(
+        g,
+        cu_seqlens,
+        chunk_indices,
+        int(chunk_size),
+        bool(reverse),
+        float(scale),
+        bool(head_first),
+        str(output_dtype),
+        _current_stream_ptr(),
+    )

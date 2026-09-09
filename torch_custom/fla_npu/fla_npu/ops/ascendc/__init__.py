@@ -161,6 +161,7 @@ def _get_direct_op(name: str):
 _THIN_SUPPORTED_OPS = frozenset(
     {
         "npu_recurrent_gated_delta_rule",
+        "npu_chunk_local_cumsum",
         "npu_kda_gate_cumsum",
     }
 )

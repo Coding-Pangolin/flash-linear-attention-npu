@@ -81,7 +81,7 @@
 | npu_chunk_fwd_o | ✅（v3） | ✅ | 0.0（仅 BNSD 合法域） | 0.56 → 0.097 ms |
 | npu_chunk_gated_delta_rule_bwd_dhu | ✅（v3） | ✅ | 0.0（canonical ≥2 序列；单序列 dense 两条路径同 NaN，内核边界） | 0.71 → 0.139 ms |
 | npu_recurrent_kda | spec 已建（inplace alias/return_when/python pre） | ✅ | 待实机用例：raw-gate canonical 组合（BSND + A_log + sigmoid）仍 507035 越界；仓库无本地测试资产，需拿到 design.md §11 对应测试工程或用 950 环境复现 | - |
-| npu_chunk_gated_delta_rule_fwd_prepare | spec 已建（return_order + ctypes 委托） | ✅ | Ascend950-only（def 仅 AddConfig ascend950；910b 无 kernel config） | - |
+| npu_chunk_gated_delta_rule_fwd_prepare | ✅ | ✅ | 0.0（9 输出；Ascend950PR 实测） | -（950 host 待补） |
 | npu_causal_conv1d_bwd | ✅ | ✅（按文档签名） | 0.0（BNSD 域）；BSH/TND 两路径同 NaN（该构建 kernel 边界待查） | 0.58 → 0.084 ms |
 | npu_chunk_kda_fwd | ✅（dense BSND 合法域；其它布局/flag 委托 ctypes） | ✅ | 0.0（10 输出 + None 语义） | 1.04 → 0.114 ms |
 | npu_chunk_kda_bwd_intra | ✅（BNSD dense 单发射合法域；BSND 分段路径委托 ctypes） | ✅ | 0.0（4 输出） | 0.73 → 0.091 ms |

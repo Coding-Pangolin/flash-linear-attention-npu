@@ -354,6 +354,36 @@ def scenario_chunk_kda_bwd_intra():
                                       dg, **kw))
 
 
+def scenario_chunk_kda_bwd():
+    B, H, T, K, V, cs = 2, 4, 256, 128, 128, 64
+    dt = torch.bfloat16
+    NT = T // cs
+    q = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
+    k = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
+    v = torch.randn(B, H, T, V, dtype=dt, device="npu") * 5e-2
+    beta = torch.randn(B, H, T, dtype=dt, device="npu")
+    gk = torch.randn(B, H, T, K, dtype=torch.float32, device="npu")
+    Aqk = torch.randn(B, H, T, cs, dtype=dt, device="npu") * 5e-2
+    Akk = torch.randn(B, H, T, cs, dtype=dt, device="npu") * 5e-2
+    w = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
+    qg = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
+    kg = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
+    v_new = torch.randn(B, H, T, V, dtype=dt, device="npu") * 5e-2
+    h = torch.randn(B, NT, H, K, V, dtype=dt, device="npu") * 5e-2
+    d_o = torch.randn(B, H, T, V, dtype=dt, device="npu") * 5e-2
+    torch.npu.synchronize()
+    kw = dict(raw_g=None, A_log=None, dt_bias=None, initial_state=None,
+              dht=None, cu_seqlens=None, chunk_indices=None, chunk_size=cs,
+              safe_gate=True, use_gate_in_kernel=False, disable_recompute=True,
+              use_exp2=True, state_v_first=False)
+    assert_parity(
+        "chunk_kda_bwd(dense BNSD)",
+        ct.npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new,
+                             h, d_o, K ** -0.5, **kw),
+        _thin.npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg,
+                                v_new, h, d_o, K ** -0.5, **kw))
+
+
 def scenario_dqkwg():
     B, HK, HV, T, K, V, cs = 1, 4, 4, 1024, 128, 128, 64
     NT = T // cs
@@ -403,11 +433,12 @@ def main():
         scenario_conv1d_bwd_bnsd,
         scenario_chunk_kda_fwd,
         scenario_chunk_kda_bwd_intra,
+        scenario_chunk_kda_bwd,
         scenario_dqkwg,
     ]
     for fn in scenarios:
         fn()
-    print("ALL PASS: 15 thin-op parity scenarios")
+    print("ALL PASS: 16 thin-op parity scenarios")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,17 @@
   "nd_only": true,
   "mutated": [],
   "output": {"arg": "out", "alloc": "empty_like_g_output_dtype"},
+  "python": {
+    "positional": ["g", "chunk_size"],
+    "defaults": {
+      "cu_seqlens": "None",
+      "chunk_indices": "None",
+      "reverse": "False",
+      "scale": "1.0",
+      "head_first": "True",
+      "output_dtype": "\"float32\""
+    }
+  },
   "args": [
     {"name": "g", "kind": "tensor"},
     {"name": "cu_seqlens", "kind": "int_array"},

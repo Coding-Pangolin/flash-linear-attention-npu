@@ -115,6 +115,18 @@ def _setup_thin_extension():
         include_dirs=include_dirs,
         extra_compile_args=["-std=c++17"],
     )
+    setup(
+        name=PACKAGE_NAME,
+        version=_package_version(),
+        description="FLA NPU Python runtime with optional C++ thin launcher",
+        packages=_packages(),
+        package_dir=_package_dir(),
+        ext_modules=[ext],
+        cmdclass={"build_ext": BuildExtension, "build_py": CleanBuildPy},
+        package_data={"fla_npu": OPP_PACKAGE_DATA},
+        include_package_data=True,
+        zip_safe=False,
+    )
 
 
 def _run_thin_spec_codegen():
@@ -144,20 +156,11 @@ def _run_thin_spec_codegen():
         codegen = tools_dir / "op_codegen_apply.py"
         if not codegen.exists():
             continue
-        _run([sys.executable, str(codegen), "--spec", str(spec_path)], SETUP_DIR)
+        subprocess.check_call(
+            [sys.executable, str(codegen), "--spec", str(spec_path)],
+            cwd=str(SETUP_DIR),
+        )
         pybind_text = pybind_path.read_text(encoding="utf-8")
-    setup(
-        name=PACKAGE_NAME,
-        version=_package_version(),
-        description="FLA NPU Python runtime with optional C++ thin launcher",
-        packages=_packages(),
-        package_dir=_package_dir(),
-        ext_modules=[ext],
-        cmdclass={"build_ext": BuildExtension, "build_py": CleanBuildPy},
-        package_data={"fla_npu": OPP_PACKAGE_DATA},
-        include_package_data=True,
-        zip_safe=False,
-    )
 
 
 def _setup_legacy_extension():

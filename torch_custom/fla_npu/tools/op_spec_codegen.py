@@ -55,6 +55,19 @@ def _arg_token(kind: str, name: str, index: int) -> str:
     return name
 
 
+def _output_alloc(output: dict, default_source: str) -> str:
+    """Return the C++ expression allocating an output tensor.
+
+    ``alloc`` is an escape hatch for specs whose output shape cannot be
+    expressed with source/dtype/shape (chunk-count-derived or
+    flag-dependent tensors); it is spliced verbatim as C++.
+    """
+
+    if "alloc" in output:
+        return output["alloc"]
+    return _output_expr(output, default_source)
+
+
 def generate(spec: dict) -> str:
     args = spec["args"]
     out_args = [a for a in args if a["kind"] == "out_tensor"]
@@ -98,6 +111,10 @@ def generate(spec: dict) -> str:
     lines.append("using LaunchFn = int (*)(void*, uint64_t, aclOpExecutor*, void*);")
     lines.append("}  // namespace")
     lines.append("")
+    helpers = spec.get("helpers")
+    if helpers:
+        lines.append(helpers)
+        lines.append("")
     multi = len(out_args) > 1
     ret_type = "std::vector<at::Tensor>" if multi else "at::Tensor"
     lines.append(f"{ret_type} {fn}(")
@@ -110,11 +127,26 @@ def generate(spec: dict) -> str:
     if multi:
         lines.append("  std::vector<at::Tensor> outputs;")
         for item in outputs_spec:
-            expr = _output_expr(item, default_source)
-            lines.append(f"  outputs.push_back({expr});")
+            expr = _output_alloc(item, default_source)
+            when = item.get("when")
+            if when:
+                lines.append(f"  if ({when}) {{")
+                lines.append(f"    outputs.push_back({expr});")
+                lines.append("  } else {")
+                lines.append("    outputs.push_back(at::Tensor());")
+                lines.append("  }")
+            else:
+                lines.append(f"  outputs.push_back({expr});")
     else:
-        lines.append("  at::Tensor output = "
-                     f"{_output_expr(outputs_spec[0], default_source)};")
+        expr = _output_alloc(outputs_spec[0], default_source)
+        when = outputs_spec[0].get("when")
+        if when:
+            lines.append("  at::Tensor output;")
+            lines.append(f"  if ({when}) {{")
+            lines.append(f"    output = {expr};")
+            lines.append("  }")
+        else:
+            lines.append(f"  at::Tensor output = {expr};")
     lines.append("")
     lines.append("  std::vector<std::unique_ptr<AclTensorView>> views;")
     lines.append("  views.reserve(8);")
@@ -197,6 +229,8 @@ def _output_expr(output: dict, default_source: str) -> str:
                 parts.append(f"{item['arg']}.size({item['dim']})")
             elif "arg" in item:
                 parts.append(item["arg"])
+            elif "expr" in item:
+                parts.append(item["expr"])
             else:
                 raise ValueError(f"bad output shape item: {item!r}")
         sizes = ", ".join(parts)
@@ -210,6 +244,8 @@ def _output_expr(output: dict, default_source: str) -> str:
                 parts.append(f"{item['arg']}.size({item['dim']})")
             elif "arg" in item:
                 parts.append(item["arg"])
+            elif "expr" in item:
+                parts.append(item["expr"])
             else:
                 raise ValueError(f"bad output shape item: {item!r}")
         sizes = ", ".join(parts)

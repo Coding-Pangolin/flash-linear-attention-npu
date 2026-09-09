@@ -83,7 +83,7 @@
 | npu_recurrent_kda | spec 已建（inplace alias/return_when/python pre） | ✅ | 待实机用例：raw-gate canonical 组合（BSND + A_log + sigmoid）仍 507035 越界；仓库无本地测试资产，需拿到 design.md §11 对应测试工程或用 950 环境复现 | - |
 | npu_chunk_gated_delta_rule_fwd_prepare | spec 已建（return_order + ctypes 委托） | ✅ | Ascend950-only（def 仅 AddConfig ascend950；910b 无 kernel config） | - |
 | npu_causal_conv1d_bwd | ✅ | ✅（按文档签名） | 0.0（BNSD 域）；BSH/TND 两路径同 NaN（该构建 kernel 边界待查） | 0.58 → 0.084 ms |
-| npu_chunk_kda_fwd | 未接入 | 头存在、def 支持 910b | ATK 用例全部 tag ascend950；当前 wave 未编 kernel（symbol 缺失），需先加 kernel 再自建 wrapper 合法 dense/BSND 配置 | - |
+| npu_chunk_kda_fwd | ✅（dense BSND 合法域；其它布局/flag 委托 ctypes） | ✅ | 0.0（10 输出 + None 语义） | 1.04 → 0.114 ms |
 | npu_solve_tri | spec 已建（enabled=false） | - | 待修（thin 输出稀疏非有限，已回退 ctypes） | - |
 
 ## 下一步

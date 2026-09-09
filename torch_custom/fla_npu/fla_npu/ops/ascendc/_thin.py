@@ -437,3 +437,29 @@ def npu_recurrent_kda(q, k, v, g, beta, initial_state, *, cu_seqlens=None, ssm_s
         _current_stream_ptr(),
     )
     return (result[0], (result[1] if output_final_state else None))
+
+
+def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, *, a_log=None, dt_bias=None, cu_seqlens=None, chunk_indices=None, allow_neg_eigval=False, use_exp2=False, output_a=True, use_qk_l2norm_in_kernel=False, use_gate_in_kernel=False, use_beta_sigmoid_in_kernel=False):
+    ext = _extension()
+    if not (bool(use_qk_l2norm_in_kernel) and not bool(use_gate_in_kernel) and bool(use_exp2) and bool(use_beta_sigmoid_in_kernel) and bool(output_a) and int(chunk_size) == 64 and a_log is None and dt_bias is None):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, use_exp2=use_exp2, a_log=a_log, dt_bias=dt_bias, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, output_a=output_a)
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    result = ext.npu_chunk_gated_delta_rule_fwd_prepare(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        a_log,
+        dt_bias,
+        cu_seqlens,
+        chunk_indices,
+        int(chunk_size),
+        bool(allow_neg_eigval),
+        bool(use_exp2),
+        bool(output_a),
+        _current_stream_ptr(),
+    )
+    return (result[4], result[5], result[6], result[7], result[8], result[0], result[1], result[2], result[3])

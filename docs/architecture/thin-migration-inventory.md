@@ -87,16 +87,16 @@
 
 ## 下一步
 
-已闭环 16 个算子（见验证状态表）。剩余算子及其所需能力：
+已闭环 17 个算子（见验证状态表）。剩余算子及其所需能力：
 
 1. `npu_recurrent_kda`（A）：需 codegen alias/out（inplace final_state 别名）+ zero
    initial_state 合成（python.pre 已支持）；仓库暂无现成 NPU 用例，需自建并覆盖
    BSND/TND × inplace × output_final_state。
 2. conv1d 家族（B）：legacy `npu_causal_conv1d` 保持 ctypes 到 #390；`causal_conv1d_update`
-   适配在验证分支（PR #512），#390 合入后并入；`causal_conv1d_bwd` 需确认
-   aclnnCausalConv1dBwd 符号来源（仓库无 op_host 头）后再做 char*+4 输出适配。
-3. chunk 融合/准备（C）：`chunk_gated_delta_rule_fwd`、`fwd_prepare`（条件 descriptor、
-   beta 主机回退）、`bwd_finalize`（Ascend950-only，910b 无法 parity）。
+   适配在验证分支（PR #512），#390 合入后并入；`causal_conv1d_bwd` 已按文档签名接入并
+   在 BNSD 域验证，BSH/TND 的 NaN 属该构建 kernel 边界待查。
+3. chunk 融合/准备（C）：`chunk_gated_delta_rule_fwd`、`fwd_prepare`（Ascend950-only，
+   910b 无 kernel config）、`bwd_finalize`（Ascend950-only，910b 无法 parity）。
 4. KDA chunk 家族（D）：`chunk_kda_fwd/bwd/bwd_intra`，布局矩阵
    BSND/BNSD/TND/NTD + canonical indices + workspace 分段策略。
 5. `npu_solve_tri`：thin parity 待修（sparse/non-finite），spec 保持 disabled。

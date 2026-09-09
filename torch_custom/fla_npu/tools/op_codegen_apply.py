@@ -150,6 +150,20 @@ def patch_thin(spec: dict) -> None:
         body += f"\n    result = {call}"
         outputs_spec = spec.get("outputs", [])
         out_names = [a["name"] for a in spec["args"] if a["kind"] == "out_tensor"]
+        return_order = py.get("return_order")
+        if return_order is not None:
+            if sorted(return_order) != sorted(out_names):
+                raise ValueError(
+                    f"{name}: return_order must be a permutation of output "
+                    f"args {out_names}")
+            ordered = [(return_order.index(out_names[i]), i)
+                       for i in range(len(out_names))]
+            terms = [f"result[{aclnn_idx}]"
+                     for _, aclnn_idx in sorted(ordered)]
+            body += "\n    return (" + ", ".join(terms) + ")"
+            text = text.rstrip() + "\n" + body + "\n"
+            path.write_text(text, encoding="utf-8")
+            return
         whens = {
             i: (outputs_spec[i].get("when")
                 or outputs_spec[i].get("return_when"))

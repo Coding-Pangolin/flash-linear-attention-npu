@@ -3,7 +3,7 @@
   "python_name": "npu_kda_gate_cumsum",
   "nd_only": true,
   "mutated": [],
-  "output": {"arg": "gk", "alloc": "empty_like_g_float32"},
+  "output": {"arg": "gk", "source": "g", "dtype": "float32"},
   "args": [
     {"name": "g", "kind": "tensor"},
     {"name": "A_log", "kind": "optional_tensor"},

@@ -157,16 +157,6 @@ def _get_direct_op(name: str):
         raise AttributeError(f"fla_npu.ops.ascendc has no ctypes Ascend C op {name}.") from exc
     return _wrap_mutable_direct_op(name, op)
 
-
-_THIN_SUPPORTED_OPS = frozenset(
-    {
-        "npu_recurrent_gated_delta_rule",
-        "npu_chunk_local_cumsum",
-        "npu_kda_gate_cumsum",
-    }
-)
-
-
 def _get_thin_op(name: str):
     """Return the thin C++ adapter for *name* when enabled, else None."""
 
@@ -174,8 +164,6 @@ def _get_thin_op(name: str):
     if flag is not None and flag.upper() in {"0", "FALSE", "NO", "OFF"}:
         return None
     canonical = name if name.startswith("npu_") else f"npu_{name}"
-    if canonical not in _THIN_SUPPORTED_OPS:
-        return None
     try:
         from . import _thin
     except Exception:

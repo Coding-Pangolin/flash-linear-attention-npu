@@ -88,6 +88,35 @@ std::vector<at::Tensor> npu_recompute_w_u_fwd(
     int64_t chunk_size,
     uint64_t stream);
 
+
+std::vector<at::Tensor> npu_prepare_wy_repr_bwd_full(
+    const at::Tensor& k,
+    const at::Tensor& v,
+    const at::Tensor& beta,
+    const at::Tensor& A,
+    const at::Tensor& dA,
+    const at::Tensor& dw,
+    const at::Tensor& du,
+    const at::Tensor& g,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    int64_t chunk_size,
+    uint64_t stream);
+
+
+std::vector<at::Tensor> npu_prepare_wy_repr_bwd(
+    const at::Tensor& k,
+    const at::Tensor& v,
+    const at::Tensor& beta,
+    const at::Tensor& A,
+    const at::Tensor& dw,
+    const at::Tensor& du,
+    const at::Tensor& g,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    int64_t chunk_size,
+    uint64_t stream);
+
 }  // namespace fla_npu_thin
 
 PYBIND11_MODULE(_C_thin, m) {
@@ -152,6 +181,33 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("A"),
       py::arg("g"),
       py::arg("gk"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("chunk_size"),
+      py::arg("stream"));
+  m.def(
+      "npu_prepare_wy_repr_bwd_full",
+      &npu_prepare_wy_repr_bwd_full, py::arg("k"),
+      py::arg("v"),
+      py::arg("beta"),
+      py::arg("A"),
+      py::arg("dA"),
+      py::arg("dw"),
+      py::arg("du"),
+      py::arg("g"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("chunk_size"),
+      py::arg("stream"));
+  m.def(
+      "npu_prepare_wy_repr_bwd",
+      &npu_prepare_wy_repr_bwd, py::arg("k"),
+      py::arg("v"),
+      py::arg("beta"),
+      py::arg("A"),
+      py::arg("dw"),
+      py::arg("du"),
+      py::arg("g"),
       py::arg("cu_seqlens"),
       py::arg("chunk_indices"),
       py::arg("chunk_size"),

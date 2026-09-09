@@ -163,3 +163,44 @@ def npu_recompute_w_u_fwd(k, v, beta, A, chunk_size, *, g=None, gk=None, cu_seql
         _current_stream_ptr(),
     )
     return tuple(result)
+
+
+def npu_prepare_wy_repr_bwd_full(k, v, beta, A, dA, dw, du, g, chunk_size, *, cu_seqlens=None, chunk_indices=None):
+    ext = _extension()
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    result = ext.npu_prepare_wy_repr_bwd_full(
+        k,
+        v,
+        beta,
+        A,
+        dA,
+        dw,
+        du,
+        g,
+        cu_seqlens,
+        chunk_indices,
+        int(chunk_size),
+        _current_stream_ptr(),
+    )
+    return tuple(result)
+
+
+def npu_prepare_wy_repr_bwd(k, v, beta, A, dw, du, g, chunk_size, *, cu_seqlens=None, chunk_indices=None):
+    ext = _extension()
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    result = ext.npu_prepare_wy_repr_bwd(
+        k,
+        v,
+        beta,
+        A,
+        dw,
+        du,
+        g,
+        cu_seqlens,
+        chunk_indices,
+        int(chunk_size),
+        _current_stream_ptr(),
+    )
+    return tuple(result)

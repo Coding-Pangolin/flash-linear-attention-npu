@@ -68,6 +68,7 @@
 | npu_kda_gate_cumsum | ✅ | ✅ | 0.0 | 0.33 → 0.049 ms |
 | npu_chunk_local_cumsum | ✅ | ✅ | 0.0 | 0.37 → 0.089 ms |
 | npu_chunk_scaled_dot_kkt | ✅ | ✅ | 0.0 | 0.44 → 0.067 ms |
+| npu_solve_tri | spec 已建 | - | 待修（thin 输出稀疏非有限，已回退 ctypes） | - |
 
 ## 下一步
 

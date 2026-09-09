@@ -15,7 +15,8 @@ typedef struct aclTensor aclTensor;
 // RAII wrapper around aclCreateTensor / aclDestroyTensor.
 class AclTensorView {
  public:
-  AclTensorView(const at::Tensor& t, bool force_nd = true);
+  AclTensorView(const at::Tensor& t, bool force_nd = true,
+                bool storage_numel_1d = false);
   ~AclTensorView();
 
   AclTensorView(const AclTensorView&) = delete;

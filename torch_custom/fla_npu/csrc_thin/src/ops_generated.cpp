@@ -395,8 +395,8 @@ at::Tensor npu_solve_tri(
 
   std::vector<std::unique_ptr<AclTensorView>> views;
   views.reserve(8);
-  views.push_back(std::make_unique<AclTensorView>(x));
-  views.push_back(std::make_unique<AclTensorView>(output));
+  views.push_back(std::make_unique<AclTensorView>(x, true, true));
+  views.push_back(std::make_unique<AclTensorView>(output, true, true));
   AclIntArrayView cu_seqlens_view(cu_seqlens);
   AclIntArrayView chunk_indices_view(chunk_indices);
 
@@ -430,4 +430,5 @@ at::Tensor npu_solve_tri(
 }
 
 }  // namespace fla_npu_thin
+
 

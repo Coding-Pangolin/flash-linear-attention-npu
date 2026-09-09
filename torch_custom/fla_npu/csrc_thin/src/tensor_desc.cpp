@@ -60,7 +60,8 @@ int64_t storage_numel(const at::Tensor& t) {
 
 }  // namespace
 
-AclTensorView::AclTensorView(const at::Tensor& t, bool force_nd) {
+AclTensorView::AclTensorView(const at::Tensor& t, bool force_nd,
+                             bool storage_numel_1d) {
   if (!t.defined()) {
     return;
   }
@@ -73,7 +74,7 @@ AclTensorView::AclTensorView(const at::Tensor& t, bool force_nd) {
   std::vector<int64_t> view_dims(sizes.begin(), sizes.end());
   std::vector<int64_t> view_strides(strides.begin(), strides.end());
   std::vector<int64_t> storage_dims;
-  if (contiguous && force_nd) {
+  if (contiguous && force_nd && !storage_numel_1d) {
     // Mirrors fla_npu nd_tensor(): contiguous views describe storage with the
     // logical shape.
     storage_dims = view_dims;

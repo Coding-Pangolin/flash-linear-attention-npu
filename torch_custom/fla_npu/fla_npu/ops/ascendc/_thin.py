@@ -288,3 +288,31 @@ def npu_chunk_bwd_dqkwg(q, k, v, g, h, dox, dh, dv, chunk_size, *, cu_seqlens=No
         _current_stream_ptr(),
     )
     return tuple(result)
+
+
+def npu_chunk_gated_delta_rule_fwd_h(k, w, u, g, *, gk=None, initial_state=None, output_final_state=False, chunk_size=None, cu_seqlens=None, chunk_indices=None, state_v_first=False):
+    ext = _extension()
+    chunk_size = (64 if chunk_size is None else int(chunk_size))
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    if cu_seqlens and not chunk_indices:
+        chunk_indices = []
+        for _seq in range(len(cu_seqlens) - 1):
+            _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]
+            for _c in range((_len + chunk_size - 1) // chunk_size):
+                chunk_indices.extend((_seq, _c))
+    result = ext.npu_chunk_gated_delta_rule_fwd_h(
+        k,
+        w,
+        u,
+        g,
+        gk,
+        initial_state,
+        bool(output_final_state),
+        int(chunk_size),
+        cu_seqlens,
+        chunk_indices,
+        bool(state_v_first),
+        _current_stream_ptr(),
+    )
+    return (result[0], result[1], (result[2] if output_final_state else None))

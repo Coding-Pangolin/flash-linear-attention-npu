@@ -92,9 +92,40 @@ tag 组合下会按 build tag 取较大者，因此：
 | A. 分发包名（推荐） | 按 SOC 拆项目：`flash-linear-attention-npu-910b` / `-950`…，包内 `import fla_npu` 不变 | PyPI 语义清晰，pip 不会装错 SOC | 需要维护多个 PyPI 项目与各自 CI |
 | B. 主包 + OPP 插件包 | 主包只含 `_C_thin` + Python（按 Python×架构发），OPP 单独发 `fla-npu-opp-<soc>`；安装时按 SOC 选择 | 主包矩阵小、内核可独立升级 | 需要新增依赖声明与加载路径约定（当前 `ASCEND_CUSTOM_OPP_PATH`/`.pth` 机制可复用） |
 | C. 继续单项目多 build tag | 保持现状，靠文档/脚本让用户指定 `==26.7.0.dev0+...`/直链下载 | 改动最小 | pip 选择不可控，容易装错；不建议对外发布 |
+| D. wheelnext variant wheel（vllm-ascend 的做法） | 仍发一个 PyPI 项目，另用 `variantlib` 生成带 SOC 后缀的 variant wheel 放到 variant 索引，用户用 `uv-wheelnext` 按硬件属性选择 | 单项目 + 硬件维度可选，pip/uv 能按 variant 精确匹配 | 依赖 wheelnext/uv 生态；需要在 CI 里按 SOC 各编一次并生成 variants |
 
 内网/离线交付（当前 `build_wheel.py` + `pip install <本地 whl>`）不受以上限制，
 按 SOC 各编各装即可；上面的分歧只影响“上 PyPI 公网分发”。
+
+### 3.6 参考：vllm-ascend 的 wheel 与 SOC 处理方式
+
+vllm-ascend 同时提供 **pre-built wheel** 和源码安装（其安装文档
+`docs/source/installation.md` 明确给出 `pip install vllm-ascend==...` 与
+`uv-wheelnext` 两条路径）：
+
+- PyPI 项目 `vllm-ascend`（示例 0.23.0）：6 个 wheel
+  （`cp310/cp311/cp312` × `manylinux_2_34_{aarch64,x86_64}`，约 27 MB/个）
+  + 一个 sdist；文件名里**不带 SOC**；
+- SOC 维度放到 **wheelnext variant wheel**：发布流水线
+  `.github/workflows/schedule_release_code_and_wheel.yml` 按 SOC 分别用
+  `Dockerfile.buildwheel.a2 / .a3 / .310p`（A2 里 `SOC_VERSION: ascend910b1`）
+  构建 → `auditwheel repair` → `wheelnext/variantlib` 生成 variant，variant
+  标签定义在其 `scripts/wheel/config.json`（`310p` / `a2` / `a3`，
+  properties 形如 `ascend :: npu_type :: a2`）；
+- 华为 variant 索引上的文件名因此带 SOC 后缀，例如
+  `vllm_ascend-0.17.0rc1-cp310-cp310-manylinux_2_24_aarch64-910b.whl`、
+  `...-a3.whl`、`...-310p.whl`、`...-a5.whl`，用户用
+  `uv pip install --extra-index-url https://mirrors.huaweicloud.com/ascend/repos/pypi/variant vllm-ascend==<ver>`
+  安装；
+- 他们的构建期依赖明显更重：`pyproject.toml` 的 build-system 需要
+  `torch==2.10.0` + `torch-npu==2.10.0` + cmake/pybind11，并把 CANN 自定义算子
+  编进 `vllm_ascend/_cann_ops_custom`；因此也建议用户优先装 wheel，源码安装
+  需要 CANN + 编译器。
+
+对我们的启发：**方案 D 就是“方案 A 的单项目版本”**，既保留一个 PyPI 项目，
+又让 SOC 维度由 variant 表达；如果将来我们也要公网分发，建议直接对齐
+vllm-ascend 的 variant 机制（我们的 SOC 标签可定为 `910b` / `a3` / `950`），
+并考虑用 `auditwheel` 把 `linux_aarch64` 升级为 `manylinux_*`。
 
 ### 3.4 元数据需要修正的点
 

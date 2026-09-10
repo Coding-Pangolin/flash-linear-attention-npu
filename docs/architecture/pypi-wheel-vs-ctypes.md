@@ -155,7 +155,10 @@ vllm-ascend 的 variant 机制（我们的 SOC 标签可定为 `910b` / `a3` / `
 {910b, 910_93, 950} = 18 份）：上传量约 18 × 26.4 MB ≈ **475 MB**，
 构建则要重复 18 次 OPP 编译（910b 约 20-40 min/次，950 更久）。
 
-优化路线（按收益排序）：
+优化路线（按收益排序）。**注意：下面是提案，当前实现仍是“OPP 内嵌在
+每个 fla_npu wheel 里”（`package_data` 含 `fla_npu/opp/**/*`，由
+`fla_npu_opp_env.pth` 在解释器启动时把 `ASCEND_CUSTOM_OPP_PATH` 指向
+wheel 内的 `fla_npu/opp/vendors/fla_npu_transformer`），尚未拆分**：
 
 | 路线 | 做法 | 结果 |
 | --- | --- | --- |

@@ -132,9 +132,10 @@ python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
 
 pip 会按机器架构自动选择 `manylinux_2_28_aarch64` / `manylinux_2_28_x86_64` wheel。
 请按机器芯片选择上表对应包名（当前不包含芯片自动识别）。`import fla_npu` 只做
-最低版本门槛校验（CANN/torch/torch_npu）：低于支持范围时直接报错并提示版本组合；
-高于最低要求的组合即可使用。发布前实测矩阵仅作为 QA 信息，由
-`scripts/check_npu_env.py` 与本文档提供查询，import 阶段不会因组合“未实测”而告警。
+低版本提示（CANN/torch/torch_npu）：低于建议最低版本时给出 RuntimeWarning，
+**不会中断 import**（与源码/旧 wheel 的导入行为保持一致），算子能否正常运行以
+实际使用为准。发布前实测矩阵仅作为 QA 信息，由 `scripts/check_npu_env.py` 与
+本文档提供查询，import 阶段既不会因组合“未实测”告警，也不会因版本偏低而失败。
 wheel 内嵌离线编译 bundle，需要从源码（重）编译的场景可参考
 [离线编译与使用指南](docs/离线编译与使用指南.md)从已安装包还原。
 

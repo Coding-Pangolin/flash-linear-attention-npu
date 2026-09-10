@@ -171,6 +171,46 @@ wheel 内的 `fla_npu/opp/vendors/fla_npu_transformer`），尚未拆分**：
 所以现状下每换一个 Python 版本都要重编一遍全部算子——这是后续做发布流水线
 时最值得先改造的一点。
 
+### 3.8 “上传体积”与“客户下载体积”是两件事
+
+- **OPP 内嵌（现状）**：发布侧要上传 `Python × 架构 × SOC` 份、每份约 26 MB
+  （全算子），但**客户只下载一份**——`pip install flash-linear-attention-npu`
+  只会选中匹配自己 Python 版本/架构/SOC 的那个 wheel（外加声明的第三方依赖）。
+  若接受上传体积，这是客户体验最好的形态，不需要拆包。
+- **OPP 拆包（方案 A）**：上传量下降，但客户要装**两个**包（主 wheel ~1 MB +
+  `fla-npu-opp-<soc>` ~26 MB），总下载量相近，安装步骤变多。
+
+因此“接受上传体积大”时，建议保持内嵌，只需解决 SOC 维度的选择问题
+（独立包名或 wheelnext variant），而不是为了省上传量去拆包。
+
+### 3.9 方案 C 的接口与 CI 用法（提案）
+
+C 不是“上传时才开的宏”，而是**构建期可选环境变量**，默认不设置时行为与现在
+完全一致（每次重新跑 `build.sh --pkg`），因此对正常/一键编译没有影响：
+
+```bash
+# 1) 每个 SOC/host 架构只编一次 OPP，产出 run 包
+bash build.sh --soc=ascend910b --pkg --vendor_name=fla_npu --ops=<需要的算子>
+#   -> build_out/fla_npu_linux-<arch>.run   （作为 CI artifact 传给后续 job）
+
+# 2) 各 Python 版本复用它，只编薄层扩展
+FLA_NPU_SOC=ascend910b \
+FLA_NPU_REUSE_OPP=/path/to/fla_npu_linux-aarch64.run \
+python scripts/build_wheel.py --wheel-dir dist
+```
+
+落地要点（实现时）：
+
+- `setup.py::_build_run_package()` 增加 `FLA_NPU_REUSE_OPP`（run 文件）与
+  `FLA_NPU_OPP_DIR`（已解包目录）两个入口，命中时跳过 `rmtree(build_out)` 与
+  `build.sh`，直接交给现有 `_stage_run_package()`；
+- **校验**：run 包内 `version.info` 的 CANN 版本与 `op_impl/.../kernel/<soc>`
+  目录名必须匹配 `FLA_NPU_SOC`，不匹配直接报错；日志打印复用来源与哈希，
+  避免误用过期 run 包；
+- 效果：OPP 编译次数从 `Python × 架构 × SOC` 降到 `架构 × SOC`，薄层扩展仍是
+  每 Python 版本编一次（约 1 min）；**wheel 内容与体积不变**（每份仍内嵌
+  同一份 OPP）。
+
 ### 3.4 元数据需要修正的点
 
 1. `Requires-Python`：thin wheel 应至少是 `>=3.10`（当前写成 `>=3.9` 与实际

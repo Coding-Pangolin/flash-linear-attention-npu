@@ -81,7 +81,7 @@
 | npu_chunk_fwd_o | ✅（v3） | ✅ | 0.0（仅 BNSD 合法域） | 0.56 → 0.097 ms |
 | npu_chunk_gated_delta_rule_bwd_dhu | ✅（v3） | ✅ | 0.0（canonical ≥2 序列；单序列 dense 两条路径同 NaN，内核边界） | 0.71 → 0.139 ms |
 | npu_recurrent_kda | ✅ | ✅ | 0.0（BSND B2/T2/H2/HV4 dense、state_v_first、inplace + final_state；Ascend950PR） | 0.085 → 0.011 ms（950） |
-| npu_chunk_gated_delta_rule_fwd | ✅（cpp_only 标量 + return_code；需上游 #495 的 op_api/ctypes 修正） | ✅ | 0.0（910b A2 legacy Phase6 域：BNSD、dense、use_exp2/use_qk_l2norm/use_gate/beta_sigmoid/allow_neg_eigval/state_v_first 全 False、chunk 64/128；GVA、V 128/256、initial_state fp32/bf16、output_final_state 均覆盖）。A5（use_exp2=True）路径、varlen、其它 layout 由 wrapper 回退 ctypes | 待补 |
+| npu_chunk_gated_delta_rule_fwd | ✅（cpp_only 标量 + return_code + layout/varlen helpers；需上游 #495 的 op_api/ctypes 修正） | ✅ | **全域名**：dense + varlen（physical B=1、canonical chunk_indices）；layout BNSD/BSND/NTD/TND；A2 legacy 路径与 A5 新路径（`use_exp2`/`use_qk_l2norm`/`state_v_first`/`return_intermediate_states` 的 `h`）；GVA、chunk 64/128、`initial_state` fp32/bf16、`output_final_state` 均覆盖。实测：A2（910b）21 场景全绿含 varlen；A5（950）BSND+exp2+l2norm、+state_v_first、+return_h、TND varlen、legacy BNSD 全部 parity 0.0，且 cp312/torch2.9 与 cp310/torch2.7.1(fzy) 两套环境结果一致。A5 专属输出（q_hat/k_hat/rstd/beta_eff）与 ctypes 一样传 null；BSND 不带 exp2、V=256 在当前 build 双方同样报错（169104/161002） | 待补 |
 | npu_chunk_gated_delta_rule_fwd_prepare | ✅ | ✅ | 0.0（9 输出；Ascend950PR） | 0.144 → 0.030 ms（950） |
 | npu_chunk_gated_delta_rule_bwd_finalize | ✅ | ✅ | 0.0（5 输出；Ascend950PR，g/beta fp32、G=2 域） | 0.167 → 0.023 ms（950） |
 | npu_causal_conv1d_bwd | ✅ | ✅（按文档签名） | 0.0（BNSD 域）；BSH/TND 两路径同 NaN（该构建 kernel 边界待查） | 0.58 → 0.084 ms |
@@ -99,14 +99,16 @@
 2. `causal_conv1d_update`（#390）：适配已在验证分支 PR #512 实现并跑通原型；
    #390 合入后并入本分支并做 910b/950 全量回归。#390 当前（2026-09-09）仍 open，
    最新 head 与本分支差异仅 examples/flash_gated_delta_rule.py，ABI 未变。
-3. `npu_chunk_gated_delta_rule_fwd`（composite）：已闭环（910b A2 legacy Phase6
-   域）。根因是上游 #495 修了该算子的 op_api/ctypes 参数透传，合并 main 并重写
-   spec（新增 `output_final_state`/`disable_recompute`/`return_intermediate_states`
-   三个 `cpp_only` 标量 + `python.return_code`）后，ctypes vs thin 在 BNSD dense
-   域逐位一致（GVA、V128/256、chunk64/128、initial_state fp32/bf16、
-   output_final_state 开/关）。注意：T 非 chunk 整数倍时 `A` 的尾块 padding 行
-   两侧都是未初始化内存（valid 区域仍 0.0）；A5 `use_exp2=True` 路径与 varlen
-   仍回退 ctypes。
+3. `npu_chunk_gated_delta_rule_fwd`（composite）：**已全量闭环**。根因是上游
+   #495 修了该算子的 op_api/ctypes 参数透传；合并 main 后把 spec 从“dense BNSD”
+   扩到全域名——引入 layout-aware helpers、varlen 的 seq/chunk 数推导、
+   A5 路径的 `h` 输出与 `return_code`，并修了两处：`use_gate_in_kernel`/
+   `use_beta_sigmoid_in_kernel` 必须是 `cpp_only`（否则 `when` 引用未声明符号），
+   A5 专属输出必须像 ctypes 一样传 null（否则 A5 报 161002）。实测 A2 21 场景
+   全绿，A5（950）A5 场景全绿，且在 torch 2.9/cp312 与 torch 2.7.1/cp310(fzy)
+   两套环境结果一致。注意：T 非 chunk 整数倍时 `A` 的尾块 padding 行两侧都是
+   未初始化内存（valid 区域仍 0.0）；只给 `cu_seqlens` 时 thin 会自动派生
+   canonical `chunk_indices`（ctypes 要求成对提供，属 thin 的超集）。
 4. `npu_solve_tri` varlen（TND/NTD）：thin 直连结果非有限 → wrapper 已委托
    ctypes；dense bsnd/bnsd 已原生 thin 并多处验证 0.0。
 5. 收尾：regression_thin_ops 20 场景（37 组）已在 910b（w16 wheel）与

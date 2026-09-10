@@ -636,12 +636,33 @@ def npu_chunk_gated_delta_rule_bwd_finalize(q, k, v, v_new, do, du, g, beta, h, 
         _current_stream_ptr(),
     )
     return tuple(result)
+def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
+    ext = _extension()
+    layout = str(layout)
+    # bsnd/bnsd (dense) and tnd (dense or varlen) match ctypes bit-exactly; ntd is
+    # broken upstream (ctypes returns all zeros and thin is not the transpose of
+    # tnd), so keep ntd on the ctypes path until the kernel is fixed.
+    if layout == "ntd":
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_solve_tri(x, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, layout=layout)
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    return ext.npu_solve_tri(
+        x,
+        cu_seqlens,
+        chunk_indices,
+        str(layout),
+        _current_stream_ptr(),
+    )
 
 
 def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, *, a_log=None, dt_bias=None, cu_seqlens=None, chunk_indices=None, allow_neg_eigval=False, use_exp2=False, output_a=True, use_beta_sigmoid_in_kernel=False, use_qk_l2norm_in_kernel=False, use_gate_in_kernel=False):
     ext = _extension()
     import torch
-    if not (bool(use_qk_l2norm_in_kernel) and not bool(use_gate_in_kernel) and bool(use_exp2) and int(chunk_size) == 64):
+    if (a_log is not None or dt_bias is not None) or not (bool(use_qk_l2norm_in_kernel) and not bool(use_gate_in_kernel) and bool(use_exp2) and int(chunk_size) == 64):
+        # a_log/dt_bias are documented as unsupported for this op; ctypes accepts
+        # them, but the thin descriptor path currently returns 161002 for a 1-D
+        # a_log/dt_bias, so keep that combination on ctypes until it is debugged.
         from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
         return _ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, use_exp2=use_exp2, a_log=a_log, dt_bias=dt_bias, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, output_a=output_a)
     cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
@@ -666,23 +687,3 @@ def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, *, a_lo
     if result[8] is None:
         return (result[4], result[5], result[6], result[7], beta.to(dtype=torch.float32), result[0], result[1], result[2], result[3])
     return (result[4], result[5], result[6], result[7], result[8], result[0], result[1], result[2], result[3])
-
-
-def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
-    ext = _extension()
-    layout = str(layout)
-    # bsnd/bnsd (dense) and tnd (dense or varlen) match ctypes bit-exactly; ntd is
-    # broken upstream (ctypes returns all zeros and thin is not the transpose of
-    # tnd), so keep ntd on the ctypes path until the kernel is fixed.
-    if layout == "ntd":
-        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
-        return _ct.npu_solve_tri(x, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, layout=layout)
-    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
-    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
-    return ext.npu_solve_tri(
-        x,
-        cu_seqlens,
-        chunk_indices,
-        str(layout),
-        _current_stream_ptr(),
-    )

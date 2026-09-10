@@ -117,6 +117,37 @@
 
 ## 6. 本分支的当前进度
 
+### 6.5 Phase 2 结果（2026-09-11，241 x86_64，同一产物跨版本）
+
+**结论：一个用 torch 2.9 头编出的产物，能在 torch 2.7.1(py3.10) 与 2.9(py3.12)
+上同时加载并注册成功。**
+
+前提是符号面收敛——这是本期拿到的最有价值的一条可量化规则：
+
+| 产物 | 需要的 `aoti_torch_*` 符号 | torch 2.7.1 加载 | torch 2.9 加载 |
+| --- | --- | --- | --- |
+| 含调试探针（`_stream_probe`） | 42 | ✗ `undefined symbol: aoti_torch_stream_id` | ✓ |
+| **生产（`--no-debug-probe`）** | **39** | **✓ LOAD OK（op 已注册）** | **✓ LOAD OK** |
+
+方法：把产物的未定义符号集与候选运行时 `libtorch_cpu.so` 的导出集求交，缺的就
+是版本下限的硬约束。本期实测 44 → 42 → 39：去掉调试探针的 3 个 stream 符号，
+再用"本地算 contiguity"和"null handle 短路"替掉 `aoti_torch_is_contiguous` /
+`aoti_torch_is_defined` 这 2 个 2.9-only 符号，就落进了 2.7.1 的导出集。
+
+**版本下限由此明确：**
+
+- **头文件下限是 2.9**：torch 2.7.1 的 `torch/csrc/stable/` 里**只有 `library.h`**，
+  没有 `tensor.h` / `stableivalue_conversions.h` / `ops.h` / `accelerator.h` ——
+  完整张量级 stable ABI 是 2.9 引入的。所以**只能按 2.9 编**。
+- **运行期符号下限可低到 2.7.1**（实测），再往前的版本未测。
+- 版本不匹配的失败是**干净的**：`dlopen` 报 undefined symbol，不会静默算错。
+
+**未完成项（Phase 2 收尾）**：2.7.1 环境下的设备级 parity 未跑通。卡点不在本方案，
+而在该环境的**参考实现**：241（Ascend950PR）上 `ct.npu_recurrent_gated_delta_rule`
+在 `env_a5fzy` 与 `env_wide` 两个 fzy env 里都返回 161002（A5 上该算子的合法输入域
+与 910b 不同，这与 stable 路径无关）。下一步换成在 950 上已验证可用的算子
+（`npu_recurrent_kda`，同时满足 Phase 1 的"多输出"要求）做 2.7.1 设备级 parity。
+
 - `csrc_stable/src/stable_recurrent_gdr.cpp`：recurrent GDR 的 stable 注册 + 实现骨架
   （复用 `csrc_thin/src/runtime.cpp` 的 dlopen 符号解析，descriptor 语义与 ctypes 对齐）。
 - `csrc_stable/build_stable.py`：不链接 torch 编译期头之外的任何东西（只 include

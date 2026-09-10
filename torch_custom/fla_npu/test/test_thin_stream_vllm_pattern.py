@@ -195,7 +195,7 @@ class TestThinMultiThreadVllmPattern(unittest.TestCase):
         diff = float((out.float() - golden.float()).abs().max().item())
         self.assertEqual(diff, 0.0, f"{what}: parity diff={diff}")
 
-    def _run_iteration(self, index, rec_state, conv_state):
+    def _run_iteration(self, index, rec_state, rec_raw, conv_state, conv_raw):
         """One recurrent + one conv update on the calling thread's stream."""
         from fla_npu.ops.ascendc import _thin
 
@@ -204,8 +204,11 @@ class TestThinMultiThreadVllmPattern(unittest.TestCase):
             int(torch.npu.current_stream().npu_stream),
             f"thread {index}: stream pointer does not match the thread stream")
 
-        rec_state.zero_()
-        conv_state.zero_()
+        # The operators may touch rows outside the as_strided view (state
+        # indices address the raw buffer), so reset the whole backing storage
+        # to keep every iteration's expected result identical to the golden.
+        rec_raw.zero_()
+        conv_raw.zero_()
 
         gap, rec_out = _event_gap_ms(
             lambda: _call_recurrent_public(self.rec, rec_state))
@@ -235,14 +238,15 @@ class TestThinMultiThreadVllmPattern(unittest.TestCase):
         def worker(index):
             try:
                 stream = torch.npu.Stream()
-                rec_state, _ = self.rec["make_state"]()
-                conv_state, _ = self.conv["make_state"]()
+                rec_state, rec_raw = self.rec["make_state"]()
+                conv_state, conv_raw = self.conv["make_state"]()
                 with torch.npu.stream(stream):
                     # Every worker owns its stream before the first launch;
                     # the old global cache kept only the last one written.
                     barrier.wait(timeout=60)
                     for _ in range(iterations):
-                        self._run_iteration(index, rec_state, conv_state)
+                        self._run_iteration(
+                            index, rec_state, rec_raw, conv_state, conv_raw)
             except Exception as exc:  # noqa: BLE001 - reported via errors list
                 errors.append((index, repr(exc)))
 
@@ -260,11 +264,12 @@ class TestThinMultiThreadVllmPattern(unittest.TestCase):
         """Launcher-level soak: 24 repeats, rotating over three streams."""
         streams = [torch.npu.current_stream(), torch.npu.Stream(),
                    torch.npu.Stream()]
-        rec_state, _ = self.rec["make_state"]()
-        conv_state, _ = self.conv["make_state"]()
+        rec_state, rec_raw = self.rec["make_state"]()
+        conv_state, conv_raw = self.conv["make_state"]()
         for index in range(24):
             with torch.npu.stream(streams[index % len(streams)]):
-                self._run_iteration(index, rec_state, conv_state)
+                self._run_iteration(
+                    index, rec_state, rec_raw, conv_state, conv_raw)
 
 
 if __name__ == "__main__":

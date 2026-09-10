@@ -601,22 +601,6 @@ def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, a_log=None, dt_bias=None
     if return_intermediate_states:
         out.append(result[9])
     return tuple(out)
-
-
-def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
-    ext = _extension()
-    layout = str(layout)
-    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
-    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
-    return ext.npu_solve_tri(
-        x,
-        cu_seqlens,
-        chunk_indices,
-        str(layout),
-        _current_stream_ptr(),
-    )
-
-
 def npu_chunk_gated_delta_rule_bwd_finalize(q, k, v, v_new, do, du, g, beta, h, dh, a, *, q_rstd=None, k_rstd=None, beta_raw=None, cu_seqlens=None, chunk_indices=None, scale=None, chunk_size=64, use_qk_l2_norm_in_kernel=False, use_beta_sigmoid_in_kernel=False, use_gate_in_kernel=False, state_v_first=False, use_exp2=True):
     ext = _extension()
     scale = (128.0 ** -0.5) if scale is None else float(scale)
@@ -682,3 +666,23 @@ def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, *, a_lo
     if result[8] is None:
         return (result[4], result[5], result[6], result[7], beta.to(dtype=torch.float32), result[0], result[1], result[2], result[3])
     return (result[4], result[5], result[6], result[7], result[8], result[0], result[1], result[2], result[3])
+
+
+def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
+    ext = _extension()
+    layout = str(layout)
+    # bsnd/bnsd (dense) and tnd (dense or varlen) match ctypes bit-exactly; ntd is
+    # broken upstream (ctypes returns all zeros and thin is not the transpose of
+    # tnd), so keep ntd on the ctypes path until the kernel is fixed.
+    if layout == "ntd":
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_solve_tri(x, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, layout=layout)
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    return ext.npu_solve_tri(
+        x,
+        cu_seqlens,
+        chunk_indices,
+        str(layout),
+        _current_stream_ptr(),
+    )

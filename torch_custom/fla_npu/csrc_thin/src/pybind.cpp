@@ -437,6 +437,9 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd_prepare(
     uint64_t stream);
 
 
+
+
+
 at::Tensor npu_solve_tri(
     const at::Tensor& x,
     const std::vector<int64_t>& cu_seqlens,
@@ -827,6 +830,7 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("output_a"),
       py::arg("use_beta_sigmoid_in_kernel"),
       py::arg("stream"));
+  
   m.def(
       "npu_solve_tri",
       &npu_solve_tri, py::arg("x"),

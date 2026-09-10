@@ -503,6 +503,44 @@ def scenario_kda_gate_cumsum():
             _thin.npu_kda_gate_cumsum(g, cs, **kw))
 
 
+def scenario_chunk_gated_delta_rule_fwd():
+    """Fused GDN forward (legacy Phase6 domain: BNSD dense).
+
+    Upstream #495 fixed the op_api/ctypes parameter passing, so the fused op
+    now runs on A2; the thin adapter covers the legacy path and falls back to
+    ctypes for the A5 (use_exp2) / varlen / other-layout combos.
+    """
+
+    def make_case(B, Hk, Hv, T, V, chunk, suffix, with_final=True,
+                  st_dtype=None):
+        dt = torch.bfloat16
+        q = (torch.randn(B, Hk, T, 128, device="npu") * 0.05).to(dt)
+        k = (torch.randn(B, Hk, T, 128, device="npu") * 0.05).to(dt)
+        v = (torch.randn(B, Hv, T, V, device="npu") * 0.05).to(dt)
+        g = (torch.randn(B, T, Hv, device="npu") * 1.25).to(torch.float32)
+        beta = torch.sigmoid(torch.randn(B, T, Hv, device="npu"))
+        kw = dict(chunk_size=chunk, output_final_state=with_final)
+        if st_dtype is not None:
+            kw["initial_state"] = (
+                torch.randn(B, Hv, 128, V, device="npu") * 0.02).to(st_dtype)
+            kw["output_final_state"] = True
+        torch.npu.synchronize()
+        assert_parity(
+            f"chunk_gated_delta_rule_fwd({suffix})",
+            ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
+            _thin.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
+
+    # GVA + final state + fp32 initial state
+    make_case(2, 2, 4, 128, 128, 64, "B2_Hk2_Hv4_T128_V128_c64",
+              st_dtype=torch.float32)
+    # bf16 initial state, chunk 128, V=256
+    make_case(2, 2, 4, 256, 256, 128, "B2_Hk2_Hv4_T256_V256_c128",
+              st_dtype=torch.bfloat16)
+    # no initial/final state
+    make_case(1, 2, 2, 192, 128, 64, "B1_Hk2_Hv2_T192_V128_c64",
+              with_final=False)
+
+
 def main():
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
@@ -527,10 +565,11 @@ def main():
         scenario_scaled_dot_kkt,
         scenario_solve_tri_dense,
         scenario_kda_gate_cumsum,
+        scenario_chunk_gated_delta_rule_fwd,
     ]
     for fn in scenarios:
         fn()
-    print("ALL PASS: 20 thin-op parity scenarios")
+    print("ALL PASS: 21 thin-op parity scenarios")
 
 
 if __name__ == "__main__":

@@ -175,9 +175,17 @@ def generate(spec: dict) -> str:
                 f"  views.push_back(std::make_unique<AclTensorView>({target}));")
             out_idx += 1
         elif kind == "optional_tensor":
+            # ``when`` mirrors a host policy that nulls an optional tensor
+            # unless a flag holds.  The ctypes reference spells the same rule
+            # as ``arg if flag else None``; the aclnn op itself may reject a
+            # non-null pointer (e.g. aLogOptional while in-kernel gating is
+            # unsupported), so the launcher must drop it the same way.
+            condition = f"{name}.has_value() && {name}->defined()"
+            if a.get("when"):
+                condition += f" && ({a['when']})"
             lines.append(
                 f"  views.push_back(std::make_unique<AclTensorView>("
-                f"{name}.has_value() && {name}->defined() ? *{name} : at::Tensor()));")
+                f"{condition} ? *{name} : at::Tensor()));")
     int_array_names = [_cpp_name(a) for a in args if a["kind"] == "int_array"]
     for name in int_array_names:
         lines.append(f"  AclIntArrayView {name}_view({name});")

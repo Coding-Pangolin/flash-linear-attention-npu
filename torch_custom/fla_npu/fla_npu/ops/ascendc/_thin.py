@@ -618,41 +618,6 @@ def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
         str(layout),
         _current_stream_ptr(),
     )
-
-
-def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, *, a_log=None, dt_bias=None, cu_seqlens=None, chunk_indices=None, allow_neg_eigval=False, use_exp2=False, output_a=True, use_beta_sigmoid_in_kernel=False, use_qk_l2norm_in_kernel=False, use_gate_in_kernel=False):
-    ext = _extension()
-    import torch
-    if (a_log is not None or dt_bias is not None) or not (bool(use_qk_l2norm_in_kernel) and not bool(use_gate_in_kernel) and bool(use_exp2) and int(chunk_size) == 64):
-        # a_log/dt_bias are documented as unsupported for this op; ctypes accepts
-        # them, but the thin descriptor path currently returns 161002 for a 1-D
-        # a_log/dt_bias, so keep that combination on ctypes until it is debugged.
-        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
-        return _ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, use_exp2=use_exp2, a_log=a_log, dt_bias=dt_bias, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, output_a=output_a)
-    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
-    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
-    result = ext.npu_chunk_gated_delta_rule_fwd_prepare(
-        q,
-        k,
-        v,
-        g,
-        beta,
-        a_log,
-        dt_bias,
-        cu_seqlens,
-        chunk_indices,
-        int(chunk_size),
-        bool(allow_neg_eigval),
-        bool(use_exp2),
-        bool(output_a),
-        bool(use_beta_sigmoid_in_kernel),
-        _current_stream_ptr(),
-    )
-    if result[8] is None:
-        return (result[4], result[5], result[6], result[7], beta.to(dtype=torch.float32), result[0], result[1], result[2], result[3])
-    return (result[4], result[5], result[6], result[7], result[8], result[0], result[1], result[2], result[3])
-
-
 def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size, *, A_log=None, dt_bias=None, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BSND", safe_gate=False, lower_bound=None, use_gate_in_kernel=False, state_v_first=False, output_final_state=False, disable_recompute=False, return_intermediate_states=False):
     ext = _extension()
     layout = str(layout)
@@ -710,3 +675,39 @@ def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size, *, A_log=None, dt_bia
     out.append(result[10] if (disable_recompute or return_intermediate_states) else None)
     out.append(initial_state)
     return tuple(out)
+
+
+def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, *, a_log=None, dt_bias=None, cu_seqlens=None, chunk_indices=None, allow_neg_eigval=False, use_exp2=False, output_a=True, use_beta_sigmoid_in_kernel=False, use_qk_l2norm_in_kernel=False, use_gate_in_kernel=False):
+    ext = _extension()
+    import torch
+    if not (bool(use_qk_l2norm_in_kernel) and bool(use_exp2) and int(chunk_size) == 64):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, use_exp2=use_exp2, a_log=a_log, dt_bias=dt_bias, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, output_a=output_a)
+    if use_gate_in_kernel:
+        # aclnn rejects a non-null aLogOptional ("use_gate_in_kernel currently only
+        # supports false"), and the ctypes reference raises ValueError for the same
+        # request: keep that error surface on the reference path.
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, use_exp2=use_exp2, a_log=a_log, dt_bias=dt_bias, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, output_a=output_a)
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    result = ext.npu_chunk_gated_delta_rule_fwd_prepare(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        a_log,
+        dt_bias,
+        cu_seqlens,
+        chunk_indices,
+        int(chunk_size),
+        bool(allow_neg_eigval),
+        bool(use_exp2),
+        bool(output_a),
+        bool(use_beta_sigmoid_in_kernel),
+        _current_stream_ptr(),
+    )
+    if result[8] is None:
+        return (result[4], result[5], result[6], result[7], beta.to(dtype=torch.float32), result[0], result[1], result[2], result[3])
+    return (result[4], result[5], result[6], result[7], result[8], result[0], result[1], result[2], result[3])

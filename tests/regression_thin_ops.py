@@ -401,6 +401,44 @@ def scenario_chunk_kda_fwd():
     print(f"PASS chunk_kda_fwd full-domain matrix ({total} combinations)")
 
 
+def scenario_chunk_kda_fwd_variants():
+    """kda_fwd shape/dtype 变体：V=256、B>1、GVA、bf16 g/beta、chunk128。"""
+    variants = [
+        # layout, B, T, H, HV, K, V, chunk, g_dtype, flags
+        ("BSND", 1, 128, 4, 4, 128, 256, 64, torch.float32, {}),
+        ("BSND", 2, 128, 4, 4, 128, 128, 64, torch.float32, {}),
+        ("BSND", 2, 128, 4, 4, 128, 128, 64, torch.bfloat16, {}),
+        ("BSND", 1, 128, 2, 4, 128, 128, 64, torch.float32, {}),
+        ("BNSD", 1, 128, 2, 8, 128, 256, 128, torch.float32, {}),
+        ("TND", 1, 128, 2, 4, 128, 128, 128, torch.float32, {}),
+        ("NTD", 1, 128, 4, 4, 128, 256, 64, torch.float32, {}),
+        ("BSND", 1, 256, 4, 4, 128, 128, 128, torch.float32,
+         dict(output_final_state=True, disable_recompute=True,
+              return_intermediate_states=True)),
+        ("TND", 1, 192, 4, 4, 128, 128, 64, torch.float32,
+         dict(output_final_state=True)),
+    ]
+    for (layout, B, T, H, HV, K, V, cs, gdt, extra) in variants:
+        q, k, v, g, beta = _kda_fwd_tensors(
+            layout, torch.bfloat16, B=B, T=T, H=H, HV=HV, K=K, V=V)
+        if gdt is not torch.float32:
+            g = g.to(dtype=gdt)
+            beta = beta.to(dtype=gdt)
+        kw = dict(layout=layout, chunk_size=cs, scale=K ** -0.5, **extra)
+        if extra.get("output_final_state"):
+            seq_num = B
+            kw["initial_state"] = (
+                torch.randn(seq_num, HV, K, V, dtype=torch.float32,
+                            device="npu") * 1e-2)
+        torch.npu.synchronize()
+        assert_parity(
+            f"chunk_kda_fwd(var {layout} B={B} T={T} H={H} HV={HV} "
+            f"V={V} cs={cs} g={str(gdt).split('.')[-1]})",
+            ct.npu_chunk_kda_fwd(q, k, v, g, beta, **kw),
+            _thin.npu_chunk_kda_fwd(q, k, v, g, beta, **kw))
+    print(f"PASS chunk_kda_fwd variants ({len(variants)} cases)")
+
+
 def scenario_chunk_kda_bwd_intra():
     B, H, T, K, cs = 2, 4, 256, 128, 64
     dt = torch.bfloat16
@@ -666,6 +704,7 @@ def main():
         scenario_bwd_dhu,
         scenario_conv1d_bwd_bnsd,
         scenario_chunk_kda_fwd,
+        scenario_chunk_kda_fwd_variants,
         scenario_chunk_kda_bwd_intra,
         scenario_chunk_kda_bwd,
         scenario_dqkwg,

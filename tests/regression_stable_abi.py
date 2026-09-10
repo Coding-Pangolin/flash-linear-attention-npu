@@ -150,10 +150,13 @@ def main():
     # --- T8 stable stream probe ----------------------------------------------
     device_index = int(torch.npu.current_device())
     py_raw = int(torch_npu._C._npu_getCurrentRawStream(device_index))
-    shim_id, stable_id = _stable.stream_probe(device_index)
-    print(f"T8 stream probe: python_raw={py_raw} shim_stream_id={shim_id} "
-          f"stable_stream_id={stable_id} "
-          f"({'MATCH' if py_raw == shim_id else 'MISMATCH'})")
+    if hasattr(torch.ops.fla_npu_thin, "_stream_probe"):
+        shim_id, stable_id = _stable.stream_probe(device_index)
+        print(f"T8 stream probe: python_raw={py_raw} shim_stream_id={shim_id} "
+              f"stable_stream_id={stable_id} "
+              f"({'MATCH' if py_raw == shim_id else 'MISMATCH'})")
+    else:
+        print("T8 skipped: build has no debug probe")
 
     # --- T3 multi-thread / multi-stream -------------------------------------
     golden = None
@@ -226,7 +229,8 @@ def main():
             float(inputs["scale"]), stream)
 
     with torch.no_grad():
-        probe = bench(lambda: torch.ops.fla_npu_thin._stream_probe(0))
+        probe = (bench(lambda: torch.ops.fla_npu_thin._stream_probe(0))
+                 if hasattr(torch.ops.fla_npu_thin, "_stream_probe") else 0.0)
         a = bench(lambda: ct.npu_recurrent_gated_delta_rule(
             inputs["query"], inputs["key"], inputs["value"], state_a,
             beta=inputs["beta"], g=inputs["g"], scale=inputs["scale"],

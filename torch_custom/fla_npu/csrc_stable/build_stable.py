@@ -43,6 +43,8 @@ def main() -> int:
     parser.add_argument("--out", default=str(ROOT / "libfla_npu_thin.so"))
     parser.add_argument("--compiler", default=os.environ.get("CXX", "g++"))
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--no-debug-probe", action="store_true",
+                        help="drop the _stream_probe op (smaller symbol surface)")
     args = parser.parse_args()
 
     includes, torch_lib = torch_paths()
@@ -53,6 +55,7 @@ def main() -> int:
         "-fPIC",
         "-shared",
         "-fvisibility=hidden",
+        *(["-DFLA_STABLE_NO_DEBUG_PROBE"] if args.no_debug_probe else []),
         "-I", str(CSRC_THIN / "include"),
         *[f"-I{path}" for path in includes],
         str(CSRC_STABLE / "stable_recurrent_gdr.cpp"),

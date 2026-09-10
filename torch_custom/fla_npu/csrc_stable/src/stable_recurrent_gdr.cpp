@@ -5,7 +5,9 @@
 // pybind11 may appear here: the compile-once/run-on-many guarantee comes from
 // touching nothing but the aoti_torch_* C shims.
 #include <torch/csrc/stable/library.h>
+#ifndef FLA_STABLE_NO_DEBUG_PROBE
 #include <torch/csrc/stable/accelerator.h>
+#endif
 #include <torch/csrc/stable/ops.h>
 #include <torch/csrc/stable/stableivalue_conversions.h>
 #include <torch/csrc/stable/tensor.h>
@@ -119,10 +121,11 @@ struct TensorMeta {
 
 TensorMeta meta_of(const torch::stable::Tensor& tensor) {
   TensorMeta meta;
+  // A missing optional arrives as a null handle.  Short-circuiting here keeps
+  // this launcher inside the aoti_torch_* set that older libtorch builds export
+  // (aoti_torch_is_defined / aoti_torch_is_contiguous are 2.9-only).
   const AtenTensorHandle handle = tensor.get();
-  bool defined = false;
-  TORCH_ERROR_CODE_CHECK(aoti_torch_is_defined(handle, &defined));
-  if (!defined) {
+  if (handle == nullptr) {
     return meta;
   }
   meta.defined = true;
@@ -155,8 +158,26 @@ TensorMeta meta_of(const torch::stable::Tensor& tensor) {
       aoti_torch_get_device_type(handle, &meta.device_type));
   TORCH_ERROR_CODE_CHECK(
       aoti_torch_get_device_index(handle, &meta.device_index));
-  TORCH_ERROR_CODE_CHECK(aoti_torch_is_contiguous(handle, &meta.contiguous));
+  // Computed locally rather than via aoti_torch_is_contiguous.
+  int64_t expected = 1;
+  meta.contiguous = true;
+  for (int64_t dim = meta.ndim - 1; dim >= 0; --dim) {
+    if (meta.sizes[dim] != 1 && meta.strides[dim] != expected) {
+      meta.contiguous = false;
+      break;
+    }
+    expected *= meta.sizes[dim];
+  }
   return meta;
+}
+
+// Default-constructed torch::stable::Tensor holds an *uninitialised* handle, so
+// optionals must be tested with has_value() instead of value_or(Tensor()).
+TensorMeta meta_optional(const std::optional<torch::stable::Tensor>& tensor) {
+  if (!tensor.has_value()) {
+    return TensorMeta{};
+  }
+  return meta_of(*tensor);
 }
 
 // RAII wrapper around aclCreateTensor / aclDestroyTensor.  Mirrors the ctypes
@@ -238,9 +259,9 @@ Tensor run_recurrent_gated_delta_rule(const Tensor& query, const Tensor& key,
   AclTensorView v_state(meta_of(state));
   AclTensorView v_seq(meta_of(actual_seq_lengths));
   AclTensorView v_idx(meta_of(ssm_state_indices));
-  AclTensorView v_g(meta_of(g.value_or(Tensor())));
-  AclTensorView v_gk(meta_of(gk.value_or(Tensor())));
-  AclTensorView v_accepted(meta_of(num_accepted_tokens.value_or(Tensor())));
+  AclTensorView v_g(meta_optional(g));
+  AclTensorView v_gk(meta_optional(gk));
+  AclTensorView v_accepted(meta_optional(num_accepted_tokens));
   AclTensorView v_out(meta_of(out));
 
   uint64_t workspace_size = 0;
@@ -312,6 +333,7 @@ void boxed_recurrent_gated_delta_rule(StableIValue* stack,
 // Python compares these against torch_npu's raw accessor; both returned 0 on
 // torch_npu 2.9.0.post2, i.e. the stable stream API does not map to the NPU
 // stream yet.
+#ifndef FLA_STABLE_NO_DEBUG_PROBE
 void boxed_stream_probe(StableIValue* stack, uint64_t num_inputs,
                         uint64_t num_outputs) {
   (void)num_inputs;
@@ -338,6 +360,7 @@ void boxed_stream_probe(StableIValue* stack, uint64_t num_inputs,
   stack[0] = from(shim_id);
   stack[1] = from(stream_id);
 }
+#endif  // FLA_STABLE_NO_DEBUG_PROBE
 
 }  // namespace
 
@@ -349,11 +372,15 @@ STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
       "Tensor? gk, float scale, int stream) -> Tensor");
   // Debug helper for the stream question: report the current stream two ways so
   // Python can compare them against torch_npu's raw accessor.
+#ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.def("_stream_probe(int device_index) -> (int, int)");
+#endif
 }
 
 STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
   m.impl("npu_recurrent_gated_delta_rule",
          &boxed_recurrent_gated_delta_rule);
+#ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.impl("_stream_probe", &boxed_stream_probe);
+#endif
 }

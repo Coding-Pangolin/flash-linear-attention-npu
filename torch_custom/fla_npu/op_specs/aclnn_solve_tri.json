@@ -6,7 +6,7 @@
   "output": {"arg": "out", "source": "x", "dtype": "same"},
   "python": {
     "positional": ["x"],
-    "pre": "layout = str(layout)\nif not (layout in (\"bsnd\", \"bnsd\") and cu_seqlens is None and chunk_indices is None):\n    from fla_npu.ops.ascendc import _aclnn_ctypes as _ct\n    return _ct.npu_solve_tri(x, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, layout=layout)",
+    "pre": "layout = str(layout)",
     "defaults": {
       "cu_seqlens": "None",
       "chunk_indices": "None",

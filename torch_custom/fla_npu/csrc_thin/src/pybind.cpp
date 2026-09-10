@@ -68,12 +68,7 @@ at::Tensor npu_chunk_scaled_dot_kkt(
     uint64_t stream);
 
 
-at::Tensor npu_solve_tri(
-    const at::Tensor& x,
-    const std::vector<int64_t>& cu_seqlens,
-    const std::vector<int64_t>& chunk_indices,
-    const std::string& layout,
-    uint64_t stream);
+
 
 
 std::vector<at::Tensor> npu_recompute_w_u_fwd(
@@ -269,21 +264,7 @@ std::vector<at::Tensor> npu_recurrent_kda(
     uint64_t stream);
 
 
-std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd_prepare(
-    const at::Tensor& q,
-    const at::Tensor& k,
-    const at::Tensor& v,
-    const at::Tensor& g,
-    const at::Tensor& beta,
-    const c10::optional<at::Tensor>& a_log,
-    const c10::optional<at::Tensor>& dt_bias,
-    const std::vector<int64_t>& cu_seqlens,
-    const std::vector<int64_t>& chunk_indices,
-    int64_t chunk_size,
-    bool allow_neg_eigval,
-    bool use_exp2,
-    bool output_a,
-    uint64_t stream);
+
 
 
 std::vector<at::Tensor> npu_causal_conv1d_bwd(
@@ -372,31 +353,7 @@ std::vector<at::Tensor> npu_chunk_kda_bwd(
 
 
 
-std::vector<at::Tensor> npu_chunk_gated_delta_rule_bwd_finalize(
-    const at::Tensor& q,
-    const at::Tensor& k,
-    const at::Tensor& v,
-    const at::Tensor& v_new,
-    const at::Tensor& d_o,
-    const at::Tensor& du,
-    const at::Tensor& g,
-    const at::Tensor& beta,
-    const at::Tensor& h,
-    const at::Tensor& dh,
-    const at::Tensor& a,
-    const c10::optional<at::Tensor>& q_rstd,
-    const c10::optional<at::Tensor>& k_rstd,
-    const c10::optional<at::Tensor>& beta_raw,
-    const std::vector<int64_t>& cu_seqlens,
-    const std::vector<int64_t>& chunk_indices,
-    double scale,
-    int64_t chunk_size,
-    bool use_qk_l2_norm_in_kernel,
-    bool use_beta_sigmoid_in_kernel,
-    bool use_gate_in_kernel,
-    bool state_v_first,
-    bool use_exp2,
-    uint64_t stream);
+
 
 
 
@@ -432,6 +389,59 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd(
     bool return_intermediate_states,
     bool use_gate_in_kernel,
     bool use_beta_sigmoid_in_kernel,
+    uint64_t stream);
+
+
+std::vector<at::Tensor> npu_chunk_gated_delta_rule_bwd_finalize(
+    const at::Tensor& q,
+    const at::Tensor& k,
+    const at::Tensor& v,
+    const at::Tensor& v_new,
+    const at::Tensor& d_o,
+    const at::Tensor& du,
+    const at::Tensor& g,
+    const at::Tensor& beta,
+    const at::Tensor& h,
+    const at::Tensor& dh,
+    const at::Tensor& a,
+    const c10::optional<at::Tensor>& q_rstd,
+    const c10::optional<at::Tensor>& k_rstd,
+    const c10::optional<at::Tensor>& beta_raw,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    double scale,
+    int64_t chunk_size,
+    bool use_qk_l2_norm_in_kernel,
+    bool use_beta_sigmoid_in_kernel,
+    bool use_gate_in_kernel,
+    bool state_v_first,
+    bool use_exp2,
+    uint64_t stream);
+
+
+std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd_prepare(
+    const at::Tensor& q,
+    const at::Tensor& k,
+    const at::Tensor& v,
+    const at::Tensor& g,
+    const at::Tensor& beta,
+    const c10::optional<at::Tensor>& a_log,
+    const c10::optional<at::Tensor>& dt_bias,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    int64_t chunk_size,
+    bool allow_neg_eigval,
+    bool use_exp2,
+    bool output_a,
+    bool use_beta_sigmoid_in_kernel,
+    uint64_t stream);
+
+
+at::Tensor npu_solve_tri(
+    const at::Tensor& x,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    const std::string& layout,
     uint64_t stream);
 
 }  // namespace fla_npu_thin
@@ -483,13 +493,7 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("chunk_indices"),
       py::arg("chunk_size"),
       py::arg("stream"));
-  m.def(
-      "npu_solve_tri",
-      &npu_solve_tri, py::arg("x"),
-      py::arg("cu_seqlens"),
-      py::arg("chunk_indices"),
-      py::arg("layout"),
-      py::arg("stream"));
+  
   m.def(
       "npu_recompute_w_u_fwd",
       &npu_recompute_w_u_fwd, py::arg("k"),
@@ -670,22 +674,7 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("lower_bound"),
       py::arg("state_v_first"),
       py::arg("stream"));
-  m.def(
-      "npu_chunk_gated_delta_rule_fwd_prepare",
-      &npu_chunk_gated_delta_rule_fwd_prepare, py::arg("q"),
-      py::arg("k"),
-      py::arg("v"),
-      py::arg("g"),
-      py::arg("beta"),
-      py::arg("a_log"),
-      py::arg("dt_bias"),
-      py::arg("cu_seqlens"),
-      py::arg("chunk_indices"),
-      py::arg("chunk_size"),
-      py::arg("allow_neg_eigval"),
-      py::arg("use_exp2"),
-      py::arg("output_a"),
-      py::arg("stream"));
+  
   m.def(
       "npu_causal_conv1d_bwd",
       &npu_causal_conv1d_bwd, py::arg("x"),
@@ -767,32 +756,7 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("use_exp2"),
       py::arg("state_v_first"),
       py::arg("stream"));
-  m.def(
-      "npu_chunk_gated_delta_rule_bwd_finalize",
-      &npu_chunk_gated_delta_rule_bwd_finalize, py::arg("q"),
-      py::arg("k"),
-      py::arg("v"),
-      py::arg("v_new"),
-      py::arg("do"),
-      py::arg("du"),
-      py::arg("g"),
-      py::arg("beta"),
-      py::arg("h"),
-      py::arg("dh"),
-      py::arg("a"),
-      py::arg("q_rstd"),
-      py::arg("k_rstd"),
-      py::arg("beta_raw"),
-      py::arg("cu_seqlens"),
-      py::arg("chunk_indices"),
-      py::arg("scale"),
-      py::arg("chunk_size"),
-      py::arg("use_qk_l2_norm_in_kernel"),
-      py::arg("use_beta_sigmoid_in_kernel"),
-      py::arg("use_gate_in_kernel"),
-      py::arg("state_v_first"),
-      py::arg("use_exp2"),
-      py::arg("stream"));  
+    
   
   
   m.def(
@@ -819,5 +783,55 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("return_intermediate_states"),
       py::arg("use_gate_in_kernel"),
       py::arg("use_beta_sigmoid_in_kernel"),
+      py::arg("stream"));
+  m.def(
+      "npu_chunk_gated_delta_rule_bwd_finalize",
+      &npu_chunk_gated_delta_rule_bwd_finalize, py::arg("q"),
+      py::arg("k"),
+      py::arg("v"),
+      py::arg("v_new"),
+      py::arg("do"),
+      py::arg("du"),
+      py::arg("g"),
+      py::arg("beta"),
+      py::arg("h"),
+      py::arg("dh"),
+      py::arg("a"),
+      py::arg("q_rstd"),
+      py::arg("k_rstd"),
+      py::arg("beta_raw"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("scale"),
+      py::arg("chunk_size"),
+      py::arg("use_qk_l2_norm_in_kernel"),
+      py::arg("use_beta_sigmoid_in_kernel"),
+      py::arg("use_gate_in_kernel"),
+      py::arg("state_v_first"),
+      py::arg("use_exp2"),
+      py::arg("stream"));
+  m.def(
+      "npu_chunk_gated_delta_rule_fwd_prepare",
+      &npu_chunk_gated_delta_rule_fwd_prepare, py::arg("q"),
+      py::arg("k"),
+      py::arg("v"),
+      py::arg("g"),
+      py::arg("beta"),
+      py::arg("a_log"),
+      py::arg("dt_bias"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("chunk_size"),
+      py::arg("allow_neg_eigval"),
+      py::arg("use_exp2"),
+      py::arg("output_a"),
+      py::arg("use_beta_sigmoid_in_kernel"),
+      py::arg("stream"));
+  m.def(
+      "npu_solve_tri",
+      &npu_solve_tri, py::arg("x"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("layout"),
       py::arg("stream"));
 }

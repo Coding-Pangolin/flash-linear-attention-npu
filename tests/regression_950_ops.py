@@ -73,6 +73,32 @@ def scenario_fwd_prepare():
                                                             **kw),
                   _thin.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g,
                                                                beta, **kw))
+    # aLogOptional/dtBiasOptional: aclnn rejects a non-null aLog while in-kernel
+    # gating is unsupported, and the ctypes reference drops it in that case, so
+    # the thin launcher must drop it too (spec args[].when = use_gate_in_kernel).
+    a_log = torch.randn(HV, dtype=torch.float32, device="npu") * 0.1
+    dt_bias = torch.randn(HV, dtype=torch.float32, device="npu") * 0.1
+    for label, extra in (("a_log+dt_bias", dict(a_log=a_log, dt_bias=dt_bias)),
+                         ("a_log only", dict(a_log=a_log)),
+                         ("no gate flags", {})):
+        torch.npu.synchronize()
+        case = dict(kw, **extra)
+        assert_parity(
+            f"fwd_prepare({label})",
+            ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, **case),
+            _thin.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta,
+                                                         **case))
+    # output_a=False and use_beta_sigmoid_in_kernel=False are part of the
+    # widened (ctypes) domain and must stay on the thin path.
+    for label, extra in (("output_a=False", dict(output_a=False)),
+                         ("sigmoid=False", dict(use_beta_sigmoid_in_kernel=False))):
+        case = dict(kw, **extra)
+        torch.npu.synchronize()
+        assert_parity(
+            f"fwd_prepare({label})",
+            ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, **case),
+            _thin.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta,
+                                                         **case))
 
 
 def scenario_bwd_finalize():

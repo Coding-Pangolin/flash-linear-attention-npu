@@ -307,21 +307,26 @@ void boxed_recurrent_gated_delta_rule(StableIValue* stack,
 }
 
 // Reports the current stream for `device_index` in two forms:
-//   [0] raw backend stream pointer (aoti_torch_get_current_cuda_stream)
-//   [1] stable Stream::id() (c10 StreamId)
-// A value of 0 for [0] means the backend does not expose the raw pointer.
+//   [0] aoti_torch_stream_id(aoti_torch_get_current_stream(...))
+//   [1] stable::accelerator::getCurrentStream(...).id()
+// Python compares these against torch_npu's raw accessor; both returned 0 on
+// torch_npu 2.9.0.post2, i.e. the stable stream API does not map to the NPU
+// stream yet.
 void boxed_stream_probe(StableIValue* stack, uint64_t num_inputs,
                         uint64_t num_outputs) {
   (void)num_inputs;
   (void)num_outputs;
   const int64_t device_index = to<int64_t>(stack[0]);
-  void* raw_stream = nullptr;
-  const auto raw_err = aoti_torch_get_current_cuda_stream(
-      static_cast<int32_t>(device_index), &raw_stream);
-  int64_t raw_value =
-      (raw_err == 0 && raw_stream != nullptr)
-          ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(raw_stream))
-          : 0;
+  int64_t shim_id = -1;
+  StreamHandle handle = nullptr;
+  if (aoti_torch_get_current_stream(static_cast<int32_t>(device_index),
+                                    &handle) == 0 &&
+      handle != nullptr) {
+    if (aoti_torch_stream_id(handle, &shim_id) != 0) {
+      shim_id = -2;
+    }
+    aoti_torch_delete_stream(handle);
+  }
   int64_t stream_id = 0;
   try {
     auto stream = torch::stable::accelerator::getCurrentStream(
@@ -330,7 +335,7 @@ void boxed_stream_probe(StableIValue* stack, uint64_t num_inputs,
   } catch (...) {
     stream_id = -1;
   }
-  stack[0] = from(raw_value);
+  stack[0] = from(shim_id);
   stack[1] = from(stream_id);
 }
 

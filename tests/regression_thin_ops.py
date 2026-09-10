@@ -9,6 +9,7 @@ tensor 的逐元素差为 0（同一 OPP kernel，期望 bitwise 相同）。hos
 """
 from __future__ import annotations
 
+import itertools
 import json
 import time
 
@@ -312,23 +313,92 @@ def scenario_conv1d_bwd_bnsd():
                   _thin.npu_causal_conv1d_bwd(**kw))
 
 
+def _kda_fwd_tensors(layout, dt, *, B=1, T=128, H=4, HV=4, K=128, V=128):
+    """Build layout-native q/k/v/g/beta for npu_chunk_kda_fwd."""
+
+    def rnd(*shape, dtype=dt, scale=5e-2):
+        return torch.randn(*shape, dtype=dtype, device="npu") * scale
+
+    if layout == "TND":
+        q, k = rnd(T, H, K), rnd(T, H, K)
+        v = rnd(T, HV, V)
+        g = rnd(T, HV, K, dtype=torch.float32, scale=1.0)
+        beta = rnd(T, HV)
+    elif layout == "NTD":
+        q, k = rnd(H, T, K), rnd(H, T, K)
+        v = rnd(HV, T, V)
+        g = rnd(HV, T, K, dtype=torch.float32, scale=1.0)
+        beta = rnd(HV, T)
+    elif layout == "BSND":
+        q, k = rnd(B, T, H, K), rnd(B, T, H, K)
+        v = rnd(B, T, HV, V)
+        g = rnd(B, T, HV, K, dtype=torch.float32, scale=1.0)
+        beta = rnd(B, T, HV)
+    else:  # BNSD
+        q, k = rnd(B, H, T, K), rnd(B, H, T, K)
+        v = rnd(B, HV, T, V)
+        g = rnd(B, HV, T, K, dtype=torch.float32, scale=1.0)
+        beta = rnd(B, HV, T)
+    return q, k, v, g, beta
+
+
 def scenario_chunk_kda_fwd():
-    B, T, H, HV, K, V, cs = 1, 128, 4, 4, 128, 128, 64
-    dt = torch.bfloat16
-    q = torch.randn(B, T, H, K, dtype=dt, device="npu") * 5e-2
-    k = torch.randn(B, T, H, K, dtype=dt, device="npu") * 5e-2
-    v = torch.randn(B, T, HV, V, dtype=dt, device="npu") * 5e-2
-    g = torch.randn(B, T, HV, K, dtype=torch.float32, device="npu")
-    beta = torch.randn(B, T, HV, dtype=dt, device="npu")
-    A_log = torch.randn(HV, dtype=torch.float32, device="npu") * 0.1
-    dtb = torch.randn(HV * K, dtype=torch.float32, device="npu") * 0.5 - 3.0
-    torch.npu.synchronize()
-    kw = dict(layout="BSND", chunk_size=cs, scale=K ** -0.5, safe_gate=True,
-              use_gate_in_kernel=True, A_log=A_log, dt_bias=dtb,
-              disable_recompute=True)
-    assert_parity("chunk_kda_fwd(dense BSND)",
-                  ct.npu_chunk_kda_fwd(q, k, v, g, beta, **kw),
-                  _thin.npu_chunk_kda_fwd(q, k, v, g, beta, **kw))
+    """kda_fwd 全域名（#491）：4 layout x dense/varlen x flag 矩阵 parity。
+
+    合法域由 ctypes 参考实现界定；thin 只有在每个组合的逐输出 diff 都为 0、
+    且 None 掩码与返回元组顺序都一致时才算覆盖（见 op_policy_check.py）。
+    """
+    H, HV, K, V = 4, 4, 128, 128
+    layouts = ("BSND", "BNSD", "TND", "NTD")
+    flags = ("output_final_state", "disable_recompute",
+             "return_intermediate_states", "use_gate_in_kernel")
+    combos = [dict(zip(flags, c))
+              for c in itertools.product((False, True), repeat=len(flags))]
+    total = 0
+    for layout in layouts:
+        for varlen in (False, True):
+            for combo in combos:
+                q, k, v, g, beta = _kda_fwd_tensors(layout, torch.bfloat16)
+                cu = [0, 64, 128] if varlen else None
+                seq_num = len(cu) - 1 if cu else 1
+                svfs = ((False, True) if combo["output_final_state"]
+                        else (False,))
+                for svf in svfs:
+                    kw = dict(layout=layout, chunk_size=64, scale=K ** -0.5,
+                              cu_seqlens=cu, state_v_first=svf,
+                              output_final_state=combo["output_final_state"],
+                              disable_recompute=combo["disable_recompute"],
+                              return_intermediate_states=combo[
+                                  "return_intermediate_states"],
+                              use_gate_in_kernel=combo["use_gate_in_kernel"])
+                    if combo["output_final_state"]:
+                        # K == V here, so state_v_first only reorders equal dims.
+                        tail = (HV, V, K) if svf else (HV, K, V)
+                        kw["initial_state"] = (
+                            torch.randn((seq_num,) + tail, dtype=torch.float32,
+                                        device="npu") * 1e-2)
+                    if combo["use_gate_in_kernel"]:
+                        kw["A_log"] = (
+                            torch.randn(HV, dtype=torch.float32, device="npu")
+                            * 0.1)
+                        kw["dt_bias"] = (
+                            torch.randn(HV * K, dtype=torch.float32,
+                                        device="npu") * 0.5 - 3.0)
+                        kw["safe_gate"] = True
+                        kw["lower_bound"] = -1.0
+                    tag = (f"chunk_kda_fwd({layout} varlen={int(varlen)} "
+                           f"svf={int(svf)} out="
+                           f"{int(combo['output_final_state'])} dis="
+                           f"{int(combo['disable_recompute'])} ret="
+                           f"{int(combo['return_intermediate_states'])} use="
+                           f"{int(combo['use_gate_in_kernel'])})")
+                    torch.npu.synchronize()
+                    assert_parity(tag,
+                                  ct.npu_chunk_kda_fwd(q, k, v, g, beta, **kw),
+                                  _thin.npu_chunk_kda_fwd(q, k, v, g, beta,
+                                                          **kw))
+                    total += 1
+    print(f"PASS chunk_kda_fwd full-domain matrix ({total} combinations)")
 
 
 def scenario_chunk_kda_bwd_intra():

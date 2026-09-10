@@ -74,7 +74,10 @@ def header_kinds(params: list[str]) -> list[str]:
 
 
 def spec_kinds(spec: dict) -> list[str]:
-    return [arg["kind"] for arg in spec["args"]]
+    # ``cpp_only`` args are launcher-only parameters: they drive conditional
+    # output allocation in C++ and must not reach the aclnn prototype. Skip
+    # them so this check mirrors op_spec_codegen's ABI construction exactly.
+    return [arg["kind"] for arg in spec["args"] if not arg.get("cpp_only")]
 
 
 def normalize(kinds: list[str]) -> list[str]:

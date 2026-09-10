@@ -1,5 +1,9 @@
 # Thin Launcher 发布矩阵说明
 
+> 面向 PyPI 公网分发的完整差异对比（与 ctypes 版 wheel 的 tag/体积/依赖/
+> 打包矩阵差异，以及 SOC 维度的发布路线）见
+> [pypi-wheel-vs-ctypes.md](pypi-wheel-vs-ctypes.md)。
+
 ## 1. 为什么 wheel 不再是 `py3-none-any`
 
 开启 thin 薄层后，`fla_npu._C_thin` 是编译进 wheel 的原生扩展

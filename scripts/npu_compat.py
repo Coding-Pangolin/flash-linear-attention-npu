@@ -3,7 +3,8 @@
 Single source of truth shared by:
 - scripts/check_npu_env.py (build/runtime preflight)
 - the PyPI import guard embedded into tiered wheels at build time
-  (generated torch_custom/fla_npu/fla_npu/_compat.py; minimum-version tables)
+  (generated torch_custom/fla_npu/fla_npu/_compat.py; the guard only emits
+  advisory RuntimeWarnings for below-minimum versions and never blocks import)
 
 Keep the public promise aligned with the README: CANN >= 8.5.2, torch >= 2.6,
 torch_npu >= TORCH_NPU_GDN_FIX_MINIMUMS[torch], triton-ascend >= 3.2.1 on CANN

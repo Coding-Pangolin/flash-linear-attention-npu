@@ -13,11 +13,12 @@ Notes:
 - Version tables mirror scripts/npu_compat.py through the build-generated
   ``_compat.py`` (single source of truth in the repo).
 - Version comparison is dependency-free (numeric tuple compare).
-- Only minimum-version gates run at import time. The release-validated matrix
-  (VALIDATED_COMBOS) is intentionally NOT enforced here: an environment above
-  the documented minimums is usable even when it was not part of the release
-  test matrix. That matrix stays informational (scripts/check_npu_env.py /
-  README) so import never warns about an untested-but-supported combination.
+- Advisory only: every check emits a RuntimeWarning and import continues, so
+  installing a tiered wheel never blocks an environment that used to import
+  (this module adds no new hard failures versus legacy/source installs).
+- The release-validated matrix (VALIDATED_COMBOS) is NOT enforced here either;
+  an environment above the documented minimums is usable even when it was not
+  part of the release test matrix (see scripts/check_npu_env.py / README).
 """
 
 from __future__ import annotations
@@ -29,10 +30,6 @@ import re
 import warnings
 
 _PKG_DIR = pathlib.Path(__file__).resolve().parent
-
-
-class GuardError(RuntimeError):
-    """Raised when the installed wheel does not match the running environment."""
 
 
 _PRERELEASE_ORDER = {"dev": 0, "a": 1, "b": 2, "rc": 3}
@@ -136,9 +133,12 @@ def _check_versions(compat: dict) -> None:
 
     cann = detect_cann_version()
     if cann and _num(cann) < _num(min_cann):
-        raise GuardError(
-            f"fla_npu requires CANN >= {min_cann}, detected {cann}. Upgrade the "
-            "CANN toolkit (see the README install guide)."
+        warnings.warn(
+            f"fla_npu: detected CANN {cann}, below the recommended minimum "
+            f"{min_cann}; import continues, but operators may fail. See the "
+            "README install guide.",
+            RuntimeWarning,
+            stacklevel=2,
         )
 
     torch_version = _dist_version("torch")
@@ -146,9 +146,12 @@ def _check_versions(compat: dict) -> None:
         return  # torch not installed yet; OPP import alone stays torch-free
     torch_nums = _num(torch_version)
     if torch_nums < _num(min_torch):
-        raise GuardError(
-            f"fla_npu requires torch >= {min_torch}, detected {torch_version}. "
-            "Install a supported torch/torch_npu combination first."
+        warnings.warn(
+            f"fla_npu: detected torch {torch_version}, below the recommended "
+            f"minimum {min_torch}; import continues, but operators may fail. "
+            "See the README for a supported torch/torch_npu combination.",
+            RuntimeWarning,
+            stacklevel=2,
         )
 
     torch_npu_version = _dist_version("torch-npu")
@@ -156,18 +159,23 @@ def _check_versions(compat: dict) -> None:
         key = ".".join(str(part) for part in torch_nums[:3])
         minimum = table.get(key)
         if minimum and _num(torch_npu_version) < _num(minimum):
-            raise GuardError(
-                f"torch_npu {torch_npu_version} is below the minimum "
-                f"{minimum} required for torch {torch_version} (GDN fixes). "
-                "See the README for the supported version matrix."
+            warnings.warn(
+                f"fla_npu: detected torch_npu {torch_npu_version}, below the "
+                f"recommended minimum {minimum} for torch {torch_version} "
+                "(missing GDN fixes); import continues, but those operators "
+                "may fail. See the README for the supported version matrix.",
+                RuntimeWarning,
+                stacklevel=2,
             )
 
 
 def run_guards() -> None:
-    """Entry point called on ``import fla_npu`` before OPP loading."""
+    """Entry point called on ``import fla_npu`` before OPP loading.
+
+    Never raises: version problems are reported as RuntimeWarnings so the
+    import path stays compatible with packages that skipped these checks.
+    """
     try:
         _check_versions(_compat())
-    except GuardError:
-        raise
     except Exception as exc:
         warnings.warn(f"fla_npu version guard skipped: {exc}", RuntimeWarning)

@@ -2815,6 +2815,9 @@ using npu_chunk_gated_delta_rule_fwd_GetWorkspaceFn = int (*)(
     bool,
     bool,
     bool,
+    bool,
+    bool,
+    bool,
     const aclTensor*,
     const aclTensor*,
     const aclTensor*,
@@ -2847,17 +2850,32 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd(
     bool use_qk_l2norm_in_kernel,
     bool allow_neg_eigval,
     bool state_v_first,
+    bool output_final_state,
+    bool disable_recompute,
+    bool return_intermediate_states,
     uint64_t stream) {
   std::vector<at::Tensor> outputs;
-  outputs.push_back(at::empty({q.size(0), q.size(1), v.size(2), v.size(3)}, q.options()));
+  outputs.push_back(at::empty({q.size(0), q.size(2), v.size(1), v.size(3)}, q.options()));
+  if (output_final_state) {
+    outputs.push_back(at::empty({q.size(0), v.size(1), (state_v_first ? v.size(3) : q.size(3)), (state_v_first ? q.size(3) : v.size(3))}, initial_state.has_value() && initial_state->defined() ? initial_state->options() : q.options().dtype(at::kFloat)));
+  } else {
+    outputs.push_back(at::Tensor());
+  }
   outputs.push_back(at::Tensor());
   outputs.push_back(at::Tensor());
   outputs.push_back(at::Tensor());
   outputs.push_back(at::Tensor());
   outputs.push_back(at::Tensor());
-  outputs.push_back(at::Tensor());
-  outputs.push_back(at::empty({q.size(0), q.size(1), v.size(2)}, q.options().dtype(at::kFloat)));
-  outputs.push_back(at::empty({q.size(0), v.size(2), q.size(1), chunk_size}, q.options()));
+  if (!disable_recompute) {
+    outputs.push_back(at::empty({q.size(0), q.size(2), v.size(1)}, q.options().dtype(at::kFloat)));
+  } else {
+    outputs.push_back(at::Tensor());
+  }
+  if (!disable_recompute) {
+    outputs.push_back(at::empty({q.size(0), v.size(1), q.size(2), chunk_size}, q.options()));
+  } else {
+    outputs.push_back(at::Tensor());
+  }
   outputs.push_back(at::Tensor());
 
   std::vector<std::unique_ptr<AclTensorView>> views;

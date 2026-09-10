@@ -617,14 +617,33 @@ def npu_chunk_gated_delta_rule_bwd_finalize(q, k, v, v_new, do, du, g, beta, h, 
     return tuple(result)
 
 
-def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, a_log=None, dt_bias=None, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BNSD", scale=None, chunk_size=64, use_exp2=False, use_qk_l2norm_in_kernel=False, allow_neg_eigval=False, state_v_first=False):
+def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
+    ext = _extension()
+    layout = str(layout)
+    if not (layout in ("bsnd", "bnsd") and cu_seqlens is None and chunk_indices is None):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_solve_tri(x, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, layout=layout)
+    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
+    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    return ext.npu_solve_tri(
+        x,
+        cu_seqlens,
+        chunk_indices,
+        str(layout),
+        _current_stream_ptr(),
+    )
+
+
+def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, a_log=None, dt_bias=None, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BNSD", scale=None, chunk_size=64, use_exp2=False, use_qk_l2norm_in_kernel=False, allow_neg_eigval=False, state_v_first=False, output_final_state=False, disable_recompute=False, return_intermediate_states=False, use_gate_in_kernel=False, use_beta_sigmoid_in_kernel=False):
     ext = _extension()
     layout = str(layout)
     if scale is None:
         scale = float(q.shape[3]) ** -0.5
-    if not (layout == "BSND" and cu_seqlens is None and chunk_indices is None and not bool(output_final_state) and bool(output_a) and not bool(use_beta_sigmoid_in_kernel) and not bool(allow_neg_eigval) and not bool(use_gate_in_kernel) and initial_state is None and int(chunk_size) == 64):
+    if not (layout == "BNSD" and cu_seqlens is None and chunk_indices is None and not bool(use_exp2) and not bool(use_qk_l2norm_in_kernel) and not bool(use_gate_in_kernel) and not bool(use_beta_sigmoid_in_kernel) and not bool(allow_neg_eigval) and not bool(state_v_first) and not bool(return_intermediate_states) and int(chunk_size) in (64, 128)):
         from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
-        return _ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, initial_state=initial_state, output_final_state=output_final_state, chunk_size=chunk_size, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, scale=scale, use_exp2=use_exp2, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, output_a=output_a, state_v_first=state_v_first, layout=layout)
+        return _ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, initial_state=initial_state, output_final_state=output_final_state, chunk_size=chunk_size, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, scale=scale, use_exp2=use_exp2, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, disable_recompute=disable_recompute, return_intermediate_states=return_intermediate_states, state_v_first=state_v_first, layout=layout)
+    a_log = None
+    dt_bias = None
     cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
     chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
     result = ext.npu_chunk_gated_delta_rule_fwd(
@@ -645,23 +664,19 @@ def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, a_log=None, dt_bias=None
         bool(use_qk_l2norm_in_kernel),
         bool(allow_neg_eigval),
         bool(state_v_first),
+        bool(output_final_state),
+        bool(disable_recompute),
+        bool(return_intermediate_states),
         _current_stream_ptr(),
     )
-    return (result[0], None, result[7], result[8])
-
-
-def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
-    ext = _extension()
-    layout = str(layout)
-    if not (layout in ("bsnd", "bnsd") and cu_seqlens is None and chunk_indices is None):
-        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
-        return _ct.npu_solve_tri(x, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, layout=layout)
-    cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
-    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
-    return ext.npu_solve_tri(
-        x,
-        cu_seqlens,
-        chunk_indices,
-        str(layout),
-        _current_stream_ptr(),
-    )
+    out = [result[0]]
+    if output_final_state:
+        out.append(result[1])
+    else:
+        out.append(None)
+    if not disable_recompute:
+        out.append(result[7])
+        out.append(result[8])
+    if return_intermediate_states:
+        out.append(result[9])
+    return tuple(out)

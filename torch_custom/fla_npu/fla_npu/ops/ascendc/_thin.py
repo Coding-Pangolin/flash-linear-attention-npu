@@ -639,10 +639,14 @@ def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, a_log=None, dt_bias=None
     layout = str(layout)
     if scale is None:
         scale = float(q.shape[3]) ** -0.5
-    if not (layout == "BNSD" and cu_seqlens is None and chunk_indices is None and not bool(use_exp2) and not bool(use_qk_l2norm_in_kernel) and not bool(use_gate_in_kernel) and not bool(use_beta_sigmoid_in_kernel) and not bool(allow_neg_eigval) and not bool(state_v_first) and not bool(return_intermediate_states) and int(chunk_size) in (64, 128)):
-        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
-        return _ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, initial_state=initial_state, output_final_state=output_final_state, chunk_size=chunk_size, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, scale=scale, use_exp2=use_exp2, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, disable_recompute=disable_recompute, return_intermediate_states=return_intermediate_states, state_v_first=state_v_first, layout=layout)
-    a_log = None
+    if cu_seqlens is not None and chunk_indices is None:
+        chunk_indices = []
+        for _seq in range(len(cu_seqlens) - 1):
+            _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]
+            for _c in range((_len + int(chunk_size) - 1) // int(chunk_size)):
+                chunk_indices.extend((_seq, _c))
+    if not bool(use_gate_in_kernel):
+        a_log = None
     dt_bias = None
     cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
     chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]

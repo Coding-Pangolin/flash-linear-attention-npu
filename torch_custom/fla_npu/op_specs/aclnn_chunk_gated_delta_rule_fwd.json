@@ -3,37 +3,54 @@
   "python_name": "npu_chunk_gated_delta_rule_fwd",
   "nd_only": true,
   "mutated": [],
+  "helpers": "inline bool gdn_fwd_head_first(const std::string& layout) {\n  return layout != \"BSND\" && layout != \"TND\";\n}\ninline int64_t gdn_fwd_tokens(const at::Tensor& q, const std::string& layout) {\n  return gdn_fwd_head_first(layout) ? q.size(2) : q.size(1);\n}\ninline int64_t gdn_fwd_kheads(const at::Tensor& q, const std::string& layout) {\n  return gdn_fwd_head_first(layout) ? q.size(1) : q.size(2);\n}\ninline int64_t gdn_fwd_vheads(const at::Tensor& v, const std::string& layout) {\n  return gdn_fwd_head_first(layout) ? v.size(1) : v.size(2);\n}\ninline int64_t gdn_fwd_seq_num(const std::vector<int64_t>& cu_seqlens, int64_t batch) {\n  return cu_seqlens.empty() ? batch : static_cast<int64_t>(cu_seqlens.size()) - 1;\n}\ninline int64_t gdn_fwd_chunks(const std::vector<int64_t>& cu_seqlens, const std::vector<int64_t>& chunk_indices, int64_t chunk_size, int64_t tokens) {\n  if (!chunk_indices.empty()) {\n    return static_cast<int64_t>(chunk_indices.size()) / 2;\n  }\n  if (!cu_seqlens.empty()) {\n    int64_t chunks = 0;\n    for (size_t i = 0; i + 1 < cu_seqlens.size(); ++i) {\n      const int64_t len = cu_seqlens[i + 1] - cu_seqlens[i];\n      chunks += (len + chunk_size - 1) / chunk_size;\n    }\n    return chunks;\n  }\n  return (tokens + chunk_size - 1) / chunk_size;\n}",
   "outputs": [
     {
       "arg": "o",
-      "alloc": "at::empty({q.size(0), q.size(2), v.size(1), v.size(3)}, q.options())"
+      "alloc": "at::empty({q.size(0), gdn_fwd_tokens(q, layout), gdn_fwd_vheads(v, layout), v.size(3)}, v.options())"
     },
     {
       "arg": "final_state",
       "when": "output_final_state",
-      "alloc": "at::empty({q.size(0), v.size(1), (state_v_first ? v.size(3) : q.size(3)), (state_v_first ? q.size(3) : v.size(3))}, initial_state.has_value() && initial_state->defined() ? initial_state->options() : q.options().dtype(at::kFloat))"
+      "alloc": "at::empty({gdn_fwd_seq_num(cu_seqlens, q.size(0)), gdn_fwd_vheads(v, layout), (state_v_first ? v.size(3) : q.size(3)), (state_v_first ? q.size(3) : v.size(3))}, initial_state.has_value() && initial_state->defined() ? initial_state->options() : q.options().dtype(at::kFloat))"
     },
-    {"arg": "q_hat", "alloc": "at::Tensor()"},
-    {"arg": "k_hat", "alloc": "at::Tensor()"},
-    {"arg": "q_rstd", "alloc": "at::Tensor()"},
-    {"arg": "k_rstd", "alloc": "at::Tensor()"},
-    {"arg": "beta_eff", "alloc": "at::Tensor()"},
+    {"arg": "q_hat", "when": "use_qk_l2norm_in_kernel", "alloc": "at::empty_like(q)"},
+    {"arg": "k_hat", "when": "use_qk_l2norm_in_kernel", "alloc": "at::empty_like(k)"},
+    {
+      "arg": "q_rstd",
+      "when": "use_qk_l2norm_in_kernel",
+      "alloc": "at::empty({q.size(0), gdn_fwd_kheads(q, layout), gdn_fwd_tokens(q, layout)}, q.options().dtype(at::kFloat))"
+    },
+    {
+      "arg": "k_rstd",
+      "when": "use_qk_l2norm_in_kernel",
+      "alloc": "at::empty({k.size(0), gdn_fwd_kheads(k, layout), gdn_fwd_tokens(k, layout)}, k.options().dtype(at::kFloat))"
+    },
+    {
+      "arg": "beta_eff",
+      "when": "use_beta_sigmoid_in_kernel",
+      "alloc": "at::empty({beta.size(0), gdn_fwd_tokens(q, layout), gdn_fwd_vheads(v, layout)}, beta.options().dtype(at::kFloat))"
+    },
     {
       "arg": "g_cumsum",
       "when": "!disable_recompute",
-      "alloc": "at::empty({q.size(0), q.size(2), v.size(1)}, q.options().dtype(at::kFloat))"
+      "alloc": "at::empty({q.size(0), gdn_fwd_tokens(q, layout), gdn_fwd_vheads(v, layout)}, g.options().dtype(at::kFloat))"
     },
     {
       "arg": "A",
       "when": "!disable_recompute",
-      "alloc": "at::empty({q.size(0), v.size(1), q.size(2), chunk_size}, q.options())"
+      "alloc": "at::empty({q.size(0), gdn_fwd_vheads(v, layout), gdn_fwd_tokens(q, layout), chunk_size}, q.options())"
     },
-    {"arg": "h", "alloc": "at::Tensor()"}
+    {
+      "arg": "h",
+      "when": "return_intermediate_states",
+      "alloc": "at::empty({q.size(0), gdn_fwd_vheads(v, layout), gdn_fwd_chunks(cu_seqlens, chunk_indices, chunk_size, gdn_fwd_tokens(q, layout)), (state_v_first ? v.size(3) : q.size(3)), (state_v_first ? q.size(3) : v.size(3))}, q.options())"
+    }
   ],
   "python": {
     "positional": ["q", "k", "v", "g", "beta"],
     "ignored": ["use_gate_in_kernel", "use_beta_sigmoid_in_kernel"],
-    "pre": "layout = str(layout)\nif scale is None:\n    scale = float(q.shape[3]) ** -0.5\nif not (layout == \"BNSD\" and cu_seqlens is None and chunk_indices is None and not bool(use_exp2) and not bool(use_qk_l2norm_in_kernel) and not bool(use_gate_in_kernel) and not bool(use_beta_sigmoid_in_kernel) and not bool(allow_neg_eigval) and not bool(state_v_first) and not bool(return_intermediate_states) and int(chunk_size) in (64, 128)):\n    from fla_npu.ops.ascendc import _aclnn_ctypes as _ct\n    return _ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, initial_state=initial_state, output_final_state=output_final_state, chunk_size=chunk_size, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, scale=scale, use_exp2=use_exp2, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, disable_recompute=disable_recompute, return_intermediate_states=return_intermediate_states, state_v_first=state_v_first, layout=layout)\na_log = None\ndt_bias = None",
+    "pre": "layout = str(layout)\nif scale is None:\n    scale = float(q.shape[3]) ** -0.5\nif cu_seqlens is not None and chunk_indices is None:\n    chunk_indices = []\n    for _seq in range(len(cu_seqlens) - 1):\n        _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]\n        for _c in range((_len + int(chunk_size) - 1) // int(chunk_size)):\n            chunk_indices.extend((_seq, _c))\nif not bool(use_gate_in_kernel):\n    a_log = None\ndt_bias = None",
     "return_code": "out = [result[0]]\nif output_final_state:\n    out.append(result[1])\nelse:\n    out.append(None)\nif not disable_recompute:\n    out.append(result[7])\n    out.append(result[8])\nif return_intermediate_states:\n    out.append(result[9])\nreturn tuple(out)",
     "defaults": {
       "a_log": "None",

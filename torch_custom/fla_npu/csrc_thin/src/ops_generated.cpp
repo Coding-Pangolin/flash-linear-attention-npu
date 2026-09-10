@@ -2829,6 +2829,36 @@ using npu_chunk_gated_delta_rule_fwd_GetWorkspaceFn = int (*)(
 using LaunchFn = int (*)(void*, uint64_t, aclOpExecutor*, void*);
 }  // namespace
 
+inline bool gdn_fwd_head_first(const std::string& layout) {
+  return layout != "BSND" && layout != "TND";
+}
+inline int64_t gdn_fwd_tokens(const at::Tensor& q, const std::string& layout) {
+  return gdn_fwd_head_first(layout) ? q.size(2) : q.size(1);
+}
+inline int64_t gdn_fwd_kheads(const at::Tensor& q, const std::string& layout) {
+  return gdn_fwd_head_first(layout) ? q.size(1) : q.size(2);
+}
+inline int64_t gdn_fwd_vheads(const at::Tensor& v, const std::string& layout) {
+  return gdn_fwd_head_first(layout) ? v.size(1) : v.size(2);
+}
+inline int64_t gdn_fwd_seq_num(const std::vector<int64_t>& cu_seqlens, int64_t batch) {
+  return cu_seqlens.empty() ? batch : static_cast<int64_t>(cu_seqlens.size()) - 1;
+}
+inline int64_t gdn_fwd_chunks(const std::vector<int64_t>& cu_seqlens, const std::vector<int64_t>& chunk_indices, int64_t chunk_size, int64_t tokens) {
+  if (!chunk_indices.empty()) {
+    return static_cast<int64_t>(chunk_indices.size()) / 2;
+  }
+  if (!cu_seqlens.empty()) {
+    int64_t chunks = 0;
+    for (size_t i = 0; i + 1 < cu_seqlens.size(); ++i) {
+      const int64_t len = cu_seqlens[i + 1] - cu_seqlens[i];
+      chunks += (len + chunk_size - 1) / chunk_size;
+    }
+    return chunks;
+  }
+  return (tokens + chunk_size - 1) / chunk_size;
+}
+
 std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd(
     const at::Tensor& q,
     const at::Tensor& k,
@@ -2852,28 +2882,52 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd(
     bool return_intermediate_states,
     uint64_t stream) {
   std::vector<at::Tensor> outputs;
-  outputs.push_back(at::empty({q.size(0), q.size(2), v.size(1), v.size(3)}, q.options()));
+  outputs.push_back(at::empty({q.size(0), gdn_fwd_tokens(q, layout), gdn_fwd_vheads(v, layout), v.size(3)}, v.options()));
   if (output_final_state) {
-    outputs.push_back(at::empty({q.size(0), v.size(1), (state_v_first ? v.size(3) : q.size(3)), (state_v_first ? q.size(3) : v.size(3))}, initial_state.has_value() && initial_state->defined() ? initial_state->options() : q.options().dtype(at::kFloat)));
+    outputs.push_back(at::empty({gdn_fwd_seq_num(cu_seqlens, q.size(0)), gdn_fwd_vheads(v, layout), (state_v_first ? v.size(3) : q.size(3)), (state_v_first ? q.size(3) : v.size(3))}, initial_state.has_value() && initial_state->defined() ? initial_state->options() : q.options().dtype(at::kFloat)));
   } else {
     outputs.push_back(at::Tensor());
   }
-  outputs.push_back(at::Tensor());
-  outputs.push_back(at::Tensor());
-  outputs.push_back(at::Tensor());
-  outputs.push_back(at::Tensor());
-  outputs.push_back(at::Tensor());
+  if (use_qk_l2norm_in_kernel) {
+    outputs.push_back(at::empty_like(q));
+  } else {
+    outputs.push_back(at::Tensor());
+  }
+  if (use_qk_l2norm_in_kernel) {
+    outputs.push_back(at::empty_like(k));
+  } else {
+    outputs.push_back(at::Tensor());
+  }
+  if (use_qk_l2norm_in_kernel) {
+    outputs.push_back(at::empty({q.size(0), gdn_fwd_kheads(q, layout), gdn_fwd_tokens(q, layout)}, q.options().dtype(at::kFloat)));
+  } else {
+    outputs.push_back(at::Tensor());
+  }
+  if (use_qk_l2norm_in_kernel) {
+    outputs.push_back(at::empty({k.size(0), gdn_fwd_kheads(k, layout), gdn_fwd_tokens(k, layout)}, k.options().dtype(at::kFloat)));
+  } else {
+    outputs.push_back(at::Tensor());
+  }
+  if (use_beta_sigmoid_in_kernel) {
+    outputs.push_back(at::empty({beta.size(0), gdn_fwd_tokens(q, layout), gdn_fwd_vheads(v, layout)}, beta.options().dtype(at::kFloat)));
+  } else {
+    outputs.push_back(at::Tensor());
+  }
   if (!disable_recompute) {
-    outputs.push_back(at::empty({q.size(0), q.size(2), v.size(1)}, q.options().dtype(at::kFloat)));
+    outputs.push_back(at::empty({q.size(0), gdn_fwd_tokens(q, layout), gdn_fwd_vheads(v, layout)}, g.options().dtype(at::kFloat)));
   } else {
     outputs.push_back(at::Tensor());
   }
   if (!disable_recompute) {
-    outputs.push_back(at::empty({q.size(0), v.size(1), q.size(2), chunk_size}, q.options()));
+    outputs.push_back(at::empty({q.size(0), gdn_fwd_vheads(v, layout), gdn_fwd_tokens(q, layout), chunk_size}, q.options()));
   } else {
     outputs.push_back(at::Tensor());
   }
-  outputs.push_back(at::Tensor());
+  if (return_intermediate_states) {
+    outputs.push_back(at::empty({q.size(0), gdn_fwd_vheads(v, layout), gdn_fwd_chunks(cu_seqlens, chunk_indices, chunk_size, gdn_fwd_tokens(q, layout)), (state_v_first ? v.size(3) : q.size(3)), (state_v_first ? q.size(3) : v.size(3))}, q.options()));
+  } else {
+    outputs.push_back(at::Tensor());
+  }
 
   std::vector<std::unique_ptr<AclTensorView>> views;
   views.reserve(8);

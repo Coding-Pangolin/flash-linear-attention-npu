@@ -1,15 +1,20 @@
-"""Multi-stream regression for the thin launcher stream cache.
+"""Multi-stream / multi-thread regression for the thin launcher stream lookup.
 
-The thin Python adapter caches the current stream pointer and tracks
-``torch.npu.set_stream``. These tests make sure that:
-1. switching streams invalidates/updates the cached pointer;
-2. after a switch the thin op really lands on the *current* stream
+The thin Python adapter resolves the current stream on every call through
+``torch_npu._C._npu_getCurrentRawStream`` (no process-global cache, so one
+worker thread can never leak its stream into another).  These tests make sure:
+1. the resolved pointer always follows ``torch.npu.set_stream`` / ``torch.npu.stream``;
+2. there is no process-global cached stream left behind;
+3. after a switch the thin op really lands on the *current* stream
    (verified with stream-local events: the op must sit between the markers);
-3. results are bit-identical to the ctypes golden path on every stream;
-4. interleaving default -> A -> default -> B -> default stays correct.
+4. results are bit-identical to the ctypes golden path on every stream;
+5. interleaving default -> A -> default -> B -> default stays correct;
+6. several threads with independent streams (vLLM-style workers) each enqueue
+   on their own stream and keep bit-identical results.
 """
 from __future__ import annotations
 
+import threading
 import unittest
 
 import pytest
@@ -121,16 +126,24 @@ class TestThinStreamInterleaving(unittest.TestCase):
         torch.npu.set_stream(self.default)
         torch.npu.synchronize()
 
-    def test_cache_tracks_set_stream(self):
+    def test_current_stream_ptr_follows_set_stream(self):
         from fla_npu.ops.ascendc import _thin
 
-        _thin._ensure_stream_tracking()
-        torch.npu.set_stream(self.s1)
-        self.assertEqual(_thin._CURRENT_STREAM_PTR, int(self.s1.npu_stream))
-        torch.npu.set_stream(self.default)
-        self.assertEqual(_thin._CURRENT_STREAM_PTR, int(self.default.npu_stream))
-        torch.npu.set_stream(self.s2)
-        self.assertEqual(_thin._CURRENT_STREAM_PTR, int(self.s2.npu_stream))
+        for stream in (self.s1, self.default, self.s2, self.default):
+            with self.subTest(stream=stream):
+                torch.npu.set_stream(stream)
+                self.assertEqual(
+                    _thin._current_stream_ptr(),
+                    int(torch.npu.current_stream().npu_stream))
+
+    def test_no_process_global_stream_cache(self):
+        from fla_npu.ops.ascendc import _thin
+
+        # Regression guard for the vLLM crash: a process-global cached stream
+        # pointer leaks one thread's stream into another.
+        self.assertFalse(hasattr(_thin, "_CURRENT_STREAM_PTR"))
+        self.assertFalse(hasattr(_thin, "_ensure_stream_tracking"))
+        self.assertFalse(hasattr(_thin, "_STREAM_PATCHED"))
 
     def _assert_op_on_stream(self, stream):
         torch.npu.set_stream(stream)
@@ -184,6 +197,58 @@ class TestThinStreamInterleaving(unittest.TestCase):
                 self.assertEqual(
                     float((state.float() - self.state_g.float()).abs().max().item()),
                     0.0)
+
+    def test_threads_use_their_own_streams(self):
+        """vLLM-style workers: N threads, N streams, no cross-thread leak."""
+        from fla_npu.ops.ascendc import _thin
+
+        n_threads = 4
+        barrier = threading.Barrier(n_threads)
+        errors = []
+
+        def worker(index):
+            try:
+                stream = torch.npu.Stream()
+                with torch.npu.stream(stream):
+                    # Every worker switches to its own stream before any
+                    # launcher call; the old global cache kept whichever
+                    # stream was written last and misrouted all the others.
+                    barrier.wait(timeout=60)
+                    for _ in range(3):
+                        self.assertEqual(
+                            _thin._current_stream_ptr(),
+                            int(torch.npu.current_stream().npu_stream))
+                        state, _ = self.inputs["make_state"]()
+                        start = torch.npu.Event(enable_timing=True)
+                        end = torch.npu.Event(enable_timing=True)
+                        start.record()
+                        out = _call_public(self.inputs, state)
+                        end.record()
+                        torch.npu.synchronize()
+                        elapsed = start.elapsed_time(end)
+                        # A misplaced enqueue leaves nothing between the two
+                        # markers recorded on this thread's own stream.
+                        if not elapsed > 0.01:
+                            raise AssertionError(
+                                f"thread {index}: op did not land on its own "
+                                f"stream (elapsed={elapsed:.4f} ms)")
+                        diff = float(
+                            (out.float() - self.out_g.float()).abs().max().item())
+                        if diff != 0.0:
+                            raise AssertionError(
+                                f"thread {index}: parity diff={diff}")
+            except Exception as exc:  # noqa: BLE001 - reported via errors list
+                errors.append((index, repr(exc)))
+
+        threads = [threading.Thread(target=worker, args=(i,))
+                   for i in range(n_threads)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=180)
+        torch.npu.synchronize()
+        self.assertEqual(errors, [])
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
 
 
 if __name__ == "__main__":

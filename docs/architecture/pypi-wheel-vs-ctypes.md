@@ -184,6 +184,13 @@ wheel 内的 `fla_npu/opp/vendors/fla_npu_transformer`），尚未拆分**：
 4. sdist：thin 的 OPP 需要 CANN 工具链（`build.sh`）才能产出，从 sdist
    源码安装不现实；建议**只发二进制 wheel**，或允许 sdist 走
    `FLA_NPU_BUILD_THIN=0` 编出纯 Python wheel（性能退化）。
+5. **版本与 build tag**：`scripts/fla_npu_artifacts.py` 默认在 `main` 分支上会
+   生成 local version（`26.7.0.dev0+main.<sha>`）并带 SOC build tag
+   （`910b.aarch64` / `950.x86_64`）。**PyPI 不接受 local version**；发布构建
+   必须设 `FLA_NPU_DISABLE_LOCAL_VERSION=1`（同时会去掉 build tag，得到干净的
+   `...-cp311-cp311-linux_aarch64.whl`），SOC 维度改用独立包名或 wheelnext
+   variant 表达。也可用 `FLA_NPU_LOCAL_VERSION` / `FLA_NPU_WHEEL_BUILD_TAG`
+   显式控制。
 
 ### 3.5 为什么 torch_npu 版本不进入编译期约束（但会影响运行期）
 

@@ -3,59 +3,66 @@
   "python_name": "npu_chunk_kda_fwd",
   "nd_only": true,
   "mutated": [],
-  "helpers": "inline int64_t chunk_kda_fwd_chunk_count(const std::vector<int64_t>& cu_seqlens, const std::vector<int64_t>& chunk_indices, int64_t chunk_size, int64_t total_tokens) {\n  if (!chunk_indices.empty()) {\n    return static_cast<int64_t>(chunk_indices.size()) / 2;\n  }\n  if (!cu_seqlens.empty()) {\n    int64_t chunks = 0;\n    for (size_t i = 0; i + 1 < cu_seqlens.size(); ++i) {\n      const int64_t len = cu_seqlens[i + 1] - cu_seqlens[i];\n      chunks += (len + chunk_size - 1) / chunk_size;\n    }\n    return chunks;\n  }\n  return (total_tokens + chunk_size - 1) / chunk_size;\n}",
+  "helpers": "inline bool kda_fwd_rank3(const std::string& layout) {\n  return layout == \"TND\" || layout == \"NTD\";\n}\ninline bool kda_fwd_seq_major(const std::string& layout) {\n  return layout == \"BSND\" || layout == \"TND\";\n}\ninline int64_t kda_fwd_tokens(const at::Tensor& q, const std::string& layout) {\n  if (kda_fwd_rank3(layout)) {\n    return kda_fwd_seq_major(layout) ? q.size(0) : q.size(1);\n  }\n  return kda_fwd_seq_major(layout) ? q.size(1) : q.size(2);\n}\ninline int64_t kda_fwd_vheads(const at::Tensor& v, const std::string& layout) {\n  if (kda_fwd_rank3(layout)) {\n    return kda_fwd_seq_major(layout) ? v.size(1) : v.size(0);\n  }\n  return kda_fwd_seq_major(layout) ? v.size(2) : v.size(1);\n}\ninline int64_t kda_fwd_batch(const at::Tensor& q, const std::string& layout) {\n  return kda_fwd_rank3(layout) ? 1 : q.size(0);\n}\ninline int64_t kda_fwd_kdim(const at::Tensor& q, const std::string& layout) {\n  return kda_fwd_rank3(layout) ? q.size(2) : q.size(3);\n}\ninline int64_t kda_fwd_vdim(const at::Tensor& v, const std::string& layout) {\n  return kda_fwd_rank3(layout) ? v.size(2) : v.size(3);\n}\ninline int64_t kda_fwd_seq_num(const std::vector<int64_t>& cu_seqlens, int64_t batch) {\n  return cu_seqlens.empty() ? batch : static_cast<int64_t>(cu_seqlens.size()) - 1;\n}\ninline int64_t kda_fwd_chunks(const std::vector<int64_t>& cu_seqlens, const std::vector<int64_t>& chunk_indices, int64_t chunk_size, int64_t tokens) {\n  if (!chunk_indices.empty()) {\n    return static_cast<int64_t>(chunk_indices.size()) / 2;\n  }\n  if (!cu_seqlens.empty()) {\n    int64_t chunks = 0;\n    for (size_t i = 0; i + 1 < cu_seqlens.size(); ++i) {\n      const int64_t len = cu_seqlens[i + 1] - cu_seqlens[i];\n      chunks += (len + chunk_size - 1) / chunk_size;\n    }\n    return chunks;\n  }\n  return (tokens + chunk_size - 1) / chunk_size;\n}\ninline std::vector<int64_t> kda_fwd_attn_sizes(const at::Tensor& q, const at::Tensor& v, const std::string& layout) {\n  if (kda_fwd_rank3(layout)) {\n    return {kda_fwd_tokens(q, layout), kda_fwd_vheads(v, layout), kda_fwd_vdim(v, layout)};\n  }\n  return {kda_fwd_batch(q, layout), kda_fwd_tokens(q, layout), kda_fwd_vheads(v, layout), kda_fwd_vdim(v, layout)};\n}\ninline std::vector<int64_t> kda_fwd_khead_sizes(const at::Tensor& q, const at::Tensor& v, const std::string& layout) {\n  if (kda_fwd_rank3(layout)) {\n    return {kda_fwd_vheads(v, layout), kda_fwd_tokens(q, layout), kda_fwd_kdim(q, layout)};\n  }\n  return {kda_fwd_batch(q, layout), kda_fwd_vheads(v, layout), kda_fwd_tokens(q, layout), kda_fwd_kdim(q, layout)};\n}\ninline std::vector<int64_t> kda_fwd_vhead_sizes(const at::Tensor& q, const at::Tensor& v, const std::string& layout) {\n  if (kda_fwd_rank3(layout)) {\n    return {kda_fwd_vheads(v, layout), kda_fwd_tokens(q, layout), kda_fwd_vdim(v, layout)};\n  }\n  return {kda_fwd_batch(q, layout), kda_fwd_vheads(v, layout), kda_fwd_tokens(q, layout), kda_fwd_vdim(v, layout)};\n}\ninline std::vector<int64_t> kda_fwd_matrix_sizes(const at::Tensor& q, const at::Tensor& v, const std::string& layout, int64_t chunk_size) {\n  if (kda_fwd_rank3(layout)) {\n    return {kda_fwd_vheads(v, layout), kda_fwd_tokens(q, layout), chunk_size};\n  }\n  return {kda_fwd_batch(q, layout), kda_fwd_vheads(v, layout), kda_fwd_tokens(q, layout), chunk_size};\n}\ninline std::vector<int64_t> kda_fwd_state_sizes(const at::Tensor& q, const at::Tensor& v, const std::string& layout, const std::vector<int64_t>& cu_seqlens, bool state_v_first) {\n  return {kda_fwd_seq_num(cu_seqlens, kda_fwd_batch(q, layout)), kda_fwd_vheads(v, layout),\n          state_v_first ? kda_fwd_vdim(v, layout) : kda_fwd_kdim(q, layout),\n          state_v_first ? kda_fwd_kdim(q, layout) : kda_fwd_vdim(v, layout)};\n}\ninline std::vector<int64_t> kda_fwd_h_sizes(const at::Tensor& q, const at::Tensor& v, const std::string& layout, const std::vector<int64_t>& cu_seqlens, const std::vector<int64_t>& chunk_indices, int64_t chunk_size, bool state_v_first) {\n  std::vector<int64_t> sizes;\n  if (!kda_fwd_rank3(layout)) {\n    sizes.push_back(kda_fwd_batch(q, layout));\n  }\n  sizes.push_back(kda_fwd_chunks(cu_seqlens, chunk_indices, chunk_size, kda_fwd_tokens(q, layout)));\n  sizes.push_back(kda_fwd_vheads(v, layout));\n  sizes.push_back(state_v_first ? kda_fwd_vdim(v, layout) : kda_fwd_kdim(q, layout));\n  sizes.push_back(state_v_first ? kda_fwd_kdim(q, layout) : kda_fwd_vdim(v, layout));\n  return sizes;\n}",
   "outputs": [
     {
       "arg": "attn_out",
-      "alloc": "at::empty({q.size(0), q.size(1), v.size(2), v.size(3)}, q.options())"
+      "alloc": "at::empty(kda_fwd_attn_sizes(q, v, layout), q.options())"
     },
     {
       "arg": "final_state",
-      "return_when": "output_final_state",
-      "alloc": "at::Tensor()"
+      "when": "output_final_state",
+      "alloc": "at::empty(kda_fwd_state_sizes(q, v, layout, cu_seqlens, state_v_first), q.options().dtype(at::kFloat))"
     },
     {
       "arg": "gk",
-      "alloc": "at::empty({q.size(0), v.size(2), q.size(1), q.size(3)}, q.options().dtype(at::kFloat))"
+      "when": "!use_gate_in_kernel || disable_recompute",
+      "alloc": "at::empty(kda_fwd_khead_sizes(q, v, layout), q.options().dtype(at::kFloat))"
     },
     {
       "arg": "aqk",
-      "alloc": "at::empty({q.size(0), v.size(2), q.size(1), chunk_size}, q.options())"
+      "alloc": "at::empty(kda_fwd_matrix_sizes(q, v, layout, chunk_size), q.options())"
     },
     {
       "arg": "akk",
-      "alloc": "at::empty({q.size(0), v.size(2), q.size(1), chunk_size}, q.options())"
+      "alloc": "at::empty(kda_fwd_matrix_sizes(q, v, layout, chunk_size), q.options())"
     },
     {
       "arg": "w",
-      "alloc": "at::empty({q.size(0), v.size(2), q.size(1), q.size(3)}, q.options())"
+      "when": "disable_recompute",
+      "alloc": "at::empty(kda_fwd_khead_sizes(q, v, layout), q.options())"
     },
     {
       "arg": "u",
-      "alloc": "at::empty({q.size(0), v.size(2), q.size(1), v.size(3)}, q.options())"
+      "when": "disable_recompute",
+      "alloc": "at::empty(kda_fwd_vhead_sizes(q, v, layout), q.options())"
     },
     {
       "arg": "qg",
-      "alloc": "at::empty({q.size(0), v.size(2), q.size(1), q.size(3)}, q.options())"
+      "when": "disable_recompute",
+      "alloc": "at::empty(kda_fwd_khead_sizes(q, v, layout), q.options())"
     },
     {
       "arg": "kg",
-      "alloc": "at::empty({q.size(0), v.size(2), q.size(1), q.size(3)}, q.options())"
+      "when": "disable_recompute",
+      "alloc": "at::empty(kda_fwd_khead_sizes(q, v, layout), q.options())"
     },
     {
       "arg": "v_new",
-      "alloc": "at::empty({q.size(0), v.size(2), q.size(1), v.size(3)}, q.options())"
+      "when": "disable_recompute",
+      "alloc": "at::empty(kda_fwd_vhead_sizes(q, v, layout), q.options())"
     },
     {
       "arg": "h",
-      "alloc": "at::empty({q.size(0), chunk_kda_fwd_chunk_count(cu_seqlens, chunk_indices, chunk_size, q.size(1)), v.size(2), (state_v_first ? v.size(3) : q.size(3)), (state_v_first ? q.size(3) : v.size(3))}, q.options())"
+      "when": "disable_recompute || return_intermediate_states",
+      "alloc": "at::empty(kda_fwd_h_sizes(q, v, layout, cu_seqlens, chunk_indices, chunk_size, state_v_first), q.options())"
     }
   ],
   "python": {
     "positional": ["q", "k", "v", "g", "beta", "scale", "chunk_size"],
-    "ignored": ["output_final_state", "disable_recompute", "return_intermediate_states"],
-    "return_suffix": ["initial_state"],
-    "pre": "layout = str(layout)\nif not (bool(disable_recompute) and not bool(output_final_state) and not bool(return_intermediate_states) and layout == \"BSND\" and cu_seqlens is None and chunk_indices is None):\n    from fla_npu.ops.ascendc import _aclnn_ctypes as _ct\n    return _ct.npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size=chunk_size, layout=layout, initial_state=initial_state, output_final_state=output_final_state, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, safe_gate=safe_gate, lower_bound=lower_bound, use_gate_in_kernel=use_gate_in_kernel, A_log=A_log, dt_bias=dt_bias, disable_recompute=disable_recompute, return_intermediate_states=return_intermediate_states, state_v_first=state_v_first)\nif scale is None:\n    scale = float(q.shape[3]) ** -0.5\nlower_bound = -5.0 if lower_bound is None else float(lower_bound)",
+    "derive_chunk_indices": true,
+    "pre": "layout = str(layout)\nsafe_gate = bool(safe_gate)\nuse_gate_in_kernel = bool(use_gate_in_kernel)\nstate_v_first = bool(state_v_first)\noutput_final_state = bool(output_final_state)\ndisable_recompute = bool(disable_recompute)\nreturn_intermediate_states = bool(return_intermediate_states)\nif scale is None:\n    scale = float(q.shape[2] if layout in (\"TND\", \"NTD\") else q.shape[3]) ** -0.5\nif lower_bound is None:\n    lower_bound = -5.0",
+    "return_code": "out = [result[0]]\nout.append(result[1] if output_final_state else None)\nout.append(result[2] if (not use_gate_in_kernel or disable_recompute) else None)\nout.append(result[3])\nout.append(result[4])\nout.append(result[5] if disable_recompute else None)\nout.append(result[6] if disable_recompute else None)\nout.append(result[7] if disable_recompute else None)\nout.append(result[8] if disable_recompute else None)\nout.append(result[9] if disable_recompute else None)\nout.append(result[10] if (disable_recompute or return_intermediate_states) else None)\nout.append(initial_state)\nreturn tuple(out)",
     "defaults": {
       "layout": "\"BSND\"",
       "initial_state": "None",
@@ -90,6 +97,9 @@
     {"name": "lower_bound", "kind": "double"},
     {"name": "use_gate_in_kernel", "kind": "bool"},
     {"name": "state_v_first", "kind": "bool"},
+    {"name": "output_final_state", "kind": "bool", "cpp_only": true},
+    {"name": "disable_recompute", "kind": "bool", "cpp_only": true},
+    {"name": "return_intermediate_states", "kind": "bool", "cpp_only": true},
     {"name": "attn_out", "kind": "out_tensor"},
     {"name": "final_state", "kind": "out_tensor"},
     {"name": "gk", "kind": "out_tensor"},

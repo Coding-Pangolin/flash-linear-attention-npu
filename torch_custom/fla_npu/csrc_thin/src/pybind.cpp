@@ -419,6 +419,20 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_bwd_finalize(
     uint64_t stream);
 
 
+
+
+
+
+
+
+at::Tensor npu_solve_tri(
+    const at::Tensor& x,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    const std::string& layout,
+    uint64_t stream);
+
+
 std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd_prepare(
     const at::Tensor& q,
     const at::Tensor& k,
@@ -434,17 +448,6 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd_prepare(
     bool use_exp2,
     bool output_a,
     bool use_beta_sigmoid_in_kernel,
-    uint64_t stream);
-
-
-
-
-
-at::Tensor npu_solve_tri(
-    const at::Tensor& x,
-    const std::vector<int64_t>& cu_seqlens,
-    const std::vector<int64_t>& chunk_indices,
-    const std::string& layout,
     uint64_t stream);
 
 }  // namespace fla_npu_thin
@@ -813,6 +816,15 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("state_v_first"),
       py::arg("use_exp2"),
       py::arg("stream"));
+  
+  
+  m.def(
+      "npu_solve_tri",
+      &npu_solve_tri, py::arg("x"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("layout"),
+      py::arg("stream"));
   m.def(
       "npu_chunk_gated_delta_rule_fwd_prepare",
       &npu_chunk_gated_delta_rule_fwd_prepare, py::arg("q"),
@@ -829,13 +841,5 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("use_exp2"),
       py::arg("output_a"),
       py::arg("use_beta_sigmoid_in_kernel"),
-      py::arg("stream"));
-  
-  m.def(
-      "npu_solve_tri",
-      &npu_solve_tri, py::arg("x"),
-      py::arg("cu_seqlens"),
-      py::arg("chunk_indices"),
-      py::arg("layout"),
       py::arg("stream"));
 }

@@ -5,6 +5,7 @@
 // pybind11 may appear here: the compile-once/run-on-many guarantee comes from
 // touching nothing but the aoti_torch_* C shims.
 #include <torch/csrc/stable/library.h>
+#include <torch/csrc/stable/accelerator.h>
 #include <torch/csrc/stable/ops.h>
 #include <torch/csrc/stable/stableivalue_conversions.h>
 #include <torch/csrc/stable/tensor.h>
@@ -305,6 +306,34 @@ void boxed_recurrent_gated_delta_rule(StableIValue* stack,
   stack[0] = from(out);
 }
 
+// Reports the current stream for `device_index` in two forms:
+//   [0] raw backend stream pointer (aoti_torch_get_current_cuda_stream)
+//   [1] stable Stream::id() (c10 StreamId)
+// A value of 0 for [0] means the backend does not expose the raw pointer.
+void boxed_stream_probe(StableIValue* stack, uint64_t num_inputs,
+                        uint64_t num_outputs) {
+  (void)num_inputs;
+  (void)num_outputs;
+  const int64_t device_index = to<int64_t>(stack[0]);
+  void* raw_stream = nullptr;
+  const auto raw_err = aoti_torch_get_current_cuda_stream(
+      static_cast<int32_t>(device_index), &raw_stream);
+  int64_t raw_value =
+      (raw_err == 0 && raw_stream != nullptr)
+          ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(raw_stream))
+          : 0;
+  int64_t stream_id = 0;
+  try {
+    auto stream = torch::stable::accelerator::getCurrentStream(
+        static_cast<int32_t>(device_index));
+    stream_id = static_cast<int64_t>(stream.id());
+  } catch (...) {
+    stream_id = -1;
+  }
+  stack[0] = from(raw_value);
+  stack[1] = from(stream_id);
+}
+
 }  // namespace
 
 STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
@@ -313,9 +342,13 @@ STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
       "Tensor(a!) state, Tensor beta, Tensor actual_seq_lengths, "
       "Tensor ssm_state_indices, Tensor? num_accepted_tokens, Tensor? g, "
       "Tensor? gk, float scale, int stream) -> Tensor");
+  // Debug helper for the stream question: report the current stream two ways so
+  // Python can compare them against torch_npu's raw accessor.
+  m.def("_stream_probe(int device_index) -> (int, int)");
 }
 
 STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
   m.impl("npu_recurrent_gated_delta_rule",
          &boxed_recurrent_gated_delta_rule);
+  m.impl("_stream_probe", &boxed_stream_probe);
 }

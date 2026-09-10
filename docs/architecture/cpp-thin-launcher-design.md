@@ -85,9 +85,13 @@ fla_npu.ops.ascendc.npu_xxx(...)          # Python 入口（保持不变）
    薄层自建 TensorDesc 生成：`sizes/strides/storage_offset/data_ptr/dtype/
    storage_numel`，format 固定 ND（与现 ctypes `nd_tensor` 语义一致），不读
    torch_npu storage 描述，避免 ABI 静默耦合。
-3. **stream 由 Python 调用侧传入**（`torch.npu.current_stream().npu_stream`），
-   薄层不查询、不创建 stream。这样薄层 .so 不链接 torch_npu，同时与模型主线程
-   保序。
+3. **stream 由 Python 调用侧按“每次调用”解析后传入**（优先
+   `torch_npu._C._npu_getCurrentRawStream(device)` 的原始指针，缺失时回退
+   `torch.npu.current_stream().npu_stream`），薄层不查询、不创建 stream。
+   这样薄层 .so 不链接 torch_npu，同时与调用线程的当前 stream 严格保序；
+   **不做进程级缓存**——vLLM 等多线程 server 会在不同线程使用不同 stream，
+   全局缓存会把某线程的 stream 泄漏给其它线程（kernel 下发到错误 stream，
+   表现为非法地址/顺序破坏）。
 4. **符号解析运行时进行**：复用现有 `fla_npu.load_ascendc_opapi_libraries()`
    的路径约定（`FLA_NPU_OP_API_LIB` 指向包内 `libcust_opapi.so`），C++ 侧
    `dlopen` 同一路径并缓存 `dlsym` 结果，等价 ctypes `_AclnnRuntime.symbol()`。

@@ -52,6 +52,11 @@ regression_950_ops.py 覆盖）。
 - `chunk_gated_delta_rule_fwd` composite 运行域未定（910b/950 探针 161002），
   spec/适配已就绪，待真实调用方确认。
 
+> 多线程修正（2026-09-10）：早期 `_thin.py` 的进程级 stream 缓存已移除，改为
+> 每调用读取 `_npu_getCurrentRawStream`（无全局状态）。vLLM 多 worker 线程 /
+> 多 stream 场景不再串流；回归见
+> `test_thin_stream_interleaving.py::test_threads_use_their_own_streams`。
+
 ## 6. 建议合入前检查
 
 1. `python scripts/build_wheel.py --wheel-dir dist`（910b/950 各编一次）；

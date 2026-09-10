@@ -78,9 +78,101 @@ MUTATED_ARGUMENTS = {
     "npu_recurrent_gated_delta_rule": ("state",),
 }
 
-MUTATION_PREDICATES = {
-    "npu_recurrent_kda": lambda arguments: bool(arguments["inplace_final_state"]),
+# Some mutable operators only write the state tensor for some argument values,
+# and the value comes straight from the caller's own arguments.  Declaring that
+# flag as ``(argument_name, default)`` lets the mutation wrapper read it from
+# the positional/keyword arguments directly, instead of running
+# ``inspect.signature().bind(...)`` (with ``apply_defaults``) on every call.
+# Only operators whose "did this call mutate?" answer is not derivable from a
+# single argument need the older ``MUTATION_PREDICATES`` lambda escape hatch.
+MUTATION_FLAGS = {
+    # Ascend950/910b: `inplace_final_state=False` makes the operator write into
+    # a scratch state and return it, leaving the caller's tensor untouched.
+    "npu_recurrent_kda": ("inplace_final_state", True),
 }
+
+# Escape hatch for mutation conditions that need more than one argument.
+MUTATION_PREDICATES: dict[str, Callable[[dict], bool]] = {}
+
+_POSITIONAL_KINDS = (
+    inspect.Parameter.POSITIONAL_ONLY,
+    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+)
+
+
+@functools.lru_cache(maxsize=None)
+def _mutation_plan(name: str, signature: inspect.Signature):
+    """Precompute how to decide the mutation contract for one operator.
+
+    Declared flags are validated against the real signature here, once, so a
+    wrong default fails loudly at first use instead of silently skipping (or
+    adding) a version bump on the hot path.
+    """
+
+    mutated_names = tuple(MUTATED_ARGUMENTS.get(name, ()))
+    positional_names = [
+        parameter.name for parameter in signature.parameters.values()
+        if parameter.kind in _POSITIONAL_KINDS
+    ]
+    mutated_positions = tuple(
+        positional_names.index(argument) for argument in mutated_names
+        if argument in positional_names
+    )
+    flag_name = None
+    flag_default = False
+    flag_position = None
+    declared = MUTATION_FLAGS.get(name)
+    if declared is not None:
+        flag_name, flag_default = declared
+        parameter = signature.parameters.get(flag_name)
+        if parameter is None:
+            raise RuntimeError(
+                f"{name}: MUTATION_FLAGS names unknown argument {flag_name!r}")
+        if (parameter.default is not inspect.Parameter.empty
+                and bool(parameter.default) != bool(flag_default)):
+            raise RuntimeError(
+                f"{name}: MUTATION_FLAGS[{flag_name!r}] default "
+                f"{flag_default!r} disagrees with the operator signature "
+                f"default {parameter.default!r}")
+        if flag_name in positional_names:
+            flag_position = positional_names.index(flag_name)
+    return (mutated_names, mutated_positions, flag_name, bool(flag_default),
+            flag_position)
+
+
+def _resolve_mutation(name, signature, args, kwargs):
+    """Return ``(mutated_tensors, used_fast_path)`` for one call.
+
+    The fast path reads the mutated tensor and the declared flag straight out
+    of the caller's arguments; the slow path is the previous
+    ``signature.bind``-based reference used for ops that still need a lambda
+    predicate.
+    """
+
+    (mutated_names, mutated_positions, flag_name, flag_default,
+     flag_position) = _mutation_plan(name, signature)
+    predicate = MUTATION_PREDICATES.get(name)
+    if (mutated_positions
+            and not any(argument in kwargs for argument in mutated_names)
+            and len(args) > max(mutated_positions)):
+        if flag_name is not None:
+            if flag_position is not None and len(args) > flag_position:
+                flag_value = args[flag_position]
+            else:
+                flag_value = kwargs.get(flag_name, flag_default)
+            if not flag_value:
+                return [], True
+        return [args[position] for position in mutated_positions], True
+
+    bound = signature.bind(*args, **kwargs)
+    bound.apply_defaults()
+    active = mutated_names
+    if flag_name is not None:
+        if not bound.arguments[flag_name]:
+            active = ()
+    elif predicate is not None and not predicate(bound.arguments):
+        active = ()
+    return [bound.arguments[argument] for argument in active], False
 
 _LEGACY_TORCH_OPS_WARNING = (
     "torch.ops.npu.{name} is a legacy FLA NPU compatibility API. This call path "
@@ -177,12 +269,8 @@ def _wrap_mutable_direct_op(name: str, op: Callable) -> Callable:
         return op
 
     signature = inspect.signature(op)
-    predicate = MUTATION_PREDICATES.get(name)
-    parameters = list(signature.parameters.values())
-    mutated_positions = [
-        i for i, param in enumerate(parameters) if param.name in mutated_names
-    ]
-    can_fast_path = predicate is None and mutated_positions
+    # Validate the declared mutation plan once, at wrap time.
+    _mutation_plan(name, signature)
 
     @functools.wraps(op)
     def wrapper(*args, **kwargs):
@@ -191,21 +279,8 @@ def _wrap_mutable_direct_op(name: str, op: Callable) -> Callable:
         except Exception as exc:
             raise RuntimeError("Mutable Ascend C operators require the torch Python runtime.") from exc
 
-        if (
-            can_fast_path
-            and not any(key in kwargs for key in mutated_names)
-            and len(args) > max(mutated_positions)
-        ):
-            raw_mutated = [args[pos] for pos in mutated_positions]
-        else:
-            bound = signature.bind(*args, **kwargs)
-            bound.apply_defaults()
-            active_mutated_names = mutated_names
-            if predicate is not None and not predicate(bound.arguments):
-                active_mutated_names = ()
-            raw_mutated = [
-                bound.arguments[arg_name] for arg_name in active_mutated_names
-            ]
+        raw_mutated, _used_fast_path = _resolve_mutation(
+            name, signature, args, kwargs)
 
         mutated_tensors = [
             tensor for tensor in raw_mutated if isinstance(tensor, torch.Tensor)
@@ -477,6 +552,7 @@ _prepare_direct_runtime(raise_on_error=False)
 __all__ = [
     "BACKWARD_OPS",
     "MUTATED_ARGUMENTS",
+    "MUTATION_FLAGS",
     "install_legacy_torch_ops_warning",
     "install_torch_npu_ops_compat",
     *sorted(set(_ASCENDC_OPS)),

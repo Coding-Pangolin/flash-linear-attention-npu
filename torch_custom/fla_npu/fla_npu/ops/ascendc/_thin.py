@@ -645,8 +645,7 @@ def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, a_log=None, dt_bias=None
             _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]
             for _c in range((_len + int(chunk_size) - 1) // int(chunk_size)):
                 chunk_indices.extend((_seq, _c))
-    if not bool(use_gate_in_kernel):
-        a_log = None
+    a_log = None
     dt_bias = None
     cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
     chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
@@ -671,6 +670,8 @@ def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, a_log=None, dt_bias=None
         bool(output_final_state),
         bool(disable_recompute),
         bool(return_intermediate_states),
+        bool(use_gate_in_kernel),
+        bool(use_beta_sigmoid_in_kernel),
         _current_stream_ptr(),
     )
     out = [result[0]]

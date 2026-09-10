@@ -399,6 +399,7 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_bwd_finalize(
     uint64_t stream);
 
 
+
 std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd(
     const at::Tensor& q,
     const at::Tensor& k,
@@ -417,6 +418,9 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd(
     bool use_qk_l2norm_in_kernel,
     bool allow_neg_eigval,
     bool state_v_first,
+    bool output_final_state,
+    bool disable_recompute,
+    bool return_intermediate_states,
     uint64_t stream);
 
 }  // namespace fla_npu_thin
@@ -777,8 +781,7 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("use_gate_in_kernel"),
       py::arg("state_v_first"),
       py::arg("use_exp2"),
-      py::arg("stream"));
-  m.def(
+      py::arg("stream"));  m.def(
       "npu_chunk_gated_delta_rule_fwd",
       &npu_chunk_gated_delta_rule_fwd, py::arg("q"),
       py::arg("k"),
@@ -797,5 +800,8 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("use_qk_l2norm_in_kernel"),
       py::arg("allow_neg_eigval"),
       py::arg("state_v_first"),
+      py::arg("output_final_state"),
+      py::arg("disable_recompute"),
+      py::arg("return_intermediate_states"),
       py::arg("stream"));
 }

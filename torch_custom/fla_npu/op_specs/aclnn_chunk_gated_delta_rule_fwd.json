@@ -6,9 +6,13 @@
   "outputs": [
     {
       "arg": "o",
-      "alloc": "at::empty({q.size(0), q.size(1), v.size(2), v.size(3)}, q.options())"
+      "alloc": "at::empty({q.size(0), q.size(2), v.size(1), v.size(3)}, q.options())"
     },
-    {"arg": "final_state", "alloc": "at::Tensor()"},
+    {
+      "arg": "final_state",
+      "when": "output_final_state",
+      "alloc": "at::empty({q.size(0), v.size(1), (state_v_first ? v.size(3) : q.size(3)), (state_v_first ? q.size(3) : v.size(3))}, initial_state.has_value() && initial_state->defined() ? initial_state->options() : q.options().dtype(at::kFloat))"
+    },
     {"arg": "q_hat", "alloc": "at::Tensor()"},
     {"arg": "k_hat", "alloc": "at::Tensor()"},
     {"arg": "q_rstd", "alloc": "at::Tensor()"},
@@ -16,19 +20,24 @@
     {"arg": "beta_eff", "alloc": "at::Tensor()"},
     {
       "arg": "g_cumsum",
-      "alloc": "at::empty({q.size(0), q.size(1), v.size(2)}, q.options().dtype(at::kFloat))"
+      "when": "!disable_recompute",
+      "alloc": "at::empty({q.size(0), q.size(2), v.size(1)}, q.options().dtype(at::kFloat))"
     },
     {
       "arg": "A",
-      "alloc": "at::empty({q.size(0), v.size(2), q.size(1), chunk_size}, q.options())"
+      "when": "!disable_recompute",
+      "alloc": "at::empty({q.size(0), v.size(1), q.size(2), chunk_size}, q.options())"
     },
     {"arg": "h", "alloc": "at::Tensor()"}
   ],
   "python": {
     "positional": ["q", "k", "v", "g", "beta"],
-    "return_order": ["o", {"none": true}, "g_cumsum", "A"],
-    "pre": "layout = str(layout)\nif scale is None:\n    scale = float(q.shape[3]) ** -0.5\nif not (layout == \"BSND\" and cu_seqlens is None and chunk_indices is None and not bool(output_final_state) and bool(output_a) and not bool(use_beta_sigmoid_in_kernel) and not bool(allow_neg_eigval) and not bool(use_gate_in_kernel) and initial_state is None and int(chunk_size) == 64):\n    from fla_npu.ops.ascendc import _aclnn_ctypes as _ct\n    return _ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, initial_state=initial_state, output_final_state=output_final_state, chunk_size=chunk_size, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, scale=scale, use_exp2=use_exp2, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, output_a=output_a, state_v_first=state_v_first, layout=layout)",
+    "ignored": ["use_gate_in_kernel", "use_beta_sigmoid_in_kernel"],
+    "pre": "layout = str(layout)\nif scale is None:\n    scale = float(q.shape[3]) ** -0.5\nif not (layout == \"BNSD\" and cu_seqlens is None and chunk_indices is None and not bool(use_exp2) and not bool(use_qk_l2norm_in_kernel) and not bool(use_gate_in_kernel) and not bool(use_beta_sigmoid_in_kernel) and not bool(allow_neg_eigval) and not bool(state_v_first) and not bool(return_intermediate_states) and int(chunk_size) in (64, 128)):\n    from fla_npu.ops.ascendc import _aclnn_ctypes as _ct\n    return _ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, initial_state=initial_state, output_final_state=output_final_state, chunk_size=chunk_size, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, scale=scale, use_exp2=use_exp2, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, disable_recompute=disable_recompute, return_intermediate_states=return_intermediate_states, state_v_first=state_v_first, layout=layout)\na_log = None\ndt_bias = None",
+    "return_code": "out = [result[0]]\nif output_final_state:\n    out.append(result[1])\nelse:\n    out.append(None)\nif not disable_recompute:\n    out.append(result[7])\n    out.append(result[8])\nif return_intermediate_states:\n    out.append(result[9])\nreturn tuple(out)",
     "defaults": {
+      "a_log": "None",
+      "dt_bias": "None",
       "initial_state": "None",
       "output_final_state": "False",
       "chunk_size": "64",
@@ -37,12 +46,13 @@
       "scale": "None",
       "use_exp2": "False",
       "use_qk_l2norm_in_kernel": "False",
-      "use_gate_in_kernel": "False",
-      "use_beta_sigmoid_in_kernel": "False",
       "allow_neg_eigval": "False",
-      "output_a": "True",
+      "disable_recompute": "False",
+      "return_intermediate_states": "False",
       "state_v_first": "False",
-      "layout": "\"BNSD\""
+      "layout": "\"BNSD\"",
+      "use_gate_in_kernel": "False",
+      "use_beta_sigmoid_in_kernel": "False"
     }
   },
   "args": [
@@ -63,6 +73,9 @@
     {"name": "use_qk_l2norm_in_kernel", "kind": "bool"},
     {"name": "allow_neg_eigval", "kind": "bool"},
     {"name": "state_v_first", "kind": "bool"},
+    {"name": "output_final_state", "kind": "bool", "cpp_only": true},
+    {"name": "disable_recompute", "kind": "bool", "cpp_only": true},
+    {"name": "return_intermediate_states", "kind": "bool", "cpp_only": true},
     {"name": "o", "kind": "out_tensor"},
     {"name": "final_state", "kind": "out_tensor"},
     {"name": "q_hat", "kind": "out_tensor"},

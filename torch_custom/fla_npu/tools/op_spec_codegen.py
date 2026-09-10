@@ -158,6 +158,10 @@ def generate(spec: dict) -> str:
     lines.append("  views.reserve(8);")
     out_idx = 0
     for i, a in enumerate(args):
+        if a.get("cpp_only"):
+            # Python/C++ parameter that must not reach the aclnn ABI (used to
+            # drive conditional output allocation).
+            continue
         kind = a["kind"]
         name = _cpp_name(a)
         if kind == "tensor":
@@ -186,6 +190,8 @@ def generate(spec: dict) -> str:
     tokens = []
     view_i = 0
     for a in args:
+        if a.get("cpp_only"):
+            continue
         kind = a["kind"]
         if kind in ("tensor", "optional_tensor", "out_tensor"):
             tokens.append(f"views[{view_i}]->get()")

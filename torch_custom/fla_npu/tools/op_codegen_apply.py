@@ -156,6 +156,16 @@ def patch_thin(spec: dict) -> None:
         outputs_spec = spec.get("outputs", [])
         out_names = [a["name"] for a in spec["args"] if a["kind"] == "out_tensor"]
         return_suffix = py.get("return_suffix", [])
+        return_code = py.get("return_code")
+        if return_code:
+            # Raw return lines: needed for operators whose Python-visible
+            # return shape depends on flags that never reach aclnn (e.g.
+            # disable_recompute / return_intermediate_states).
+            for raw_line in return_code.splitlines():
+                body += ("\n    " + raw_line) if raw_line.strip() else ""
+            text = text.rstrip() + "\n" + body + "\n"
+            path.write_text(text, encoding="utf-8")
+            return
         return_order = py.get("return_order")
         if return_order is not None:
             terms = []

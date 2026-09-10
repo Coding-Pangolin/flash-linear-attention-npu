@@ -122,3 +122,50 @@
 - `csrc_stable/build_stable.py`：不链接 torch 编译期头之外的任何东西（只 include
   `torch/csrc/stable/*`），产出 `libfla_npu_thin.so`。
 - `tests/regression_stable_abi.py`：T1/T2/T5/T6 的驱动（T3/T7 在 Phase 1 收尾补）。
+
+### 6.1 竖切实测（2026-09-11，221 / 910B3，torch 2.9.0 + torch_npu 2.9.0.post2）
+
+产物 `libfla_npu_thin.so`（60 KB）：
+
+```
+NEEDED: libtorch_cpu.so / libc10.so / libtorch.so / libstdc++ / libm / libgcc_s / libc
+undefined 的 C++ ATen/c10/pybind11 符号: 0        ← 关键：不再触碰不稳定 ABI
+undefined 的 aoti_torch_* 符号: 40                 ← 全部走稳定 C shim
+未链接 libtorch_python.so                          ← 无 Python ABI
+源码审计（tools/stable_abi_audit.py）: OK
+```
+
+| 项 | 结果 |
+| --- | --- |
+| T1 parity（ctypes vs stable，非连续 paged state） | **PASS，out diff 0.0 / state diff 0.0** |
+| T6 ELF 符号审计 | PASS（0 个 `_ZN2at/_ZN3c10`） |
+| T5 host P50（同 shape，batch 8×q=1） | ctypes **0.5089 ms**、pybind-thin **0.0617 ms**、**stable 0.0686 ms** |
+
+即：stable 路径比 ctypes 快 **7.4×**，与 pybind-thin 相差 11%（Gate T5 的预算是
+≤1.15×），已在 vllm-ascend custom（0.073 ms）同一量级。注意该数字未含 Python
+侧 stream 查询（驱动里把 stream 提到循环外，约 +0.002 ms 若放回）。
+
+### 6.2 竖切暴露的两个必须处理项
+
+1. **dispatcher 不会替我们维护 mutation 契约。** schema 写了 `Tensor(a!) state`
+   之后实测：`state._version` **未自增**（1 → 1），`requires_grad=True` 的 state
+   **未被拒绝**。说明"用 schema 声明 in-place 就能省掉手写 wrapper"这个假设不成立，
+   仍需保留（或下沉到 C++）`MUTATION_FLAGS` 那套契约。这是 T2 的直接结论。
+2. **stream 仍是 Python 显式传入。** 本期为降低变量数，schema 里带 `int stream`，
+   由 Python 调 `_npu_getCurrentRawStream` 传入；`stable::accelerator::getCurrentStream`
+   是否等价于 NPU 当前流尚未验证（Phase 1 收尾要单独测，成功则可再省一次 Python 调用）。
+
+### 6.3 踩到并修掉的两个坑（对后续 codegen 有直接价值）
+
+1. **`data_ptr()` 已含 storage_offset**：`aoti_torch_get_data_ptr` 返回的是
+   `t.data_ptr()`（含 offset），而 `aclCreateTensor` 还要单独传 offset，直接使用会
+   把 offset 应用两次。症状很隐蔽——**连续输入（offset=0）完全正常、非连续 state
+   静默不更新**（parity 只有 state 差 1.31）。必须回退为
+   `storage_base = data_ptr - storage_offset * itemsize`。
+2. **storage extent 不能用 `aoti_torch_get_storage_numel`**：它是 view 的 numel，
+   对 paged/带 offset 的 state 是错的；要对齐 ctypes 的
+   `untyped_storage().nbytes() // itemsize`，改用 `aoti_torch_get_storage_size`。
+
+两条都说明：stable 路径的 descriptor 语义必须逐条对齐
+`csrc_thin/src/tensor_desc.cpp`，不能想当然。Phase 3 的 codegen 要把这两条写成
+共享的 `thin_tensor.h` 实现，而不是每个算子各写一遍。

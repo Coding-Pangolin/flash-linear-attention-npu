@@ -82,13 +82,13 @@
 | npu_chunk_gated_delta_rule_bwd_dhu | ✅（v3） | ✅ | 0.0（canonical ≥2 序列；单序列 dense 两条路径同 NaN，内核边界） | 0.71 → 0.139 ms |
 | npu_recurrent_kda | ✅ | ✅ | 0.0（BSND B2/T2/H2/HV4 dense、state_v_first、inplace + final_state；Ascend950PR） | 0.085 → 0.011 ms（950） |
 | npu_chunk_gated_delta_rule_fwd | ✅（cpp_only 标量 + return_code + layout/varlen helpers；需上游 #495 的 op_api/ctypes 修正） | ✅ | **全域名**：dense + varlen（physical B=1、canonical chunk_indices）；layout BNSD/BSND/NTD/TND；A2 legacy 路径与 A5 新路径（`use_exp2`/`use_qk_l2norm`/`state_v_first`/`return_intermediate_states` 的 `h`）；GVA、chunk 64/128、`initial_state` fp32/bf16、`output_final_state` 均覆盖。实测：A2（910b）21 场景全绿含 varlen；A5（950）BSND+exp2+l2norm、+state_v_first、+return_h、TND varlen、legacy BNSD 全部 parity 0.0，且 cp312/torch2.9 与 cp310/torch2.7.1(fzy) 两套环境结果一致。A5 专属输出（q_hat/k_hat/rstd/beta_eff）与 ctypes 一样传 null；BSND 不带 exp2、V=256 在当前 build 双方同样报错（169104/161002） | 待补 |
-| npu_chunk_gated_delta_rule_fwd_prepare | ✅ | ✅ | 0.0（9 输出；Ascend950PR） | 0.144 → 0.030 ms（950） |
-| npu_chunk_gated_delta_rule_bwd_finalize | ✅ | ✅ | 0.0（5 输出；Ascend950PR，g/beta fp32、G=2 域） | 0.167 → 0.023 ms（950） |
+| npu_chunk_gated_delta_rule_fwd_prepare | ✅ | ✅ | 0.0（9 输出；Ascend950PR）＋放宽域：`use_beta_sigmoid=False`（返回 `beta.to(fp32)`）、`output_a=False`、varlen 均已 0.0；仅 `a_log`/`dt_bias` 非空时 thin 报 161002（1-D 描述符待查）→ 保持回退 ctypes | 0.144 → 0.030 ms（950） |
+| npu_chunk_gated_delta_rule_bwd_finalize | ✅ | ✅ | 0.0（5 输出；Ascend950PR，g/beta fp32、G=2 域）＋放宽域：`use_qk_l2_norm_in_kernel=False`/`use_beta_sigmoid_in_kernel=False`（不传 q_rstd/k_rstd/beta_raw）、`state_v_first=True` 均已 0.0 | 0.167 → 0.023 ms（950） |
 | npu_causal_conv1d_bwd | ✅ | ✅（按文档签名） | 0.0（BNSD 域）；BSH/TND 两路径同 NaN（该构建 kernel 边界待查） | 0.58 → 0.084 ms |
 | npu_chunk_kda_fwd | ✅（dense BSND 合法域；其它布局/flag 委托 ctypes） | ✅ | 0.0（10 输出 + None 语义） | 1.04 → 0.114 ms |
 | npu_chunk_kda_bwd_intra | ✅（BNSD dense 单发射合法域；BSND 分段路径委托 ctypes） | ✅ | 0.0（4 输出） | 0.73 → 0.091 ms |
 | npu_chunk_kda_bwd | ✅（dense BNSD 简单域：偶数头、T%64=0、gate off；tail/奇头/varlen 回退委托 ctypes） | ✅ | 0.0（dq/dk/dv/db/dg + 3×None） | 0.88 → 0.111 ms |
-| npu_solve_tri | ✅（dense bsnd/bnsd 域，enabled） | ✅ | 0.0（fp16/bf16 × BT 16/32/64/128，910b w16 + Ascend950 950d wheel）；TND/NTD varlen thin 仍非有限 → 委托 ctypes | 910b：0.372 → 0.098 ms；950：0.033 → 0.009 ms（dense bsnd fp16 BT64） |
+| npu_solve_tri | ✅（bsnd/bnsd dense + tnd，enabled） | ✅ | 0.0（fp16/bf16 × BT 16/32/64/128；**tnd varlen 已原生 thin 0.0**，用 `block_t = 1<<17/chunk_size` 生成 canonical chunk_indices）；**ntd 为上游 kernel 问题**（多次调用结果非确定：ctypes 返回全 0、thin 不等于 tnd 的转置）→ 保持回退 ctypes | 910b：0.372 → 0.098 ms；950：0.033 → 0.009 ms（dense bsnd fp16 BT64） |
 
 ## 下一步
 
@@ -109,12 +109,30 @@
    两套环境结果一致。注意：T 非 chunk 整数倍时 `A` 的尾块 padding 行两侧都是
    未初始化内存（valid 区域仍 0.0）；只给 `cu_seqlens` 时 thin 会自动派生
    canonical `chunk_indices`（ctypes 要求成对提供，属 thin 的超集）。
-4. `npu_solve_tri` varlen（TND/NTD）：thin 直连结果非有限 → wrapper 已委托
-   ctypes；dense bsnd/bnsd 已原生 thin 并多处验证 0.0。
+4. `npu_solve_tri`：bsnd/bnsd dense 与 tnd（dense/varlen）已原生 thin 并 0.0；
+   **ntd 是上游 kernel 问题**（结果非确定：ctypes 全 0、thin 不等于 tnd 转置），
+   保持 ctypes 回退并建议上报。
 5. 收尾：regression_thin_ops 21 场景已在 910b（本分支 wheel）全绿；
    regression_950_ops 4 场景（fwd_prepare / bwd_finalize / recurrent_kda /
    chunk_gated_delta_rule_fwd A5 域）已在 Ascend950PR（fzy py3.10 + torch 2.7.1）
    全绿，安装态 smoke 3/3 通过。
+
+## 回退域收敛计划（目标：thin 覆盖 ctypes 的全部可用域）
+
+当前仍会回退 ctypes 的点（已在代码里逐个核对）：
+
+| 算子 | 回退条件 | 性质 | 结论/计划 |
+| --- | --- | --- | --- |
+| `npu_solve_tri` | `layout == "ntd"` | 上游 kernel 问题（非确定） | 保持回退；建议上游修 ntd |
+| `npu_chunk_gated_delta_rule_fwd_prepare` | `a_log`/`dt_bias` 非空 | thin 1-D 描述符 161002 | 保持回退；待查 1-D/format 描述符 |
+| `npu_chunk_kda_fwd` | 非 BSND、varlen、`output_final_state`、`return_intermediate_states` | spec 未展开（与 composite 同类，可做） | 下一步：layout helpers + 条件输出 + `return_code` |
+| `npu_chunk_kda_bwd_intra` | BSND（分段）/varlen | 需把 ctypes wrapper 的**多发射分段**语义搬进 C++ | 需 codegen 支持子发射循环 |
+| `npu_chunk_kda_bwd` | varlen/尾块/奇头等 | 同上（多发射 + 补齐） | 同上 |
+| `npu_causal_conv1d`（legacy） | 全部（无 thin 入口） | 等上游 #390 统一 ABI | #390 合入后加 spec |
+| `causal_conv1d_update` | 不在 #496 | 在 #512 验证分支 | #390 合入后并入 |
+
+其余“回退”只是域判定（ctypes 本身也会拒绝该组合，例如 chunk 64 限制、
+A2 上的 A5-only 组合），不属于覆盖缺口。
    历史记录：regression_thin_ops 20 场景（37 组）已在 910b（w16 wheel）与
    Ascend950PR（950d wheel）安装态全量执行并全绿；950-only 3 场景
    （fwd_prepare/bwd_finalize/recurrent_kda）与安装态 smoke 3/3 亦全绿。

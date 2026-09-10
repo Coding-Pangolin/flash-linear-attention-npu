@@ -7,29 +7,6 @@ from __future__ import annotations
 
 import os
 
-_CURRENT_STREAM_PTR = None
-_STREAM_PATCHED = False
-
-
-def _ensure_stream_tracking() -> None:
-    """Track torch.npu.set_stream so thin ops avoid the expensive
-    torch.npu.current_stream() object construction on every call."""
-
-    global _STREAM_PATCHED, _CURRENT_STREAM_PTR
-    if _STREAM_PATCHED:
-        return
-    import torch
-
-    original = torch.npu.set_stream
-
-    def tracking_set_stream(stream):
-        global _CURRENT_STREAM_PTR
-        _CURRENT_STREAM_PTR = int(stream.npu_stream)
-        return original(stream)
-
-    torch.npu.set_stream = tracking_set_stream
-    _STREAM_PATCHED = True
-
 
 def _extension() -> "module":
     import fla_npu._C_thin as ext
@@ -44,13 +21,29 @@ def _extension() -> "module":
 
 
 def _current_stream_ptr() -> int:
+    """Return the raw aclrtStream of the *current* stream of the calling thread.
+
+    ``torch_npu._C._npu_getCurrentRawStream`` returns the stream pointer
+    directly (~1us) instead of building a ``Stream`` object through
+    ``torch.npu.current_stream()`` (~24us).  Unlike a process-global cache it
+    cannot leak one thread's stream into another: servers such as vLLM run the
+    operators from multiple worker threads with independent NPU streams, and a
+    shared cache there enqueues kernels on the wrong stream (illegal address /
+    broken ordering).  Older torch_npu builds without the raw accessor fall back
+    to the object path.
+    """
+
     import torch
 
-    global _CURRENT_STREAM_PTR
-    _ensure_stream_tracking()
-    if _CURRENT_STREAM_PTR is None:
-        _CURRENT_STREAM_PTR = int(torch.npu.current_stream().npu_stream)
-    return _CURRENT_STREAM_PTR
+    try:
+        import torch_npu
+
+        raw_stream = getattr(torch_npu._C, "_npu_getCurrentRawStream", None)
+        if raw_stream is not None:
+            return int(raw_stream(torch.npu.current_device()))
+    except Exception:
+        pass
+    return int(torch.npu.current_stream().npu_stream)
 
 
 def npu_recurrent_gated_delta_rule(

@@ -34,6 +34,29 @@ def assert_parity(name, oc, ot):
     print(f"PASS {name}")
 
 
+def assert_finite_parity(name, oc, ot):
+    """Like assert_parity but ignores unwritten (non-finite) regions.
+
+    The fused GDN forward leaves the tail-padding rows of ``A`` uninitialised
+    on both paths, so those elements are compared only where both are finite.
+    """
+
+    if not isinstance(oc, tuple):
+        oc = (oc,)
+        ot = (ot,)
+    assert len(oc) == len(ot), f"{name}: output count mismatch"
+    for i, (a, b) in enumerate(zip(oc, ot)):
+        if a is None or b is None:
+            assert a is None and b is None, f"{name}[{i}]: None mismatch"
+            continue
+        assert tuple(a.shape) == tuple(b.shape), f"{name}[{i}]: shape"
+        finite = torch.isfinite(a.float()) & torch.isfinite(b.float())
+        if finite.any():
+            diff = float((a.float() - b.float()).abs()[finite].max().item())
+            assert diff == 0.0, f"{name}[{i}]: diff={diff}"
+    print(f"PASS {name}")
+
+
 def scenario_fwd_prepare():
     dt = torch.bfloat16
     B, HK, HV, T, K, V, cs = 1, 4, 8, 1792, 128, 128, 64
@@ -81,6 +104,64 @@ def scenario_bwd_finalize():
                       q, k, v, v_new, do, du, g, beta, h, dh, a, **kw))
 
 
+def _cgdr_fwd_case(layout, B, Hk, Hv, T, K, V, cs, **kwargs):
+    dt = torch.bfloat16
+    if layout in ("BNSD", "NTD"):
+        q_shape, v_shape = (B, Hk, T, K), (B, Hv, T, V)
+    else:
+        q_shape, v_shape = (B, T, Hk, K), (B, T, Hv, V)
+    q = (torch.randn(*q_shape, device="npu") * 0.05).to(dt)
+    k = (torch.randn(*q_shape, device="npu") * 0.05).to(dt)
+    v = (torch.randn(*v_shape, device="npu") * 0.05).to(dt)
+    g = (torch.randn(B, T, Hv, device="npu") * 1.25).to(torch.float32)
+    beta = torch.sigmoid(torch.randn(B, T, Hv, device="npu"))
+    torch.npu.synchronize()
+    kw = dict(chunk_size=cs, output_final_state=True, layout=layout, **kwargs)
+    assert_finite_parity(
+        f"chunk_gated_delta_rule_fwd({layout}_B{B}_Hk{Hk}_Hv{Hv}_T{T}_V{V})",
+        ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
+        _thin.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
+
+
+def scenario_chunk_gated_delta_rule_fwd_a5():
+    """A5 new path (prepare + fwd_h + fwd_o) across layouts/flags."""
+
+    # BSND + use_exp2 + qk l2norm (the canonical A5 path)
+    _cgdr_fwd_case("BSND", 2, 4, 4, 128, 128, 128, 64,
+                   use_exp2=True, use_qk_l2norm_in_kernel=True)
+    # + state_v_first
+    _cgdr_fwd_case("BSND", 2, 4, 4, 128, 128, 128, 64,
+                   use_exp2=True, use_qk_l2norm_in_kernel=True,
+                   state_v_first=True)
+    # + return_intermediate_states (h output)
+    _cgdr_fwd_case("BSND", 1, 2, 2, 128, 128, 128, 64,
+                   use_exp2=True, use_qk_l2norm_in_kernel=True,
+                   return_intermediate_states=True)
+    # varlen TND
+    B, Hk, Hv, T, K, V, cs = 1, 4, 4, 128, 128, 128, 64
+    cu = [0, 30, 128]
+    ci = []
+    for seq, (begin, end) in enumerate(zip(cu[:-1], cu[1:])):
+        for chunk in range((end - begin + cs - 1) // cs):
+            ci.extend((seq, chunk))
+    dt = torch.bfloat16
+    q = (torch.randn(B, T, Hk, K, device="npu") * 0.05).to(dt)
+    k = (torch.randn(B, T, Hk, K, device="npu") * 0.05).to(dt)
+    v = (torch.randn(B, T, Hv, V, device="npu") * 0.05).to(dt)
+    g = (torch.randn(B, T, Hv, device="npu") * 1.25).to(torch.float32)
+    beta = torch.sigmoid(torch.randn(B, T, Hv, device="npu"))
+    torch.npu.synchronize()
+    kw = dict(chunk_size=cs, output_final_state=True, layout="TND",
+              cu_seqlens=cu, chunk_indices=ci, use_exp2=True,
+              use_qk_l2norm_in_kernel=True)
+    assert_finite_parity(
+        "chunk_gated_delta_rule_fwd(TND_varlen_exp2_l2norm)",
+        ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
+        _thin.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
+    # legacy BNSD path on A5 as a cross-check
+    _cgdr_fwd_case("BNSD", 2, 2, 4, 128, 128, 128, 64)
+
+
 def scenario_recurrent_kda():
     B, T, H, HV, K, V = 2, 2, 2, 4, 128, 128
     dt = torch.bfloat16
@@ -111,7 +192,8 @@ def main():
     scenario_fwd_prepare()
     scenario_bwd_finalize()
     scenario_recurrent_kda()
-    print("ALL PASS: 3 Ascend950-only parity scenarios")
+    scenario_chunk_gated_delta_rule_fwd_a5()
+    print("ALL PASS: 4 Ascend950-only parity scenarios")
 
 
 if __name__ == "__main__":

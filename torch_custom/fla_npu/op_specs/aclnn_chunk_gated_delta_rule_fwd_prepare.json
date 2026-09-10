@@ -47,7 +47,7 @@
   ],
   "python": {
     "positional": ["q", "k", "v", "g", "beta", "chunk_size"],
-    "ignored": ["use_qk_l2norm_in_kernel", "use_gate_in_kernel"],
+    "ignored": ["use_qk_l2norm_in_kernel"],
     "return_code": "if result[8] is None:\n    return (result[4], result[5], result[6], result[7], beta.to(dtype=torch.float32), result[0], result[1], result[2], result[3])\nreturn (result[4], result[5], result[6], result[7], result[8], result[0], result[1], result[2], result[3])",
     "pre": "import torch\nif not (bool(use_qk_l2norm_in_kernel) and bool(use_exp2) and int(chunk_size) == 64):\n    from fla_npu.ops.ascendc import _aclnn_ctypes as _ct\n    return _ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, use_exp2=use_exp2, a_log=a_log, dt_bias=dt_bias, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, output_a=output_a)\nif use_gate_in_kernel:\n    # aclnn rejects a non-null aLogOptional (\"use_gate_in_kernel currently only\n    # supports false\"), and the ctypes reference raises ValueError for the same\n    # request: keep that error surface on the reference path.\n    from fla_npu.ops.ascendc import _aclnn_ctypes as _ct\n    return _ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, use_exp2=use_exp2, a_log=a_log, dt_bias=dt_bias, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, output_a=output_a)",
     "defaults": {
@@ -78,6 +78,7 @@
     {"name": "use_exp2", "kind": "bool"},
     {"name": "output_a", "kind": "bool"},
     {"name": "use_beta_sigmoid_in_kernel", "kind": "bool", "cpp_only": true},
+    {"name": "use_gate_in_kernel", "kind": "bool", "cpp_only": true},
     {"name": "g_cumsum", "kind": "out_tensor"},
     {"name": "w", "kind": "out_tensor"},
     {"name": "u", "kind": "out_tensor"},

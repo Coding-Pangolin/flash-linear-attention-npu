@@ -677,7 +677,7 @@ def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size, *, A_log=None, dt_bia
     return tuple(out)
 
 
-def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, *, a_log=None, dt_bias=None, cu_seqlens=None, chunk_indices=None, allow_neg_eigval=False, use_exp2=False, output_a=True, use_beta_sigmoid_in_kernel=False, use_qk_l2norm_in_kernel=False, use_gate_in_kernel=False):
+def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, *, a_log=None, dt_bias=None, cu_seqlens=None, chunk_indices=None, allow_neg_eigval=False, use_exp2=False, output_a=True, use_beta_sigmoid_in_kernel=False, use_gate_in_kernel=False, use_qk_l2norm_in_kernel=False):
     ext = _extension()
     import torch
     if not (bool(use_qk_l2norm_in_kernel) and bool(use_exp2) and int(chunk_size) == 64):
@@ -706,6 +706,7 @@ def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, *, a_lo
         bool(use_exp2),
         bool(output_a),
         bool(use_beta_sigmoid_in_kernel),
+        bool(use_gate_in_kernel),
         _current_stream_ptr(),
     )
     if result[8] is None:

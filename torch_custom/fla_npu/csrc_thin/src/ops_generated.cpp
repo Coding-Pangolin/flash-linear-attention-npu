@@ -2880,6 +2880,8 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd(
     bool output_final_state,
     bool disable_recompute,
     bool return_intermediate_states,
+    bool use_gate_in_kernel,
+    bool use_beta_sigmoid_in_kernel,
     uint64_t stream) {
   std::vector<at::Tensor> outputs;
   outputs.push_back(at::empty({q.size(0), gdn_fwd_tokens(q, layout), gdn_fwd_vheads(v, layout), v.size(3)}, v.options()));

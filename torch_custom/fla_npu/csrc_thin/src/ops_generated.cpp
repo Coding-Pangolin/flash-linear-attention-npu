@@ -2890,31 +2890,11 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd(
   } else {
     outputs.push_back(at::Tensor());
   }
-  if (use_qk_l2norm_in_kernel) {
-    outputs.push_back(at::empty_like(q));
-  } else {
-    outputs.push_back(at::Tensor());
-  }
-  if (use_qk_l2norm_in_kernel) {
-    outputs.push_back(at::empty_like(k));
-  } else {
-    outputs.push_back(at::Tensor());
-  }
-  if (use_qk_l2norm_in_kernel) {
-    outputs.push_back(at::empty({q.size(0), gdn_fwd_kheads(q, layout), gdn_fwd_tokens(q, layout)}, q.options().dtype(at::kFloat)));
-  } else {
-    outputs.push_back(at::Tensor());
-  }
-  if (use_qk_l2norm_in_kernel) {
-    outputs.push_back(at::empty({k.size(0), gdn_fwd_kheads(k, layout), gdn_fwd_tokens(k, layout)}, k.options().dtype(at::kFloat)));
-  } else {
-    outputs.push_back(at::Tensor());
-  }
-  if (use_beta_sigmoid_in_kernel) {
-    outputs.push_back(at::empty({beta.size(0), gdn_fwd_tokens(q, layout), gdn_fwd_vheads(v, layout)}, beta.options().dtype(at::kFloat)));
-  } else {
-    outputs.push_back(at::Tensor());
-  }
+  outputs.push_back(at::Tensor());
+  outputs.push_back(at::Tensor());
+  outputs.push_back(at::Tensor());
+  outputs.push_back(at::Tensor());
+  outputs.push_back(at::Tensor());
   if (!disable_recompute) {
     outputs.push_back(at::empty({q.size(0), gdn_fwd_tokens(q, layout), gdn_fwd_vheads(v, layout)}, g.options().dtype(at::kFloat)));
   } else {

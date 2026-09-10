@@ -14,23 +14,11 @@
       "when": "output_final_state",
       "alloc": "at::empty({gdn_fwd_seq_num(cu_seqlens, q.size(0)), gdn_fwd_vheads(v, layout), (state_v_first ? v.size(3) : q.size(3)), (state_v_first ? q.size(3) : v.size(3))}, initial_state.has_value() && initial_state->defined() ? initial_state->options() : q.options().dtype(at::kFloat))"
     },
-    {"arg": "q_hat", "when": "use_qk_l2norm_in_kernel", "alloc": "at::empty_like(q)"},
-    {"arg": "k_hat", "when": "use_qk_l2norm_in_kernel", "alloc": "at::empty_like(k)"},
-    {
-      "arg": "q_rstd",
-      "when": "use_qk_l2norm_in_kernel",
-      "alloc": "at::empty({q.size(0), gdn_fwd_kheads(q, layout), gdn_fwd_tokens(q, layout)}, q.options().dtype(at::kFloat))"
-    },
-    {
-      "arg": "k_rstd",
-      "when": "use_qk_l2norm_in_kernel",
-      "alloc": "at::empty({k.size(0), gdn_fwd_kheads(k, layout), gdn_fwd_tokens(k, layout)}, k.options().dtype(at::kFloat))"
-    },
-    {
-      "arg": "beta_eff",
-      "when": "use_beta_sigmoid_in_kernel",
-      "alloc": "at::empty({beta.size(0), gdn_fwd_tokens(q, layout), gdn_fwd_vheads(v, layout)}, beta.options().dtype(at::kFloat))"
-    },
+    {"arg": "q_hat", "alloc": "at::Tensor()"},
+    {"arg": "k_hat", "alloc": "at::Tensor()"},
+    {"arg": "q_rstd", "alloc": "at::Tensor()"},
+    {"arg": "k_rstd", "alloc": "at::Tensor()"},
+    {"arg": "beta_eff", "alloc": "at::Tensor()"},
     {
       "arg": "g_cumsum",
       "when": "!disable_recompute",

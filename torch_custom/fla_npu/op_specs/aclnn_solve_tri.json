@@ -6,7 +6,7 @@
   "output": {"arg": "out", "source": "x", "dtype": "same"},
   "python": {
     "positional": ["x"],
-    "pre": "layout = str(layout)",
+    "pre": "layout = str(layout)\n# bsnd/bnsd (dense) and tnd (dense or varlen) match ctypes bit-exactly; ntd is\n# broken upstream (ctypes returns all zeros and thin is not the transpose of\n# tnd), so keep ntd on the ctypes path until the kernel is fixed.\nif layout == \"ntd\":\n    from fla_npu.ops.ascendc import _aclnn_ctypes as _ct\n    return _ct.npu_solve_tri(x, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, layout=layout)",
     "defaults": {
       "cu_seqlens": "None",
       "chunk_indices": "None",

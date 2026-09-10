@@ -181,3 +181,55 @@ stream 查询开销（同机 2000 次 P50）：缓存 0 ms、raw accessor 0.0012
 - conv1d：等 #390 合入后按新 ABI 重写并启用；
 - device/event 差距：在服务级 profiling 场景复核是否仍存在；
 - 按 profile 增量接入其他高频算子。
+
+## 8. mutation 包装层快路径（2026-09-10）
+
+公共入口 `fla_npu.ops.ascendc.*` 会对 `MUTATED_ARGUMENTS` 里的算子包一层
+mutation wrapper（拒绝 `requires_grad` 的 state、launch 后
+`increment_version`）。旧实现只要该算子有 predicate 就每调用执行
+`inspect.signature().bind()` + `apply_defaults()`，而
+`npu_recurrent_kda` 恰好有 predicate，因此**每次调用**都付这笔钱，且调用方
+无法规避。
+
+改法：把 predicate 从 lambda 改成声明
+`MUTATION_FLAGS = {"npu_recurrent_kda": ("inplace_final_state", True)}`，
+wrapper 在 wrap 时算好 plan（校验默认值与真签名一致），热路径直接从
+args/kwargs 读取 mutated tensor 与 flag。
+
+### 8.1 同一进程 A/B（dummy op + 真签名，排除进程间噪声；us/次）
+
+| 调用形态 | 旧 wrapper | 新 wrapper | 差值 |
+| --- | --- | --- | --- |
+| KDA `initial_state` 位置、`inplace_final_state=True` | 38.52 | **6.40** | −32.1 |
+| KDA `initial_state` 位置、`inplace_final_state=False` | 36.19 | **4.42** | −31.8 |
+| KDA `initial_state` 关键字 | 38.82 | 39.15 | +0.3（仍走 bind，按设计不变） |
+| GDR `state` 位置 | 5.94 | 5.05 | −0.9 |
+| GDR `state` 关键字 | 27.62 | 26.38 | −1.2 |
+
+碎片测量（221，20 参数签名）：`hash(signature)` **30.4us**、
+`signature.bind+apply_defaults` **40.6us**、`_mutation_plan`（仅 wrap 时）
+9.9us、新热路径判定 **1.23us**。第一条解释了为什么 plan **不能**用
+`lru_cache(signature)` 缓存——那样每次调用都要付 30us 的签名哈希，比它省下
+的还贵（本改动第一版就踩了这个坑，A/B 显示"优化后更慢"，随后改为闭包持有
+plan）。
+
+### 8.2 真实算子（`npu_recurrent_kda`，batch 100×T=1，host P50，910b）
+
+| 调用形态 | 旧 wrapper | 新 wrapper |
+| --- | --- | --- |
+| `initial_state` 位置、`inplace_final_state=True` | 0.155 ms | **0.092 ms** |
+| `initial_state` 位置、`inplace_final_state=False` | 0.153 ms | **0.087 ms** |
+| `initial_state` 位置、flag 省略（默认 True） | 0.154 ms | **0.092 ms** |
+| `initial_state` 关键字 | 0.154 ms | 0.151 ms（不变） |
+
+### 8.3 正确性门禁
+
+- `torch_custom/fla_npu/test/test_ascendc_mutation_contract.py`：纯 Python
+  （不需要 torch/NPU），对 11 种调用形态断言"快路径结果 ≡ 旧 bind 参考实现"，
+  并用 `mock.patch.object(inspect.Signature, "bind", side_effect=...)` 硬性
+  证明位置参数路径**确实没有**调用 bind；另测 flag 默认值与签名不一致、
+  flag 名字写错都会在 wrap 时立刻报错。
+- `tests/regression_mutation_contract.py`：安装态 device 回归，
+  `inplace=True`→version+1、`inplace=False`→version+0 且返回 scratch state、
+  `requires_grad` 在 inplace=True 时拒绝 / inplace=False 时放行、
+  ctypes vs thin public 数值逐位一致（910b 上 11 项全 PASS）。

@@ -110,7 +110,10 @@ def generate(spec: dict) -> str:
     lines.append("namespace {")
     lines.append("typedef struct aclOpExecutor aclOpExecutor;")
     lines.append("")
-    cpp_types = [_aclnn_typename(a["kind"]) for a in args]
+    # cpp_only args are launcher-only parameters; they must not appear in the
+    # aclnn function-pointer type nor in the call argument list.
+    aclnn_args = [a for a in args if not a.get("cpp_only")]
+    cpp_types = [_aclnn_typename(a["kind"]) for a in aclnn_args]
     lines.append(f"using {fn}_GetWorkspaceFn = int (*)(")
     lines.append("    " + ",\n    ".join(cpp_types) + ",")
     lines.append("    uint64_t*, aclOpExecutor**);")

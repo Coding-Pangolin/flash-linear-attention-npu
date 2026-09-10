@@ -81,7 +81,7 @@
 | npu_chunk_fwd_o | ✅（v3） | ✅ | 0.0（仅 BNSD 合法域） | 0.56 → 0.097 ms |
 | npu_chunk_gated_delta_rule_bwd_dhu | ✅（v3） | ✅ | 0.0（canonical ≥2 序列；单序列 dense 两条路径同 NaN，内核边界） | 0.71 → 0.139 ms |
 | npu_recurrent_kda | ✅ | ✅ | 0.0（BSND B2/T2/H2/HV4 dense、state_v_first、inplace + final_state；Ascend950PR） | 0.085 → 0.011 ms（950） |
-| npu_chunk_gated_delta_rule_fwd | spec 已建（BSND 域 + return_order None 槽） | ✅ | 运行域待定：910b/950 多组 flag 探针均 161002（host 走 l0op phase6 复合，可能依赖特定子算子/flag 组合）；仓库无调用方 | - |
+| npu_chunk_gated_delta_rule_fwd | ✅（cpp_only 标量 + return_code；需上游 #495 的 op_api/ctypes 修正） | ✅ | 0.0（910b A2 legacy Phase6 域：BNSD、dense、use_exp2/use_qk_l2norm/use_gate/beta_sigmoid/allow_neg_eigval/state_v_first 全 False、chunk 64/128；GVA、V 128/256、initial_state fp32/bf16、output_final_state 均覆盖）。A5（use_exp2=True）路径、varlen、其它 layout 由 wrapper 回退 ctypes | 待补 |
 | npu_chunk_gated_delta_rule_fwd_prepare | ✅ | ✅ | 0.0（9 输出；Ascend950PR） | 0.144 → 0.030 ms（950） |
 | npu_chunk_gated_delta_rule_bwd_finalize | ✅ | ✅ | 0.0（5 输出；Ascend950PR，g/beta fp32、G=2 域） | 0.167 → 0.023 ms（950） |
 | npu_causal_conv1d_bwd | ✅ | ✅（按文档签名） | 0.0（BNSD 域）；BSH/TND 两路径同 NaN（该构建 kernel 边界待查） | 0.58 → 0.084 ms |
@@ -99,9 +99,14 @@
 2. `causal_conv1d_update`（#390）：适配已在验证分支 PR #512 实现并跑通原型；
    #390 合入后并入本分支并做 910b/950 全量回归。#390 当前（2026-09-09）仍 open，
    最新 head 与本分支差异仅 examples/flash_gated_delta_rule.py，ABI 未变。
-3. `npu_chunk_gated_delta_rule_fwd`（composite）：spec/适配已建（BSND 域 +
-   return_order None 槽），但 910b/950 多组 flag 探针均为 161002，仓库无调用方；
-   判定为运行域未闭合，待真实调用/子算子组合确认后回归。
+3. `npu_chunk_gated_delta_rule_fwd`（composite）：已闭环（910b A2 legacy Phase6
+   域）。根因是上游 #495 修了该算子的 op_api/ctypes 参数透传，合并 main 并重写
+   spec（新增 `output_final_state`/`disable_recompute`/`return_intermediate_states`
+   三个 `cpp_only` 标量 + `python.return_code`）后，ctypes vs thin 在 BNSD dense
+   域逐位一致（GVA、V128/256、chunk64/128、initial_state fp32/bf16、
+   output_final_state 开/关）。注意：T 非 chunk 整数倍时 `A` 的尾块 padding 行
+   两侧都是未初始化内存（valid 区域仍 0.0）；A5 `use_exp2=True` 路径与 varlen
+   仍回退 ctypes。
 4. `npu_solve_tri` varlen（TND/NTD）：thin 直连结果非有限 → wrapper 已委托
    ctypes；dense bsnd/bnsd 已原生 thin 并多处验证 0.0。
 5. 收尾：regression_thin_ops 20 场景（37 组）已在 910b（w16 wheel）与

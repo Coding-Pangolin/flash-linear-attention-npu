@@ -59,7 +59,7 @@ shape：state `(blocks=1448, 16, 128, 128)`，stride gap=16384，offset=12288。
 | ctypes public（原实现） | ~0.52-0.65 ms | ~0.14-0.34 ms | batch 32-128；共享机波动 |
 | 薄层 C++ 直连 | ~0.043-0.053 ms | 同 kernel | 不含 Python wrapper |
 | 薄层 public（M4 前） | ~0.165-0.17 ms | 同 kernel | wrapper：current_stream + bind |
-| 薄层 public（M4 后） | ~0.098-0.108 ms | 同 kernel | stream 缓存 + mutation 快路径 |
+| 薄层 public（M4 后） | ~0.098-0.108 ms | 同 kernel | raw stream 查询 + mutation 快路径 |
 | vllm custom public | ~0.073 ms | ~0.14-0.28 ms | 对照 |
 
 结论：host 从 ctypes 的 ~6-7x custom 降到 M4 后的 ~1.4-1.5x；C++ 执行体
@@ -96,7 +96,7 @@ shape：x `[8, 4096]` bf16，weight `[4, 4096]`，conv_state `(blocks, 6, 4096)`
 | 数值/语义（合法输入） | 基准 | 与 ctypes 逐位一致 |
 | 每调用 Python 校验 | 完整 dtype/device/shape 校验 | 少量校验（性能路径） |
 | 非法输入报错 | 多为 `TypeError`/`RuntimeError`（Python 校验产生） | 常为 aclnn `RuntimeError`；类型不保证一致 |
-| stream | 每调用 `torch.npu.current_stream()` | 首次获取 + 跟踪 `set_stream` 缓存 |
+| stream | 每调用 `torch.npu.current_stream()` | 每调用 `_npu_getCurrentRawStream`（~1us；无进程级缓存，多线程安全） |
 | workspace | 每调用 `torch.empty` | 每调用 C++ `at::empty`（暂同策略） |
 | 编译依赖 | 无（纯 Python） | 编译期仅 torch/CANN；不依赖 torch_npu |
 | 默认行为 | 默认 | 默认编译、默认启用（可 `=0` 关闭），缺失自动回退 |
@@ -111,12 +111,27 @@ shape：x `[8, 4096]` bf16，weight `[4, 4096]`，conv_state `(blocks, 6, 4096)`
 3. conv1d（旧 ABI 的 `npu_causal_conv1d` 与 #390 的 `causal_conv1d_update`）在
    #390 合入前均**不启用** thin，始终回退 ctypes。
 
+### 修复记录：vLLM 多线程多 stream 崩溃（2026-09-10）
+
+- 现象：vLLM 单 curl 崩溃（设备非法地址）。根因是 `_thin.py` 早期提交
+  （`cd206c27 perf: cache current stream ...`）用**进程级全局变量**缓存
+  stream 指针并 monkeypatch `torch.npu.set_stream`；vLLM 多 worker 线程各用
+  独立 stream 时，线程 A 写入的缓存被线程 B 读到，kernel 下发到错误 stream，
+  破坏跨 stream 依赖并访问未就绪内存。
+- 修复：删除全局缓存与 monkeypatch，改为每调用经
+  `torch_npu._C._npu_getCurrentRawStream(torch.npu.current_device())` 读取
+  调用线程当前 stream 的原始指针（实测 ~1.2us/次，对比对象路径 ~23.6us），
+  老版本 torch_npu 无该接口时回退 `torch.npu.current_stream()`。
+- 回归：新增 `test_thin_stream_interleaving.py::test_no_process_global_stream_cache`
+  与 `::test_threads_use_their_own_streams`（4 线程 × 4 stream，barrier 对齐后
+  各自下发，事件须落在本线程 stream 且结果与 ctypes 逐位一致）。
+
 ## 6. 变更文件清单
 
 - `torch_custom/fla_npu/csrc_thin/`：runtime / tensor_desc / ops_recurrent_gdn /
   ops_causal_conv1d（占位）/ pybind
 - `torch_custom/fla_npu/setup.py`：`_C_thin` 默认编译分支
-- `fla_npu/ops/ascendc/_thin.py`：薄层 Python 适配（含 stream 缓存）
+- `fla_npu/ops/ascendc/_thin.py`：薄层 Python 适配（每调用 raw stream 查询）
 - `fla_npu/ops/ascendc/__init__.py`：默认启用 + 白名单 + mutation 快路径
 - `torch_custom/fla_npu/test/test_thin_launcher.py`、
   `test_thin_customer_compat.py`：dispatch/parity/兼容性测试

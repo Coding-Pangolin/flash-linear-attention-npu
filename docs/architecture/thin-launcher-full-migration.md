@@ -77,7 +77,8 @@ kind 取值（v0）：`tensor`、`optional_tensor`、`int_array`、`cpu_int_arra
 4. codegen（或手写对齐）产出 C++ 适配；`_thin.py` 同签名 wrapper；
 5. 白名单 + mutation 契约确认；
 6. 测试：parity（连续/非连续/可选参数/边界）、mutation/autograd、
-   非法输入报错记录、多 stream、确定性；
+   非法输入报错记录、多 stream + 多线程（每线程独立 stream，vLLM worker
+   形态）、确定性；
 7. host benchmark：ctypes vs thin public vs direct（P50，200 次），记录入表；
 8. ND-only 约束：非 ND 输入自动回退 ctypes。
 

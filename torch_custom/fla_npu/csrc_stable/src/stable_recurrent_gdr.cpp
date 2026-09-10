@@ -5,6 +5,7 @@
 // pybind11 may appear here: the compile-once/run-on-many guarantee comes from
 // touching nothing but the aoti_torch_* C shims.
 #include <torch/csrc/stable/library.h>
+#include <torch/csrc/stable/ops.h>
 #include <torch/csrc/stable/stableivalue_conversions.h>
 #include <torch/csrc/stable/tensor.h>
 
@@ -70,6 +71,30 @@ int32_t acl_dtype(int32_t scalar_type) {
   }
 }
 
+// Element size in bytes for the storage-extent computation below.
+int64_t element_size(int32_t scalar_type) {
+  switch (scalar_type) {
+    case 0:   // kByte
+    case 1:   // kChar
+    case 11:  // kBool
+      return 1;
+    case 2:  // kShort
+    case 5:  // kHalf
+    case 15:  // kBFloat16
+      return 2;
+    case 3:   // kInt
+    case 6:   // kFloat
+      return 4;
+    case 4:   // kLong
+    case 7:   // kDouble
+      return 8;
+    default:
+      throw std::runtime_error(
+          "fla_npu_thin(stable): unsupported dtype id " +
+          std::to_string(scalar_type));
+  }
+}
+
 using AclCreateTensorFn = aclTensor* (*)(const int64_t*, uint64_t, int32_t,
                                          const int64_t*, int64_t, int32_t,
                                          const int64_t*, uint64_t, void*);
@@ -93,12 +118,15 @@ struct TensorMeta {
 
 TensorMeta meta_of(const torch::stable::Tensor& tensor) {
   TensorMeta meta;
-  if (!tensor.defined()) {
+  const AtenTensorHandle handle = tensor.get();
+  bool defined = false;
+  TORCH_ERROR_CODE_CHECK(aoti_torch_is_defined(handle, &defined));
+  if (!defined) {
     return meta;
   }
   meta.defined = true;
-  const AtenTensorHandle handle = tensor.get();
-  TORCH_ERROR_CODE_CHECK(aoti_torch_get_data_ptr(handle, &meta.data));
+  void* tensor_data = nullptr;
+  TORCH_ERROR_CODE_CHECK(aoti_torch_get_data_ptr(handle, &tensor_data));
   TORCH_ERROR_CODE_CHECK(aoti_torch_get_dim(handle, &meta.ndim));
   int64_t* sizes = nullptr;
   int64_t* strides = nullptr;
@@ -108,9 +136,20 @@ TensorMeta meta_of(const torch::stable::Tensor& tensor) {
   meta.strides.assign(strides, strides + meta.ndim);
   TORCH_ERROR_CODE_CHECK(
       aoti_torch_get_storage_offset(handle, &meta.storage_offset));
-  TORCH_ERROR_CODE_CHECK(
-      aoti_torch_get_storage_numel(handle, &meta.storage_numel));
+  // Storage extent in elements, exactly like the ctypes path computes it from
+  // `untyped_storage().nbytes() // element_size`.  (aoti_torch_get_storage_numel
+  // is the *view* numel, which is wrong for paged/offset states.)
+  int64_t storage_bytes = 0;
+  TORCH_ERROR_CODE_CHECK(aoti_torch_get_storage_size(handle, &storage_bytes));
   TORCH_ERROR_CODE_CHECK(aoti_torch_get_dtype(handle, &meta.scalar_type));
+  const int64_t item_size = element_size(meta.scalar_type);
+  meta.storage_numel = storage_bytes / item_size;
+  // aclCreateTensor wants the *storage* base address and takes storage_offset
+  // separately; the shim's data_ptr already includes the offset, so subtract it
+  // back out or the offset would be applied twice (see the same note in
+  // csrc_thin/src/tensor_desc.cpp).
+  meta.data = static_cast<uint8_t*>(tensor_data) -
+              meta.storage_offset * item_size;
   TORCH_ERROR_CODE_CHECK(
       aoti_torch_get_device_type(handle, &meta.device_type));
   TORCH_ERROR_CODE_CHECK(
@@ -189,6 +228,7 @@ Tensor run_recurrent_gated_delta_rule(const Tensor& query, const Tensor& key,
   // Output allocation: same shape/dtype/device as `value` (identical to the
   // ctypes/pybind paths, which allocate `_shape(value)` with value's options).
   Tensor out = torch::stable::empty_like(value);
+  const TensorMeta out_meta = meta_of(out);
 
   AclTensorView v_query(meta_of(query));
   AclTensorView v_key(meta_of(key));
@@ -215,13 +255,21 @@ Tensor run_recurrent_gated_delta_rule(const Tensor& query, const Tensor& key,
         std::to_string(get_ret));
   }
 
-  std::vector<uint8_t> workspace;
+  torch::stable::Tensor workspace;
   void* workspace_ptr = nullptr;
   if (workspace_size != 0) {
-    // Spike: host-side scratch is fine for A2 sizes; Phase 1 replaces this with
-    // an aoti_torch_empty_strided allocation on the input's device.
-    workspace.resize(static_cast<size_t>(workspace_size));
-    workspace_ptr = workspace.data();
+    // Device scratch, allocated through the stable shim exactly like the
+    // ctypes/pybind paths allocate it with torch.empty(..., uint8, device).
+    int64_t ws_sizes[1] = {static_cast<int64_t>(workspace_size)};
+    int64_t ws_strides[1] = {1};
+    constexpr int32_t kTorchByte = 0;
+    AtenTensorHandle ws_handle = nullptr;
+    TORCH_ERROR_CODE_CHECK(aoti_torch_empty_strided(
+        1, ws_sizes, ws_strides, kTorchByte, out_meta.device_type,
+        out_meta.device_index, &ws_handle));
+    workspace = torch::stable::Tensor(ws_handle);  // steals ownership
+    TORCH_ERROR_CODE_CHECK(
+        aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
   }
   const int launch_ret = launch(workspace_ptr, workspace_size, executor,
                                 reinterpret_cast<void*>(stream));
@@ -234,7 +282,7 @@ Tensor run_recurrent_gated_delta_rule(const Tensor& query, const Tensor& key,
 }
 
 // Boxed entry point: unbox StableIValues, run, pack the single output.
-void boxed_recurrent_gated_delta_rule(torch::stable::StableIValue* stack,
+void boxed_recurrent_gated_delta_rule(StableIValue* stack,
                                       uint64_t num_inputs,
                                       uint64_t num_outputs) {
   (void)num_inputs;

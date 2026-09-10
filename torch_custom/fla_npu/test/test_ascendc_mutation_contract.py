@@ -254,8 +254,11 @@ class AscendCMutationContractTest(unittest.TestCase):
             for label, name, args, kwargs in self._call_forms(module):
                 signature = inspect.signature(
                     module.ASCENDC_CTYPES_OPS[name])
+                plan = module._mutation_plan(name, signature)
                 fast_mutated, used_fast = module._resolve_mutation(
-                    name, signature, tuple(args), dict(kwargs))
+                    plan, signature,
+                    module.MUTATION_PREDICATES.get(name),
+                    tuple(args), dict(kwargs))
                 expected = self._reference_mutation(
                     module, name, signature, tuple(args), dict(kwargs))
                 self.assertEqual(
@@ -317,7 +320,6 @@ class AscendCMutationContractTest(unittest.TestCase):
             # instead of silently skipping a version bump on the hot path.
             module.MUTATION_FLAGS["npu_recurrent_kda"] = (
                 "inplace_final_state", False)
-            module._mutation_plan.cache_clear()
             module._get_direct_op.cache_clear()
             with self.assertRaisesRegex(
                     RuntimeError, "disagrees with the operator signature default"):
@@ -333,7 +335,6 @@ class AscendCMutationContractTest(unittest.TestCase):
             assert spec.loader is not None
             spec.loader.exec_module(module)
             module.MUTATION_FLAGS["npu_recurrent_kda"] = ("no_such_flag", True)
-            module._mutation_plan.cache_clear()
             module._get_direct_op.cache_clear()
             with self.assertRaisesRegex(RuntimeError, "unknown argument"):
                 module._get_direct_op("npu_recurrent_kda")

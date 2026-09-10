@@ -100,13 +100,19 @@ _POSITIONAL_KINDS = (
 )
 
 
-@functools.lru_cache(maxsize=None)
 def _mutation_plan(name: str, signature: inspect.Signature):
     """Precompute how to decide the mutation contract for one operator.
 
     Declared flags are validated against the real signature here, once, so a
     wrong default fails loudly at first use instead of silently skipping (or
     adding) a version bump on the hot path.
+
+    Called once per wrapped operator.  It is deliberately *not* cached by
+    signature: hashing a 20-argument ``inspect.Signature`` costs ~30us, which
+    would land on every call and dwarf everything this avoids.
+
+    Returns ``(mutated_names, mutated_positions, min_args, flag_name,
+    flag_default, flag_position)``.
     """
 
     mutated_names = tuple(MUTATED_ARGUMENTS.get(name, ()))
@@ -136,11 +142,12 @@ def _mutation_plan(name: str, signature: inspect.Signature):
                 f"default {parameter.default!r}")
         if flag_name in positional_names:
             flag_position = positional_names.index(flag_name)
-    return (mutated_names, mutated_positions, flag_name, bool(flag_default),
-            flag_position)
+    min_args = (max(mutated_positions) + 1) if mutated_positions else 0
+    return (mutated_names, mutated_positions, min_args, flag_name,
+            bool(flag_default), flag_position)
 
 
-def _resolve_mutation(name, signature, args, kwargs):
+def _resolve_mutation(plan, signature, predicate, args, kwargs):
     """Return ``(mutated_tensors, used_fast_path)`` for one call.
 
     The fast path reads the mutated tensor and the declared flag straight out
@@ -149,12 +156,10 @@ def _resolve_mutation(name, signature, args, kwargs):
     predicate.
     """
 
-    (mutated_names, mutated_positions, flag_name, flag_default,
-     flag_position) = _mutation_plan(name, signature)
-    predicate = MUTATION_PREDICATES.get(name)
-    if (mutated_positions
-            and not any(argument in kwargs for argument in mutated_names)
-            and len(args) > max(mutated_positions)):
+    (mutated_names, mutated_positions, min_args, flag_name, flag_default,
+     flag_position) = plan
+    if (min_args and len(args) >= min_args
+            and kwargs.keys().isdisjoint(mutated_names)):
         if flag_name is not None:
             if flag_position is not None and len(args) > flag_position:
                 flag_value = args[flag_position]
@@ -269,8 +274,9 @@ def _wrap_mutable_direct_op(name: str, op: Callable) -> Callable:
         return op
 
     signature = inspect.signature(op)
-    # Validate the declared mutation plan once, at wrap time.
-    _mutation_plan(name, signature)
+    # Validate and precompute the mutation plan once, at wrap time.
+    plan = _mutation_plan(name, signature)
+    predicate = MUTATION_PREDICATES.get(name)
 
     @functools.wraps(op)
     def wrapper(*args, **kwargs):
@@ -280,7 +286,7 @@ def _wrap_mutable_direct_op(name: str, op: Callable) -> Callable:
             raise RuntimeError("Mutable Ascend C operators require the torch Python runtime.") from exc
 
         raw_mutated, _used_fast_path = _resolve_mutation(
-            name, signature, args, kwargs)
+            plan, signature, predicate, args, kwargs)
 
         mutated_tensors = [
             tensor for tensor in raw_mutated if isinstance(tensor, torch.Tensor)

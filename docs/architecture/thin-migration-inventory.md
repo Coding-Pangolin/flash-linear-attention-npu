@@ -26,6 +26,18 @@
   - `中`：含 optional tensor / int-array / 输出 shape 推理；
   - `复杂`：多输出、char*、bwd、字符串 layout、多组 device+cpu metadata；
 - **mutation**：`MUTATED_ARGUMENTS` 中列出的 in-place 参数需走 mutation 契约测试；
+  `MUTATION_FLAGS` 声明"是否写回"的 flag（如
+  `npu_recurrent_kda.inplace_final_state`），使热路径不必 `signature.bind`
+  （910b：`npu_recurrent_kda` 公共调用 0.155 → 0.092 ms，见
+  [cpp-thin-launcher-measurement-report.md §8](cpp-thin-launcher-measurement-report.md)）；
+  设备侧契约用例：`tests/regression_mutation_contract.py`；
+  纯 Python 用例：`torch_custom/fla_npu/test/test_ascendc_mutation_contract.py`。
+- **离线门禁（不需要 NPU/torch，建议随 spec 改动一起跑）**：
+  `torch_custom/fla_npu/tools/op_abi_validate.py`（spec 参数种类/顺序 vs
+  aclnn 头）、`tools/op_spec_lint.py`（`alloc`/`when` 引用的符号必须在 spec
+  参数或 helpers 里声明——拦住"'use_gate_in_kernel' was not declared"这类
+  编译期才发现的问题）、`tools/op_policy_check.py`（spec 输出掩码/返回元组
+  与权威 policy 模块在全部 flag 组合下等价）。
 - **host 热度**：正式迁移顺序最终以服务 profile 决定；本表给出候选顺序。
 
 ## 详细清单

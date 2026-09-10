@@ -24,6 +24,7 @@ from fla_npu.ops.ascendc import _aclnn_ctypes as ct  # noqa: E402
 from fla_npu.ops.ascendc import _stable, _wrap_mutable_direct_op  # noqa: E402
 
 STABLE_LIB = os.environ.get("FLA_NPU_STABLE_LIB", "")
+BATCH = int(os.environ.get("FLA_STABLE_BATCH", "8"))
 
 
 def pct(values, q):
@@ -47,7 +48,7 @@ def bench(fn, n=200, warm=20):
     return pct(ts, 0.5)
 
 
-def make_inputs(batch=8, nk=8, nv=16, dim=128, gap=16384, offset=12288):
+def make_inputs(batch=BATCH, nk=8, nv=16, dim=128, gap=16384, offset=12288):
     block_stride = nv * dim * dim + gap
 
     def make_state():
@@ -149,10 +150,10 @@ def main():
     # --- T8 stable stream probe ----------------------------------------------
     device_index = int(torch.npu.current_device())
     py_raw = int(torch_npu._C._npu_getCurrentRawStream(device_index))
-    shim_raw, shim_id = _stable.stream_probe(device_index)
-    print(f"T8 stream probe: python_raw={py_raw} shim_raw={shim_raw} "
-          f"stable_id={shim_id} "
-          f"({'MATCH' if shim_raw == py_raw else 'MISMATCH'})")
+    shim_id, stable_id = _stable.stream_probe(device_index)
+    print(f"T8 stream probe: python_raw={py_raw} shim_stream_id={shim_id} "
+          f"stable_stream_id={stable_id} "
+          f"({'MATCH' if py_raw == shim_id else 'MISMATCH'})")
 
     # --- T3 multi-thread / multi-stream -------------------------------------
     golden = None
@@ -202,24 +203,38 @@ def main():
     print(f"PASS T3 {n_threads} threads x own stream "
           f"(events landed on the calling stream, parity 0.0)")
 
-    # --- T5 host A/B ---------------------------------------------------------
+    # --- T5 host A/B (5 rows: isolate dispatcher vs Python wrapper) ----------
     from fla_npu.ops.ascendc import _thin
 
     state_a, _ = inputs["make_state"]()
     state_b, _ = inputs["make_state"]()
+    state_r, _ = inputs["make_state"]()
+    stream = int(torch_npu._C._npu_getCurrentRawStream(device_index))
+    ext = _thin._extension()
+
+    def thin_direct():
+        return ext.npu_recurrent_gated_delta_rule(
+            inputs["query"], inputs["key"], inputs["value"], state_b,
+            inputs["beta"], float(inputs["scale"]), inputs["actual_seq_lengths"],
+            inputs["ssm_state_indices"], None, inputs["g"], None, stream)
+
+    def stable_direct():
+        return torch.ops.fla_npu_thin.npu_recurrent_gated_delta_rule(
+            inputs["query"], inputs["key"], inputs["value"], state_r,
+            inputs["beta"], inputs["actual_seq_lengths"],
+            inputs["ssm_state_indices"], None, inputs["g"], None,
+            float(inputs["scale"]), stream)
+
     with torch.no_grad():
+        probe = bench(lambda: torch.ops.fla_npu_thin._stream_probe(0))
         a = bench(lambda: ct.npu_recurrent_gated_delta_rule(
             inputs["query"], inputs["key"], inputs["value"], state_a,
             beta=inputs["beta"], g=inputs["g"], scale=inputs["scale"],
             actual_seq_lengths=inputs["actual_seq_lengths"],
             ssm_state_indices=inputs["ssm_state_indices"],
             num_accepted_tokens=None))
-        b = bench(lambda: _thin.npu_recurrent_gated_delta_rule(
-            inputs["query"], inputs["key"], inputs["value"], state_b,
-            beta=inputs["beta"], g=inputs["g"], scale=inputs["scale"],
-            actual_seq_lengths=inputs["actual_seq_lengths"],
-            ssm_state_indices=inputs["ssm_state_indices"],
-            num_accepted_tokens=None))
+        b = bench(thin_direct)
+        e = bench(stable_direct)
         c = bench(lambda: call_public_stable(inputs, state_s))
         d = bench(lambda: stable_op(
             inputs["query"], inputs["key"], inputs["value"], state_w,
@@ -227,8 +242,13 @@ def main():
             actual_seq_lengths=inputs["actual_seq_lengths"],
             ssm_state_indices=inputs["ssm_state_indices"],
             num_accepted_tokens=None))
-    print(f"T5 host P50  ctypes={a:.4f}  pybind-thin={b:.4f}  "
-          f"stable={c:.4f}  stable+contract={d:.4f} ms")
+    print("T5 host P50 (ms):")
+    print(f"  0 dispatcher only (_stream_probe)  {probe:.4f}   <- bare torch.ops cost")
+    print(f"  1 ctypes                          {a:.4f}")
+    print(f"  2 pybind ext direct (stream fixed) {b:.4f}")
+    print(f"  3 stable op direct (stream fixed)  {e:.4f}   <- dispatcher cost")
+    print(f"  4 stable via _stable wrapper        {c:.4f}   <- + python stream/wrapper")
+    print(f"  5 stable + mutation contract        {d:.4f}")
     print("ALL PASS: stable-abi Phase 1")
 
 

@@ -169,3 +169,43 @@ undefined 的 aoti_torch_* 符号: 40                 ← 全部走稳定 C shim
 两条都说明：stable 路径的 descriptor 语义必须逐条对齐
 `csrc_thin/src/tensor_desc.cpp`，不能想当然。Phase 3 的 codegen 要把这两条写成
 共享的 `thin_tensor.h` 实现，而不是每个算子各写一遍。
+
+### 6.4 Phase 1 完成情况（2026-09-11，batch 8 与 batch 100 各一轮）
+
+| 用例 | 结果 |
+| --- | --- |
+| T1 parity（ctypes vs stable，非连续 paged state） | **PASS**（out 0.0 / state 0.0） |
+| T2 mutation 契约（共享 wrapper 之后） | **PASS**（version +1、requires_grad 被拒） |
+| T3 4 线程 × 各自 stream（事件归属 + parity） | **PASS** |
+| T6 ELF 符号审计 | **PASS**（0 个 `_ZN2at/_ZN3c10`，40 个 `aoti_torch_*`） |
+| **T5 host A/B（≤ pybind × 1.15）** | **FAIL**，见下表 |
+| T8 stable stream 探针 | **不可用**：`aoti_torch_get_current_stream` 与 `stable::accelerator::getCurrentStream` 在 torch_npu 2.9.0.post2 上都返回 0 |
+
+T5 明细（host P50，ms；batch 8 / batch 100 两轮）：
+
+| # | 路径 | batch 8 | batch 100 |
+| --- | --- | --- | --- |
+| 0 | dispatcher 裸开销（`_stream_probe`） | 0.0043 | 0.0043 |
+| 1 | ctypes | 0.4957 | 0.4854 |
+| 2 | pybind ext 直连（stream 固定） | 0.0379 | 0.0365 |
+| 3 | **stable op 直连**（stream 固定） | **0.0662** | **0.0757** |
+| 4 | stable 经 `_stable` wrapper | 0.0885 | 0.1021 |
+| 5 | stable + mutation 契约 | 0.1070 | 0.1241 |
+
+结论（写进决策，不粉饰）：
+
+1. **可行性成立**：数值逐位一致、无不稳定符号、无 cpXXX、多流正确、契约可保。
+2. **性能不达标**：stable 直连 ≈ pybind 直连 × 1.8–2.1（公共路径 ×1.7），超过
+   Gate 的 1.15×。而 dispatcher **裸**开销只有 4.3us，说明贵的是**逐参数转换**——
+   本算子有 11 个张量参数 + 3 个 optional + 2 个标量，每个张量参数约 2us（IValue
+   boxing + `torch::stable::Tensor` 的 shared_ptr 构造）。
+3. **它正好落在 vllm-ascend 的量级**：stable 直连 0.0757 vs vllm custom 0.073（同为
+   `torch.ops` 机制）。也就是说"消掉两条轴"的代价就是回到 vllm 的 host 水平，而
+   我们现有 pybind 路径（0.0365 直连 / 约 0.058 公共）其实是**更快但带两条 ABI 轴**。
+   按每 decode step ~30 次调用估算，切到 stable 约 +1.2 ms/step——这是必须显式接受的
+   取舍，而不是白拿。
+4. **唯一明显杠杆已定位**：把逐参数解包从 `to<Tensor>`（每个参数一个 shared_ptr）
+   换成 handle 级解包。本次尝试 `to<AtenTensorHandle>` **段错误**（bare handle 的
+   所有权语义与 `torch::stable::Tensor` 不同），已回退并记为 Phase 3 第一项待解问题；
+   若解决，预计可回收 ~2us × 11 ≈ 20us，把 stable 直连压到 ~0.045–0.055，
+   回到 Gate 附近。

@@ -280,25 +280,7 @@ std::vector<at::Tensor> npu_causal_conv1d_bwd(
     uint64_t stream);
 
 
-std::vector<at::Tensor> npu_chunk_kda_fwd(
-    const at::Tensor& q,
-    const at::Tensor& k,
-    const at::Tensor& v,
-    const at::Tensor& g,
-    const at::Tensor& beta,
-    const c10::optional<at::Tensor>& A_log,
-    const c10::optional<at::Tensor>& dt_bias,
-    const c10::optional<at::Tensor>& initial_state,
-    const std::vector<int64_t>& cu_seqlens,
-    const std::vector<int64_t>& chunk_indices,
-    const std::string& layout,
-    double scale,
-    int64_t chunk_size,
-    bool safe_gate,
-    double lower_bound,
-    bool use_gate_in_kernel,
-    bool state_v_first,
-    uint64_t stream);
+
 
 
 std::vector<at::Tensor> npu_chunk_kda_bwd_intra(
@@ -448,6 +430,30 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd_prepare(
     bool use_exp2,
     bool output_a,
     bool use_beta_sigmoid_in_kernel,
+    uint64_t stream);
+
+
+std::vector<at::Tensor> npu_chunk_kda_fwd(
+    const at::Tensor& q,
+    const at::Tensor& k,
+    const at::Tensor& v,
+    const at::Tensor& g,
+    const at::Tensor& beta,
+    const c10::optional<at::Tensor>& A_log,
+    const c10::optional<at::Tensor>& dt_bias,
+    const c10::optional<at::Tensor>& initial_state,
+    const std::vector<int64_t>& cu_seqlens,
+    const std::vector<int64_t>& chunk_indices,
+    const std::string& layout,
+    double scale,
+    int64_t chunk_size,
+    bool safe_gate,
+    double lower_bound,
+    bool use_gate_in_kernel,
+    bool state_v_first,
+    bool output_final_state,
+    bool disable_recompute,
+    bool return_intermediate_states,
     uint64_t stream);
 
 }  // namespace fla_npu_thin
@@ -693,26 +699,7 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("activation"),
       py::arg("input_layout"),
       py::arg("stream"));
-  m.def(
-      "npu_chunk_kda_fwd",
-      &npu_chunk_kda_fwd, py::arg("q"),
-      py::arg("k"),
-      py::arg("v"),
-      py::arg("g"),
-      py::arg("beta"),
-      py::arg("A_log"),
-      py::arg("dt_bias"),
-      py::arg("initial_state"),
-      py::arg("cu_seqlens"),
-      py::arg("chunk_indices"),
-      py::arg("layout"),
-      py::arg("scale"),
-      py::arg("chunk_size"),
-      py::arg("safe_gate"),
-      py::arg("lower_bound"),
-      py::arg("use_gate_in_kernel"),
-      py::arg("state_v_first"),
-      py::arg("stream"));
+  
   m.def(
       "npu_chunk_kda_bwd_intra",
       &npu_chunk_kda_bwd_intra, py::arg("q"),
@@ -841,5 +828,28 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("use_exp2"),
       py::arg("output_a"),
       py::arg("use_beta_sigmoid_in_kernel"),
+      py::arg("stream"));
+  m.def(
+      "npu_chunk_kda_fwd",
+      &npu_chunk_kda_fwd, py::arg("q"),
+      py::arg("k"),
+      py::arg("v"),
+      py::arg("g"),
+      py::arg("beta"),
+      py::arg("A_log"),
+      py::arg("dt_bias"),
+      py::arg("initial_state"),
+      py::arg("cu_seqlens"),
+      py::arg("chunk_indices"),
+      py::arg("layout"),
+      py::arg("scale"),
+      py::arg("chunk_size"),
+      py::arg("safe_gate"),
+      py::arg("lower_bound"),
+      py::arg("use_gate_in_kernel"),
+      py::arg("state_v_first"),
+      py::arg("output_final_state"),
+      py::arg("disable_recompute"),
+      py::arg("return_intermediate_states"),
       py::arg("stream"));
 }

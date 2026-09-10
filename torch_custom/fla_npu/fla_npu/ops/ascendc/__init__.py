@@ -197,6 +197,8 @@ def _prepare_direct_runtime(*, raise_on_error: bool = True) -> None:
     if _DIRECT_RUNTIME_READY:
         return
 
+    _check_build_compat()
+
     try:
         import fla_npu
 
@@ -212,6 +214,45 @@ def _prepare_direct_runtime(*, raise_on_error: bool = True) -> None:
     else:
         _DIRECT_RUNTIME_ERROR = None
         _DIRECT_RUNTIME_READY = True
+
+
+def _check_build_compat() -> None:
+    """Refuse to run a compiled launcher next to a different torch build.
+
+    ``_C_thin`` is a C++ extension linked against one libtorch; a torch upgrade
+    or a different torch_npu packaging changes the C++ ABI underneath it.  The
+    failure mode without this check is an undefined symbol at import, or (worse)
+    a silently mismatched call.  The stable-ABI launcher (``libfla_npu_thin.so``)
+    does not need this check: it only touches ``aoti_torch_*`` symbols.
+    """
+
+    if os.environ.get("FLA_NPU_SKIP_ABI_CHECK"):
+        return
+    try:
+        from fla_npu import _build_info as build_info
+    except Exception:
+        return  # pure-Python install (no compiled launcher): nothing to verify
+    if not getattr(build_info, "THIN_BUILT", False):
+        return
+
+    import torch
+
+    expected = getattr(build_info, "TORCH_VERSION", None)
+    actual = torch.__version__
+    if expected and actual != expected:
+        raise RuntimeError(
+            f"fla_npu._C_thin was built against torch {expected} but torch "
+            f"{actual} is imported. The compiled thin launcher is ABI-matched "
+            "to its build torch; install a matching fla_npu wheel, or set "
+            "FLA_NPU_SKIP_ABI_CHECK=1 to bypass this check.")
+    expected_git = getattr(build_info, "TORCH_GIT_VERSION", None)
+    actual_git = getattr(torch.version, "git_version", None)
+    if expected_git and actual_git and expected_git != actual_git:
+        raise RuntimeError(
+            f"fla_npu._C_thin was built against torch git {expected_git} but "
+            f"torch {actual} reports git {actual_git}: same version string, "
+            "different build. Install a matching fla_npu wheel, or set "
+            "FLA_NPU_SKIP_ABI_CHECK=1 to bypass this check.")
 
 
 def _torch_npu_namespace():

@@ -107,6 +107,7 @@ def _setup_thin_extension():
     from torch.utils.cpp_extension import BuildExtension, CppExtension
 
     _run_thin_spec_codegen()
+    _write_build_info()
     csrc_thin = SETUP_DIR / "csrc_thin"
     sources = sorted(str(p) for p in (csrc_thin / "src").glob("*.cpp"))
     include_dirs = [str(csrc_thin / "include")]
@@ -126,7 +127,62 @@ def _setup_thin_extension():
         cmdclass={"build_ext": BuildExtension, "build_py": CleanBuildPy},
         package_data={"fla_npu": OPP_PACKAGE_DATA},
         include_package_data=True,
+        install_requires=_runtime_requirements(),
         zip_safe=False,
+    )
+
+
+def _runtime_requirements() -> list[str]:
+    """Pin the torch/torch_npu pair the shipped extension was compiled against.
+
+    The wheel carries a compiled ``_C_thin`` (and, later, ``libfla_npu_thin.so``)
+    that is ABI-matched to one torch build.  Without these pins pip happily
+    installs it next to a different torch, and the failure shows up as a segfault
+    or an undefined symbol at import instead of a resolution error.
+    """
+
+    pins: list[str] = []
+    try:
+        import torch
+
+        pins.append(f"torch=={torch.__version__}")
+    except Exception:
+        pass
+    try:
+        import torch_npu
+
+        pins.append(f"torch_npu=={torch_npu.__version__}")
+    except Exception:
+        pass
+    return pins
+
+
+def _write_build_info() -> None:
+    """Record the build-time versions for the runtime compatibility check."""
+
+    import torch
+
+    torch_npu_version = None
+    try:
+        import torch_npu
+
+        torch_npu_version = torch_npu.__version__
+    except Exception:
+        pass
+    cxx11_abi = None
+    try:
+        cxx11_abi = bool(torch._C._GLIBCXX_USE_CXX11_ABI)
+    except Exception:
+        pass
+    target = SETUP_DIR / "fla_npu" / "_build_info.py"
+    target.write_text(
+        '"""Generated at build time -- do not edit."""\n'
+        "THIN_BUILT = True\n"
+        f"TORCH_VERSION = {torch.__version__!r}\n"
+        f"TORCH_GIT_VERSION = {torch.version.git_version!r}\n"
+        f"TORCH_NPU_VERSION = {torch_npu_version!r}\n"
+        f"TORCH_CXX11_ABI = {cxx11_abi!r}\n",
+        encoding="utf-8",
     )
 
 

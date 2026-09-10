@@ -309,6 +309,12 @@ void boxed_recurrent_gated_delta_rule(StableIValue* stack,
                                       uint64_t num_outputs) {
   (void)num_inputs;
   (void)num_outputs;
+  // Two attempts at handle-level unboxing (`to<AtenTensorHandle>`) segfaulted at
+  // call time, and the second one isolated it to this conversion rather than the
+  // optional path: a bare handle out of an IValue does not carry the ownership
+  // that torch::stable::Tensor takes over, so the launcher must keep the Tensor
+  // form (~2us of shared_ptr per argument).  Left for a debugger session; the
+  // measured prize is ~14-20us per call.
   const Tensor query = to<Tensor>(stack[0]);
   const Tensor key = to<Tensor>(stack[1]);
   const Tensor value = to<Tensor>(stack[2]);

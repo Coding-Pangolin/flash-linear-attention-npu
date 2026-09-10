@@ -49,8 +49,7 @@
   ],
   "python": {
     "positional": ["q", "k", "v", "g", "beta"],
-    "ignored": ["use_gate_in_kernel", "use_beta_sigmoid_in_kernel"],
-    "pre": "layout = str(layout)\nif scale is None:\n    scale = float(q.shape[3]) ** -0.5\nif cu_seqlens is not None and chunk_indices is None:\n    chunk_indices = []\n    for _seq in range(len(cu_seqlens) - 1):\n        _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]\n        for _c in range((_len + int(chunk_size) - 1) // int(chunk_size)):\n            chunk_indices.extend((_seq, _c))\nif not bool(use_gate_in_kernel):\n    a_log = None\ndt_bias = None",
+    "pre": "layout = str(layout)\nif scale is None:\n    scale = float(q.shape[3]) ** -0.5\nif cu_seqlens is not None and chunk_indices is None:\n    chunk_indices = []\n    for _seq in range(len(cu_seqlens) - 1):\n        _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]\n        for _c in range((_len + int(chunk_size) - 1) // int(chunk_size)):\n            chunk_indices.extend((_seq, _c))\na_log = None\ndt_bias = None",
     "return_code": "out = [result[0]]\nif output_final_state:\n    out.append(result[1])\nelse:\n    out.append(None)\nif not disable_recompute:\n    out.append(result[7])\n    out.append(result[8])\nif return_intermediate_states:\n    out.append(result[9])\nreturn tuple(out)",
     "defaults": {
       "a_log": "None",
@@ -93,6 +92,8 @@
     {"name": "output_final_state", "kind": "bool", "cpp_only": true},
     {"name": "disable_recompute", "kind": "bool", "cpp_only": true},
     {"name": "return_intermediate_states", "kind": "bool", "cpp_only": true},
+    {"name": "use_gate_in_kernel", "kind": "bool", "cpp_only": true},
+    {"name": "use_beta_sigmoid_in_kernel", "kind": "bool", "cpp_only": true},
     {"name": "o", "kind": "out_tensor"},
     {"name": "final_state", "kind": "out_tensor"},
     {"name": "q_hat", "kind": "out_tensor"},

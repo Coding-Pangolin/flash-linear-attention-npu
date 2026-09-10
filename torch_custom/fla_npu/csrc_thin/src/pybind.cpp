@@ -400,6 +400,9 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_bwd_finalize(
 
 
 
+
+
+
 std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd(
     const at::Tensor& q,
     const at::Tensor& k,
@@ -781,7 +784,8 @@ PYBIND11_MODULE(_C_thin, m) {
       py::arg("use_gate_in_kernel"),
       py::arg("state_v_first"),
       py::arg("use_exp2"),
-      py::arg("stream"));  m.def(
+      py::arg("stream"));  
+  m.def(
       "npu_chunk_gated_delta_rule_fwd",
       &npu_chunk_gated_delta_rule_fwd, py::arg("q"),
       py::arg("k"),

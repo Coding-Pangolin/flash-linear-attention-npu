@@ -10,6 +10,7 @@
 
 #define GDN_CHUNK_CUMSUM_KKT_SOLVE_IMPL_ONLY
 #include "operators/chunk_kkt_solve_tri/op_kernel/chunk_cumsum_kkt_solve_tri.cpp"
+#include "operators/chunk_kkt_solve_tri/op_kernel/solve_layout_staging.h"
 #undef GDN_CHUNK_CUMSUM_KKT_SOLVE_IMPL_ONLY
 
 namespace GDN {
@@ -226,6 +227,8 @@ __aicore__ inline void RunPhase6(
     GM_ADDR scoreWorkspace = userWorkspace + phase6->scoreWorkspaceOffset;
     GM_ADDR aWorkspace = userWorkspace + phase6->aWorkspaceOffset;
     GM_ADDR solveWorkspaceBase = userWorkspace + phase6->solveWorkspaceOffset;
+    GM_ADDR tndInput = scoreWorkspace;
+    GM_ADDR tndOutput = scoreWorkspace + abc.aWorkspaceBytes;
     GM_ADDR gCumsumBht = userWorkspace + phase6->gCumsumBhtOffset;
     uint64_t coreGroup = static_cast<uint64_t>(AscendC::GetBlockIdx());
     if ASCEND_IS_AIV {
@@ -252,9 +255,30 @@ __aicore__ inline void RunPhase6(
         kktPipe.Reset();
     }
 
-    if (abc.BT == 64) {
+    if (abc.BT == 64 && abc.isVarlen != 0) {
+        // Match the public BT64 SolveTri path exactly: physical TND layout,
+        // chunk-to-head task order, and the native FP32 implementation.
+        AscendC::SyncAll<false>();
+        NsPhase6SolveLayoutStaging::TransposeBhtTnd<InputT>(
+            aWorkspace, tndInput, &abc, true);
+        AscendC::SyncAll<false>();
+
+        Arch22ChunkGatedDeltaRuleFwdAbcTiling solveTiling = abc;
+        solveTiling.layoutMode = 2;
+        RunSolvePhase<InputT, 64>(tndInput, cuSeqlens, chunkIndices,
+                                  tndOutput, solveWorkspaceBase, &solveTiling);
+
+        AscendC::SyncAll<false>();
+        NsPhase6SolveLayoutStaging::TransposeBhtTnd<InputT>(
+            tndOutput, A, &abc, false);
+        AscendC::SyncAll<false>();
+    } else if (abc.BT == 64) {
+        // The public SolveTri runs after a kernel boundary.  Recreate that
+        // visibility point before its FP32 AIC/AIV protocol consumes the
+        // fused KKT epilogue written by all participating vector cores.
+        AscendC::SyncAll<false>();
         RunSolvePhase<InputT, 64>(aWorkspace, cuSeqlens, chunkIndices, A,
-                                  solveWorkspace, &abc);
+                                  solveWorkspaceBase, &abc);
     } else {
         RunSolvePhase<InputT, 128>(aWorkspace, cuSeqlens, chunkIndices, A,
                                    solveWorkspace, &abc);
@@ -284,7 +308,7 @@ __aicore__ inline void RunPhase6(
     }
 
     WritePublicCumsumRows(gCumsumBht, gCumsumBth, cuSeqlens, chunkIndices, abc);
-    DispatchFwdH<TileShapes>(k, w, u, gCumsumBht, gk, initialState, cuSeqlens,
+    DispatchFwdH<InputT, TileShapes>(k, w, u, gCumsumBht, gk, initialState, cuSeqlens,
                              chunkIndices, h, vNew, finalState, tiling, userWorkspace);
 
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
@@ -302,7 +326,7 @@ __aicore__ inline void RunPhase6(
         reinterpret_cast<const __gm__ ChunkFwdOTilingData *>(tiling + oTilingOffset);
     ChunkFwdOTilingData oTiling{};
     CopyOTiling(gmOTiling, oTiling);
-    DispatchFwdO(q, k, vNew, h, gCumsumBht, cuSeqlens, chunkIndices, o,
+    DispatchFwdO<InputT>(q, k, vNew, h, gCumsumBht, cuSeqlens, chunkIndices, o,
                  userWorkspace, &oTiling);
 }
 
@@ -319,27 +343,13 @@ extern "C" __global__ __aicore__ void chunk_gated_delta_rule_fwd(
     REGISTER_TILING_DEFAULT(GDN::Arch22ChunkGatedDeltaRuleFwdTrailer);
     if (TILING_KEY_IS(1)) {
         KERNEL_TASK_TYPE(1, KERNEL_TYPE_MIX_AIC_1_2);
-        const __gm__ GDN::Arch22ChunkGatedDeltaRuleFwdTrailer *phase6 = GDN::GetPhase6Trailer(tiling);
-        if (phase6->abc.dtypeMode == 1) {
-            GDN::RunPhase6<bfloat16_t, Catlass::Gemm::Kernel::GDNFwdHTileShapes128>(
-                q, k, v, beta, raw_g, gk, initial_state, cu_seqlens, chunk_indices,
-                o, final_state, g_cumsum_bth, A, workspace, tiling);
-        } else {
-            GDN::RunPhase6<half, Catlass::Gemm::Kernel::GDNFwdHTileShapes128>(
-                q, k, v, beta, raw_g, gk, initial_state, cu_seqlens, chunk_indices,
-                o, final_state, g_cumsum_bth, A, workspace, tiling);
-        }
+        GDN::RunPhase6<DTYPE_Q, Catlass::Gemm::Kernel::GDNFwdHTileShapes128>(
+            q, k, v, beta, raw_g, gk, initial_state, cu_seqlens, chunk_indices,
+            o, final_state, g_cumsum_bth, A, workspace, tiling);
     } else if (TILING_KEY_IS(2)) {
         KERNEL_TASK_TYPE(2, KERNEL_TYPE_MIX_AIC_1_2);
-        const __gm__ GDN::Arch22ChunkGatedDeltaRuleFwdTrailer *phase6 = GDN::GetPhase6Trailer(tiling);
-        if (phase6->abc.dtypeMode == 1) {
-            GDN::RunPhase6<bfloat16_t, Catlass::Gemm::Kernel::GDNFwdHTileShapes256>(
-                q, k, v, beta, raw_g, gk, initial_state, cu_seqlens, chunk_indices,
-                o, final_state, g_cumsum_bth, A, workspace, tiling);
-        } else {
-            GDN::RunPhase6<half, Catlass::Gemm::Kernel::GDNFwdHTileShapes256>(
-                q, k, v, beta, raw_g, gk, initial_state, cu_seqlens, chunk_indices,
-                o, final_state, g_cumsum_bth, A, workspace, tiling);
-        }
+        GDN::RunPhase6<DTYPE_Q, Catlass::Gemm::Kernel::GDNFwdHTileShapes256>(
+            q, k, v, beta, raw_g, gk, initial_state, cu_seqlens, chunk_indices,
+            o, final_state, g_cumsum_bth, A, workspace, tiling);
     }
 }

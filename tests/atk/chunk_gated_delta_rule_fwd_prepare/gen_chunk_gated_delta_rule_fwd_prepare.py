@@ -1,8 +1,14 @@
 """chunk_gated_delta_rule_fwd_prepare 的 ATK 泛化用例生成器。
 
-100 个 shape × 2 条（bf16 双 seed）= 200。不支持的 fp16 入口会改回 bf16。
+100 个 shape × 3 条合法 flag = 300（bf16）。
 约束：chunk_size=64，K=128，V∈{128,256}，HV/HK∈{1,2,3,4}，use_exp2=True，
 use_qk_l2norm=True，use_gate=False。含 packed varlen（B=1 + seqlens）。
+
+当前 kernel/host 只接受这 3 组 flag（l2 / gate / sigmoid / neg）：
+
+    T F T T   sig1_neg1   核内 2*sigmoid(beta)
+    T F T F   sig1_neg0   核内 1*sigmoid(beta)
+    T F F F   sig0_neg0   不做 sigmoid；Python 不分配 beta_out
 """
 
 from __future__ import annotations
@@ -23,6 +29,13 @@ except ModuleNotFoundError as exc:
     CaseConfig = None
 
 OP_NAME = "chunk_gated_delta_rule_fwd_prepare"
+
+# (tag, sigmoid, neg). l2norm=True and gate=False are fixed by the kernel.
+SUPPORTED_FLAGS = (
+    ("sig1_neg1", True, True),
+    ("sig1_neg0", True, False),
+    ("sig0_neg0", False, False),
+)
 
 
 def _ok(hk: int, hv: int) -> bool:
@@ -177,10 +190,10 @@ def _make_profiles() -> list[dict]:
     profiles = []
     case_id = 0
     for shape in _shape_table():
-        for slot, dtype_name in enumerate(("bf16", "fp16")):
+        for tag, sigmoid, neg in SUPPORTED_FLAGS:
             spec = dict(shape)
             spec.update(
-                dtype="bf16",  # fp16 unsupported; remap
+                dtype="bf16",
                 op=OP_NAME,
                 case_id=case_id,
                 seed=20260817 + case_id,
@@ -188,17 +201,20 @@ def _make_profiles() -> list[dict]:
                 soc="ascend950",
                 use_qk_l2norm_in_kernel=True,
                 use_gate_in_kernel=False,
-                use_beta_sigmoid_in_kernel=True,
-                allow_neg_eigval=True,
+                use_beta_sigmoid_in_kernel=sigmoid,
+                allow_neg_eigval=neg,
                 use_exp2=True,
+                flag_tag=tag,
             )
-            spec["name"] = f"{shape['name']}_{dtype_name}"
+            spec["name"] = f"{shape['name']}_{tag}"
             profiles.append(spec)
             case_id += 1
     return profiles
 
 
 PROFILES = _make_profiles()
+if len(PROFILES) != 300:
+    raise RuntimeError(f"need 300 profiles (100 shapes x 3 flags), got {len(PROFILES)}")
 
 
 def _dtype(name: str) -> str:
@@ -308,11 +324,11 @@ def dump_json_files(out_dir: Path | None = None) -> None:
         json.dumps(all_cases, indent=1, ensure_ascii=False) + "\n"
     )
 
-    def _first(substr: str) -> int:
+    def _first(substr: str, tag: str = "sig1_neg1") -> int:
         for i, spec in enumerate(PROFILES):
-            if substr in spec.get("name", "") and i % 2 == 0:
+            if substr in spec.get("name", "") and spec.get("flag_tag") == tag:
                 return i
-        raise RuntimeError(f"no profile matching {substr!r}")
+        raise RuntimeError(f"no profile matching {substr!r} tag={tag!r}")
 
     mss_idx = [
         0,
@@ -323,6 +339,10 @@ def dump_json_files(out_dir: Path | None = None) -> None:
         _first("varlen_g2_v256"),
         _first("varlen_g3_mix"),
         _first("varlen_near_chunk"),
+        _first("gva_B2_T256", "sig1_neg0"),
+        _first("gva_B2_T256", "sig0_neg0"),
+        _first("varlen_g2_v256", "sig0_neg0"),
+        _first("r2_T64_V256", "sig1_neg0"),
     ]
     mss = [all_cases[i] for i in mss_idx]
     (out_dir / f"atk_{OP_NAME}_mss.json").write_text(
@@ -330,13 +350,20 @@ def dump_json_files(out_dir: Path | None = None) -> None:
     )
     perf_idx = [
         i for i, s in enumerate(PROFILES)
-        if s["T"] >= 256 and not s.get("seqlens")
+        if s["T"] >= 256 and not s.get("seqlens") and s.get("flag_tag") == "sig1_neg1"
     ][:6]
     if not perf_idx:
-        perf_idx = [0, 1]
+        perf_idx = [0]
     perf = [all_cases[i] for i in perf_idx]
     (out_dir / f"atk_{OP_NAME}_perf.json").write_text(
         json.dumps(perf, indent=1, ensure_ascii=False) + "\n"
+    )
+    g2 = [
+        all_cases[i] for i, s in enumerate(PROFILES)
+        if s["HK"] > 0 and s["HV"] // s["HK"] == 2
+    ]
+    (out_dir / f"atk_{OP_NAME}_g2.json").write_text(
+        json.dumps(g2, indent=1, ensure_ascii=False) + "\n"
     )
 
 
@@ -365,4 +392,7 @@ if GENERATOR_REGISTRY is not None:
 
 if __name__ == "__main__":
     dump_json_files()
-    print(f"wrote {len(PROFILES)} profiles")
+    tags = {}
+    for spec in PROFILES:
+        tags[spec["flag_tag"]] = tags.get(spec["flag_tag"], 0) + 1
+    print(f"wrote {len(PROFILES)} profiles {tags}")

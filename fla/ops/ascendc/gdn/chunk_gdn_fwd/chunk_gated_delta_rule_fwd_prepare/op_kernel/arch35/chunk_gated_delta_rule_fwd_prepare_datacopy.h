@@ -215,27 +215,14 @@ __aicore__ inline void PackDiagLeavesFromUb(LocalTensor<float> packed, LocalTens
     DataCopy(packed[32], L[32 * 64 + 32], DataCopyParams(32, burst, gap, gap));
 }
 
-// Packed VCS ND -> L1 NZ quadrants (Right=TL L00, Left=BR L11), and
-// -L ND64 -> L1 NZ. 8-col DataCopy, no UB TransDataTo5HD.
-// Off-diagonal leaves stay Stage0 zero.
-__aicore__ inline void UploadDiagLeavesAndFullAToL1(LocalTensor<float> l1LeafRight, LocalTensor<float> l1LeafLeft,
-                                                    LocalTensor<float> l1NegL, LocalTensor<float> packedNd32x64,
-                                                    LocalTensor<float> negLNd64)
+// Packed VCS ND -> L1 NZ quadrants (Right=TL L00, Left=BR L11).
+// Off-diagonal leaves stay Stage0 zero. -L is uploaded separately so it
+// can overlap VCS on MTE3.
+__aicore__ inline void UploadDiagLeavesToL1(LocalTensor<float> l1LeafRight, LocalTensor<float> l1LeafLeft,
+                                            LocalTensor<float> packedNd32x64)
 {
     UbPackedLeafToL1(l1LeafRight, packedNd32x64, 0, 0, 0);
     UbPackedLeafToL1(l1LeafLeft, packedNd32x64, 1, 1, static_cast<int32_t>(kVcs32));
-    UbNd64ToL1Nz8(l1NegL, negLNd64);
-}
-
-// -L from kkt/g/β, pack diag leaves, VCS (I+Lii)^{-1} into ubResVcs.
-__aicore__ inline void Stage3_ConstructLAndVcs(LocalTensor<float> kkt, LocalTensor<float> g, LocalTensor<float> beta,
-                                               LocalTensor<float> ubL, LocalTensor<float> packed, LocalTensor<float> ubIVcs,
-                                               LocalTensor<float> ubResVcs, LocalTensor<uint32_t> ubVcsIdx)
-{
-    NegLowerLVF(kkt, g, beta, ubL);
-    PackDiagLeavesFromUb(packed, ubL);
-    DataCopy(ubResVcs, ubIVcs, static_cast<int32_t>(kVcsPackedElems32));
-    MulReduceScatterVF32(ubResVcs, packed, ubResVcs, ubVcsIdx);
 }
 
 } // namespace ChunkGatedDeltaRuleFwdPrepare

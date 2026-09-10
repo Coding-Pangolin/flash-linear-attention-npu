@@ -218,11 +218,11 @@ public:
         }
 
         // HardEvent ids (do not reuse a live id without Wait):
-        //   0  S1 Q/K GM copy; S3 V_MTE3 before UB→L1 (after S1 Wait); S6 v GM
+        //   0  S1 Q/K GM copy; S3 V_MTE3 (L ready / VCS done); S6 v GM
         //   1  S1 gate/beta GM copy; S6 k' GM copy
         //   2  S1 L2Norm store / gate scalar aLog
         //   3  S1 g' / beta_eff GM store
-        //   4  unused
+        //   4  S3 MTE3_V after pack so VCS can overlap -L UB→L1
         //   5  S1 k' ND -> L1 NZ / S6 vb then kbg UB -> L1
         //   6  unused (was S3 PRINTF)
         //   7  unused
@@ -530,19 +530,31 @@ public:
     }
 
     // ========================= Stage 3 =========================
-    // Wait Cube kkt, build -L = -tril(exp2(g_i-g_j))*β*kkt, pack diag
-    // leaves, VCS (I+Lii)^{-1}, upload leaves/-L to L1 NZ C0=8, Notify AIC.
+    // Gate (no kkt) is emitted before WaitCubeKktDone so Exp overlaps Cube
+    // kkt. After kkt: L = kkt ⊙ G, pack, -L UB→L1 on MTE3, VCS on V, leaves.
+    __aicore__ inline void Stage3_PrepareGate(int64_t taskIdx)
+    {
+        const int32_t db = PingPongSlot(taskIdx);
+        GateLowerLVF(ubGPrime[db], ubBetaEff[db], ubLFull[db]);
+    }
+
     __aicore__ inline void Stage3_AivOne(int64_t hv, int64_t taskIdx)
     {
         WaitCubeKktDone(taskIdx);
         const int32_t db = PingPongSlot(taskIdx);
         const int32_t kktDb = PingPongSlot(OwnerTaskIdx(hv, taskIdx));
-        Stage3_ConstructLAndVcs(ubKkt[kktDb], ubGPrime[db], ubBetaEff[db], ubLFull[db], ubLPacked[db],
-                                ubIVcs, ubResVcs[db], ubVcsIdx);
+        MulKktGateVF(ubKkt[kktDb], ubLFull[db]);
         SetFlag<HardEvent::V_MTE3>(0);
         WaitFlag<HardEvent::V_MTE3>(0);
-        UploadDiagLeavesAndFullAToL1(l1LeafRight[taskIdx], l1LeafLeft[taskIdx], l1NegL[taskIdx], ubResVcs[db],
-                                     ubLFull[db]);
+        PackDiagLeavesFromUb(ubLPacked[db], ubLFull[db]);
+        DataCopy(ubResVcs[db], ubIVcs, static_cast<int32_t>(kVcsPackedElems32));
+        SetFlag<HardEvent::MTE3_V>(4);
+        WaitFlag<HardEvent::MTE3_V>(4);
+        UbNd64ToL1Nz8(l1NegL[taskIdx], ubLFull[db]);
+        MulReduceScatterVF32(ubResVcs[db], ubLPacked[db], ubResVcs[db], ubVcsIdx);
+        SetFlag<HardEvent::V_MTE3>(0);
+        WaitFlag<HardEvent::V_MTE3>(0);
+        UploadDiagLeavesToL1(l1LeafRight[taskIdx], l1LeafLeft[taskIdx], ubResVcs[db]);
         NotifyAicStage3Done(taskIdx);
     }
 
@@ -739,17 +751,27 @@ public:
         SetFlag<HardEvent::M_FIX>(1);
         SetFlag<HardEvent::M_MTE1>(1);
         WaitFlag<HardEvent::M_FIX>(1);
-        Fixpipe<InDtype, float, CFG_ROW_MAJOR_UB>(ubS7U[db], l0CS71, wuFixpipeParams);
-        SetFlag<HardEvent::FIX_M>(1);
-
+        // V=128 U is 16 KiB and stays in ubS7U until the next pack drains.
+        // V=256 U is 32 KiB; UB is 248 KiB and the retain window [204, 248)
+        // cannot hold two 32 KiB tiles, so both 128-col halves go to GM.
         if (nV > kGdnHeadDimK) {
+            const int64_t offU = OffsetBHTD(chunk.batch, hv, chunk.tokenStart, HV, T, V);
+            FixpipeL0cToGmNd<InDtype>(gmU[offU], l0CS71, rows, kGdnHeadDimK, nV);
+            SetFlag<HardEvent::FIX_MTE2>(1);
+            WaitFlag<HardEvent::FIX_MTE2>(1);
+            SetFlag<HardEvent::FIX_M>(1);
             WaitFlag<HardEvent::M_MTE1>(1);
             WuMatmulToL0C<InDtype>(l1A[taskIdx], l1Vb1[taskIdx], l0AS71, l0BS71, l0CS71, bt,
                                    static_cast<int32_t>(kGdnHeadDimK), bt, 1);
             SetFlag<HardEvent::M_FIX>(1);
             SetFlag<HardEvent::M_MTE1>(1);
             WaitFlag<HardEvent::M_FIX>(1);
-            Fixpipe<InDtype, float, CFG_ROW_MAJOR_UB>(ubS7U[db][kGdnHeadDimK], l0CS71, wuFixpipeParams);
+            FixpipeL0cToGmNd<InDtype>(gmU[offU + kGdnHeadDimK], l0CS71, rows, kGdnHeadDimK, nV);
+            SetFlag<HardEvent::FIX_MTE2>(1);
+            WaitFlag<HardEvent::FIX_MTE2>(1);
+            SetFlag<HardEvent::FIX_M>(1);
+        } else {
+            Fixpipe<InDtype, float, CFG_ROW_MAJOR_UB>(ubS7U[db], l0CS71, wuFixpipeParams);
             SetFlag<HardEvent::FIX_M>(1);
         }
     }
@@ -788,6 +810,9 @@ public:
             SetFlag<HardEvent::MTE3_V>(0);
             WaitFlag<HardEvent::MTE3_V>(0);
             for (int64_t t = subBlock; t < nThis; t += 2) {
+                Stage3_PrepareGate(t);
+            }
+            for (int64_t t = subBlock; t < nThis; t += 2) {
                 const int64_t workId = PackWorkId(base, nThis, t);
                 Stage3_AivOne(workId % HV, t);
             }
@@ -797,8 +822,10 @@ public:
                     const ChunkRange chunk = GetChunkRange(*this, gmCu, gmIdx, workId / HV);
                     CopyUbToGmElems(gmW[OffsetBHTD(chunk.batch, workId % HV, chunk.tokenStart, HV, T, K)],
                                     ubS7W[PingPongSlot(t)], static_cast<uint32_t>(chunk.M * K));
-                    CopyUbToGmElems(gmU[OffsetBHTD(chunk.batch, workId % HV, chunk.tokenStart, HV, T, V)],
-                                    ubS7U[PingPongSlot(t)], static_cast<uint32_t>(chunk.M * V));
+                    if (V <= kGdnHeadDimK) {
+                        CopyUbToGmElems(gmU[OffsetBHTD(chunk.batch, workId % HV, chunk.tokenStart, HV, T, V)],
+                                        ubS7U[PingPongSlot(t)], static_cast<uint32_t>(chunk.M * V));
+                    }
                 }
             }
             SetFlag<HardEvent::MTE3_MTE2>(0);
@@ -820,8 +847,10 @@ public:
                 const ChunkRange chunk = GetChunkRange(*this, gmCu, gmIdx, workId / HV);
                 CopyUbToGmElems(gmW[OffsetBHTD(chunk.batch, workId % HV, chunk.tokenStart, HV, T, K)],
                                 ubS7W[PingPongSlot(t)], static_cast<uint32_t>(chunk.M * K));
-                CopyUbToGmElems(gmU[OffsetBHTD(chunk.batch, workId % HV, chunk.tokenStart, HV, T, V)],
-                                ubS7U[PingPongSlot(t)], static_cast<uint32_t>(chunk.M * V));
+                if (V <= kGdnHeadDimK) {
+                    CopyUbToGmElems(gmU[OffsetBHTD(chunk.batch, workId % HV, chunk.tokenStart, HV, T, V)],
+                                    ubS7U[PingPongSlot(t)], static_cast<uint32_t>(chunk.M * V));
+                }
             }
         }
     }

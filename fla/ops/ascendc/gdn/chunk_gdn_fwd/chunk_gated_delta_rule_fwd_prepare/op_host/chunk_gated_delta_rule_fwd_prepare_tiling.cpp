@@ -26,26 +26,6 @@ const gert::Shape &LogicalShape(const gert::StorageShape *shape)
     return origin.GetDimNum() >= storage.GetDimNum() ? origin : storage;
 }
 
-void PrintShape(const char *name, const gert::StorageShape *shape)
-{
-    if (shape == nullptr) {
-        printf("[ChunkGatedDeltaRuleFwdPrepare][Tiling] %s=null\n", name);
-        return;
-    }
-    const gert::Shape &origin = shape->GetOriginShape();
-    const gert::Shape &storage = shape->GetStorageShape();
-    printf("[ChunkGatedDeltaRuleFwdPrepare][Tiling] %s originRank=%zu storageRank=%zu origin=[",
-           name, origin.GetDimNum(), storage.GetDimNum());
-    for (size_t i = 0; i < origin.GetDimNum(); ++i) {
-        printf("%s%ld", i == 0 ? "" : ",", origin.GetDim(i));
-    }
-    printf("] storage=[");
-    for (size_t i = 0; i < storage.GetDimNum(); ++i) {
-        printf("%s%ld", i == 0 ? "" : ",", storage.GetDim(i));
-    }
-    printf("]\n");
-}
-
 bool HasOutput(const gert::TilingContext *context, size_t index)
 {
     return context->GetOutputDesc(index) != nullptr && context->GetOutputShape(index) != nullptr;
@@ -74,16 +54,6 @@ static ge::graphStatus Tiling4ChunkGatedDeltaRuleFwdPrepare(gert::TilingContext 
         printf("[ChunkGatedDeltaRuleFwdPrepare][Tiling] required input shape is null\n");
         return ge::GRAPH_FAILED;
     }
-
-    PrintShape("q", qShape);
-    PrintShape("k", kShape);
-    PrintShape("v", vShape);
-    PrintShape("g", gShape);
-    PrintShape("beta", betaShape);
-    PrintShape("a_log", context->GetOptionalInputShape(PREPARE_INPUT_A_LOG));
-    PrintShape("dt_bias", context->GetOptionalInputShape(PREPARE_INPUT_DT_BIAS));
-    PrintShape("cu_seqlens", context->GetOptionalInputShape(PREPARE_INPUT_CU_SEQLENS));
-    PrintShape("chunk_indices", context->GetOptionalInputShape(PREPARE_INPUT_CHUNK_INDICES));
 
     const auto &q = LogicalShape(qShape);
     const auto &v = LogicalShape(vShape);
@@ -247,21 +217,6 @@ static ge::graphStatus Tiling4ChunkGatedDeltaRuleFwdPrepare(gert::TilingContext 
         return ge::GRAPH_FAILED;
     }
 
-    printf("[ChunkGatedDeltaRuleFwdPrepare][Tiling] B=%ld Hk=%ld Hv=%ld T=%ld K=%ld V=%ld chunkSize=%ld seqNum=%ld totalChunks=%ld\n",
-           B, HK, HV, T, K, V, chunkSize, seqNum, totalChunks);
-    printf("[ChunkGatedDeltaRuleFwdPrepare][Tiling] flags: useQkL2norm=1 (qHat=%d kHat=%d qRstd=%d kRstd=%d) "
-           "useGate=%d (aLog=%d dtBias=%d) useBetaSigmoid=%d allowNegEigval=%d useExp2=%d "
-           "isVarlen=%d chunkIndices=%d\n",
-           static_cast<int>(hasQHat), static_cast<int>(hasKHat),
-           static_cast<int>(hasQRstd), static_cast<int>(hasKRstd),
-           static_cast<int>(useGateInKernel), static_cast<int>(hasALog), static_cast<int>(hasDtBias),
-           static_cast<int>(useBetaSigmoid), static_cast<int>(allowNegEigval), static_cast<int>(useExp2),
-           static_cast<int>(hasCuSeqlens), static_cast<int>(hasChunkIndices));
-    printf("[ChunkGatedDeltaRuleFwdPrepare][Tiling] dtype: q=%d g=%d beta=%d HRatio=%ld\n",
-           static_cast<int>(qDtype), static_cast<int>(gDtype), static_cast<int>(betaDtype),
-           HK == 0 ? 0 : (HV / HK));
-    fflush(stdout);
-
     ChunkGatedDeltaRuleFwdPrepareTilingData tiling;
     tiling.set_inputBatchSize(B);
     tiling.set_queryKeyHeadCount(HK);
@@ -294,9 +249,6 @@ static ge::graphStatus Tiling4ChunkGatedDeltaRuleFwdPrepare(gert::TilingContext 
     const size_t tilingBytes = tiling.GetDataSize();
     const size_t tilingBytesDevice = tilingBytes + 8;
     context->GetRawTilingData()->SetDataSize(tilingBytesDevice);
-    printf("[ChunkGatedDeltaRuleFwdPrepare][Tiling] tilingBytes=%zu deviceBytes=%zu capacity=%zu coreNum=%ld\n",
-           tilingBytes, tilingBytesDevice, context->GetRawTilingData()->GetCapacity(), coreNum);
-    fflush(stdout);
     context->SetTilingKey(0);
     context->SetBlockDim(static_cast<uint32_t>(coreNum > 0 ? coreNum : 1));
 

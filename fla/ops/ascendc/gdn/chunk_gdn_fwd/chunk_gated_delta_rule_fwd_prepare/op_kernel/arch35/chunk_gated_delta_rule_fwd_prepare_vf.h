@@ -334,24 +334,22 @@ __aicore__ inline void BetaSigmoidVF(LocalTensor<T> &betaIn, LocalTensor<float> 
 }
 
 /**
- * function: 构造 MBH 用的 -L。整块写 64x64。
- *           -L[i,j] = -beta[i] * kkt[i,j] * exp2(clip(g[i]-g[j], -50, 50)), i>j；其余为 0。
- * input:  kkt [64,64] fp32, g [64] fp32, beta [64] fp32
- * output: L [64,64] fp32（即 -L）
+ * function: 构造与 kkt 无关的下三角 gate。
+ *           G[i,j] = -beta[i] * exp2(clip(g[i]-g[j], -50, 50)), i>j；其余为 0。
+ * input:  g [64] fp32, beta [64] fp32
+ * output: G [64,64] fp32
  */
-__aicore__ inline void NegLowerLVF(LocalTensor<float> &kkt, LocalTensor<float> &g, LocalTensor<float> &beta,
-                                   LocalTensor<float> &L)
+__aicore__ inline void GateLowerLVF(LocalTensor<float> &g, LocalTensor<float> &beta, LocalTensor<float> &G)
 {
     constexpr float kLn2 = 0.6931471825f;
-    __ubuf__ float *kktAddr = (__ubuf__ float *)kkt.GetPhyAddr();
     __ubuf__ float *gAddr = (__ubuf__ float *)g.GetPhyAddr();
     __ubuf__ float *betaAddr = (__ubuf__ float *)beta.GetPhyAddr();
-    __ubuf__ float *lAddr = (__ubuf__ float *)L.GetPhyAddr();
+    __ubuf__ float *gMatAddr = (__ubuf__ float *)G.GetPhyAddr();
     __VEC_SCOPE__
     {
         MaskReg pregAll = CreateMask<float, MaskPattern::ALL>();
         MaskReg lowerMask0, lowerMask1;
-        RegTensor<float> gJ, gI0, gI1, kkt0, kkt1, d0, d1, gate0, gate1;
+        RegTensor<float> gJ, gI0, gI1, d0, d1, gate0, gate1;
         RegTensor<float> b0, b1, out0, out1, lo, hi, zero;
         uint32_t lowerCount0 = 0;
         uint32_t lowerCount1 = 0;
@@ -369,8 +367,6 @@ __aicore__ inline void NegLowerLVF(LocalTensor<float> &kkt, LocalTensor<float> &
             LoadAlign<float, LoadDist::DIST_BRC_B32>(gI1, gAddr + static_cast<uint32_t>(i) * 2 + 1);
             LoadAlign<float, LoadDist::DIST_BRC_B32>(b0, betaAddr + static_cast<uint32_t>(i) * 2);
             LoadAlign<float, LoadDist::DIST_BRC_B32>(b1, betaAddr + static_cast<uint32_t>(i) * 2 + 1);
-            LoadAlign(kkt0, kktAddr + r0);
-            LoadAlign(kkt1, kktAddr + r0 + 64);
             Sub(d0, gI0, gJ, pregAll);
             Sub(d1, gI1, gJ, pregAll);
             Max(d0, d0, lo, pregAll);
@@ -381,16 +377,41 @@ __aicore__ inline void NegLowerLVF(LocalTensor<float> &kkt, LocalTensor<float> &
             Muls(d1, d1, kLn2, pregAll);
             Exp(gate0, d0, pregAll);
             Exp(gate1, d1, pregAll);
-            Mul(out0, kkt0, gate0, pregAll);
-            Mul(out1, kkt1, gate1, pregAll);
-            Mul(out0, out0, b0, pregAll);
-            Mul(out1, out1, b1, pregAll);
+            Mul(out0, gate0, b0, pregAll);
+            Mul(out1, gate1, b1, pregAll);
             Muls(out0, out0, -1.0f, pregAll);
             Muls(out1, out1, -1.0f, pregAll);
             Select(out0, out0, zero, lowerMask0);
             Select(out1, out1, zero, lowerMask1);
-            StoreAlign(lAddr + r0, out0, pregAll);
-            StoreAlign(lAddr + r0 + 64, out1, pregAll);
+            StoreAlign(gMatAddr + r0, out0, pregAll);
+            StoreAlign(gMatAddr + r0 + 64, out1, pregAll);
+        }
+    }
+}
+
+/**
+ * function: -L = kkt ⊙ G，原地覆盖 G。
+ * input:  kkt [64,64] fp32, G [64,64] fp32
+ * output: L [64,64] fp32（即 -L）
+ */
+__aicore__ inline void MulKktGateVF(LocalTensor<float> &kkt, LocalTensor<float> &G)
+{
+    __ubuf__ float *kktAddr = (__ubuf__ float *)kkt.GetPhyAddr();
+    __ubuf__ float *gMatAddr = (__ubuf__ float *)G.GetPhyAddr();
+    __VEC_SCOPE__
+    {
+        MaskReg pregAll = CreateMask<float, MaskPattern::ALL>();
+        RegTensor<float> k0, k1, g0, g1;
+        for (uint16_t i = 0; i < 32; i++) {
+            const uint32_t r0 = static_cast<uint32_t>(i) * 128;
+            LoadAlign(k0, kktAddr + r0);
+            LoadAlign(k1, kktAddr + r0 + 64);
+            LoadAlign(g0, gMatAddr + r0);
+            LoadAlign(g1, gMatAddr + r0 + 64);
+            Mul(g0, k0, g0, pregAll);
+            Mul(g1, k1, g1, pregAll);
+            StoreAlign(gMatAddr + r0, g0, pregAll);
+            StoreAlign(gMatAddr + r0 + 64, g1, pregAll);
         }
     }
 }

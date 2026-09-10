@@ -322,7 +322,7 @@ jobs:
       - name: 拉取当前目标分支代码（第 1 次）
         id: checkout_pr_1
         continue-on-error: true
-        timeout-minutes: 10
+        timeout-minutes: 5
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository }}
@@ -333,6 +333,57 @@ jobs:
       - name: 启动代理并获取端口
         if: steps.checkout_pr_1.outcome == 'failure'
         run: |
+          # 1. 备份现有环境变量
+          echo "========== 备份原有代理配置 =========="
+          
+          # 备份环境变量
+          if [ -n "$http_proxy" ]; then
+            export OLD_http_proxy="$http_proxy"
+            echo "OLD_http_proxy=$http_proxy" >> $GITHUB_ENV
+            echo "备份 http_proxy: $http_proxy"
+          fi
+          
+          if [ -n "$https_proxy" ]; then
+            export OLD_https_proxy="$https_proxy"
+            echo "OLD_https_proxy=$https_proxy" >> $GITHUB_ENV
+            echo "备份 https_proxy: $https_proxy"
+          fi
+          
+          if [ -n "$HTTP_PROXY" ]; then
+            export OLD_HTTP_PROXY="$HTTP_PROXY"
+            echo "OLD_HTTP_PROXY=$HTTP_PROXY" >> $GITHUB_ENV
+            echo "备份 HTTP_PROXY: $HTTP_PROXY"
+          fi
+          
+          if [ -n "$HTTPS_PROXY" ]; then
+            export OLD_HTTPS_PROXY="$HTTPS_PROXY"
+            echo "OLD_HTTPS_PROXY=$HTTPS_PROXY" >> $GITHUB_ENV
+            echo "备份 HTTPS_PROXY: $HTTPS_PROXY"
+          fi
+          
+          if [ -n "$all_proxy" ]; then
+            export OLD_all_proxy="$all_proxy"
+            echo "OLD_all_proxy=$all_proxy" >> $GITHUB_ENV
+            echo "备份 all_proxy: $all_proxy"
+          fi
+          
+          # 备份 Git 代理配置
+          echo "========== 备份 Git 代理配置 =========="
+          OLD_GIT_HTTP_PROXY=$(git config --global --get http.proxy || echo "")
+          OLD_GIT_HTTPS_PROXY=$(git config --global --get https.proxy || echo "")
+          
+          if [ -n "$OLD_GIT_HTTP_PROXY" ]; then
+            echo "OLD_GIT_HTTP_PROXY=$OLD_GIT_HTTP_PROXY" >> $GITHUB_ENV
+            echo "备份 git http.proxy: $OLD_GIT_HTTP_PROXY"
+          fi
+          
+          if [ -n "$OLD_GIT_HTTPS_PROXY" ]; then
+            echo "OLD_GIT_HTTPS_PROXY=$OLD_GIT_HTTPS_PROXY" >> $GITHUB_ENV
+            echo "备份 git https.proxy: $OLD_GIT_HTTPS_PROXY"
+          fi
+          
+          # 2. 启动新代理
+          echo "========== 启动新代理 =========="
           # 加载代理配置
           source /etc/profile.d/vpn-proxy.sh
           proxyon
@@ -354,7 +405,8 @@ jobs:
           echo "all_proxy=socks5h://127.0.0.1:$SOCKS_PORT" >> $GITHUB_ENV
           
           echo "检测到代理端口: HTTP=$HTTP_PORT, SOCKS=$SOCKS_PORT"
-          
+          export HOME=${HOME:-/workspace/ci/}
+          echo "HOME=$HOME" >> $GITHUB_ENV
           # 配置 Git 代理
           git config --global http.proxy http://127.0.0.1:$HTTP_PORT
           git config --global https.proxy http://127.0.0.1:$HTTP_PORT
@@ -496,22 +548,6 @@ jobs:
           ref: refs/heads/${{ needs.prepare.outputs.base_ref }}
           fetch-depth: 1
           path: trusted-ci
-
-      - name: 关闭代理
-        if: steps.checkout_pr_1.outcome == 'failure'
-        run: |
-          # 如果 proxyoff 可用
-          source /etc/profile.d/vpn-proxy.sh
-          proxyoff
-          
-          # 或者直接 kill mihomo
-          # pkill -f mihomo || true
-          
-          # 清理 Git 代理配置（可选）
-          git config --global --unset http.proxy
-          git config --global --unset https.proxy
-          
-          echo "代理已关闭"
 
       - name: 使用可信 CI 脚本
         run: |

@@ -2,6 +2,7 @@
 #define SOLVE_TRI_ASCEND950_128_H
 
 #include "kernel_operator.h"
+#include "catlass/arch/cross_core_sync.hpp"
 #include "solve_tri_ascend950_common.h"
 #include "mem.h"
 
@@ -649,6 +650,8 @@ public:
                 }
                 SetFlag<AscendC::HardEvent::MTE3_V>(0);
                 WaitFlag<AscendC::HardEvent::MTE3_V>(0);
+                // Keep both Vector subblocks participating in the mode2
+                // handoff after their local L1 writebacks.
                 AscendC::CrossCoreSetFlag<0x2, PIPE_MTE3>(0x2);
             }
         }

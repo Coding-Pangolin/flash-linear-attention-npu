@@ -77,11 +77,13 @@ __simd_vf__ inline void Stage1Gate64VF(__ubuf__ float *gateAAddr, __ubuf__ float
     }
 }
 
+template <bool FullChunk>
 __simd_vf__ inline void Stage3Gate64VF(__ubuf__ bfloat16_t *aPrimeAddr, __ubuf__ float *oSAddr,
                                       __ubuf__ float *aRawAddr, __ubuf__ float *gateAAddr,
                                       __ubuf__ float *gateOAddr, uint16_t validRows)
 {
     constexpr uint16_t kBt = static_cast<uint16_t>(CHUNK_FWD_O_A5_BT);
+    const uint16_t activeRows = FullChunk ? kBt : validRows;
     RegTensor<float> zeroReg;
     MaskReg floatMask = CreateMask<float, MaskPattern::ALL>();
     Duplicate(zeroReg, 0.0f, floatMask);
@@ -110,8 +112,8 @@ __simd_vf__ inline void Stage3Gate64VF(__ubuf__ bfloat16_t *aPrimeAddr, __ubuf__
         RegTensor<bfloat16_t> aPrimeBf16Reg2;
         RegTensor<bfloat16_t> aPrimeBf16Reg3;
         uint16_t rowLoop = 0;
-        const uint16_t rowLoopCount = validRows / 4U;
-        const uint16_t tailLoopCount = validRows % 4U;
+        const uint16_t rowLoopCount = activeRows / 4U;
+        const uint16_t tailLoopCount = activeRows % 4U;
         const uint16_t tailRowBase = rowLoopCount * 4U;
         uint16_t rowBase = 0;
         uint32_t rowOffset0 = 0;
@@ -179,64 +181,35 @@ __simd_vf__ inline void Stage3Gate64VF(__ubuf__ bfloat16_t *aPrimeAddr, __ubuf__
         }
 
         Cast<bfloat16_t, float, CHUNK_FWD_O_FP32_TO_B16_PACK>(aPrimeBf16Reg0, zeroReg, floatMask);
-        const uint16_t invalidRowCount = static_cast<uint16_t>(kBt - validRows);
+        const uint16_t invalidRowCount = static_cast<uint16_t>(kBt - activeRows);
         for (rowLoop = 0; rowLoop < invalidRowCount; ++rowLoop) {
-            rowBase = static_cast<uint16_t>(validRows + rowLoop);
+            rowBase = static_cast<uint16_t>(activeRows + rowLoop);
             rowOffset0 = static_cast<uint32_t>(rowBase) * kBt;
             StoreAlign<bfloat16_t, StoreDist::DIST_PACK_B32>(aPrimeAddr + rowOffset0, aPrimeBf16Reg0, floatMask);
         }
     }
 
-    // Phase 2 handles two rows per loop while explicitly reusing one row's registers.
-    RegTensor<float> oSReg00;
-    RegTensor<float> oSReg01;
+    // Phase 2 keeps one row and its two fixed V tiles in nested hardware loops.
+    RegTensor<float> oSReg;
     RegTensor<float> gateOVectorReg;
     RegTensor<float> gateORowReg0;
     RegTensor<uint32_t> rowIndexReg0;
     LoadAlign(gateOVectorReg, gateOAddr);
 
-    const uint16_t validRowPairCount = validRows / 2U;
-    for (uint16_t rowPair = 0; rowPair < validRowPairCount; ++rowPair) {
-        const uint16_t row0 = static_cast<uint16_t>(rowPair * 2U);
-        const uint16_t row1 = static_cast<uint16_t>(row0 + 1U);
-        const uint32_t offset00 = static_cast<uint32_t>(row0) * CHUNK_FWD_O_A5_V;
-        const uint32_t offset01 = offset00 + kBt;
-        const uint32_t offset10 = static_cast<uint32_t>(row1) * CHUNK_FWD_O_A5_V;
-        const uint32_t offset11 = offset10 + kBt;
-
-        Duplicate(rowIndexReg0, static_cast<uint32_t>(row0), floatMask);
+    constexpr uint16_t kTilesPerRow = static_cast<uint16_t>(CHUNK_FWD_O_A5_V / CHUNK_FWD_O_A5_BT);
+    for (uint16_t row = 0; row < activeRows; ++row) {
+        Duplicate(rowIndexReg0, static_cast<uint32_t>(row), floatMask);
         Gather(gateORowReg0, gateOVectorReg, rowIndexReg0);
-        LoadAlign(oSReg00, oSAddr + offset00);
-        LoadAlign(oSReg01, oSAddr + offset01);
-        Mul(oSReg00, oSReg00, gateORowReg0, floatMask);
-        Mul(oSReg01, oSReg01, gateORowReg0, floatMask);
-        StoreAlign(oSAddr + offset00, oSReg00, floatMask);
-        StoreAlign(oSAddr + offset01, oSReg01, floatMask);
-
-        Duplicate(rowIndexReg0, static_cast<uint32_t>(row1), floatMask);
-        Gather(gateORowReg0, gateOVectorReg, rowIndexReg0);
-        LoadAlign(oSReg00, oSAddr + offset10);
-        LoadAlign(oSReg01, oSAddr + offset11);
-        Mul(oSReg00, oSReg00, gateORowReg0, floatMask);
-        Mul(oSReg01, oSReg01, gateORowReg0, floatMask);
-        StoreAlign(oSAddr + offset10, oSReg00, floatMask);
-        StoreAlign(oSAddr + offset11, oSReg01, floatMask);
+        for (uint16_t tile = 0; tile < kTilesPerRow; ++tile) {
+            const uint32_t offset = static_cast<uint32_t>(row) * CHUNK_FWD_O_A5_V +
+                                    static_cast<uint32_t>(tile) * kBt;
+            LoadAlign(oSReg, oSAddr + offset);
+            Mul(oSReg, oSReg, gateORowReg0, floatMask);
+            StoreAlign(oSAddr + offset, oSReg, floatMask);
+        }
     }
 
-    if ((validRows & 1U) != 0U) {
-        const uint32_t offset0 = static_cast<uint32_t>(validRows - 1U) * CHUNK_FWD_O_A5_V;
-        const uint32_t offset1 = offset0 + kBt;
-        Duplicate(rowIndexReg0, static_cast<uint32_t>(validRows - 1U), floatMask);
-        Gather(gateORowReg0, gateOVectorReg, rowIndexReg0);
-        LoadAlign(oSReg00, oSAddr + offset0);
-        LoadAlign(oSReg01, oSAddr + offset1);
-        Mul(oSReg00, oSReg00, gateORowReg0, floatMask);
-        Mul(oSReg01, oSReg01, gateORowReg0, floatMask);
-        StoreAlign(oSAddr + offset0, oSReg00, floatMask);
-        StoreAlign(oSAddr + offset1, oSReg01, floatMask);
-    }
-
-    for (uint16_t row = validRows; row < kBt; ++row) {
+    for (uint16_t row = activeRows; row < kBt; ++row) {
         const uint32_t offset0 = static_cast<uint32_t>(row) * CHUNK_FWD_O_A5_V;
         StoreAlign(oSAddr + offset0, zeroReg, floatMask);
         StoreAlign(oSAddr + offset0 + kBt, zeroReg, floatMask);
@@ -277,9 +250,9 @@ public:
 
     __aicore__ inline ChunkFwdOA5VectorProcess(GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR h, GM_ADDR g,
                                                GM_ADDR cuSeqlens, GM_ADDR chunkOffsets, GM_ADDR o, GM_ADDR workspace)
-        : q_(q), k_(k), v_(v), h_(h), g_(g), cuSeqlens_(cuSeqlens), chunkOffsets_(chunkOffsets), o_(o),
-          workspace_(workspace)
+        : q_(q), k_(k), v_(v), h_(h), g_(g), cuSeqlens_(cuSeqlens), chunkOffsets_(chunkOffsets), o_(o)
     {
+        (void)workspace;
     }
 
     __aicore__ inline void Init(const ChunkFwdOTilingData &tiling, TPipe *pipe)
@@ -310,118 +283,130 @@ public:
         const uint32_t matrixElems = bt * bt;
         ChunkFwdOChunkLoc loc;
 
-        for (uint32_t loopIdx = 0; loopIdx < static_cast<uint32_t>(tiling_.chunkNum); ++loopIdx) {
+        const uint32_t headGroupNum = ChunkFwdOHeadGroupNum(tiling_);
+        const uint32_t groupTaskNum = static_cast<uint32_t>(tiling_.chunkNum) * headGroupNum;
+        for (uint32_t groupTaskIdx = coreIdx; groupTaskIdx < groupTaskNum; groupTaskIdx += coreNum) {
+            const uint32_t loopIdx = groupTaskIdx / headGroupNum;
+            const uint32_t headGroupIdx = groupTaskIdx % headGroupNum;
+            const int64_t hvBase = static_cast<int64_t>(headGroupIdx) * tiling_.taskGroupSize;
             ChunkFwdOResolveChunkLoc(cuSeqlens_, chunkOffsets_, tiling_, loopIdx, loc);
-            if (coreIdx != (loopIdx % coreNum)) {
-                continue;
+            const int64_t remaining = tiling_.vNumHead - hvBase;
+            const int64_t taskCount = remaining < tiling_.taskGroupSize ? remaining : tiling_.taskGroupSize;
+            // Stage 1: prepare gate_o/gate_A for every owner HEAD. The
+            // producer/consumer events stay at the exact transfer site.
+            streamSlot_ = 0U;
+            for (int64_t headOffset = 0; headOffset < taskCount; ++headOffset) {
+                const uint32_t ownerSubBlock = static_cast<uint32_t>(headOffset % 2);
+                if (ownerSubBlock != subBlockIdx) {
+                    continue;
+                }
+                LoadStage1G(loc, hvBase + headOffset, streamSlot_);
+                SetFlag<HardEvent::MTE2_V>(mte2ToV_[streamSlot_]);
+                WaitFlag<HardEvent::MTE2_V>(mte2ToV_[streamSlot_]);
+                ComputeStage1Gate(loc, streamSlot_, streamSlot_);
+                streamSlot_ ^= 1U;
             }
 
-            for (int64_t hvBase = 0; hvBase < tiling_.vNumHead; hvBase += tiling_.taskGroupSize) {
-                const int64_t remaining = tiling_.vNumHead - hvBase;
-                const int64_t taskCount = remaining < tiling_.taskGroupSize ? remaining : tiling_.taskGroupSize;
-                const int64_t groupRound =
-                    ChunkFwdOGroupRound(tiling_, loopIdx, coreIdx, coreNum, hvBase);
-
-                // Stage 1: prepare gate_o/gate_A for every owner HEAD. The
-                // producer/consumer events stay at the exact transfer site.
-                streamSlot_ = 0U;
-                for (int64_t headOffset = 0; headOffset < taskCount; ++headOffset) {
-                    const uint32_t ownerSubBlock = static_cast<uint32_t>(headOffset % 2);
-                    if (ownerSubBlock != subBlockIdx) {
-                        continue;
-                    }
-                    LoadStage1G(loc, hvBase + headOffset, streamSlot_);
-                    SetFlag<HardEvent::MTE2_V>(mte2ToV_[streamSlot_]);
-                    WaitFlag<HardEvent::MTE2_V>(mte2ToV_[streamSlot_]);
-                    ComputeStage1Gate(loc, streamSlot_, streamSlot_);
-                    streamSlot_ ^= 1U;
-                }
-
-                // Stage 3: consume one Stage 2 ready per HEAD. Both subblocks
-                // participate in the handshake; only the owner executes the
-                // VF and writes A-prime to GM.
-                // Select the first Stage3 ping-pong UB slot for this task group.
-                streamSlot_ = 0U;
-                for (int64_t headOffset = 0; headOffset < taskCount; ++headOffset) {
-                    const uint32_t ownerSubBlock = static_cast<uint32_t>(headOffset % 2);
+            // Stage 3: consume one Stage 2 ready per HEAD. Both subblocks
+            // participate in the handshake; only the owner executes the
+            // VF and writes A-prime directly to Stage 4's zN L1 slot.
+            // Select the first Stage3 ping-pong UB slot for this task group.
+            streamSlot_ = 0U;
+            for (int64_t headOffset = 0; headOffset < taskCount; ++headOffset) {
+                const uint32_t ownerSubBlock = static_cast<uint32_t>(headOffset % 2);
+                if (ownerSubBlock == subBlockIdx) {
+                    LocalTensor<float> gateO =
+                        ubBuf_.GetWithOffset<float>(bt, ChunkFwdOGateOOffset(streamSlot_));
+                    LocalTensor<float> gateA =
+                        ubBuf_.GetWithOffset<float>(matrixElems, ChunkFwdOGateAOffset(streamSlot_));
+                    LocalTensor<float> aRaw =
+                        ubBuf_.GetWithOffset<float>(matrixElems, ChunkFwdOARawOffset(streamSlot_));
+                    LocalTensor<float> oSPrime =
+                        ubBuf_.GetWithOffset<float>(bt * vDim, ChunkFwdOOsPrimeOffset(streamSlot_));
+                    LocalTensor<bfloat16_t> aPrimeBf16 =
+                        ubBuf_.GetWithOffset<bfloat16_t>(matrixElems,
+                                                         ChunkFwdOAPrimeBf16Offset(streamSlot_));
                     Catlass::Arch::CrossCoreWaitFlag(cubeToVecFlag_);
-                    if (ownerSubBlock == subBlockIdx) {
-                        LocalTensor<float> gateO =
-                            ubBuf_.GetWithOffset<float>(bt, ChunkFwdOGateOOffset(streamSlot_));
-                        LocalTensor<float> gateA =
-                            ubBuf_.GetWithOffset<float>(matrixElems, ChunkFwdOGateAOffset(streamSlot_));
-                        LocalTensor<float> aRaw =
-                            ubBuf_.GetWithOffset<float>(matrixElems, ChunkFwdOARawOffset(streamSlot_));
-                        LocalTensor<float> oSPrime =
-                            ubBuf_.GetWithOffset<float>(bt * vDim, ChunkFwdOOsPrimeOffset(streamSlot_));
-                        LocalTensor<bfloat16_t> aPrimeBf16 =
-                            ubBuf_.GetWithOffset<bfloat16_t>(matrixElems,
-                                                             ChunkFwdOAPrimeBf16Offset(streamSlot_));
-                        WaitFlag<HardEvent::MTE3_V>(mte3ToVStream_[streamSlot_]);
-                        PipeBarrier<PIPE_V>();
-                        AscendC::VF_CALL<Stage3Gate64VF>(
+                    WaitFlag<HardEvent::MTE3_V>(mte3ToVStream_[streamSlot_]);
+                    if (loc.chunkLen == bt) {
+                        AscendC::VF_CALL<Stage3Gate64VF<true>>(
                             reinterpret_cast<__ubuf__ bfloat16_t *>(aPrimeBf16.GetPhyAddr()),
                             reinterpret_cast<__ubuf__ float *>(oSPrime.GetPhyAddr()),
                             reinterpret_cast<__ubuf__ float *>(aRaw.GetPhyAddr()),
                             reinterpret_cast<__ubuf__ float *>(gateA.GetPhyAddr()),
                             reinterpret_cast<__ubuf__ float *>(gateO.GetPhyAddr()),
                             static_cast<uint16_t>(loc.chunkLen));
-                        SetFlag<HardEvent::V_MTE3>(vToMte3Stream_[streamSlot_]);
-                        WaitFlag<HardEvent::V_MTE3>(vToMte3Stream_[streamSlot_]);
-
-                        const uint32_t aivCoreIdx = AscendC::GetBlockIdx() / 2U;
-                        GM_ADDR aPrimeAddr =
-                            ChunkFwdOAPrimeGmOffset(workspace_, tiling_, aivCoreIdx, groupRound, headOffset);
-                        GlobalTensor<bfloat16_t> aPrimeGm;
-                        aPrimeGm.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(aPrimeAddr));
-                        DataCopyExtParams aPrimeCopyParams{1, CHUNK_FWD_O_APRIME_SLOT_BYTES, 0, 0, 0};
-                        DataCopyPad(aPrimeGm, aPrimeBf16, aPrimeCopyParams);
-
-                        SetFlag<HardEvent::MTE3_V>(mte3ToVStream_[streamSlot_]);
-                        streamSlot_ ^= 1U;
+                    } else {
+                        AscendC::VF_CALL<Stage3Gate64VF<false>>(
+                            reinterpret_cast<__ubuf__ bfloat16_t *>(aPrimeBf16.GetPhyAddr()),
+                            reinterpret_cast<__ubuf__ float *>(oSPrime.GetPhyAddr()),
+                            reinterpret_cast<__ubuf__ float *>(aRaw.GetPhyAddr()),
+                            reinterpret_cast<__ubuf__ float *>(gateA.GetPhyAddr()),
+                            reinterpret_cast<__ubuf__ float *>(gateO.GetPhyAddr()),
+                            static_cast<uint16_t>(loc.chunkLen));
                     }
-                    Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(vecToCubeFlag_);
-                }
+                    SetFlag<HardEvent::V_MTE3>(vToMte3Stream_[streamSlot_]);
+                    WaitFlag<HardEvent::V_MTE3>(vToMte3Stream_[streamSlot_]);
 
-                // Stage 5: consume one Stage 4 ready per HEAD, then publish
-                // the final output only from the owning subblock.
-                streamSlot_ = 0U;
-                for (int64_t headOffset = 0; headOffset < taskCount; ++headOffset) {
-                    const uint32_t ownerSubBlock = static_cast<uint32_t>(headOffset % 2);
-                    const int64_t hv = hvBase + headOffset;
-                    Catlass::Arch::CrossCoreWaitFlag(cubeToVecFlag_);
-                    if (ownerSubBlock != subBlockIdx) {
-                        continue;
+                    LocalTensor<bfloat16_t> l1APrime =
+                        resource_.l1Buf.template GetBufferByByte<bfloat16_t>(
+                            ChunkFwdOL1APrimeOffset(static_cast<uint32_t>(headOffset)));
+                    DataCopyParams aPrimeL1CopyParams;
+                    aPrimeL1CopyParams.blockCount = bt;
+                    aPrimeL1CopyParams.blockLen = 1;
+                    aPrimeL1CopyParams.srcGap = bt / 16U - 1U;
+                    aPrimeL1CopyParams.dstGap = 0;
+                    for (uint32_t colBlock = 0; colBlock < bt / 16U; ++colBlock) {
+                        const uint32_t dstOffset = colBlock * bt * 16U;
+                        const uint32_t srcOffset = colBlock * 16U;
+                        DataCopy(l1APrime[dstOffset], aPrimeBf16[srcOffset], aPrimeL1CopyParams);
                     }
-
-                    LocalTensor<float> oSPrime =
-                        ubBuf_.GetWithOffset<float>(bt * vDim, ChunkFwdOOsPrimeOffset(streamSlot_));
-                    LocalTensor<float> oL =
-                        ubBuf_.GetWithOffset<float>(bt * vDim, ChunkFwdOOlOffset(streamSlot_));
-                    LocalTensor<bfloat16_t> oOut =
-                        ubBuf_.GetWithOffset<bfloat16_t>(bt * vDim, ChunkFwdOOlOffset(streamSlot_));
-                    WaitFlag<HardEvent::MTE3_V>(mte3ToVStream_[streamSlot_]);
-                    PipeBarrier<PIPE_V>();
-                    AscendC::VF_CALL<Stage5Fuse64VF>(
-                        reinterpret_cast<__ubuf__ bfloat16_t *>(oOut.GetPhyAddr()),
-                        reinterpret_cast<__ubuf__ float *>(oSPrime.GetPhyAddr()),
-                        reinterpret_cast<__ubuf__ float *>(oL.GetPhyAddr()), tiling_.scale,
-                        static_cast<uint16_t>(loc.chunkLen));
-                    SetFlag<HardEvent::V_MTE3>(vToMte3Event_[streamSlot_]);
-                    WaitFlag<HardEvent::V_MTE3>(vToMte3Event_[streamSlot_]);
-                    const int64_t oOffset = ChunkFwdOOOffset(tiling_, loc, hv);
-                    DataCopyExtParams outputCopyParams{
-                        static_cast<uint16_t>(loc.chunkLen),
-                        static_cast<uint32_t>(vDim * sizeof(bfloat16_t)),
-                        0,
-                        static_cast<uint32_t>((tiling_.vNumHead - 1) * vDim * sizeof(bfloat16_t)),
-                        0};
-                    DataCopyPad(oGm_[oOffset], oOut, outputCopyParams);
                     SetFlag<HardEvent::MTE3_V>(mte3ToVStream_[streamSlot_]);
                     streamSlot_ ^= 1U;
+                } else {
+                    Catlass::Arch::CrossCoreWaitFlag(cubeToVecFlag_);
                 }
                 Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(vecToCubeFlag_);
             }
+
+            // Stage 5: consume one Stage 4 ready per HEAD, then publish
+            // the final output only from the owning subblock.
+            streamSlot_ = 0U;
+            for (int64_t headOffset = 0; headOffset < taskCount; ++headOffset) {
+                const uint32_t ownerSubBlock = static_cast<uint32_t>(headOffset % 2);
+                const int64_t hv = hvBase + headOffset;
+                Catlass::Arch::CrossCoreWaitFlag(cubeToVecFlag_);
+                if (ownerSubBlock != subBlockIdx) {
+                    continue;
+                }
+
+                LocalTensor<float> oSPrime =
+                    ubBuf_.GetWithOffset<float>(bt * vDim, ChunkFwdOOsPrimeOffset(streamSlot_));
+                LocalTensor<float> oL =
+                    ubBuf_.GetWithOffset<float>(bt * vDim, ChunkFwdOOlOffset(streamSlot_));
+                LocalTensor<bfloat16_t> oOut =
+                    ubBuf_.GetWithOffset<bfloat16_t>(bt * vDim, ChunkFwdOOlOffset(streamSlot_));
+                WaitFlag<HardEvent::MTE3_V>(mte3ToVStream_[streamSlot_]);
+                PipeBarrier<PIPE_V>();
+                AscendC::VF_CALL<Stage5Fuse64VF>(
+                    reinterpret_cast<__ubuf__ bfloat16_t *>(oOut.GetPhyAddr()),
+                    reinterpret_cast<__ubuf__ float *>(oSPrime.GetPhyAddr()),
+                    reinterpret_cast<__ubuf__ float *>(oL.GetPhyAddr()), tiling_.scale,
+                    static_cast<uint16_t>(loc.chunkLen));
+                SetFlag<HardEvent::V_MTE3>(vToMte3Event_[streamSlot_]);
+                WaitFlag<HardEvent::V_MTE3>(vToMte3Event_[streamSlot_]);
+                const int64_t oOffset = ChunkFwdOOOffset(tiling_, loc, hv);
+                DataCopyExtParams outputCopyParams{
+                    static_cast<uint16_t>(loc.chunkLen),
+                    static_cast<uint32_t>(vDim * sizeof(bfloat16_t)),
+                    0,
+                    static_cast<uint32_t>((tiling_.vNumHead - 1) * vDim * sizeof(bfloat16_t)),
+                    0};
+                DataCopyPad(oGm_[oOffset], oOut, outputCopyParams);
+                SetFlag<HardEvent::MTE3_V>(mte3ToVStream_[streamSlot_]);
+                streamSlot_ ^= 1U;
+            }
+            Catlass::Arch::CrossCoreSetFlag<0x2, PIPE_MTE3>(vecToCubeFlag_);
         }
 
         // Reuse waits consume the preceding MTE3 completion directly. Only
@@ -435,6 +420,7 @@ public:
     {
         GlobalTensor<GT> gGm;
         gGm.SetGlobalBuffer((__gm__ GT *)g_);
+        gGm.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
         const int64_t gOffset = ChunkFwdOGOffset(tiling_, loc, hv);
         const uint32_t bt = static_cast<uint32_t>(CHUNK_FWD_O_A5_BT);
         const uint32_t gScratchOff = ChunkFwdOGScratchOffset(streamSlot);
@@ -495,11 +481,11 @@ private:
     GM_ADDR cuSeqlens_;
     GM_ADDR chunkOffsets_;
     GM_ADDR o_;
-    GM_ADDR workspace_;
     ChunkFwdOTilingData tiling_{};
     TPipe *pipe_ = nullptr;
 
     TBuf<TPosition::VECCALC> ubBuf_;
+    Catlass::Arch::Resource<ArchTag> resource_;
     GlobalTensor<bfloat16_t> oGm_;
     uint32_t streamSlot_ = 0;
     TEventID mte2ToV_[BANK_COUNT_2];

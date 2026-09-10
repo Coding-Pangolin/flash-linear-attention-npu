@@ -55,6 +55,39 @@ __aicore__ inline void RunFwdH(GM_ADDR k, GM_ADDR w, GM_ADDR u, GM_ADDR g, GM_AD
     kernel.Process();
 }
 
+template <typename InputT, typename TileShapes>
+__aicore__ inline void DispatchFwdH(GM_ADDR k, GM_ADDR w, GM_ADDR u, GM_ADDR g, GM_ADDR gk,
+                                    GM_ADDR initialState, GM_ADDR cuSeqlens, GM_ADDR chunkIndices,
+                                    GM_ADDR h, GM_ADDR vNew, GM_ADDR finalState, GM_ADDR tiling,
+                                    GM_ADDR userWorkspace)
+{
+    const __gm__ ChunkGatedDeltaRuleFwdHTilingData *hTiling =
+        reinterpret_cast<const __gm__ ChunkGatedDeltaRuleFwdHTilingData *>(tiling);
+    // Mega's input dtype is fixed by the generated DTYPE_Q variant, and its
+    // cumsum/gk contract is FP32. State remains runtime-selected: a disabled
+    // final-state output is an FP32 placeholder, not the initial-state dtype.
+    if (hTiling->stateDataType == 2) {
+        if (hTiling->useGk) {
+            RunFwdH<InputT, float, float, TileShapes, true>(
+                k, w, u, g, gk, initialState, cuSeqlens, chunkIndices, h, vNew, finalState,
+                tiling, userWorkspace);
+        } else {
+            RunFwdH<InputT, float, float, TileShapes, false>(
+                k, w, u, g, gk, initialState, cuSeqlens, chunkIndices, h, vNew, finalState,
+                tiling, userWorkspace);
+        }
+    } else if (hTiling->useGk) {
+        RunFwdH<InputT, float, InputT, TileShapes, true>(
+            k, w, u, g, gk, initialState, cuSeqlens, chunkIndices, h, vNew, finalState,
+            tiling, userWorkspace);
+    } else {
+        RunFwdH<InputT, float, InputT, TileShapes, false>(
+            k, w, u, g, gk, initialState, cuSeqlens, chunkIndices, h, vNew, finalState,
+            tiling, userWorkspace);
+    }
+}
+
+#ifndef GDN_CHUNK_RECOMPUTE_WU_FWD_HO_IMPL_ONLY
 template <typename TileShapes>
 __aicore__ inline void DispatchFwdH(GM_ADDR k, GM_ADDR w, GM_ADDR u, GM_ADDR g, GM_ADDR gk,
                                     GM_ADDR initialState, GM_ADDR cuSeqlens, GM_ADDR chunkIndices,
@@ -144,6 +177,8 @@ __aicore__ inline void DispatchFwdH(GM_ADDR k, GM_ADDR w, GM_ADDR u, GM_ADDR g, 
             tiling, userWorkspace);
     }
 }
+
+#endif
 
 __aicore__ inline void CopyOTiling(const __gm__ ChunkFwdOTilingData *src, ChunkFwdOTilingData &dst)
 {
@@ -235,6 +270,15 @@ __aicore__ inline void DispatchRecompute(
     }
 }
 
+template <typename InputT>
+__aicore__ inline void DispatchFwdO(GM_ADDR q, GM_ADDR k, GM_ADDR vNew, GM_ADDR h, GM_ADDR g,
+                                    GM_ADDR cuSeqlens, GM_ADDR chunkIndices, GM_ADDR o,
+                                    GM_ADDR userWorkspace, const ChunkFwdOTilingData *tiling)
+{
+    RunFwdO<InputT, float>(q, k, vNew, h, g, cuSeqlens, chunkIndices, o, userWorkspace, tiling);
+}
+
+#ifndef GDN_CHUNK_RECOMPUTE_WU_FWD_HO_IMPL_ONLY
 __aicore__ inline void DispatchFwdO(GM_ADDR q, GM_ADDR k, GM_ADDR vNew, GM_ADDR h, GM_ADDR g,
                                     GM_ADDR cuSeqlens, GM_ADDR chunkIndices, GM_ADDR o,
                                     GM_ADDR userWorkspace, const ChunkFwdOTilingData *tiling)
@@ -302,6 +346,8 @@ __aicore__ inline void RunFused(
     CopyOTiling(gmOTiling, oTiling);
     DispatchFwdO(q, k, vNew, h, g, cuSeqlens, chunkIndices, o, userWorkspace, &oTiling);
 }
+
+#endif // GDN_CHUNK_RECOMPUTE_WU_FWD_HO_IMPL_ONLY
 
 } // namespace
 } // namespace GDN

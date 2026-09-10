@@ -1619,7 +1619,8 @@ def npu_chunk_gated_delta_rule_fwd(
     use_gate_in_kernel=False,
     use_beta_sigmoid_in_kernel=False,
     allow_neg_eigval=False,
-    output_a=True,
+    disable_recompute=False,
+    return_intermediate_states=False,
     state_v_first=False,
     layout="BNSD",
 ):
@@ -1684,21 +1685,22 @@ def npu_chunk_gated_delta_rule_fwd(
     use_gate_in_kernel = _optional_bool(use_gate_in_kernel, False)
     use_beta_sigmoid_in_kernel = _optional_bool(use_beta_sigmoid_in_kernel, False)
     allow_neg_eigval = _optional_bool(allow_neg_eigval, False)
-    output_a = _optional_bool(output_a, True)
+    disable_recompute = _optional_bool(disable_recompute, False)
+    return_intermediate_states = _optional_bool(return_intermediate_states, False)
     state_v_first = _optional_bool(state_v_first, False)
-    if use_gate_in_kernel:
-        raise ValueError("use_gate_in_kernel currently only supports False.")
-    if use_beta_sigmoid_in_kernel and not (use_exp2 and use_qk_l2norm_in_kernel):
-        raise ValueError(
-            "use_beta_sigmoid_in_kernel=True requires use_exp2=True and "
-            "use_qk_l2norm_in_kernel=True."
-        )
-    if allow_neg_eigval and not use_beta_sigmoid_in_kernel:
-        raise ValueError("allow_neg_eigval=True requires use_beta_sigmoid_in_kernel=True.")
     scale = _optional_float(scale, float(k_dim) ** -0.5)
     o = _empty((batch, tokens, v_heads, v_dim), v)
-    g_cumsum = _empty((batch, tokens, v_heads), g, dtype=torch.float32)
-    A = _empty((batch, v_heads, tokens, int(chunk_size)), q)
+    g_cumsum = (
+        _empty((batch, tokens, v_heads), g, dtype=torch.float32)
+        if not disable_recompute
+        else None
+    )
+    A = (
+        _empty((batch, v_heads, tokens, int(chunk_size)), q)
+        if not disable_recompute
+        else None
+    )
+    a_log = _empty((v_heads,), g, dtype=torch.float32) if use_gate_in_kernel else None
     beta_eff = (
         _empty((batch, tokens, v_heads), beta, dtype=torch.float32)
         if use_beta_sigmoid_in_kernel
@@ -1713,8 +1715,24 @@ def npu_chunk_gated_delta_rule_fwd(
             state_dtype = initial_state.dtype
         state_tail = (v_dim, k_dim) if state_v_first else (k_dim, v_dim)
         final_state = _empty((seq_num, v_heads, *state_tail), q, dtype=state_dtype)
+    h = None
+    if return_intermediate_states:
+        chunks = (
+            sum(
+                (right - left + chunk_size - 1) // chunk_size
+                for left, right in zip(cu_seqlens, cu_seqlens[1:])
+            )
+            if cu_seqlens is not None
+            else (tokens + chunk_size - 1) // chunk_size
+        )
+        state_tail = (v_dim, k_dim) if state_v_first else (k_dim, v_dim)
+        h = _empty((batch, v_heads, chunks, *state_tail), q)
     layout_buffer = ctypes.create_string_buffer(layout.encode("utf-8"))
-    outputs = (o, final_state, g_cumsum, A)
+    outputs = (o, final_state)
+    if not disable_recompute:
+        outputs += (g_cumsum, A)
+    if return_intermediate_states:
+        outputs += (h,)
     return _call_aclnn(
         "aclnnChunkGatedDeltaRuleFwd",
         lambda ctx: [
@@ -1723,7 +1741,7 @@ def npu_chunk_gated_delta_rule_fwd(
             ctx.tensor(v, "v"),
             ctx.tensor(g, "g"),
             ctx.tensor(beta, "beta"),
-            ctx.tensor(None, "a_log"),
+            ctx.tensor(a_log, "a_log"),
             ctx.tensor(None, "dt_bias"),
             ctx.tensor(initial_state, "initial_state"),
             ctx.int_array(cu_seqlens),
@@ -1743,8 +1761,8 @@ def npu_chunk_gated_delta_rule_fwd(
             ctx.tensor(None, "k_rstd"),
             ctx.tensor(beta_eff, "beta_eff"),
             ctx.tensor(g_cumsum, "g_cumsum"),
-            ctx.tensor(A if output_a else None, "A"),
-            ctx.tensor(None, "h"),
+            ctx.tensor(A, "A"),
+            ctx.tensor(h, "h"),
         ],
         outputs,
     )

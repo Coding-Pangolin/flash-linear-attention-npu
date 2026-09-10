@@ -127,6 +127,47 @@ vllm-ascend 同时提供 **pre-built wheel** 和源码安装（其安装文档
 vllm-ascend 的 variant 机制（我们的 SOC 标签可定为 `910b` / `a3` / `950`），
 并考虑用 `auditwheel` 把 `linux_aarch64` 升级为 `manylinux_*`。
 
+### 3.7 当前打包的体积/构建成本，以及两点澄清
+
+当前实现（HEAD `ef285a98`，910b 全算子 wheel）实测：
+
+| 项 | 数值 |
+| --- | --- |
+| wheel 解包总大小 | 79.45 MB |
+| 其中 `fla_npu/opp/vendors` | 78.41 MB（977 个文件：`.h/.hpp/.json/.o/.cpp/.py/.so`） |
+| 其中 `_C_thin.cpython-311-*.so` | 0.51 MB |
+| wheel 压缩后 | 26.4 MB |
+| 对比：512 分支只编 2 个算子的 wheel | 9.33 MB 解包 / 2.66 MB 压缩 |
+
+需要澄清两点：
+
+1. **“整份 OPP / 全算子”是当前一键默认，不是必然**。`setup.py` 里
+   `FLA_NPU_OPS` 默认为空，`build.sh --pkg` 因此编译仓库里全部算子；设成
+   `FLA_NPU_OPS="recurrent_gated_delta_rule,causal_conv1d"` 时 OPP 体积随算子数
+   线性下降（2 算子时整个 wheel 只有 2.66 MB）。
+2. **OPP 与 Python 版本无关**，只与 SOC 和 host 架构有关：977 个 OPP 文件里
+   没有任何 `cpython-3XX` 命名，5 个 `.so`（`libcust_opapi.so`/`liboptiling.so`/
+   `libcust_opmaster_rt2.0.so`/`libes_transformer_cust.so`/`libcust_opsproto_rt2.0.so`）
+   都是 CANN host 库、不链接 libpython。因此“每个 Python 版本各带一份 78 MB
+   OPP”是**当前打包实现的重复**，不是本质需求。
+
+代价估算（当前实现，Python 3.10/3.11/3.12 × {aarch64, x86_64} × SOC
+{910b, 910_93, 950} = 18 份）：上传量约 18 × 26.4 MB ≈ **475 MB**，
+构建则要重复 18 次 OPP 编译（910b 约 20-40 min/次，950 更久）。
+
+优化路线（按收益排序）：
+
+| 路线 | 做法 | 结果 |
+| --- | --- | --- |
+| OPP 拆独立包（推荐） | 主 wheel 只含 Python + `_C_thin.so`（~1 MB），OPP 按 `SOC × host 架构` 发 `fla-npu-opp-<soc>`；沿用现有 `ASCEND_CUSTOM_OPP_PATH` / `fla_npu_opp_env.pth` 加载 | 上传量 ≈ 6 × 1 MB（thin wheel）+ ≤6 × 26 MB（OPP 包）≈ 160 MB；OPP 编译次数从 18 降到 ≤6 |
+| 只编需要的算子 | `FLA_NPU_OPS=<用到的算子>` | OPP 体积/构建时间按算子数下降（2 算子 ≈ 2.7 MB wheel） |
+| OPP 复用开关（最小改动） | 给 `setup.py` 增加“复用已有 run package”的入口，避免 `_build_run_package()` 每次 `rm -rf build_out` 后重跑 `build.sh` | 各 Python 版本共用同一份 OPP，构建时间只花 1 次；wheel 体积仍是每份 78 MB |
+
+补充：当前 `setup.py::_build_run_package()` 每次构建都会
+`shutil.rmtree(build_out)` 再执行 `bash build.sh --pkg`，没有任何跨构建缓存，
+所以现状下每换一个 Python 版本都要重编一遍全部算子——这是后续做发布流水线
+时最值得先改造的一点。
+
 ### 3.4 元数据需要修正的点
 
 1. `Requires-Python`：thin wheel 应至少是 `>=3.10`（当前写成 `>=3.9` 与实际

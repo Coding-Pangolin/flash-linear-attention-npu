@@ -126,6 +126,44 @@ shape：x `[8, 4096]` bf16，weight `[4, 4096]`，conv_state `(blocks, 6, 4096)`
   与 `::test_threads_use_their_own_streams`（4 线程 × 4 stream，barrier 对齐后
   各自下发，事件须落在本线程 stream 且结果与 ctypes 逐位一致）。
 
+#### vLLM 侧 A/B（80.5.9.126，512-token 单请求，异步）
+
+| 配置 | 结果 | 用时 |
+|---|---|---|
+| Recurrent thin + Conv update thin（原全局缓存） | 失败，约 257 token 设备异常 | - |
+| Recurrent thin + Conv update thin（原缓存，同步） | 200，512 token | 71 s |
+| 两个算子都走 ctypes | 200，512 token | 41 s |
+| 仅 Recurrent thin | 200，512 token | 38 s |
+| 仅 Conv update thin | 200，512 token | 42 s |
+| 两个算子都 thin，取消 stream 缓存 | 200，512 token | 36 s |
+
+plog 首个可观测故障是 MoE kernel 的 GM 非法地址，`aclnnFlaCausalConv1d
+361001` 是 stream 进入异常态后的连带错误；同步与 thin 拆分实验证明 MoE 不是
+必要条件。修复后用同一 512-token 请求通过。
+
+#### Launcher 侧 A/B（221，910B3）
+
+同一个 512 验证 wheel（`causal_conv1d` + `recurrent_gated_delta_rule`，仅编
+这两个算子约 5 min），只替换 `_thin.py`：
+
+| `_thin.py` | 4 线程 × 4 stream 交替 Recurrent+Conv | 24 次轮换 stream 反复调用 |
+|---|---|---|
+| 旧（全局 `_CURRENT_STREAM_PTR` 缓存） | FAIL：线程 2/3 读到同一个缓存指针（1447952608），自身 stream 为 1507399680/1513441440 | PASS* |
+| 新（每调用 raw stream） | PASS | PASS |
+
+\* 旧实现对“单线程轮换 stream”恰好不暴露问题（每次 `set_stream` 都会刷新缓存），
+只有多线程并发才能稳定复现，这正是 vLLM worker 的形态。
+
+stream 查询开销（同机 2000 次 P50）：缓存 0 ms、raw accessor 0.0012 ms、
+`torch.npu.current_stream().npu_stream` 0.0233 ms。thin recurrent host P50
+0.1103 ms（缓存）→ 0.1167 ms（raw）。按每 decode step ~30 次 recurrent/conv
+调用估算：raw 方案约 +0.04-0.2 ms/step，若改用每调用 `current_stream()` 的
+最小修法则约 +0.7 ms/step；因此采用 raw accessor 兼顾正确性与 host 开销。
+
+> 待办：vLLM 侧仍需按验收清单完成重复 20 次、并发 8/32/64、TTFT/TPOT 复核；
+> 以及此前观察到的 Conv1d 多 batch 输出不一致问题（与 stream 修复无关，需单独
+> 做算子精度回归）。
+
 ## 6. 变更文件清单
 
 - `torch_custom/fla_npu/csrc_thin/`：runtime / tensor_desc / ops_recurrent_gdn /

@@ -1,0 +1,273 @@
+// Stable-ABI thin launcher spike: npu_recurrent_gated_delta_rule.
+//
+// This translation unit deliberately includes ONLY torch/csrc/stable/* (plus the
+// torch-free dlopen helper shared with csrc_thin).  Nothing from ATen/c10 or
+// pybind11 may appear here: the compile-once/run-on-many guarantee comes from
+// touching nothing but the aoti_torch_* C shims.
+#include <torch/csrc/stable/library.h>
+#include <torch/csrc/stable/stableivalue_conversions.h>
+#include <torch/csrc/stable/tensor.h>
+
+#include "thin_launcher/runtime.h"
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace {
+
+using torch::stable::Tensor;
+
+// ---------------------------------------------------------------------------
+// CANN / aclnn ABI (resolved at run time through the shared Runtime helper).
+// ---------------------------------------------------------------------------
+typedef struct aclTensor aclTensor;
+typedef struct aclIntArray aclIntArray;
+typedef struct aclOpExecutor aclOpExecutor;
+
+constexpr int32_t kAclFloat = 0;
+constexpr int32_t kAclFloat16 = 1;
+constexpr int32_t kAclInt8 = 2;
+constexpr int32_t kAclInt32 = 3;
+constexpr int32_t kAclUint8 = 4;
+constexpr int32_t kAclInt16 = 6;
+constexpr int32_t kAclInt64 = 9;
+constexpr int32_t kAclDouble = 11;
+constexpr int32_t kAclBool = 12;
+constexpr int32_t kAclBf16 = 27;
+constexpr int32_t kAclFormatNd = 2;
+
+// torch ScalarType -> ACL data type (mirrors csrc_thin/src/tensor_desc.cpp).
+int32_t acl_dtype(int32_t scalar_type) {
+  switch (scalar_type) {
+    case 6:  // kFloat
+      return kAclFloat;
+    case 5:  // kHalf
+      return kAclFloat16;
+    case 1:  // kChar
+      return kAclInt8;
+    case 3:  // kInt
+      return kAclInt32;
+    case 0:  // kByte
+      return kAclUint8;
+    case 2:  // kShort
+      return kAclInt16;
+    case 4:  // kLong
+      return kAclInt64;
+    case 7:  // kDouble
+      return kAclDouble;
+    case 11:  // kBool
+      return kAclBool;
+    case 15:  // kBFloat16
+      return kAclBf16;
+    default:
+      throw std::runtime_error(
+          "fla_npu_thin(stable): unsupported tensor dtype id " +
+          std::to_string(scalar_type));
+  }
+}
+
+using AclCreateTensorFn = aclTensor* (*)(const int64_t*, uint64_t, int32_t,
+                                         const int64_t*, int64_t, int32_t,
+                                         const int64_t*, uint64_t, void*);
+using AclDestroyTensorFn = int (*)(aclTensor*);
+using LaunchFn = int (*)(void*, uint64_t, aclOpExecutor*, void*);
+
+// Metadata pulled out of a stable tensor handle via the C shims.
+struct TensorMeta {
+  bool defined = false;
+  void* data = nullptr;
+  int64_t ndim = 0;
+  std::vector<int64_t> sizes;
+  std::vector<int64_t> strides;
+  int64_t storage_offset = 0;
+  int64_t storage_numel = 0;
+  int32_t scalar_type = 0;
+  int32_t device_type = 0;
+  int32_t device_index = 0;
+  bool contiguous = false;
+};
+
+TensorMeta meta_of(const torch::stable::Tensor& tensor) {
+  TensorMeta meta;
+  if (!tensor.defined()) {
+    return meta;
+  }
+  meta.defined = true;
+  const AtenTensorHandle handle = tensor.get();
+  TORCH_ERROR_CODE_CHECK(aoti_torch_get_data_ptr(handle, &meta.data));
+  TORCH_ERROR_CODE_CHECK(aoti_torch_get_dim(handle, &meta.ndim));
+  int64_t* sizes = nullptr;
+  int64_t* strides = nullptr;
+  TORCH_ERROR_CODE_CHECK(aoti_torch_get_sizes(handle, &sizes));
+  TORCH_ERROR_CODE_CHECK(aoti_torch_get_strides(handle, &strides));
+  meta.sizes.assign(sizes, sizes + meta.ndim);
+  meta.strides.assign(strides, strides + meta.ndim);
+  TORCH_ERROR_CODE_CHECK(
+      aoti_torch_get_storage_offset(handle, &meta.storage_offset));
+  TORCH_ERROR_CODE_CHECK(
+      aoti_torch_get_storage_numel(handle, &meta.storage_numel));
+  TORCH_ERROR_CODE_CHECK(aoti_torch_get_dtype(handle, &meta.scalar_type));
+  TORCH_ERROR_CODE_CHECK(
+      aoti_torch_get_device_type(handle, &meta.device_type));
+  TORCH_ERROR_CODE_CHECK(
+      aoti_torch_get_device_index(handle, &meta.device_index));
+  TORCH_ERROR_CODE_CHECK(aoti_torch_is_contiguous(handle, &meta.contiguous));
+  return meta;
+}
+
+// RAII wrapper around aclCreateTensor / aclDestroyTensor.  Mirrors the ctypes
+// and pybind paths: contiguous tensors describe storage with the logical shape,
+// non-contiguous ones fall back to a flat storage extent.
+class AclTensorView {
+ public:
+  explicit AclTensorView(const TensorMeta& meta) {
+    if (!meta.defined) {
+      return;
+    }
+    storage_dims_ = meta.contiguous ? meta.sizes
+                                    : std::vector<int64_t>{meta.storage_numel};
+    auto create = reinterpret_cast<AclCreateTensorFn>(
+        fla_npu_thin::Runtime::instance().symbol("aclCreateTensor"));
+    ptr_ = create(meta.sizes.data(), static_cast<uint64_t>(meta.ndim),
+                  acl_dtype(meta.scalar_type), meta.strides.data(),
+                  meta.storage_offset, kAclFormatNd, storage_dims_.data(),
+                  static_cast<uint64_t>(storage_dims_.size()), meta.data);
+    if (ptr_ == nullptr) {
+      throw std::runtime_error(
+          "fla_npu_thin(stable): aclCreateTensor returned nullptr");
+    }
+  }
+
+  ~AclTensorView() {
+    if (ptr_ != nullptr) {
+      auto destroy = reinterpret_cast<AclDestroyTensorFn>(
+          fla_npu_thin::Runtime::instance().symbol("aclDestroyTensor"));
+      destroy(ptr_);
+    }
+  }
+
+  AclTensorView(const AclTensorView&) = delete;
+  AclTensorView& operator=(const AclTensorView&) = delete;
+
+  aclTensor* get() const { return ptr_; }
+
+ private:
+  aclTensor* ptr_ = nullptr;
+  std::vector<int64_t> storage_dims_;
+};
+
+using GetWorkspaceFn = int (*)(const aclTensor*, const aclTensor*,
+                               const aclTensor*, const aclTensor*, aclTensor*,
+                               const aclTensor*, const aclTensor*,
+                               const aclTensor*, const aclTensor*,
+                               const aclTensor*, float, aclTensor*, uint64_t*,
+                               aclOpExecutor**);
+
+// ---------------------------------------------------------------------------
+// Op implementation.
+// ---------------------------------------------------------------------------
+Tensor run_recurrent_gated_delta_rule(const Tensor& query, const Tensor& key,
+                                      const Tensor& value, const Tensor& state,
+                                      const Tensor& beta,
+                                      const Tensor& actual_seq_lengths,
+                                      const Tensor& ssm_state_indices,
+                                      const std::optional<Tensor>&
+                                          num_accepted_tokens,
+                                      const std::optional<Tensor>& g,
+                                      const std::optional<Tensor>& gk,
+                                      double scale, int64_t stream) {
+  auto& rt = fla_npu_thin::Runtime::instance();
+  auto get_ws = reinterpret_cast<GetWorkspaceFn>(
+      rt.symbol("aclnnRecurrentGatedDeltaRuleGetWorkspaceSize"));
+  auto launch =
+      reinterpret_cast<LaunchFn>(rt.symbol("aclnnRecurrentGatedDeltaRule"));
+
+  // Output allocation: same shape/dtype/device as `value` (identical to the
+  // ctypes/pybind paths, which allocate `_shape(value)` with value's options).
+  Tensor out = torch::stable::empty_like(value);
+
+  AclTensorView v_query(meta_of(query));
+  AclTensorView v_key(meta_of(key));
+  AclTensorView v_value(meta_of(value));
+  AclTensorView v_beta(meta_of(beta));
+  AclTensorView v_state(meta_of(state));
+  AclTensorView v_seq(meta_of(actual_seq_lengths));
+  AclTensorView v_idx(meta_of(ssm_state_indices));
+  AclTensorView v_g(meta_of(g.value_or(Tensor())));
+  AclTensorView v_gk(meta_of(gk.value_or(Tensor())));
+  AclTensorView v_accepted(meta_of(num_accepted_tokens.value_or(Tensor())));
+  AclTensorView v_out(meta_of(out));
+
+  uint64_t workspace_size = 0;
+  aclOpExecutor* executor = nullptr;
+  const int get_ret = get_ws(
+      v_query.get(), v_key.get(), v_value.get(), v_beta.get(), v_state.get(),
+      v_seq.get(), v_idx.get(), v_g.get(), v_gk.get(), v_accepted.get(),
+      static_cast<float>(scale), v_out.get(), &workspace_size, &executor);
+  if (get_ret != 0) {
+    throw std::runtime_error(
+        "fla_npu_thin(stable): aclnnRecurrentGatedDeltaRuleGetWorkspaceSize "
+        "failed: " +
+        std::to_string(get_ret));
+  }
+
+  std::vector<uint8_t> workspace;
+  void* workspace_ptr = nullptr;
+  if (workspace_size != 0) {
+    // Spike: host-side scratch is fine for A2 sizes; Phase 1 replaces this with
+    // an aoti_torch_empty_strided allocation on the input's device.
+    workspace.resize(static_cast<size_t>(workspace_size));
+    workspace_ptr = workspace.data();
+  }
+  const int launch_ret = launch(workspace_ptr, workspace_size, executor,
+                                reinterpret_cast<void*>(stream));
+  if (launch_ret != 0) {
+    throw std::runtime_error(
+        "fla_npu_thin(stable): aclnnRecurrentGatedDeltaRule failed: " +
+        std::to_string(launch_ret));
+  }
+  return out;
+}
+
+// Boxed entry point: unbox StableIValues, run, pack the single output.
+void boxed_recurrent_gated_delta_rule(torch::stable::StableIValue* stack,
+                                      uint64_t num_inputs,
+                                      uint64_t num_outputs) {
+  (void)num_inputs;
+  (void)num_outputs;
+  const Tensor query = to<Tensor>(stack[0]);
+  const Tensor key = to<Tensor>(stack[1]);
+  const Tensor value = to<Tensor>(stack[2]);
+  const Tensor state = to<Tensor>(stack[3]);
+  const Tensor beta = to<Tensor>(stack[4]);
+  const Tensor actual_seq_lengths = to<Tensor>(stack[5]);
+  const Tensor ssm_state_indices = to<Tensor>(stack[6]);
+  const auto num_accepted_tokens = to<std::optional<Tensor>>(stack[7]);
+  const auto g = to<std::optional<Tensor>>(stack[8]);
+  const auto gk = to<std::optional<Tensor>>(stack[9]);
+  const double scale = to<double>(stack[10]);
+  const int64_t stream = to<int64_t>(stack[11]);
+  Tensor out = run_recurrent_gated_delta_rule(
+      query, key, value, state, beta, actual_seq_lengths, ssm_state_indices,
+      num_accepted_tokens, g, gk, scale, stream);
+  stack[0] = from(out);
+}
+
+}  // namespace
+
+STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
+  m.def(
+      "npu_recurrent_gated_delta_rule(Tensor query, Tensor key, Tensor value, "
+      "Tensor(a!) state, Tensor beta, Tensor actual_seq_lengths, "
+      "Tensor ssm_state_indices, Tensor? num_accepted_tokens, Tensor? g, "
+      "Tensor? gk, float scale, int stream) -> Tensor");
+}
+
+STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
+  m.impl("npu_recurrent_gated_delta_rule",
+         &boxed_recurrent_gated_delta_rule);
+}

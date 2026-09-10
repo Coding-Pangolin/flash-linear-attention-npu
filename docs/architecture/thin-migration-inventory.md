@@ -111,7 +111,11 @@
    canonical `chunk_indices`（ctypes 要求成对提供，属 thin 的超集）。
 4. `npu_solve_tri` varlen（TND/NTD）：thin 直连结果非有限 → wrapper 已委托
    ctypes；dense bsnd/bnsd 已原生 thin 并多处验证 0.0。
-5. 收尾：regression_thin_ops 20 场景（37 组）已在 910b（w16 wheel）与
+5. 收尾：regression_thin_ops 21 场景已在 910b（本分支 wheel）全绿；
+   regression_950_ops 4 场景（fwd_prepare / bwd_finalize / recurrent_kda /
+   chunk_gated_delta_rule_fwd A5 域）已在 Ascend950PR（fzy py3.10 + torch 2.7.1）
+   全绿，安装态 smoke 3/3 通过。
+   历史记录：regression_thin_ops 20 场景（37 组）已在 910b（w16 wheel）与
    Ascend950PR（950d wheel）安装态全量执行并全绿；950-only 3 场景
    （fwd_prepare/bwd_finalize/recurrent_kda）与安装态 smoke 3/3 亦全绿。
    发布矩阵与实测记录见 thin-launcher-release-matrix.md。

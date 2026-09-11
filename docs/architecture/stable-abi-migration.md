@@ -564,3 +564,24 @@ Python 侧 API 契约的修法也记在这里：`tools/op_api_parity.py` 用 `as
 关键字改名、默认值语义从 False 变成 None）。修法不是逐个打补丁，而是让
 `tools/sync_spec_python.py` 从 ctypes 反推 spec 的 `python` 块，并让生成器支持
 "位置参数带默认值"与"必填关键字参数"。
+
+### 8.1 覆盖记录入库、两条构建路径都验过（2026-09-11 收尾）
+
+`tests/stable_scenarios.json` 把"这次跑了哪些场景"变成仓库里的一份事实：
+910B3 记 **245 通过 + 2 条带原因的 SKIP**，950PR 记 **12 通过**。写用
+`FLA_NPU_BASELINE_WRITE=1`，默认模式比对——**少一个场景就 FAIL**（丢 layout、
+丢 flag 组合这类"绿着丢覆盖"的问题因此挡在门外）。重复跑一次确认基线自洽：
+`baseline ok for Ascend910B3: 245 scenarios (0 new, 0 new skip)`。
+
+另外两条构建路径都实测过，避免"改了默认把开关路径弄坏"：
+
+| 构建 | 产物 | 安装后 |
+| --- | --- | --- |
+| 默认 | `...-910b.aarch64-py3-none-any.whl`，含 `libfla_npu_thin.so`、无 `_C_thin` | 无 `FLA_NPU_STABLE_LIB` / `ASCEND_CUSTOM_OPP_PATH` 也能跑全量 256 PASS |
+| `FLA_NPU_BUILD_THIN=1` | `...-910b.aarch64-cp311-cp311-linux_aarch64.whl`，含 `_C_thin*.so` + `libfla_npu_thin.so` + torch pin | `FLA_NPU_THIN_ABI=pybind` → `_thin`；不设该变量 → 仍然 `_stable_generated` |
+
+`test_wheel_environment.py` 也补了 4 个用例覆盖这对开关（默认必须是 ABI-free、
+pybind 必须 opt-in、`FLA_NPU_BUILD_STABLE_ABI=0` 能出纯 ctypes wheel、
+`build_wheel.py` 会丢掉残留的 `_C_thin*.so`），18 个用例全过。
+`regression_mutation_contract.py`（version 计数 / grad 拒绝 / scratch state）在新的
+默认链路上同样全过。

@@ -27,6 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]          # torch_custom/fla_npu
 CSRC_STABLE = ROOT / "csrc_stable" / "src"
 CSRC_THIN = ROOT / "csrc_thin"
+CSRC_STABLE_INCLUDE = ROOT / "csrc_stable" / "include"
 
 
 def torch_paths() -> tuple[list[str], str]:
@@ -57,8 +58,11 @@ def main() -> int:
         "-fvisibility=hidden",
         *(["-DFLA_STABLE_NO_DEBUG_PROBE"] if args.no_debug_probe else []),
         "-I", str(CSRC_THIN / "include"),
+        "-I", str(CSRC_STABLE_INCLUDE),
         *[f"-I{path}" for path in includes],
-        str(CSRC_STABLE / "stable_recurrent_gdr.cpp"),
+        # One TU by construction: the stable headers may not be included twice
+        # (non-inline definitions in tensor_inl.h -> duplicate symbols).
+        str(CSRC_STABLE / "stable_ops.cpp"),
         str(CSRC_THIN / "src" / "runtime.cpp"),
         "-L", torch_lib,
         "-Wl,--no-as-needed", "-ltorch_cpu", "-lc10", "-ltorch",

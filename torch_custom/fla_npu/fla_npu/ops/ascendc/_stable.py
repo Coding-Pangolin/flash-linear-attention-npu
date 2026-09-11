@@ -238,3 +238,54 @@ def npu_recurrent_kda(
         # here, which also returns the caller's object.
         final_state = initial_state
     return out, final_state
+
+
+# ---------------------------------------------------------------------------
+# Generic plumbing for the generated wrappers.
+# ---------------------------------------------------------------------------
+def _host_ints(values):
+    """int[] arguments travel as host int64 tensors (no list support in the
+    stable conversions)."""
+
+    if values is None:
+        return None
+    import torch
+
+    return torch.tensor(list(values), dtype=torch.int64, device="cpu")
+
+
+def _call(name: str, values: dict):
+    """Invoke a generated stable op from its user-facing argument values."""
+
+    from . import _stable_generated as generated
+
+    schema = generated._SIG[name]
+    enums = generated._ENUM.get(name, {})
+    args = []
+    for arg_name, kind in schema:
+        value = values.get(arg_name)
+        if kind == "int_array":
+            value = _host_ints(value)
+        elif kind == "char_ptr":
+            table = enums[arg_name]
+            if value is None:
+                value = 0
+            elif isinstance(value, str):
+                value = table[value]
+        args.append(value)
+    args.append(_current_stream_ptr())
+    result = _op(name)(*args)
+    if not isinstance(result, tuple):
+        result = (result,)
+    out = []
+    for index, when in generated._RET[name]:
+        keep = True if when is None else bool(eval(when, {}, values))
+        out.append(result[index] if keep else None)
+    return tuple(out) if len(out) > 1 else out[0]
+
+
+try:  # generated wrappers (optional: present when the codegen step has run)
+    from ._stable_generated import *  # noqa: F401,F403
+    from . import _stable_generated
+except Exception:  # pragma: no cover - generated module is optional
+    _stable_generated = None

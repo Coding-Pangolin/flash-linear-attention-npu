@@ -59,5 +59,13 @@
     "arg": "out",
     "source": "value",
     "dtype": "bfloat16"
+  },
+  "python": {
+    "positional": [
+      "query",
+      "key",
+      "value",
+      "state"
+    ]
   }
 }

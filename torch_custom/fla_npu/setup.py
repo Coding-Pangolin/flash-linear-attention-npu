@@ -86,6 +86,13 @@ def _package_dir():
 
 def _setup_pure_python():
     stable_abi_data = _build_stable_abi_library()
+    # A stale copy of the pybind extension from an earlier in-place build must
+    # not be packaged as data: the wheel would then be tagged py3-none-any while
+    # actually holding a cpXXX .so.
+    stale = SETUP_DIR / "fla_npu"
+    for pattern in ("_C_thin*.so", "_C_thin*.pyd", "_C_thin*.dylib"):
+        for path in stale.glob(pattern):
+            path.unlink()
     setup(
         name=PACKAGE_NAME,
         version=_package_version(),
@@ -93,6 +100,7 @@ def _setup_pure_python():
         packages=_packages(),
         package_dir=_package_dir(),
         package_data={"fla_npu": OPP_PACKAGE_DATA + stable_abi_data},
+        exclude_package_data={"fla_npu": ["_C_thin*.so", "_C_thin*.pyd"]},
         include_package_data=True,
         zip_safe=False,
         cmdclass={"build_py": CleanBuildPy},

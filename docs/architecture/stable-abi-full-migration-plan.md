@@ -290,9 +290,27 @@ baseline 必须清空，否则发版门禁不放行。
 数值不再是 0.0 也 FAIL。这样"覆盖"是仓库里的一份事实，而不是某次日志里的一行
 `ALL PASS`。当前记录：910B3 **245 通过 + 2 条带原因的 SKIP**，950PR **12 通过**。
 
-### C4. 运行期回退可视化
+### C4. 运行期回退可视化（已实现）
 
-`FLA_NPU_THIN_TRACE=1` 时打印/计数"算子 + 场景标签"；CI 在合法域内断言计数为 0。
+解析后端时记录 `BACKENDS`（算子 → 服务它的后端）与 `FALLBACKS`（被迫走 ctypes 的
+算子及次数）；`FLA_NPU_THIN_TRACE=1` 让每个算子打一行到 stderr：
+
+```
+[fla-npu] npu_fast_gelu_custom: stable
+```
+
+更重要的是它可以当门禁用：`FLA_NPU_DISPATCH=public python tests/regression_stable_full.py`
+把**整套场景**改走公共 API（而不是直接钉住后端），于是覆盖到"后端选择 + mutation
+契约 + launcher"整条链，跑完断言 `FALLBACKS` 为空。实测：
+
+```
+public dispatch: 24 operators, backends ['stable'], no fallback
+ALL PASS: full stable parity          (259 PASS, 基线 246 + 3 条 SKIP)
+```
+
+四种模式的行为也逐一对过：默认 → `stable`；`FLA_NPU_THIN_TRACE=1` 打印该行；
+`FLA_NPU_THIN_ABI=ctypes` → `ctypes`（显式选择，不计回退）；
+`FLA_NPU_THIN_VALIDATE=1` → `ctypes` 且**记录一次回退**（带原因）。
 
 ### C5. 补全演练缺口（已完成）
 
@@ -395,6 +413,8 @@ ABI，`python` 块负责 activation 字符串与 CPU 元数据数组的归一）
 | C5 | ✅ 3 个演练缺口已补（910b 24 个 + 950 4 个） | — |
 | C6 | ✅ Python API 契约门禁（0 漂移） | — |
 | C7 | ✅ 构建戳（陈旧 `.so` 直接报错） | — |
+| C4 | ✅ 回退可视化 + 公共 API 全量演练（24 算子全为 stable，0 回退） | — |
+| C8 | ✅ spec 的 aclnn 实参列表 vs 实现（离线，能提前发现 #390 那类 ABI 换血） | — |
 | B2 | ✅ int 缓存（varlen 路径 −39%） | — |
 | B4 | 校验分层（schema + C++ 廉价断言），把 GDR 压回 ≤1.15× | 无 |
 | C3 | ✅ parity 基线入库（910B3 245 + 950PR 12，丢失场景即 FAIL） | — |

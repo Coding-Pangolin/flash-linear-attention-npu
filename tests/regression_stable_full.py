@@ -112,6 +112,38 @@ class StableShim:
         return counted
 
 
+class PublicShim:
+    """Stands in for `_thin` by calling the public API.
+
+    The scenarios then exercise the *whole* dispatch chain -- backend
+    selection, the mutation contract, the wrapper -- instead of pinning the
+    backend directly.  With FLA_NPU_THIN_TRACE=1 every operator announces which
+    backend served it, and the run fails if anything had to fall back to ctypes
+    (FALLBACKS is the counted form of "the launcher did not carry this
+    operator", which changes the dependency footprint and must not happen
+    silently).
+    """
+
+    def __init__(self):
+        self.calls: dict[str, int] = {}
+        self.missing: list[str] = []
+
+    def __getattr__(self, name):
+        import fla_npu.ops.ascendc as ascendc
+
+        try:
+            target = getattr(ascendc, name)
+        except AttributeError as exc:
+            raise AttributeError(
+                f"the public API does not expose {name!r}") from exc
+
+        def counted(*args, **kwargs):
+            self.calls[name] = self.calls.get(name, 0) + 1
+            return target(*args, **kwargs)
+
+        return counted
+
+
 def main() -> int:
     # Either FLA_NPU_STABLE_LIB points at a build tree, or an installed wheel
     # carries the launcher next to the package -- both are ordinary customer
@@ -123,6 +155,8 @@ def main() -> int:
     import regression_thin_ops as suite
 
     shim = StableShim()
+    if (os.environ.get("FLA_NPU_DISPATCH") or "").strip().lower() == "public":
+        shim = PublicShim()
     suite._thin = shim  # every scenario now exercises the stable backend
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
@@ -193,6 +227,15 @@ def main() -> int:
     status = check_baseline(device, suite)
     if status != 0:
         return status
+    if isinstance(shim, PublicShim):
+        import fla_npu.ops.ascendc as ascendc
+
+        if ascendc.FALLBACKS:
+            print(f"UNEXPECTED FALLBACKS: {ascendc.FALLBACKS}")
+            return 1
+        served = sorted(set(ascendc.BACKENDS.values()))
+        print(f"public dispatch: {len(ascendc.BACKENDS)} operators, "
+              f"backends {served}, no fallback")
     print("ALL PASS: full stable parity")
     return 0
 

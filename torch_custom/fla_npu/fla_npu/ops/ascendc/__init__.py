@@ -20,6 +20,7 @@ from __future__ import annotations
 import functools
 import inspect
 import os
+import sys
 import types
 import warnings
 from typing import Callable, Optional
@@ -288,6 +289,7 @@ def _get_direct_op(name: str):
     _prepare_direct_runtime()
     stable_op = _get_stable_op(name)
     if stable_op is not None:
+        _note_backend(name, "stable")
         return _wrap_mutable_direct_op(name, stable_op)
     # The pybind launcher is *not* part of the default chain: it is the only
     # backend that pins the CPython ABI and the libtorch C++ ABI, so falling
@@ -297,16 +299,52 @@ def _get_direct_op(name: str):
     if _pybind_requested():
         thin_op = _get_thin_op(name)
         if thin_op is not None:
+            _note_backend(name, "pybind")
             return _wrap_mutable_direct_op(name, thin_op)
     try:
         op = ASCENDC_CTYPES_OPS[name]
     except KeyError as exc:
         raise AttributeError(f"fla_npu.ops.ascendc has no ctypes Ascend C op {name}.") from exc
+    if _validate_requested():
+        _note_backend(name, "ctypes", "FLA_NPU_THIN_VALIDATE=1")
+    elif _stable_backend_selected():
+        _note_backend(name, "ctypes", "not carried by the stable launcher")
+    else:
+        _note_backend(name, "ctypes")
     return _wrap_mutable_direct_op(name, op)
 
 
 def _abi_mode() -> str:
     return (os.environ.get("FLA_NPU_THIN_ABI") or "").strip().lower()
+
+
+# Which backend serves each operator, and why anything fell back.  Recorded at
+# resolution time (once per operator, not per call) so both a diagnosis and the
+# CI assertion "no fallback inside the legal domain" can read it.
+BACKENDS: dict[str, str] = {}
+FALLBACKS: dict[str, int] = {}
+
+
+def _trace_enabled() -> bool:
+    value = os.environ.get("FLA_NPU_THIN_TRACE")
+    return value is not None and value.upper() in {"1", "TRUE", "YES", "ON"}
+
+
+def _note_backend(name: str, backend: str, reason: str | None = None) -> None:
+    """Record (and optionally report) which backend answers *name*.
+
+    ``FLA_NPU_THIN_TRACE=1`` turns this into a per-operator line on stderr.  The
+    interesting case is a fallback: the launcher exists but does not carry the
+    operator, so ctypes answers instead -- that changes the dependency
+    footprint, and it must never happen silently.
+    """
+
+    BACKENDS[name] = backend
+    if reason is not None:
+        FALLBACKS[name] = FALLBACKS.get(name, 0) + 1
+    if _trace_enabled():
+        detail = f" ({reason})" if reason else ""
+        print(f"[fla-npu] {name}: {backend}{detail}", file=sys.stderr)
 
 
 def _validate_requested() -> bool:
@@ -680,7 +718,9 @@ globals()["causal_conv1d"] = causal_conv1d
 _prepare_direct_runtime(raise_on_error=False)
 
 __all__ = [
+    "BACKENDS",
     "BACKWARD_OPS",
+    "FALLBACKS",
     "MUTATED_ARGUMENTS",
     "MUTATION_FLAGS",
     "install_legacy_torch_ops_warning",

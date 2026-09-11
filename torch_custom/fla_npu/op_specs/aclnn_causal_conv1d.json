@@ -82,5 +82,19 @@
       "run_mode": "0",
       "head_num": "0"
     }
+  },
+  "scenarios": {
+    "run_mode": [
+      0,
+      1
+    ],
+    "head_num": [
+      0,
+      2
+    ],
+    "activation_mode": [
+      0,
+      1
+    ]
   }
 }

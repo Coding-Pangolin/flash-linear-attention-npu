@@ -166,20 +166,49 @@ vllm-ascend 走的是同一条 dispatcher 路线（C++ op + `EXEC_NPU_CMD`），
 ### C1. spec 增 `scenarios`（合法域契约，机器可读）
 
 ```json
-"scenarios": [
-  {"layout": ["BSND", "BNSD", "TND", "NTD"], "varlen": [false, true],
-   "flags": {"output_final_state": [false, true], "disable_recompute": [false, true]}}
-]
+"scenarios": {
+  "layout": ["BSND", "BNSD", "TND", "NTD"],
+  "varlen": [false, true],
+  "flags":  ["output_final_state", "disable_recompute"]
+}
 ```
 
-它同时是"必须覆盖"的声明、测试用例的来源、覆盖矩阵的输入。维度的合法值由 ctypes
-实现反推，不允许凭印象写。
+平面的"轴 → 合法值"映射，而不是用例对象列表——diff 里读得出来，也便于与
+C2 从 spec 反推出的轴逐条对账。**维度的合法值必须从 ctypes 实现反推，不允许凭印象写**；
+反推不出来的轴（例如没有 `enum` 表的 `char_ptr`）在矩阵里标 `UNVERIFIABLE`，而不是假装已声明。
 
-### C2. `tools/stable_coverage.py`（离线门禁，不需要 NPU）
+### C2. `tools/stable_coverage.py`（已实现，离线门禁，不需要 NPU）
 
-- 输入：全部 spec（含 `scenarios`）+ 已注册算子清单（从 `_stable_generated.py` / `_stable.py` 的函数名推导）；
-- 输出：`算子 × 场景 → stable / 回退 / 未声明` 矩阵；
-- 判定：**"合法域内回退" = FAIL**；"声明了场景却没有 stable 适配" = FAIL；"新算子没有 `scenarios`" = FAIL。
+```
+python tools/stable_coverage.py           # 覆盖矩阵；已登记缺口 = KNOWN GAP，其余 FAIL
+python tools/stable_coverage.py --axes    # 逐算子列出反推出的轴与合法值
+python tools/stable_coverage.py --strict  # 不认 baseline，任何缺口都 FAIL（发版前用）
+python tools/stable_coverage.py --json    # 机器可读，供 CI 消费
+```
+
+三项判定，全部来自仓库内的文件：
+
+1. **适配器覆盖**：ctypes 暴露的每个 `npu_*` 都要有 stable 适配器（`.inc` 里的
+   `kSchema_<op>` 或 `_stable.py` 里的同名函数）。缺失 = FAIL，除非写进
+   `tests/stable_coverage_baseline.json` 并给出理由与移除条件——**缺口是登记制，不是容忍制**。
+2. **场景轴声明**：从 spec 反推轴（`char_ptr` 的 `enum` → layout/dtype 轴及合法值；
+   `cu_seqlens`/`chunk_indices`/`actual_seq_lengths`/`query_start_loc` → varlen 轴；
+   `cache_indices`/`num_accepted_tokens` → spec-decode 轴；布尔入参与输出 `return_when` → flag 轴），
+   再拿 `scenarios` 逐条对账；声明了推导不出来的轴、或声明了 spec 表达不了的值 = FAIL。
+3. **spec 与注册一致性**：注册了却缺 spec、有 spec 却没注册、生成了却没有 Python 包装 = FAIL。
+
+当前输出（221/910B3 时代的仓库状态，本地离线可复现）：
+
+```
+ctypes operators: 26
+stable adapters : 23 generated + 2 hand-written
+npu_causal_conv1d   -   0 axes   KNOWN GAP  (waiting on #390)
+... 其余 25 行 OK ...
+ALL COVERED: every ctypes operator has a stable adapter (recorded gaps only)
+```
+
+`--strict` 退出码 1 并列出 `npu_causal_conv1d: no stable adapter`——即 A3 完成后
+baseline 必须清空，否则发版门禁不放行。
 
 ### C3. parity 基线入库
 
@@ -200,7 +229,7 @@ vllm-ascend 走的是同一条 dispatcher 路线（C++ op + `EXEC_NPU_CMD`），
 | 阶段 | 内容 | 前置 |
 | --- | --- | --- |
 | A3 | `npu_causal_conv1d` + `causal_conv1d_update` 适配（`conv_states` in-place、`int[]`、layout enum） | 上游 #390 ABI 定稿 |
-| C1–C2 | `scenarios` + 覆盖矩阵门禁 | 无（可立即做） |
+| C1–C2 | `scenarios` + 覆盖矩阵门禁 | **C2 已实现**；C1 的逐算子轴值核对待补 |
 | C5 | 补 3 个演练缺口 | C1 |
 | B2/B4 | int 缓存 + 校验分层，把 GDR 压回 ≤1.15× | 无 |
 | B5/C3 | 26 算子 A/B 表 + parity 基线入库 | B2/B4、C1 |

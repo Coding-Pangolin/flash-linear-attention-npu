@@ -1,0 +1,14 @@
+{
+  "//": "Gaps that are known and accepted today. tools/stable_coverage.py reports these as KNOWN GAP and stays green; anything else fails. Every entry needs a reason and a removal condition.",
+  "known_gaps": {
+    "npu_causal_conv1d": "waiting on the upstream #390 ABI (conv_states in-place update); A3 of the migration plan"
+  },
+  "notes": {
+    "unexercised": [
+      "npu_chunk_gated_delta_rule_bwd_finalize",
+      "npu_chunk_gated_delta_rule_fwd_prepare",
+      "npu_recurrent_kda"
+    ],
+    "unexercised_why": "These have adapters and pass their own parity drivers, but tests/regression_stable_full.py does not call them yet. Phase C5 adds the scenarios; this list is the reminder, not an excuse."
+  }
+}

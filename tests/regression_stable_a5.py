@@ -33,9 +33,11 @@ from regression_stable_full import StableShim, check_baseline  # noqa: E402
 
 def main() -> int:
     import regression_950_ops as a5
+    import regression_thin_ops as suite_module
 
     shim = StableShim()
     a5._thin = shim
+    suite_module._thin = shim
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
     device = str(torch.npu.get_device_name(0))
@@ -46,11 +48,21 @@ def main() -> int:
         a5.scenario_recurrent_kda,
         a5.scenario_chunk_gated_delta_rule_fwd_a5,
     ]
+    # These operators have Ascend950 kernels too (checked with nm on the OPP:
+    # aclnnChunkFwdO / aclnnSolveTri / aclnnChunkLocalCumsum are all present),
+    # so the same scenarios run here and the 950 baseline covers them as well.
+    # The rest of the suite is not portable: the A5 OPP carries neither
+    # aclnnCausalConv1d nor aclnnRecurrentGatedDeltaRule, and several A2 inputs
+    # are outside the A5 kernels' accepted domain.
+    scenarios += [
+        suite_module.scenario_chunk_fwd_o,
+        suite_module.scenario_chunk_local_cumsum,
+        suite_module.scenario_solve_tri_dense,
+        suite_module.scenario_solve_tri_guards,
+    ]
     for scenario in scenarios:
         print(f"--- entering {scenario.__name__}", flush=True)
         scenario()
-    import regression_thin_ops as suite_module
-
     suite_module.SCENARIOS.update(a5.SCENARIOS)
     print(f"\nstable ops exercised: {len(shim.calls)}")
     for name in sorted(shim.calls):

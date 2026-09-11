@@ -85,17 +85,40 @@ def _package_dir():
 
 
 def _setup_pure_python():
+    stable_abi_data = _build_stable_abi_library()
     setup(
         name=PACKAGE_NAME,
         version=_package_version(),
         description="FLA NPU Python runtime",
         packages=_packages(),
         package_dir=_package_dir(),
-        package_data={"fla_npu": OPP_PACKAGE_DATA},
+        package_data={"fla_npu": OPP_PACKAGE_DATA + stable_abi_data},
         include_package_data=True,
         zip_safe=False,
         cmdclass={"build_py": CleanBuildPy},
     )
+
+
+def _build_stable_abi_library() -> list[str]:
+    """Bundle ``libfla_npu_thin.so`` when FLA_NPU_BUILD_STABLE_ABI is set.
+
+    This is the ABI-free launcher: a plain shared object with no CPython and no
+    libtorch C++ dependency, so a wheel that ships only this (and pure Python)
+    stays usable across Python and torch versions.  Build-time only needs torch
+    headers; nothing is linked against libtorch.
+    """
+
+    if not _env_flag("FLA_NPU_BUILD_STABLE_ABI"):
+        return []
+    import subprocess
+
+    builder = SETUP_DIR / "csrc_stable" / "build_stable.py"
+    out = SETUP_DIR / "fla_npu" / "libfla_npu_thin.so"
+    subprocess.run(
+        [sys.executable, str(builder), "--no-debug-probe", "--out", str(out)],
+        check=True,
+    )
+    return ["libfla_npu_thin.so"]
 
 
 def _setup_thin_extension():

@@ -585,3 +585,28 @@ pybind 必须 opt-in、`FLA_NPU_BUILD_STABLE_ABI=0` 能出纯 ctypes wheel、
 `build_wheel.py` 会丢掉残留的 `_C_thin*.so`），18 个用例全过。
 `regression_mutation_contract.py`（version 计数 / grad 拒绝 / scratch state）在新的
 默认链路上同样全过。
+
+### 8.2 API 契约覆盖到 pybind，三条后端一致（2026-09-11 最后一项）
+
+`FLA_NPU_THIN_ABI=pybind` 仍然可选，所以它的 Python 表面也是对外 API 的一部分。
+`tools/op_api_parity.py` 改成**逐后端**比对（不再"谁先找到算子就只比谁"），于是把
+pybind 的 9 处漂移也照出来了：位置默认值丢失（`causal_conv1d_bwd`、
+`chunk_gated_delta_rule_fwd_prepare`、`chunk_kda_fwd`、`recurrent_kda`）、
+参数漏掉（`bwd_dhu.transpose_state_layout`）、关键字改名
+（`chunk_local_cumsum.chunk_indices` → ctypes 的 `chunk_indices_out`）、
+多出 ctypes 没有的参数（`chunk_gated_delta_rule_fwd.a_log/dt_bias`）。
+
+修完后的记录（51 = 26 算子 × 能提供它的后端）：
+
+```
+operators compared: 51    drifted: 0
+SIGNATURES MATCH: every backend exposes the ctypes call shape
+```
+
+一处细节值得记：`bwd_dhu` 的 `transpose_state_layout` 在 pybind ABI 里本来就不存在
+（pybind codegen 会跳过 cpp_only 参数），而 ctypes 是**收下但忽略**。所以 `_thin.py`
+把它加进 Python 签名、但不转发给扩展——与 ctypes 行为一致，而不是硬塞进 ABI。
+
+pybind 这一侧用 `tests/regression_thin_ops.py`（ctypes vs `_thin`）实测：
+**26 个场景 ALL PASS / 246 PASS**，其中 6 个 conv1d 场景显式 SKIP（pybind 覆盖 25/26，
+它本来就没有 `npu_causal_conv1d`）。

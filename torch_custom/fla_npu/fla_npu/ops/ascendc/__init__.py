@@ -289,9 +289,15 @@ def _get_direct_op(name: str):
     stable_op = _get_stable_op(name)
     if stable_op is not None:
         return _wrap_mutable_direct_op(name, stable_op)
-    thin_op = _get_thin_op(name)
-    if thin_op is not None:
-        return _wrap_mutable_direct_op(name, thin_op)
+    # The pybind launcher is *not* part of the default chain: it is the only
+    # backend that pins the CPython ABI and the libtorch C++ ABI, so falling
+    # back to it silently would hand a caller a different dependency footprint
+    # than the one they installed.  It stays reachable for A/B work with
+    # FLA_NPU_THIN_ABI=pybind (see _get_thin_op).
+    if _pybind_requested():
+        thin_op = _get_thin_op(name)
+        if thin_op is not None:
+            return _wrap_mutable_direct_op(name, thin_op)
     try:
         op = ASCENDC_CTYPES_OPS[name]
     except KeyError as exc:
@@ -299,31 +305,40 @@ def _get_direct_op(name: str):
     return _wrap_mutable_direct_op(name, op)
 
 
+def _abi_mode() -> str:
+    return (os.environ.get("FLA_NPU_THIN_ABI") or "").strip().lower()
+
+
+def _pybind_requested() -> bool:
+    """Whether the pybind launcher was asked for explicitly."""
+
+    return _abi_mode() == "pybind"
+
+
 def _stable_backend_selected() -> bool:
     """Whether the ABI-free backend should be tried first.
 
-    Default order is stable -> pybind -> ctypes: the stable launcher carries
-    neither the CPython ABI nor the libtorch C++ ABI, so it is the only backend
-    that keeps a wheel usable across Python and torch versions.  The pybind
-    backend stays reachable with ``FLA_NPU_THIN_ABI=pybind`` (it is faster for
-    operators whose Python wrapper is very light), and ``=ctypes`` forces the
-    reference path.
+    Default order is stable -> ctypes: the stable launcher carries neither the
+    CPython ABI nor the libtorch C++ ABI, so it is the only backend that keeps a
+    wheel usable across Python and torch versions.  ``FLA_NPU_THIN_ABI=pybind``
+    switches to the compiled ``_C_thin`` (A/B comparisons), and ``=ctypes``
+    forces the reference path.
     """
 
-    mode = (os.environ.get("FLA_NPU_THIN_ABI") or "").strip().lower()
-    if mode == "pybind":
-        return False
-    return True
+    # `ctypes` has to mean ctypes: the mode used to be honoured only for the
+    # pybind launcher, so FLA_NPU_THIN_ABI=ctypes still picked the stable
+    # backend and the documented "force the reference path" escape hatch did
+    # nothing.
+    return _abi_mode() not in ("pybind", "ctypes")
 
 
 def _get_stable_op(name: str):
-    """Return the Stable-ABI backend entry for *name* when it is selected.
+    """Return the Stable-ABI backend entry for *name*, else None.
 
-    ``FLA_NPU_THIN_ABI`` selects the backend explicitly:
-      * unset / ``pybind`` -> compiled ``_C_thin`` (current default)
-      * ``stable``         -> ``libfla_npu_thin.so`` via torch.ops, falling back
-                              to pybind/ctypes for operators it does not carry
-      * ``ctypes``         -> always the Python ctypes path
+    ``FLA_NPU_THIN_ABI`` selects the backend: unset / ``stable`` uses
+    ``libfla_npu_thin.so`` via torch.ops (falling back to ctypes for anything it
+    does not carry), ``pybind`` uses ``_C_thin``, and ``ctypes`` forces the
+    Python reference path.
     """
 
     if not _stable_backend_selected():
@@ -338,10 +353,9 @@ def _get_stable_op(name: str):
 
 
 def _get_thin_op(name: str):
-    """Return the thin C++ adapter for *name* when enabled, else None."""
+    """Return the pybind launcher entry for *name*, else None."""
 
-    mode = (os.environ.get("FLA_NPU_THIN_ABI") or "").strip().lower()
-    if mode == "ctypes":
+    if _abi_mode() == "ctypes":
         return None
     flag = os.environ.get("FLA_NPU_THIN_LAUNCHER")
     if flag is not None and flag.upper() in {"0", "FALSE", "NO", "OFF"}:

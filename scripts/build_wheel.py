@@ -60,19 +60,24 @@ def _prepare_abi_free_launcher() -> None:
     what ships: without it a stale ``_C_thin*.so`` from an earlier in-place build
     gets packaged as data and the wheel claims ``py3-none-any`` while holding a
     cpXXX binary.
+
+    The default build is the ABI-free one: pure Python plus
+    ``libfla_npu_thin.so``, no CPython ABI, no libtorch C++ ABI.  The pybind
+    extension is opt-in (``FLA_NPU_BUILD_THIN=1``) for A/B comparisons, and a
+    pure-ctypes wheel is ``FLA_NPU_BUILD_STABLE_ABI=0``.
     """
 
     package_dir = REPO_ROOT / "torch_custom" / "fla_npu" / "fla_npu"
     if not package_dir.is_dir():
         return
-    if os.getenv("FLA_NPU_BUILD_THIN", "TRUE").upper() in {"0", "FALSE", "NO",
-                                                          "OFF"}:
+    if os.getenv("FLA_NPU_BUILD_THIN", "FALSE").upper() not in {"1", "TRUE",
+                                                              "YES", "ON"}:
         for pattern in ("_C_thin*.so", "_C_thin*.pyd"):
             for stale in package_dir.glob(pattern):
                 stale.unlink()
                 print(f"[fla-npu build] dropped stale {stale.name}", flush=True)
-    if os.getenv("FLA_NPU_BUILD_STABLE_ABI", "FALSE").upper() not in {
-            "1", "TRUE", "YES", "ON"}:
+    if os.getenv("FLA_NPU_BUILD_STABLE_ABI", "TRUE").upper() in {
+            "0", "FALSE", "NO", "OFF"}:
         return
     builder = (REPO_ROOT / "torch_custom" / "fla_npu" / "csrc_stable"
                / "build_stable.py")

@@ -108,15 +108,17 @@ def _setup_pure_python():
 
 
 def _build_stable_abi_library() -> list[str]:
-    """Bundle ``libfla_npu_thin.so`` when FLA_NPU_BUILD_STABLE_ABI is set.
+    """Bundle ``libfla_npu_thin.so`` (the default launcher).
 
     This is the ABI-free launcher: a plain shared object with no CPython and no
     libtorch C++ dependency, so a wheel that ships only this (and pure Python)
     stays usable across Python and torch versions.  Build-time only needs torch
-    headers; nothing is linked against libtorch.
+    headers; nothing is linked against libtorch.  It is built unless
+    ``FLA_NPU_BUILD_STABLE_ABI=0`` asks for a pure-Python (ctypes-only) wheel.
     """
 
-    if not _env_flag("FLA_NPU_BUILD_STABLE_ABI"):
+    if os.getenv("FLA_NPU_BUILD_STABLE_ABI", "TRUE").upper() in {
+            "0", "FALSE", "NO", "OFF"}:
         return []
     import subprocess
 
@@ -377,12 +379,15 @@ def _setup_legacy_extension():
 
 
 def _thin_build_enabled() -> bool:
-    """Thin launcher is compiled by default; disable with FLA_NPU_BUILD_THIN=0."""
+    """Whether to compile the pybind launcher (``_C_thin``).
 
-    value = os.getenv("FLA_NPU_BUILD_THIN")
-    if value is None:
-        return True
-    return value.upper() not in {"0", "FALSE", "NO", "OFF"}
+    Off by default: ``_C_thin`` is the only piece that pins the CPython ABI and
+    the libtorch C++ ABI, so it is now an opt-in A/B build
+    (``FLA_NPU_BUILD_THIN=1``).  The default wheel is pure Python plus the
+    Stable-ABI ``libfla_npu_thin.so`` and therefore stays ``py3-none-any``.
+    """
+
+    return _env_flag("FLA_NPU_BUILD_THIN")
 
 
 if _thin_build_enabled():

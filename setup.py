@@ -604,14 +604,27 @@ def _stage_offline_bundle(build_lib: Path) -> None:
 
 
 def _thin_build_enabled() -> bool:
-    """Compile the optional C++ thin launcher by default.
+    """Whether to compile the pybind launcher (``_C_thin``).
 
-    Disable with FLA_NPU_BUILD_THIN=0 to keep the pure-Python wheel.
+    Off by default.  ``_C_thin`` is the only piece that pins the CPython ABI and
+    the libtorch C++ ABI, so it is now an opt-in A/B build
+    (``FLA_NPU_BUILD_THIN=1``); the default wheel carries the Stable-ABI
+    ``libfla_npu_thin.so`` instead, which is plain package data and keeps the
+    wheel ``py3-none-any``.
     """
 
-    value = os.getenv("FLA_NPU_BUILD_THIN")
-    if value is None:
-        return True
+    value = os.getenv("FLA_NPU_BUILD_THIN", "FALSE")
+    return value.upper() in {"1", "TRUE", "YES", "ON"}
+
+
+def _stable_build_enabled() -> bool:
+    """Whether to build the ABI-free Stable-ABI launcher.
+
+    On by default; ``FLA_NPU_BUILD_STABLE_ABI=0`` produces a pure-ctypes wheel
+    (no compiled launcher at all).
+    """
+
+    value = os.getenv("FLA_NPU_BUILD_STABLE_ABI", "TRUE")
     return value.upper() not in {"0", "FALSE", "NO", "OFF"}
 
 
@@ -638,7 +651,33 @@ def _build_thin_inplace():
         )
 
 
+def _build_stable_inplace():
+    """Compile libfla_npu_thin.so into the source package before staging.
+
+    Same in-place flow as the pybind launcher, but the artifact is a plain
+    shared library (no CPython module init), so it ships as package data and the
+    wheel stays ``py3-none-any``.
+    """
+
+    if not _stable_build_enabled():
+        return
+    out = FLA_NPU_PACKAGE_DIR / "libfla_npu_thin.so"
+    _run(
+        [
+            sys.executable,
+            str(TORCH_EXTENSION_DIR / "csrc_stable" / "build_stable.py"),
+            "--no-debug-probe",
+            "--out",
+            str(out),
+        ],
+        TORCH_EXTENSION_DIR,
+    )
+    if not out.exists():
+        raise RuntimeError(f"libfla_npu_thin.so was not produced under {FLA_NPU_PACKAGE_DIR}")
+
+
 _THIN_BUILD_ENABLED = _thin_build_enabled()
+_STABLE_BUILD_ENABLED = _stable_build_enabled()
 
 
 class FlaNpuBuildPy(_build_py):
@@ -649,6 +688,7 @@ class FlaNpuBuildPy(_build_py):
             _RUN_PACKAGE = _build_run_package()
             _build_torch_extension_inplace()
             _build_thin_inplace()
+            _build_stable_inplace()
             _EXTERNAL_BUILD_DONE = True
 
         built_package_dir = Path(self.build_lib) / "fla_npu"
@@ -667,6 +707,12 @@ class FlaNpuBuildPy(_build_py):
             shutil.copy2(
                 str(so_file),
                 str(Path(self.build_lib) / "fla_npu" / so_file.name),
+            )
+        stable_so = FLA_NPU_PACKAGE_DIR / "libfla_npu_thin.so"
+        if _STABLE_BUILD_ENABLED and stable_so.exists():
+            shutil.copy2(
+                str(stable_so),
+                str(Path(self.build_lib) / "fla_npu" / stable_so.name),
             )
 
 

@@ -18,6 +18,7 @@ import os
 
 _LIB_ENV = "FLA_NPU_STABLE_LIB"
 _loaded_path: str | None = None
+_OP_CACHE: dict[str, object] = {}
 
 
 def _lib_path() -> str:
@@ -51,13 +52,26 @@ def available() -> bool:
         return False
 
 
+def _op(name: str):
+    """Cached torch.ops handle: the attribute chain is not free per call."""
+
+    op = _OP_CACHE.get(name)
+    if op is None:
+        load()
+        import torch
+
+        op = getattr(torch.ops.fla_npu_thin, name)
+        _OP_CACHE[name] = op
+    return op
+
+
 def stream_probe(device_index: int) -> tuple[int, int]:
     """Return (raw backend stream ptr, stable Stream::id()) for comparison."""
 
     load()
     import torch
 
-    raw, stream_id = torch.ops.fla_npu_thin._stream_probe(int(device_index))
+    raw, stream_id = _op("_stream_probe")(int(device_index))
     return int(raw), int(stream_id)
 
 
@@ -83,7 +97,7 @@ def npu_recurrent_gated_delta_rule(
 
     stream = int(
         torch_npu._C._npu_getCurrentRawStream(torch.npu.current_device()))
-    return torch.ops.fla_npu_thin.npu_recurrent_gated_delta_rule(
+    return _op("npu_recurrent_gated_delta_rule")(
         query,
         key,
         value,

@@ -161,7 +161,7 @@ vllm-ascend 走的是同一条 dispatcher 路线（C++ op + `EXEC_NPU_CMD`），
 
 ## 5. 场景覆盖记录（Phase C，"全部场景都记录覆盖"）
 
-现状：`regression_stable_full.py` 的 243 PASS 是**事实上的**覆盖，但还不是**可查询、可报警**的。补齐四件套：
+现状：`regression_stable_full.py` 的 243 PASS 是**事实上的**覆盖，但还不是**可查询、可报警**的。补齐 C1–C5：
 
 ### C1. spec 增 `scenarios`（合法域契约，机器可读）
 

@@ -64,7 +64,42 @@ def load() -> None:
     import torch
 
     torch.ops.load_library(path)
+    _check_build_stamp(path)
     _loaded_path = path
+
+
+def _check_build_stamp(path: str) -> None:
+    """Refuse a library built from different generated adapters than this glue.
+
+    The C++ adapters and the Python wrappers are both produced from the same
+    ``ops_stable_generated.inc``; when only one of the two is refreshed, the
+    mismatch shows up either as a dispatcher error deep inside a call or -- when
+    only a stack index moved -- as a wrong stream, which is much harder to read.
+    The stamp turns that into one clear message.  A library predating the stamp
+    reports ``unknown`` and is accepted, so older artifacts keep working.
+    """
+
+    try:
+        from . import _stable_generated as generated
+
+        expected = generated._GENERATED_HASH
+    except Exception:
+        return
+    try:
+        import ctypes
+
+        lib = ctypes.CDLL(path)
+        lib.fla_npu_thin_source_hash.restype = ctypes.c_char_p
+        actual = lib.fla_npu_thin_source_hash().decode("utf-8", "replace")
+    except Exception:
+        return
+    if actual in ("unknown", expected):
+        return
+    raise RuntimeError(
+        f"{path} was built from different generated adapters "
+        f"(library {actual}, Python glue {expected}). Rebuild the launcher "
+        f"after re-running tools/op_stable_codegen.py --all: "
+        f"python csrc_stable/build_stable.py --out {path} --no-debug-probe")
 
 
 def available() -> bool:

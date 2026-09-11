@@ -61,8 +61,6 @@
     "pre": "layout = str(layout)\nif scale is None:\n    scale = float(q.shape[3]) ** -0.5\nif cu_seqlens is not None and chunk_indices is None:\n    chunk_indices = []\n    for _seq in range(len(cu_seqlens) - 1):\n        _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]\n        for _c in range((_len + int(chunk_size) - 1) // int(chunk_size)):\n            chunk_indices.extend((_seq, _c))\na_log = None\ndt_bias = None",
     "return_code": "out = [result[0]]\nif output_final_state:\n    out.append(result[1])\nelse:\n    out.append(None)\nif not disable_recompute:\n    out.append(result[7])\n    out.append(result[8])\nif return_intermediate_states:\n    out.append(result[9])\nreturn tuple(out)",
     "defaults": {
-      "a_log": "None",
-      "dt_bias": "None",
       "initial_state": "None",
       "output_final_state": "False",
       "chunk_size": "64",
@@ -71,14 +69,18 @@
       "scale": "None",
       "use_exp2": "False",
       "use_qk_l2norm_in_kernel": "False",
+      "use_gate_in_kernel": "False",
+      "use_beta_sigmoid_in_kernel": "False",
       "allow_neg_eigval": "False",
       "disable_recompute": "False",
       "return_intermediate_states": "False",
       "state_v_first": "False",
-      "layout": "\"BNSD\"",
-      "use_gate_in_kernel": "False",
-      "use_beta_sigmoid_in_kernel": "False"
-    }
+      "layout": "\"BNSD\""
+    },
+    "hidden": [
+      "a_log",
+      "dt_bias"
+    ]
   },
   "args": [
     {

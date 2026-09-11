@@ -32,6 +32,8 @@
       "dht"
     ],
     "defaults": {
+      "initial_state": "None",
+      "dht": "None",
       "query_start_loc": "None",
       "activation": "0",
       "input_layout": "\"BSND\""

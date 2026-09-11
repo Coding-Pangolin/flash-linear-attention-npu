@@ -56,6 +56,9 @@ def main() -> int:
     # aclnnRecurrentGatedDeltaRule, no KDA backward, no fast_gelu -- which is
     # why this driver is the A5 slice of the suite rather than the whole thing.
     scenarios += [
+        # regression_thin_ops' KDA case covers BSND and TND; the 950-only one
+        # above is BSND, so this adds the varlen spelling to the A5 record too.
+        suite_module.scenario_recurrent_kda,
         suite_module.scenario_chunk_fwd_h,
         suite_module.scenario_chunk_fwd_o,
         suite_module.scenario_gated_fwd_h,

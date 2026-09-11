@@ -427,8 +427,8 @@ def parity_or_domain_skip(name, call_ct, call_thin):
                 # validation); the launcher passed it on and the kernel refused.
                 SKIPPED[name] = (
                     f"reference rejects by validation "
-                    f"({str(exc).splitlines()[0][:70]}); thin rejects via the "
-                    f"kernel ({_aclnn_status(thin_exc)})")
+                    f"({str(exc).splitlines()[0][:70]}); thin rejects too "
+                    f"({str(thin_exc).splitlines()[0][:50]})")
             else:
                 assert status == thin_status, (
                     f"{name}: ctypes rejected with {status} but thin with "
@@ -656,6 +656,15 @@ def scenario_conv1d_new_apis():
     if CONV1D_ABI != "new":
         reason = ("the OPP in this environment carries the pre-#390 "
                   "aclnnCausalConv1d ABI; the merged code speaks the new one")
+        for name in ("causal_conv1d_fn(dense)", "causal_conv1d_fn(varlen)",
+                     "causal_conv1d_update(dense)"):
+            SKIPPED[name] = reason
+            print(f"SKIP {name} ({reason})")
+        return
+    if not _backend_carries("npu_causal_conv1d_fn"):
+        # The pybind launcher predates these two entry points (it covers 25 of
+        # the 26 operators), so the A/B run records the gap instead of failing.
+        reason = "the selected backend does not carry causal_conv1d_fn/_update"
         for name in ("causal_conv1d_fn(dense)", "causal_conv1d_fn(varlen)",
                      "causal_conv1d_update(dense)"):
             SKIPPED[name] = reason
@@ -1055,8 +1064,10 @@ def scenario_chunk_local_cumsum():
         ct.npu_chunk_local_cumsum(reverse, **kw),
         _thin.npu_chunk_local_cumsum(reverse, **kw))
     # output_dtype and head_first are both real parameters of the operator.
-    for label, extra in (("output_dtype_bf16",
+    for label, extra in (("output_dtype=bfloat16",
                           dict(output_dtype="bfloat16")),
+                         ("output_dtype=float32",
+                          dict(output_dtype="float32")),
                          ("head_first_false", dict(head_first=False))):
         torch.npu.synchronize()
         parity_or_domain_skip(
@@ -1290,6 +1301,42 @@ def scenario_chunk_gated_delta_rule_fwd():
         "chunk_gated_delta_rule_fwd(varlen_B1_T128_c64)",
         ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
         _thin.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
+
+    # The operator's other declared layouts.  Measured on A2: BSND is rejected
+    # by the kernel (161002), and the rank-3 TND/NTD spellings are refused by the
+    # reference's own validation ("q, k and v must be rank-4").  They are still
+    # exercised -- by the Ascend950 driver, whose kernel does implement them --
+    # so here they are recorded rather than left as unexplained gaps.
+    for layout in ("BSND", "TND", "NTD"):
+        B2, Hk2, Hv2, T2, V2, cs2 = 1, 2, 2, 128, 128, 64
+
+        def rnd(*shape):
+            return (torch.randn(*shape, device="npu") * 0.05).to(torch.bfloat16)
+
+        if layout == "BSND":
+            q2, k2 = rnd(B2, T2, Hk2, 128), rnd(B2, T2, Hk2, 128)
+            v2 = rnd(B2, T2, Hv2, V2)
+            g2 = (torch.randn(B2, T2, Hv2, device="npu") * 1.25).to(torch.float32)
+            beta2 = torch.sigmoid(torch.randn(B2, T2, Hv2, device="npu"))
+        elif layout == "TND":
+            q2, k2 = rnd(T2, Hk2, 128), rnd(T2, Hk2, 128)
+            v2 = rnd(T2, Hv2, V2)
+            g2 = (torch.randn(T2, Hv2, device="npu") * 1.25).to(torch.float32)
+            beta2 = torch.sigmoid(torch.randn(T2, Hv2, device="npu"))
+        else:  # NTD
+            q2, k2 = rnd(Hk2, T2, 128), rnd(Hk2, T2, 128)
+            v2 = rnd(Hv2, T2, V2)
+            g2 = (torch.randn(Hv2, T2, device="npu") * 1.25).to(torch.float32)
+            beta2 = torch.sigmoid(torch.randn(Hv2, T2, device="npu"))
+        torch.npu.synchronize()
+        parity_or_domain_skip(
+            f"chunk_gated_delta_rule_fwd(layout={layout})",
+            lambda q2=q2, k2=k2, v2=v2, g2=g2, beta2=beta2, layout=layout,
+            cs2=cs2: ct.npu_chunk_gated_delta_rule_fwd(
+                q2, k2, v2, g2, beta2, chunk_size=cs2, layout=layout),
+            lambda q2=q2, k2=k2, v2=v2, g2=g2, beta2=beta2, layout=layout,
+            cs2=cs2: _thin.npu_chunk_gated_delta_rule_fwd(
+                q2, k2, v2, g2, beta2, chunk_size=cs2, layout=layout))
 
 
 def main():

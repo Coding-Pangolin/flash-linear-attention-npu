@@ -35,7 +35,14 @@ def diff_of(a, b):
     if a is None or b is None:
         return 0.0 if (a is None and b is None) else float("inf")
     assert tuple(a.shape) == tuple(b.shape), (tuple(a.shape), tuple(b.shape))
-    return float((a.float() - b.float()).abs().max().item())
+    # Some kernels (solve_tri's tail padding) leave rows uninitialised on both
+    # paths, so compare only the finite region -- same rule as the existing
+    # regression suite.
+    lhs, rhs = a.float(), b.float()
+    finite = torch.isfinite(lhs) & torch.isfinite(rhs)
+    if not bool(finite.any()):
+        return 0.0
+    return float((lhs - rhs).abs()[finite].max().item())
 
 
 def case_fast_gelu():
@@ -85,6 +92,29 @@ def case_bwd_dv_local():
     return "chunk_bwd_dv_local", diff_of(ref, got)
 
 
+def case_solve_tri():
+    # Validated shape/layout from the existing regression: [B, T, H, chunk],
+    # bf16, layout bsnd.
+    B, T, H, cs = 2, 128, 4, 64
+    x = ((torch.randn(B, T, H, cs) * 0.1).to(torch.bfloat16).npu())
+    ref = ct.npu_solve_tri(x, layout="bsnd")
+    # layout travels as an int code (enum order in the spec: bsnd=0).
+    got = torch.ops.fla_npu_thin.npu_solve_tri(x, None, None, 0, stream())
+    torch.npu.synchronize()
+    return "solve_tri", diff_of(ref, got)
+
+
+def case_local_cumsum():
+    B, H, T = 1, 4, 128
+    g = torch.randn(B, H, T, dtype=torch.float32, device="npu")
+    ref = ct.npu_chunk_local_cumsum(g, 64)
+    # output_dtype enum order in the spec: float32=0.
+    got = torch.ops.fla_npu_thin.npu_chunk_local_cumsum(
+        g, None, None, 64, False, 1.0, True, 0, stream())
+    torch.npu.synchronize()
+    return "chunk_local_cumsum", diff_of(ref, got)
+
+
 def main():
     torch.npu.set_device(0)
     torch.manual_seed(20260911)
@@ -93,7 +123,7 @@ def main():
     _stable.load()
     failures = []
     for case in (case_fast_gelu, case_kda_gate_cumsum, case_scaled_dot_kkt,
-                 case_bwd_dv_local):
+                 case_bwd_dv_local, case_solve_tri, case_local_cumsum):
         try:
             name, diff = case()
         except Exception as exc:  # noqa: BLE001

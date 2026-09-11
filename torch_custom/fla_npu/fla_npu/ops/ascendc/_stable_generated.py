@@ -2,10 +2,19 @@
 from ._stable import _call  # noqa: F401
 
 _SIG = {
+    "npu_causal_conv1d_bwd": [("x", "tensor"), ("y", "optional_tensor"), ("weight", "tensor"), ("dy", "tensor"), ("initial_state", "optional_tensor"), ("dht", "optional_tensor"), ("query_start_loc", "int_array"), ("activation", "int64"), ("input_layout", "char_ptr")],
     "npu_chunk_bwd_dqkwg": [("q", "tensor"), ("k", "tensor"), ("v", "tensor"), ("g", "tensor"), ("h", "tensor"), ("dox", "tensor"), ("dh", "tensor"), ("dv", "tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("w", "optional_tensor"), ("g_gamma", "optional_tensor"), ("scale", "float"), ("chunk_size", "int64"), ("use_exp2", "bool"), ("transpose_state_layout", "bool")],
     "npu_chunk_bwd_dv_local": [("q", "tensor"), ("k", "tensor"), ("d_o", "tensor"), ("g", "tensor"), ("g_gamma", "optional_tensor"), ("A", "optional_tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("scale", "double"), ("chunk_size", "int64")],
+    "npu_chunk_fwd_h": [("k", "tensor"), ("w", "tensor"), ("u", "tensor"), ("g", "optional_tensor"), ("gk", "optional_tensor"), ("initial_state", "optional_tensor"), ("output_final_state", "bool"), ("chunk_size", "int64"), ("save_new_value", "bool"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("use_exp2", "bool"), ("state_v_first", "bool")],
+    "npu_chunk_fwd_o": [("q", "tensor"), ("k", "tensor"), ("v", "tensor"), ("h", "tensor"), ("g", "optional_tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("scale", "double"), ("chunk_size", "int64"), ("use_exp2", "bool"), ("transpose_state_layout", "bool"), ("output_layout", "char_ptr")],
+    "npu_chunk_gated_delta_rule_bwd_dhu": [("q", "tensor"), ("k", "tensor"), ("w", "tensor"), ("d_o", "tensor"), ("dv", "tensor"), ("g", "optional_tensor"), ("gK", "optional_tensor"), ("h0", "optional_tensor"), ("dht", "optional_tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("scale", "double"), ("chunk_size", "int64"), ("use_exp2", "bool")],
     "npu_chunk_gated_delta_rule_bwd_finalize": [("q", "tensor"), ("k", "tensor"), ("v", "tensor"), ("v_new", "tensor"), ("do", "tensor"), ("du", "tensor"), ("g", "tensor"), ("beta", "tensor"), ("h", "tensor"), ("dh", "tensor"), ("a", "tensor"), ("q_rstd", "optional_tensor"), ("k_rstd", "optional_tensor"), ("beta_raw", "optional_tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("scale", "double"), ("chunk_size", "int64"), ("use_qk_l2_norm_in_kernel", "bool"), ("use_beta_sigmoid_in_kernel", "bool"), ("use_gate_in_kernel", "bool"), ("state_v_first", "bool"), ("use_exp2", "bool")],
+    "npu_chunk_gated_delta_rule_fwd": [("q", "tensor"), ("k", "tensor"), ("v", "tensor"), ("g", "tensor"), ("beta", "tensor"), ("a_log", "optional_tensor"), ("dt_bias", "optional_tensor"), ("initial_state", "optional_tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("layout", "char_ptr"), ("scale", "double"), ("chunk_size", "int64"), ("use_exp2", "bool"), ("use_qk_l2norm_in_kernel", "bool"), ("allow_neg_eigval", "bool"), ("state_v_first", "bool"), ("output_final_state", "bool"), ("disable_recompute", "bool"), ("return_intermediate_states", "bool"), ("use_gate_in_kernel", "bool"), ("use_beta_sigmoid_in_kernel", "bool")],
+    "npu_chunk_gated_delta_rule_fwd_h": [("k", "tensor"), ("w", "tensor"), ("u", "tensor"), ("g", "optional_tensor"), ("gk", "optional_tensor"), ("initial_state", "optional_tensor"), ("output_final_state", "bool"), ("chunk_size", "int64"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("state_v_first", "bool")],
+    "npu_chunk_gated_delta_rule_fwd_prepare": [("q", "tensor"), ("k", "tensor"), ("v", "tensor"), ("g", "tensor"), ("beta", "tensor"), ("a_log", "optional_tensor"), ("dt_bias", "optional_tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("chunk_size", "int64"), ("allow_neg_eigval", "bool"), ("use_exp2", "bool"), ("output_a", "bool"), ("use_beta_sigmoid_in_kernel", "bool"), ("use_gate_in_kernel", "bool")],
+    "npu_chunk_kda_bwd": [("q", "tensor"), ("k", "tensor"), ("v", "tensor"), ("beta", "tensor"), ("gk", "tensor"), ("Aqk", "tensor"), ("Akk", "tensor"), ("w", "optional_tensor"), ("qg", "optional_tensor"), ("kg", "optional_tensor"), ("v_new", "optional_tensor"), ("h", "optional_tensor"), ("d_o", "tensor"), ("raw_g", "optional_tensor"), ("A_log", "optional_tensor"), ("dt_bias", "optional_tensor"), ("initial_state", "optional_tensor"), ("dht", "optional_tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("scale", "double"), ("chunk_size", "int64"), ("safe_gate", "bool"), ("use_gate_in_kernel", "bool"), ("lower_bound", "double"), ("disable_recompute", "bool"), ("use_exp2", "bool"), ("state_v_first", "bool")],
     "npu_chunk_kda_bwd_intra": [("q", "tensor"), ("k", "tensor"), ("gk", "tensor"), ("beta", "tensor"), ("dAqk", "tensor"), ("dAkk", "tensor"), ("dq", "tensor"), ("dk", "tensor"), ("db", "tensor"), ("dg", "tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("chunk_size", "int64"), ("safe_gate", "bool"), ("layout", "char_ptr")],
+    "npu_chunk_kda_fwd": [("q", "tensor"), ("k", "tensor"), ("v", "tensor"), ("g", "tensor"), ("beta", "tensor"), ("A_log", "optional_tensor"), ("dt_bias", "optional_tensor"), ("initial_state", "optional_tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("layout", "char_ptr"), ("scale", "double"), ("chunk_size", "int64"), ("safe_gate", "bool"), ("lower_bound", "double"), ("use_gate_in_kernel", "bool"), ("state_v_first", "bool"), ("output_final_state", "bool"), ("disable_recompute", "bool"), ("return_intermediate_states", "bool")],
     "npu_chunk_local_cumsum": [("g", "tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("chunk_size", "int64"), ("reverse", "bool"), ("scale", "double"), ("head_first", "bool"), ("output_dtype", "char_ptr")],
     "npu_chunk_scaled_dot_kkt": [("k", "tensor"), ("g", "tensor"), ("beta", "tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("chunk_size", "int64")],
     "npu_fast_gelu_custom": [("self", "tensor")],
@@ -19,16 +28,29 @@ _SIG = {
 }
 
 _ENUM = {
+    "npu_causal_conv1d_bwd": {"input_layout": {'BSND': 0, 'BNSD': 1, 'NTD': 2, 'TND': 3}},
+    "npu_chunk_fwd_o": {"output_layout": {'BNSD': 0, 'BSND': 1, 'TND': 2, 'NTD': 3}},
+    "npu_chunk_gated_delta_rule_fwd": {"layout": {'BSND': 0, 'BNSD': 1, 'NTD': 2, 'TND': 3}},
     "npu_chunk_kda_bwd_intra": {"layout": {'BSND': 0, 'BNSD': 1}},
+    "npu_chunk_kda_fwd": {"layout": {'BSND': 0, 'BNSD': 1, 'TND': 2, 'NTD': 3}},
     "npu_chunk_local_cumsum": {"output_dtype": {'float32': 0, 'bfloat16': 1}},
     "npu_solve_tri": {"layout": {'bsnd': 0, 'bnsd': 1, 'tnd': 2, 'ntd': 3}},
 }
 
 _RET = {
+    "npu_causal_conv1d_bwd": [(0, None), (1, None), (2, None), (3, None)],
     "npu_chunk_bwd_dqkwg": [(0, None), (1, None), (2, None), (3, None)],
     "npu_chunk_bwd_dv_local": [(0, None)],
+    "npu_chunk_fwd_h": [(0, None), (1, None), (2, 'output_final_state')],
+    "npu_chunk_fwd_o": [(0, None)],
+    "npu_chunk_gated_delta_rule_bwd_dhu": [(0, None), (1, 'h0.has_value() && h0->defined()'), (2, None)],
     "npu_chunk_gated_delta_rule_bwd_finalize": [(0, None), (1, None), (2, None), (3, None), (4, None)],
+    "npu_chunk_gated_delta_rule_fwd": [(0, None), (1, 'output_final_state'), (2, None), (3, None), (4, None), (5, None), (6, None), (7, '!disable_recompute'), (8, '!disable_recompute'), (9, 'return_intermediate_states')],
+    "npu_chunk_gated_delta_rule_fwd_h": [(0, None), (1, None), (2, 'output_final_state')],
+    "npu_chunk_gated_delta_rule_fwd_prepare": [(0, None), (1, None), (2, None), (3, None), (4, None), (5, None), (6, None), (7, None), (8, 'use_beta_sigmoid_in_kernel')],
+    "npu_chunk_kda_bwd": [(0, None), (1, None), (2, None), (3, None), (4, None), (5, None), (6, None), (7, None)],
     "npu_chunk_kda_bwd_intra": [(0, None), (1, None), (2, None), (3, None)],
+    "npu_chunk_kda_fwd": [(0, None), (1, 'output_final_state'), (2, '!use_gate_in_kernel || disable_recompute'), (3, None), (4, None), (5, 'disable_recompute'), (6, 'disable_recompute'), (7, 'disable_recompute'), (8, 'disable_recompute'), (9, 'disable_recompute'), (10, 'disable_recompute || return_intermediate_states')],
     "npu_chunk_local_cumsum": [(0, None)],
     "npu_chunk_scaled_dot_kkt": [(0, None)],
     "npu_fast_gelu_custom": [(0, None)],
@@ -40,6 +62,19 @@ _RET = {
     "npu_recompute_w_u_fwd": [(0, None), (1, None)],
     "npu_solve_tri": [(0, None)],
 }
+
+def npu_causal_conv1d_bwd(x, y, weight, dy, initial_state, dht, *, query_start_loc=None, activation=0, input_layout="BSND"):
+    return _call("npu_causal_conv1d_bwd", {
+        "x": x,
+        "y": y,
+        "weight": weight,
+        "dy": dy,
+        "initial_state": initial_state,
+        "dht": dht,
+        "query_start_loc": query_start_loc,
+        "activation": activation,
+        "input_layout": input_layout,
+    })
 
 def npu_chunk_bwd_dqkwg(q, k, v, g, h, dox, dh, dv, chunk_size, *, cu_seqlens=None, chunk_indices=None, w=None, g_gamma=None, scale=None, use_exp2=None, transpose_state_layout=None):
     return _call("npu_chunk_bwd_dqkwg", {
@@ -75,7 +110,68 @@ def npu_chunk_bwd_dv_local(q, k, d_o, g, scale, chunk_size, *, g_gamma=None, A=N
         "chunk_size": chunk_size,
     })
 
+def npu_chunk_fwd_h(k, w, u, *, g=None, gk=None, initial_state=None, output_final_state=False, chunk_size=64, save_new_value=True, cu_seqlens=None, chunk_indices=None, use_exp2=False, state_v_first=False):
+    if cu_seqlens and not chunk_indices:
+        chunk_indices = []
+        for _seq in range(len(cu_seqlens) - 1):
+            _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]
+            for _c in range((_len + chunk_size - 1) // chunk_size):
+                chunk_indices.extend((_seq, _c))
+    return _call("npu_chunk_fwd_h", {
+        "k": k,
+        "w": w,
+        "u": u,
+        "g": g,
+        "gk": gk,
+        "initial_state": initial_state,
+        "output_final_state": output_final_state,
+        "chunk_size": chunk_size,
+        "save_new_value": save_new_value,
+        "cu_seqlens": cu_seqlens,
+        "chunk_indices": chunk_indices,
+        "use_exp2": use_exp2,
+        "state_v_first": state_v_first,
+    })
+
+def npu_chunk_fwd_o(q, k, v, h, scale, *, g=None, cu_seqlens=None, chunk_indices=None, chunk_size=None, use_exp2=False, transpose_state_layout=False, output_layout="BNSD", g_gamma=None):
+    return _call("npu_chunk_fwd_o", {
+        "q": q,
+        "k": k,
+        "v": v,
+        "h": h,
+        "g": g,
+        "cu_seqlens": cu_seqlens,
+        "chunk_indices": chunk_indices,
+        "scale": scale,
+        "chunk_size": chunk_size,
+        "use_exp2": use_exp2,
+        "transpose_state_layout": transpose_state_layout,
+        "output_layout": output_layout,
+    })
+
+def npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, d_o, dv, scale, chunk_size, *, g=None, gK=None, h0=None, dht=None, cu_seqlens=None, chunk_indices=None, use_exp2=False):
+    return _call("npu_chunk_gated_delta_rule_bwd_dhu", {
+        "q": q,
+        "k": k,
+        "w": w,
+        "d_o": d_o,
+        "dv": dv,
+        "g": g,
+        "gK": gK,
+        "h0": h0,
+        "dht": dht,
+        "cu_seqlens": cu_seqlens,
+        "chunk_indices": chunk_indices,
+        "scale": scale,
+        "chunk_size": chunk_size,
+        "use_exp2": use_exp2,
+    })
+
 def npu_chunk_gated_delta_rule_bwd_finalize(q, k, v, v_new, do, du, g, beta, h, dh, a, *, q_rstd=None, k_rstd=None, beta_raw=None, cu_seqlens=None, chunk_indices=None, scale=None, chunk_size=64, use_qk_l2_norm_in_kernel=False, use_beta_sigmoid_in_kernel=False, use_gate_in_kernel=False, state_v_first=False, use_exp2=True):
+    scale = (128.0 ** -0.5) if scale is None else float(scale)
+    if int(chunk_size) != 64 or bool(use_gate_in_kernel) or not bool(use_exp2):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_gated_delta_rule_bwd_finalize(q, k, v, v_new, do, du, g, beta, h, dh, a, q_rstd=q_rstd, k_rstd=k_rstd, beta_raw=beta_raw, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, scale=scale, chunk_size=chunk_size, use_qk_l2_norm_in_kernel=use_qk_l2_norm_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, use_gate_in_kernel=use_gate_in_kernel, state_v_first=state_v_first, use_exp2=use_exp2)
     return _call("npu_chunk_gated_delta_rule_bwd_finalize", {
         "q": q,
         "k": k,
@@ -102,7 +198,147 @@ def npu_chunk_gated_delta_rule_bwd_finalize(q, k, v, v_new, do, du, g, beta, h, 
         "use_exp2": use_exp2,
     })
 
+def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, a_log=None, dt_bias=None, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BNSD", scale=None, chunk_size=64, use_exp2=False, use_qk_l2norm_in_kernel=False, allow_neg_eigval=False, state_v_first=False, output_final_state=False, disable_recompute=False, return_intermediate_states=False, use_gate_in_kernel=False, use_beta_sigmoid_in_kernel=False):
+    layout = str(layout)
+    if scale is None:
+        scale = float(q.shape[3]) ** -0.5
+    if cu_seqlens is not None and chunk_indices is None:
+        chunk_indices = []
+        for _seq in range(len(cu_seqlens) - 1):
+            _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]
+            for _c in range((_len + int(chunk_size) - 1) // int(chunk_size)):
+                chunk_indices.extend((_seq, _c))
+    a_log = None
+    dt_bias = None
+    result = _call("npu_chunk_gated_delta_rule_fwd", {
+        "q": q,
+        "k": k,
+        "v": v,
+        "g": g,
+        "beta": beta,
+        "a_log": a_log,
+        "dt_bias": dt_bias,
+        "initial_state": initial_state,
+        "cu_seqlens": cu_seqlens,
+        "chunk_indices": chunk_indices,
+        "layout": layout,
+        "scale": scale,
+        "chunk_size": chunk_size,
+        "use_exp2": use_exp2,
+        "use_qk_l2norm_in_kernel": use_qk_l2norm_in_kernel,
+        "allow_neg_eigval": allow_neg_eigval,
+        "state_v_first": state_v_first,
+        "output_final_state": output_final_state,
+        "disable_recompute": disable_recompute,
+        "return_intermediate_states": return_intermediate_states,
+        "use_gate_in_kernel": use_gate_in_kernel,
+        "use_beta_sigmoid_in_kernel": use_beta_sigmoid_in_kernel,
+    })
+    out = [result[0]]
+    if output_final_state:
+        out.append(result[1])
+    else:
+        out.append(None)
+    if not disable_recompute:
+        out.append(result[7])
+        out.append(result[8])
+    if return_intermediate_states:
+        out.append(result[9])
+    return tuple(out)
+
+def npu_chunk_gated_delta_rule_fwd_h(k, w, u, g, *, gk=None, initial_state=None, output_final_state=False, chunk_size=None, cu_seqlens=None, chunk_indices=None, state_v_first=False):
+    if cu_seqlens and not chunk_indices:
+        chunk_indices = []
+        for _seq in range(len(cu_seqlens) - 1):
+            _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]
+            for _c in range((_len + chunk_size - 1) // chunk_size):
+                chunk_indices.extend((_seq, _c))
+    return _call("npu_chunk_gated_delta_rule_fwd_h", {
+        "k": k,
+        "w": w,
+        "u": u,
+        "g": g,
+        "gk": gk,
+        "initial_state": initial_state,
+        "output_final_state": output_final_state,
+        "chunk_size": chunk_size,
+        "cu_seqlens": cu_seqlens,
+        "chunk_indices": chunk_indices,
+        "state_v_first": state_v_first,
+    })
+
+def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, *, a_log=None, dt_bias=None, cu_seqlens=None, chunk_indices=None, allow_neg_eigval=False, use_exp2=False, output_a=True, use_beta_sigmoid_in_kernel=False, use_gate_in_kernel=False, use_qk_l2norm_in_kernel=False):
+    import torch
+    if not (bool(use_qk_l2norm_in_kernel) and bool(use_exp2) and int(chunk_size) == 64):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, use_exp2=use_exp2, a_log=a_log, dt_bias=dt_bias, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, output_a=output_a)
+    if use_gate_in_kernel:
+        # aclnn rejects a non-null aLogOptional ("use_gate_in_kernel currently only
+        # supports false"), and the ctypes reference raises ValueError for the same
+        # request: keep that error surface on the reference path.
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel, use_gate_in_kernel=use_gate_in_kernel, use_beta_sigmoid_in_kernel=use_beta_sigmoid_in_kernel, allow_neg_eigval=allow_neg_eigval, use_exp2=use_exp2, a_log=a_log, dt_bias=dt_bias, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, output_a=output_a)
+    result = _call("npu_chunk_gated_delta_rule_fwd_prepare", {
+        "q": q,
+        "k": k,
+        "v": v,
+        "g": g,
+        "beta": beta,
+        "a_log": a_log,
+        "dt_bias": dt_bias,
+        "cu_seqlens": cu_seqlens,
+        "chunk_indices": chunk_indices,
+        "chunk_size": chunk_size,
+        "allow_neg_eigval": allow_neg_eigval,
+        "use_exp2": use_exp2,
+        "output_a": output_a,
+        "use_beta_sigmoid_in_kernel": use_beta_sigmoid_in_kernel,
+        "use_gate_in_kernel": use_gate_in_kernel,
+    })
+    if result[8] is None:
+        return (result[4], result[5], result[6], result[7], beta.to(dtype=torch.float32), result[0], result[1], result[2], result[3])
+    return (result[4], result[5], result[6], result[7], result[8], result[0], result[1], result[2], result[3])
+
+def npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o, scale, *, raw_g=None, A_log=None, dt_bias=None, initial_state=None, dht=None, cu_seqlens=None, chunk_indices=None, chunk_size=64, safe_gate=True, use_gate_in_kernel=False, lower_bound=-5.0, disable_recompute=True, use_exp2=True, state_v_first=False):
+    if not (cu_seqlens is None and chunk_indices is None and int(chunk_size) == 64 and bool(safe_gate) and not bool(use_gate_in_kernel) and bool(disable_recompute) and bool(use_exp2) and not bool(state_v_first) and raw_g is None and A_log is None and dt_bias is None and initial_state is None and dht is None and q.dim() == 4 and q.shape[1] % 2 == 0 and q.shape[2] % 64 == 0 and all(x is not None for x in (w, qg, kg, v_new, h))):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o, scale, raw_g=raw_g, A_log=A_log, dt_bias=dt_bias, initial_state=initial_state, dht=dht, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, chunk_size=chunk_size, safe_gate=safe_gate, lower_bound=lower_bound, use_gate_in_kernel=use_gate_in_kernel, disable_recompute=disable_recompute, use_exp2=use_exp2, state_v_first=state_v_first)
+    return _call("npu_chunk_kda_bwd", {
+        "q": q,
+        "k": k,
+        "v": v,
+        "beta": beta,
+        "gk": gk,
+        "Aqk": Aqk,
+        "Akk": Akk,
+        "w": w,
+        "qg": qg,
+        "kg": kg,
+        "v_new": v_new,
+        "h": h,
+        "d_o": d_o,
+        "raw_g": raw_g,
+        "A_log": A_log,
+        "dt_bias": dt_bias,
+        "initial_state": initial_state,
+        "dht": dht,
+        "cu_seqlens": cu_seqlens,
+        "chunk_indices": chunk_indices,
+        "scale": scale,
+        "chunk_size": chunk_size,
+        "safe_gate": safe_gate,
+        "use_gate_in_kernel": use_gate_in_kernel,
+        "lower_bound": lower_bound,
+        "disable_recompute": disable_recompute,
+        "use_exp2": use_exp2,
+        "state_v_first": state_v_first,
+    })
+
 def npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg, *, cu_seqlens=None, chunk_indices=None, chunk_size=64, safe_gate=True, layout="BSND"):
+    layout = str(layout)
+    if not (layout == "BNSD" and cu_seqlens is None and chunk_indices is None and int(chunk_size) == 64 and bool(safe_gate)):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, chunk_size=chunk_size, safe_gate=safe_gate, layout=layout)
     return _call("npu_chunk_kda_bwd_intra", {
         "q": q,
         "k": k,
@@ -120,6 +356,60 @@ def npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg, *, cu_se
         "safe_gate": safe_gate,
         "layout": layout,
     })
+
+def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size, *, A_log=None, dt_bias=None, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BSND", safe_gate=False, lower_bound=None, use_gate_in_kernel=False, state_v_first=False, output_final_state=False, disable_recompute=False, return_intermediate_states=False):
+    layout = str(layout)
+    safe_gate = bool(safe_gate)
+    use_gate_in_kernel = bool(use_gate_in_kernel)
+    state_v_first = bool(state_v_first)
+    output_final_state = bool(output_final_state)
+    disable_recompute = bool(disable_recompute)
+    return_intermediate_states = bool(return_intermediate_states)
+    if scale is None:
+        scale = float(q.shape[2] if layout in ("TND", "NTD") else q.shape[3]) ** -0.5
+    if lower_bound is None:
+        lower_bound = -5.0
+    if cu_seqlens and not chunk_indices:
+        chunk_indices = []
+        for _seq in range(len(cu_seqlens) - 1):
+            _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]
+            for _c in range((_len + chunk_size - 1) // chunk_size):
+                chunk_indices.extend((_seq, _c))
+    result = _call("npu_chunk_kda_fwd", {
+        "q": q,
+        "k": k,
+        "v": v,
+        "g": g,
+        "beta": beta,
+        "A_log": A_log,
+        "dt_bias": dt_bias,
+        "initial_state": initial_state,
+        "cu_seqlens": cu_seqlens,
+        "chunk_indices": chunk_indices,
+        "layout": layout,
+        "scale": scale,
+        "chunk_size": chunk_size,
+        "safe_gate": safe_gate,
+        "lower_bound": lower_bound,
+        "use_gate_in_kernel": use_gate_in_kernel,
+        "state_v_first": state_v_first,
+        "output_final_state": output_final_state,
+        "disable_recompute": disable_recompute,
+        "return_intermediate_states": return_intermediate_states,
+    })
+    out = [result[0]]
+    out.append(result[1] if output_final_state else None)
+    out.append(result[2] if (not use_gate_in_kernel or disable_recompute) else None)
+    out.append(result[3])
+    out.append(result[4])
+    out.append(result[5] if disable_recompute else None)
+    out.append(result[6] if disable_recompute else None)
+    out.append(result[7] if disable_recompute else None)
+    out.append(result[8] if disable_recompute else None)
+    out.append(result[9] if disable_recompute else None)
+    out.append(result[10] if (disable_recompute or return_intermediate_states) else None)
+    out.append(initial_state)
+    return tuple(out)
 
 def npu_chunk_local_cumsum(g, chunk_size, *, cu_seqlens=None, chunk_indices=None, reverse=False, scale=1.0, head_first=True, output_dtype="float32"):
     return _call("npu_chunk_local_cumsum", {
@@ -223,6 +513,13 @@ def npu_recompute_w_u_fwd(k, v, beta, A, chunk_size, *, g=None, gk=None, cu_seql
     })
 
 def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
+    layout = str(layout)
+    # bsnd/bnsd (dense) and tnd (dense or varlen) match ctypes bit-exactly; ntd is
+    # broken upstream (ctypes returns all zeros and thin is not the transpose of
+    # tnd), so keep ntd on the ctypes path until the kernel is fixed.
+    if layout == "ntd":
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+        return _ct.npu_solve_tri(x, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, layout=layout)
     return _call("npu_solve_tri", {
         "x": x,
         "cu_seqlens": cu_seqlens,
@@ -231,10 +528,19 @@ def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
     })
 
 __all__ = [
+    "npu_causal_conv1d_bwd",
     "npu_chunk_bwd_dqkwg",
     "npu_chunk_bwd_dv_local",
+    "npu_chunk_fwd_h",
+    "npu_chunk_fwd_o",
+    "npu_chunk_gated_delta_rule_bwd_dhu",
     "npu_chunk_gated_delta_rule_bwd_finalize",
+    "npu_chunk_gated_delta_rule_fwd",
+    "npu_chunk_gated_delta_rule_fwd_h",
+    "npu_chunk_gated_delta_rule_fwd_prepare",
+    "npu_chunk_kda_bwd",
     "npu_chunk_kda_bwd_intra",
+    "npu_chunk_kda_fwd",
     "npu_chunk_local_cumsum",
     "npu_chunk_scaled_dot_kkt",
     "npu_fast_gelu_custom",

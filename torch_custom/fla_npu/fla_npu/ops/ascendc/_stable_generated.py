@@ -224,6 +224,10 @@ def npu_chunk_gated_delta_rule_bwd_finalize(q, k, v, v_new, do, du, g, beta, h, 
 def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BNSD", scale=None, chunk_size=64, use_exp2=False, use_qk_l2norm_in_kernel=False, allow_neg_eigval=False, state_v_first=False, output_final_state=False, disable_recompute=False, return_intermediate_states=False, use_gate_in_kernel=False, use_beta_sigmoid_in_kernel=False):
     layout = str(layout)
     if scale is None:
+        if q.dim() != 4:
+            raise RuntimeError(
+                "npu_chunk_gated_delta_rule_fwd: q, k and v must be rank-4 "
+                "tensors.")
         scale = float(q.shape[3]) ** -0.5
     if cu_seqlens is not None and chunk_indices is None:
         chunk_indices = []

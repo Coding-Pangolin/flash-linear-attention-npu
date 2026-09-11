@@ -9,7 +9,7 @@
 | 项 | v1（方案刚写下时） | v2（A1/A2 落地） | v3（本文，含 conv1d 与 API 契约） |
 | --- | --- | --- | --- |
 | 覆盖 | 16/26，剩 10 个卡在 `alloc`/`helpers` 的 ATen 惯用法 | 25/26 | **26/26**：`npu_causal_conv1d` 已接入（`alloc` 表达 `head_num` 重排），只剩上游 #390 的 update 变体未定稿 |
-| 一次性通过 | 无 | 243 PASS（22 个算子被调用） | **910b：266 PASS / 0 FAIL（250 场景 + 11 条带原因 SKIP）；950：39 PASS / ALL PASS（34 场景 + 5 条带原因 SKIP，覆盖 A5 OPP 里 10 个可跑算子）** |
+| 一次性通过 | 无 | 243 PASS（22 个算子被调用） | **910b：272 PASS / 0 FAIL（256 场景 + 16 条带原因 SKIP）；950：39 PASS / ALL PASS（34 场景 + 5 条带原因 SKIP，覆盖 A5 OPP 里 10 个可跑算子）** |
 | Python API 契约 | 未检查 | 未检查 | **ctypes 为唯一真源**：`tools/op_api_parity.py` 报 0 漂移（本轮修掉 10 个算子的签名漂移） |
 | 性能 | 只有 GDR/KDA 两个数 | GDR 1.26×、KDA 1.11×、fast_gelu 0.34× | 同上（B2/B4 未做，GDR 仍未达标） |
 | 后端取舍 | stable 可选、pybind 默认 | stable 默认 | **stable 为唯一后端**；pybind 仅作 A/B 对照，随后删除 |
@@ -44,7 +44,7 @@
 ```
 libfla_npu_thin.so  245 736 B
 undefined  _ZN2at/_ZN3c10 = 0     aoti_torch_* = 38     导出构建戳符号 = 1
-regression_stable_full.py (910B3):  266 PASS / 0 FAIL   "ALL PASS: full stable parity"
+regression_stable_full.py (910B3):  272 PASS / 0 FAIL   "ALL PASS: full stable parity"
 regression_stable_a5.py   (950PR):   39 PASS / 0 FAIL   "ALL PASS: Ascend950 stable parity"
 op_api_parity.py: 26 个算子比对，0 漂移        stable_coverage.py --strict: 退出码 0
 ```

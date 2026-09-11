@@ -9,8 +9,10 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
+from pathlib import Path
 
 import torch
 import torch_npu  # noqa: F401
@@ -23,6 +25,62 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fla_npu.ops.ascendc import _stable  # noqa: E402
 
 STABLE_LIB = os.environ.get("FLA_NPU_STABLE_LIB", "")
+BASELINE = Path(__file__).resolve().parent / "stable_scenarios.json"
+# One baseline entry covering the three Ascend950-only scenarios: on a non-950
+# host they are a recorded skip, on Ascend950 they are recorded passes.
+A5_SCENARIOS = "Ascend950-only: fwd_prepare / bwd_finalize / fwd(a5)"
+BASELINE_WRITE = os.environ.get("FLA_NPU_BASELINE_WRITE", "").strip().lower() in {
+    "1", "true", "yes", "on"}
+
+
+def check_baseline(device: str, suite) -> int:
+    """Compare this run's scenario set against the checked-in record.
+
+    The point is the *set*, not the numbers: a scenario that disappears (a
+    dropped layout, a flag combination nobody exercises any more) is exactly the
+    kind of coverage loss that a green run would otherwise hide.  Diffs are
+    recorded too -- they are 0.0 by construction, so a non-zero one means the
+    comparison itself changed meaning.
+    """
+
+    observed = {"passed": dict(sorted(suite.SCENARIOS.items())),
+                "skipped": dict(sorted(suite.SKIPPED.items()))}
+    data = {}
+    if BASELINE.exists():
+        data = json.loads(BASELINE.read_text(encoding="utf-8"))
+    if BASELINE_WRITE:
+        data[device] = observed
+        BASELINE.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n",
+                            encoding="utf-8")
+        print(f"baseline written for {device}: "
+              f"{len(observed['passed'])} passed, "
+              f"{len(observed['skipped'])} skipped -> {BASELINE}")
+        return 0
+    if device not in data:
+        print(f"no baseline recorded for {device}; run once with "
+              f"FLA_NPU_BASELINE_WRITE=1 to add it")
+        return 0
+    expected = data[device]
+    missing = sorted(set(expected["passed"]) - set(observed["passed"]))
+    added = sorted(set(observed["passed"]) - set(expected["passed"]))
+    skipped_missing = sorted(set(expected["skipped"]) - set(observed["skipped"]))
+    skipped_added = sorted(set(observed["skipped"]) - set(expected["skipped"]))
+    for label, items in (("scenario lost", missing),
+                         ("scenario added", added),
+                         ("recorded skip lost", skipped_missing),
+                         ("new skip", skipped_added)):
+        for item in items:
+            print(f"{label}: {item}")
+    bad = [name for name, diff in observed["passed"].items() if diff != 0.0]
+    for name in bad:
+        print(f"scenario no longer bit-identical: {name}")
+    if missing or bad:
+        print(f"\nBASELINE MISMATCH for {device} "
+              f"({len(missing)} lost, {len(bad)} non-zero)")
+        return 1
+    print(f"baseline ok for {device}: {len(observed['passed'])} scenarios "
+          f"({len(added)} new, {len(skipped_added)} new skip)")
+    return 0
 
 
 class StableShim:
@@ -116,14 +174,23 @@ def main() -> int:
                   flush=True)
             scenario()
     else:
+        reason = (f"requires Ascend950, this host reports {device!r}")
+        suite.SKIPPED[A5_SCENARIOS] = reason
         print(f"SKIP chunk_gated_delta_rule_fwd_prepare / _bwd_finalize / "
-              f"fwd(a5): requires Ascend950, this host reports {device!r}")
+              f"fwd(a5): {reason}")
+    if "950" in device:
+        # The A5 driver keeps its own recorder; fold it into this run's record
+        # so one baseline covers whatever the host can actually execute.
+        suite.SCENARIOS.update(a5.SCENARIOS)
     print(f"\nstable ops exercised: {len(shim.calls)}")
     for name in sorted(shim.calls):
         print(f"  {name}: {shim.calls[name]} call(s)")
     if shim.missing:
         print(f"MISSING ADAPTERS: {sorted(set(shim.missing))}")
         return 1
+    status = check_baseline(device, suite)
+    if status != 0:
+        return status
     print("ALL PASS: full stable parity")
     return 0
 

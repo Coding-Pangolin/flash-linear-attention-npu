@@ -24,6 +24,15 @@ from fla_npu.ops.ascendc import _aclnn_ctypes as ct  # noqa: E402
 from fla_npu.ops.ascendc import _thin  # noqa: E402
 
 
+# name -> max |diff| observed for that scenario (0.0 when it matched).  The
+# driver snapshots this into tests/stable_scenarios.json, so "which scenarios
+# are covered" is a checked-in fact that a later run has to reproduce rather
+# than a number printed once in a log.
+SCENARIOS: dict[str, float] = {}
+# name -> reason, for cases both backends reject (domain limits, missing kernel).
+SKIPPED: dict[str, str] = {}
+
+
 def pct(vals, q):
     vals = sorted(vals)
     pos = (len(vals) - 1) * q
@@ -57,6 +66,7 @@ def assert_parity(name, oc, ot):
         assert tuple(a.shape) == tuple(b.shape), f"{name}[{i}]: shape"
         diff = float((a.float() - b.float()).abs().max().item())
         assert diff == 0.0, f"{name}[{i}]: diff={diff}"
+    SCENARIOS[name] = 0.0
     print(f"PASS {name}")
 
 
@@ -327,6 +337,7 @@ def _conv1d_parity(name, kwargs, mutated=("conv_states",)):
     if kind_ct == "err":
         assert out_ct == out_th, (
             f"{name}: aclnn status mismatch ctypes={out_ct} thin={out_th}")
+        SKIPPED[name] = f"both backends rejected the inputs: {out_ct}"
         print(f"SKIP {name} (both backends rejected the inputs: {out_ct})")
         return
     assert_parity(name, out_ct, out_th)

@@ -639,3 +639,18 @@ main（#390 之后）：    specs checked: 26   mismatched: 1
 指出来，并且把两侧的实参表都打印出来——下次合 main 时它会先响，而不是等内核崩。
 `tests/test_stable_gates.py` 现在 13 个用例：既查当前树为绿，也用一个被改过的实现
 副本验证它确实会响。
+
+### 8.4 公共 API 全量演练与回退计数（C4）
+
+把驱动里的"钉住后端"换成"走公共 API"（`FLA_NPU_DISPATCH=public`），整套场景就覆盖到
+后端选择 + mutation 契约 + launcher 三条路径，跑完断言 `FALLBACKS` 为空：
+
+```
+public dispatch: 24 operators, backends ['stable'], no fallback
+ALL PASS: full stable parity          (259 PASS，基线 246 + 3 条带原因 SKIP)
+```
+
+顺带把四种模式的行为钉住了：默认 `stable`；`FLA_NPU_THIN_TRACE=1` 逐算子打印
+`[fla-npu] <op>: stable`；`FLA_NPU_THIN_ABI=ctypes` 显示 `ctypes` 但**不计**回退
+（那是显式选择）；`FLA_NPU_THIN_VALIDATE=1` 显示 `ctypes` 并记一次回退（带原因）。
+这样"某个算子悄悄退回 ctypes"这件事从"没人会发现"变成"跑一次就报"。

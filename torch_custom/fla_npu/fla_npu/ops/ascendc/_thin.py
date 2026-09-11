@@ -107,14 +107,15 @@ def npu_kda_gate_cumsum(
     )
 
 
-def npu_chunk_local_cumsum(g, chunk_size, *, cu_seqlens=None, chunk_indices=None, reverse=False, scale=1.0, head_first=True, output_dtype="float32"):
+def npu_chunk_local_cumsum(g, chunk_size, *, cu_seqlens=None, chunk_indices_out=None, reverse=False, scale=1.0, head_first=True, output_dtype="float32"):
     ext = _extension()
     cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
-    chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
+    chunk_indices_out = ([] if chunk_indices_out is None
+                         else [int(v) for v in chunk_indices_out])
     return ext.npu_chunk_local_cumsum(
         g,
         cu_seqlens,
-        chunk_indices,
+        chunk_indices_out,
         int(chunk_size),
         bool(reverse),
         float(scale),
@@ -218,7 +219,7 @@ def npu_chunk_bwd_dv_local(q, k, d_o, g, scale, chunk_size, *, g_gamma=None, A=N
     )
 
 
-def npu_prepare_wy_repr_bwd_da(k, v, beta, A, dw, du, g, *, cu_seqlens=None, chunk_indices=None, chunk_size=None):
+def npu_prepare_wy_repr_bwd_da(k, v, beta, A, dw, du, g, *, cu_seqlens=None, chunk_indices=None, chunk_size):
     ext = _extension()
     cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
     chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
@@ -283,7 +284,7 @@ def npu_chunk_bwd_dqkwg(q, k, v, g, h, dox, dh, dv, chunk_size, *, cu_seqlens=No
     return tuple(result)
 
 
-def npu_chunk_gated_delta_rule_fwd_h(k, w, u, g, *, gk=None, initial_state=None, output_final_state=False, chunk_size=None, cu_seqlens=None, chunk_indices=None, state_v_first=False):
+def npu_chunk_gated_delta_rule_fwd_h(k, w, u, g=None, *, gk=None, initial_state=None, output_final_state=False, chunk_size=None, cu_seqlens=None, chunk_indices=None, state_v_first=False):
     ext = _extension()
     chunk_size = (64 if chunk_size is None else int(chunk_size))
     cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
@@ -362,7 +363,10 @@ def npu_chunk_fwd_o(q, k, v, h, scale, *, g=None, cu_seqlens=None, chunk_indices
     )
 
 
-def npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, d_o, dv, scale, chunk_size, *, g=None, gK=None, h0=None, dht=None, cu_seqlens=None, chunk_indices=None, use_exp2=False):
+def npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, d_o, dv, scale, chunk_size, *, g=None, gK=None, h0=None, dht=None, cu_seqlens=None, chunk_indices=None, use_exp2=False, transpose_state_layout=False):
+    # `transpose_state_layout` is accepted for API parity with the ctypes
+    # reference (which also ignores it: the flag only ever reached the host
+    # policy, not aclnn), so it is deliberately not forwarded to the extension.
     ext = _extension()
     cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
     chunk_indices = [] if chunk_indices is None else [int(v) for v in chunk_indices]
@@ -386,7 +390,7 @@ def npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, d_o, dv, scale, chunk_size, *, g
     return (result[0], (result[1] if h0 is not None else None), result[2])
 
 
-def npu_recurrent_kda(q, k, v, g, beta, initial_state, *, cu_seqlens=None, ssm_state_indices=None, A_log=None, dt_bias=None, num_accepted_tokens=None, layout="BSND", scale=None, output_final_state=False, inplace_final_state=True, use_qk_l2norm_in_kernel=False, use_gate_in_kernel=False, use_beta_sigmoid_in_kernel=False, allow_neg_eigval=False, safe_gate=False, lower_bound=None, state_v_first=False):
+def npu_recurrent_kda(q, k, v, g, beta, initial_state=None, *, cu_seqlens=None, ssm_state_indices=None, A_log=None, dt_bias=None, num_accepted_tokens=None, layout="BSND", scale=None, output_final_state=False, inplace_final_state=True, use_qk_l2norm_in_kernel=False, use_gate_in_kernel=False, use_beta_sigmoid_in_kernel=False, allow_neg_eigval=False, safe_gate=False, lower_bound=None, state_v_first=False):
     ext = _extension()
     import torch as _torch
     layout = str(layout)
@@ -430,7 +434,7 @@ def npu_recurrent_kda(q, k, v, g, beta, initial_state, *, cu_seqlens=None, ssm_s
         _current_stream_ptr(),
     )
     return (result[0], (result[1] if output_final_state else None))
-def npu_causal_conv1d_bwd(x, y, weight, dy, initial_state, dht, *, query_start_loc=None, activation=0, input_layout="BSND"):
+def npu_causal_conv1d_bwd(x, y, weight, dy, initial_state=None, dht=None, *, query_start_loc=None, activation=0, input_layout="BSND"):
     ext = _extension()
     query_start_loc = [] if query_start_loc is None else [int(v) for v in query_start_loc]
     result = ext.npu_causal_conv1d_bwd(
@@ -514,7 +518,7 @@ def npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o, sca
         _current_stream_ptr(),
     )
     return (result[0], result[1], result[2], result[3], result[4], (result[5] if False else None), (result[6] if False else None), (result[7] if False else None))
-def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, a_log=None, dt_bias=None, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BNSD", scale=None, chunk_size=64, use_exp2=False, use_qk_l2norm_in_kernel=False, allow_neg_eigval=False, state_v_first=False, output_final_state=False, disable_recompute=False, return_intermediate_states=False, use_gate_in_kernel=False, use_beta_sigmoid_in_kernel=False):
+def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BNSD", scale=None, chunk_size=64, use_exp2=False, use_qk_l2norm_in_kernel=False, allow_neg_eigval=False, state_v_first=False, output_final_state=False, disable_recompute=False, return_intermediate_states=False, use_gate_in_kernel=False, use_beta_sigmoid_in_kernel=False):
     ext = _extension()
     layout = str(layout)
     if scale is None:
@@ -525,6 +529,9 @@ def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, a_log=None, dt_bias=None
             _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]
             for _c in range((_len + int(chunk_size) - 1) // int(chunk_size)):
                 chunk_indices.extend((_seq, _c))
+    # a_log / dt_bias stay aclnn-only slots: the ctypes reference does not
+    # expose them either (it fills them internally), so the wrapper neither
+    # accepts nor forwards them.
     a_log = None
     dt_bias = None
     cu_seqlens = [] if cu_seqlens is None else [int(v) for v in cu_seqlens]
@@ -618,7 +625,7 @@ def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
         str(layout),
         _current_stream_ptr(),
     )
-def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size, *, A_log=None, dt_bias=None, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BSND", safe_gate=False, lower_bound=None, use_gate_in_kernel=False, state_v_first=False, output_final_state=False, disable_recompute=False, return_intermediate_states=False):
+def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size=64, *, A_log=None, dt_bias=None, initial_state=None, cu_seqlens=None, chunk_indices=None, layout="BSND", safe_gate=False, lower_bound=None, use_gate_in_kernel=False, state_v_first=False, output_final_state=False, disable_recompute=False, return_intermediate_states=False):
     ext = _extension()
     layout = str(layout)
     safe_gate = bool(safe_gate)
@@ -677,7 +684,7 @@ def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size, *, A_log=None, dt_bia
     return tuple(out)
 
 
-def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size, *, a_log=None, dt_bias=None, cu_seqlens=None, chunk_indices=None, allow_neg_eigval=False, use_exp2=False, output_a=True, use_beta_sigmoid_in_kernel=False, use_gate_in_kernel=False, use_qk_l2norm_in_kernel=False):
+def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size=64, *, a_log=None, dt_bias=None, cu_seqlens=None, chunk_indices=None, allow_neg_eigval=False, use_exp2=False, output_a=True, use_beta_sigmoid_in_kernel=False, use_gate_in_kernel=False, use_qk_l2norm_in_kernel=False):
     ext = _extension()
     import torch
     if not (bool(use_qk_l2norm_in_kernel) and bool(use_exp2) and int(chunk_size) == 64):

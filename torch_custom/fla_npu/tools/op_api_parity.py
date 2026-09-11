@@ -36,6 +36,10 @@ REFERENCE = OPS_DIR / "_aclnn_ctypes.py"
 BACKENDS = {
     "stable-generated": OPS_DIR / "_stable_generated.py",
     "stable-handwritten": OPS_DIR / "_stable.py",
+    # Still selectable with FLA_NPU_THIN_ABI=pybind, so its Python surface is
+    # part of the published API too -- a caller who switches backends must not
+    # discover that a keyword was renamed.
+    "pybind": OPS_DIR / "_thin.py",
 }
 
 def _defaults(node: ast.arguments) -> dict[str, str]:
@@ -125,25 +129,25 @@ def _compare(name: str, reference: dict, backend: dict) -> list[str]:
 def evaluate() -> dict:
     reference = signatures(REFERENCE)
     backends = {label: signatures(path) for label, path in BACKENDS.items()}
-    rows = []
+    rows: list[dict] = []
     for name in sorted(reference):
-        backend_label = None
+        found = False
         for label, table in backends.items():
-            if label == "stable-handwritten" and name in backends["stable-generated"]:
+            if name not in table:
                 continue
-            if name in table:
-                backend_label = label
-                break
-        if backend_label is None:
+            found = True
+            # Every backend that exposes the operator is compared, not just the
+            # one that happens to answer first: FLA_NPU_THIN_ABI switches
+            # between them, so a caller must not hit a renamed keyword by
+            # changing a flag.
+            rows.append({
+                "op": name,
+                "backend": label,
+                "problems": _compare(name, reference[name], table[name]),
+            })
+        if not found:
             rows.append({"op": name, "backend": None,
                          "problems": ["no stable backend signature found"]})
-            continue
-        rows.append({
-            "op": name,
-            "backend": backend_label,
-            "problems": _compare(name, reference[name],
-                                 backends[backend_label][name]),
-        })
     return {"rows": rows, "reference": str(REFERENCE.name)}
 
 

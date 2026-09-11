@@ -308,10 +308,22 @@ baseline 必须清空，否则发版门禁不放行。
 | B5 | 26 算子 A/B 表 | B4、C1 |
 | D1 | ✅ 默认链 stable → ctypes；`FLA_NPU_THIN_ABI=pybind/ctypes` 才算显式切换（顺带修掉 `=ctypes` 其实没生效的老问题） | — |
 | D2 | ✅ 默认构建不再编 `_C_thin`，wheel 自带 `libfla_npu_thin.so`；一键编包产物 `py3-none-any` 并在干净目录安装后跑通全量 | — |
-| D3 | 发布矩阵：`torch>=2.7.1` 下限（运行期 `aoti_torch_abi_version()` + 符号检查）、SOC 分 OPP 包 | D2 |
+| D3 | ✅ 发布矩阵：ABI-free wheel 声明 `torch>=2.7.1` / `torch_npu>=2.7.1` 下限（pybind wheel 仍是精确 pin），加载失败时给出"需要 ≥2.7.1"的明确报错 | — |
 
-建议顺序：**C1 → B4 → B5/C3 → D3 →（#390 就绪后）conv1d update 变体**。
+建议顺序：**C1 → B4 → B5 →（#390 就绪后）conv1d update 变体**。
 门禁（C1/C2/C6/C7）已经立在前面，后续每个算子的接入自动被记录。
+
+### D3 细节：一个包服务整段 torch 版本
+
+| wheel | 元数据 | 说明 |
+| --- | --- | --- |
+| 默认（ABI-free） | `torch>=2.7.1`、`torch_npu>=2.7.1` | 2.9 头编译，2.7.1 运行实测（241：py3.10 + torch 2.7.1.post5 跑完全部 A50 场景）；一条下限覆盖整段版本 |
+| `FLA_NPU_BUILD_THIN=1` | `torch==<build>`、`torch_npu==<build>` | pybind 是 ABI 匹配的，装错是硬错误而非警告 |
+| `FLA_NPU_BUILD_STABLE_ABI=0` | 只带 ctypes，无任何 torch 约束 | 纯 Python wheel |
+
+运行期那一半：`_stable.load()` 在 `torch.ops.load_library` 失败时不再抛裸的
+"undefined symbol"，而是说明"该 launcher 需要 torch >= 2.7.1（它解析的
+`aoti_torch_*` 符号在 2.7.x 之后才补齐）"，并附上原始错误。
 
 ## 7. 风险与对策
 

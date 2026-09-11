@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 import setuptools
+import zipfile
 
 
 try:
@@ -236,6 +237,55 @@ class WheelEnvironmentTest(unittest.TestCase):
         finally:
             if stale.exists():
                 stale.unlink()
+
+    def _write_minimal_wheel(self, path: Path, entries: dict) -> None:
+        info = "demo-1.0.dist-info"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(f"{info}/METADATA", (
+                "Metadata-Version: 2.1\nName: demo\nVersion: 1.0\n"
+                "Requires-Dist: numpy\n"))
+            for name, payload in entries.items():
+                archive.writestr(name, payload)
+            archive.writestr(f"{info}/RECORD",
+                             f"{info}/METADATA,,\n{info}/RECORD,,\n")
+
+    @staticmethod
+    def _wheel_metadata(wheel: Path) -> str:
+        with zipfile.ZipFile(wheel) as archive:
+            name = next(entry for entry in archive.namelist()
+                        if entry.endswith("METADATA"))
+            return archive.read(name).decode("utf-8")
+
+    def test_abi_free_wheel_declares_a_torch_lower_bound(self) -> None:
+        """One wheel for every torch above the floor, not an exact pin.
+
+        The Stable-ABI launcher resolves its aoti_torch_* symbols at load, so
+        what it needs is a minimum version -- the exact pins belong to the
+        pybind wheel, which is ABI-matched to one build.
+        """
+
+        build_wheel = runpy.run_path(str(REPO_ROOT / "scripts" / "build_wheel.py"))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wheel = Path(temp_dir) / "demo-1.0-py3-none-any.whl"
+            self._write_minimal_wheel(
+                wheel, {"fla_npu/libfla_npu_thin.so": b"\x7fELF"})
+            build_wheel["_inject_runtime_pins"](wheel)
+            text = self._wheel_metadata(wheel)
+        self.assertIn("Requires-Dist: torch>=2.7.1", text)
+        self.assertIn("Requires-Dist: torch_npu>=2.7.1", text)
+        self.assertNotIn("Requires-Dist: torch==", text)
+
+    def test_pure_ctypes_wheel_declares_nothing(self) -> None:
+        """No compiled launcher means no torch constraint to add."""
+
+        build_wheel = runpy.run_path(str(REPO_ROOT / "scripts" / "build_wheel.py"))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wheel = Path(temp_dir) / "demo-1.0-py3-none-any.whl"
+            self._write_minimal_wheel(wheel, {"fla_npu/__init__.py": b""})
+            before = self._wheel_metadata(wheel)
+            build_wheel["_inject_runtime_pins"](wheel)
+            after = self._wheel_metadata(wheel)
+        self.assertEqual(before, after)
 
     def test_generated_set_env_is_idempotent(self) -> None:
         rewrite_set_env = self.setup_globals["_rewrite_set_env"]

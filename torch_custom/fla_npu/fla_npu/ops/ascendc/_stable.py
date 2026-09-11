@@ -17,6 +17,9 @@ import os
 
 
 _LIB_ENV = "FLA_NPU_STABLE_LIB"
+# Lowest torch whose stable runtime symbols the launcher was verified against.
+# Keep in sync with STABLE_ABI_MIN_TORCH in scripts/build_wheel.py.
+_MIN_TORCH = "2.7.1"
 _loaded_path: str | None = None
 _OP_CACHE: dict[str, object] = {}
 # Cached objects for the hot path.  `torch`/`torch_npu` are plain module
@@ -101,7 +104,16 @@ def load() -> None:
     if _loaded_path == path:
         return
     torch = _modules()[0]
-    torch.ops.load_library(path)
+    try:
+        torch.ops.load_library(path)
+    except Exception as exc:  # symbol resolution happens here, not at dlopen
+        # The launcher resolves aoti_torch_* at load; an older torch fails with
+        # "undefined symbol" a long way from the cause, so say what is wrong.
+        raise RuntimeError(
+            f"fla_npu: cannot load the Stable-ABI launcher {path} against "
+            f"torch {torch.__version__}. It needs torch >= {_MIN_TORCH} (the "
+            f"aoti_torch_* runtime symbols it resolves were added over 2.7.x). "
+            f"Original error: {exc}") from exc
     _check_build_stamp(path)
     _loaded_path = path
 

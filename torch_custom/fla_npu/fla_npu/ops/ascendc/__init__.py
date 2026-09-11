@@ -300,7 +300,20 @@ def _get_direct_op(name: str):
 
 
 def _stable_backend_selected() -> bool:
-    return (os.environ.get("FLA_NPU_THIN_ABI") or "").strip().lower() == "stable"
+    """Whether the ABI-free backend should be tried first.
+
+    Default order is stable -> pybind -> ctypes: the stable launcher carries
+    neither the CPython ABI nor the libtorch C++ ABI, so it is the only backend
+    that keeps a wheel usable across Python and torch versions.  The pybind
+    backend stays reachable with ``FLA_NPU_THIN_ABI=pybind`` (it is faster for
+    operators whose Python wrapper is very light), and ``=ctypes`` forces the
+    reference path.
+    """
+
+    mode = (os.environ.get("FLA_NPU_THIN_ABI") or "").strip().lower()
+    if mode == "pybind":
+        return False
+    return True
 
 
 def _get_stable_op(name: str):
@@ -336,6 +349,12 @@ def _get_thin_op(name: str):
     canonical = name if name.startswith("npu_") else f"npu_{name}"
     try:
         from . import _thin
+
+        # _thin.py imports the compiled extension lazily, so its mere presence
+        # does not mean the pybind backend exists.  Probe the extension here,
+        # otherwise a wheel built without _C_thin would pick the pybind wrapper
+        # and fail at call time instead of falling back to ctypes.
+        _thin._extension()
     except Exception:
         return None
     return getattr(_thin, canonical, None)

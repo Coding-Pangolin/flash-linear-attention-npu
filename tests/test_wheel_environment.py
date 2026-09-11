@@ -177,6 +177,66 @@ class WheelEnvironmentTest(unittest.TestCase):
         self.assertIn("FLA_NPU_OPS", setup_source)
         self.assertIn("--ops=", setup_source)
 
+    def test_default_build_is_the_abi_free_one(self) -> None:
+        """The default artifact must not pin the CPython/libtorch C++ ABI.
+
+        ``_C_thin`` is a CPython extension and therefore drags both ABI axes
+        into the wheel; the Stable-ABI ``libfla_npu_thin.so`` is plain package
+        data, so the default build ships that one and stays ``py3-none-any``.
+        """
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FLA_NPU_BUILD_THIN", None)
+            os.environ.pop("FLA_NPU_BUILD_STABLE_ABI", None)
+            setup_globals, setup_kwargs = _load_setup()
+            # The predicates read os.environ, so they have to be called while
+            # the environment under test is still in place.
+            self.assertFalse(setup_globals["_thin_build_enabled"]())
+            self.assertTrue(setup_globals["_stable_build_enabled"]())
+            distribution = setup_kwargs["distclass"]()
+            self.assertTrue(distribution.is_pure())
+            self.assertFalse(distribution.has_ext_modules())
+
+    def test_pybind_launcher_is_opt_in(self) -> None:
+        for value, expected in (("1", True), ("TRUE", True), ("0", False),
+                                ("OFF", False)):
+            with mock.patch.dict(os.environ, {"FLA_NPU_BUILD_THIN": value}):
+                setup_globals, setup_kwargs = _load_setup()
+                self.assertIs(setup_globals["_thin_build_enabled"](), expected,
+                              f"FLA_NPU_BUILD_THIN={value}")
+                self.assertIs(setup_kwargs["distclass"]().is_pure(),
+                              not expected, f"FLA_NPU_BUILD_THIN={value}")
+
+    def test_stable_launcher_can_be_turned_off(self) -> None:
+        with mock.patch.dict(os.environ,
+                             {"FLA_NPU_BUILD_STABLE_ABI": "0"}):
+            setup_globals, _ = _load_setup()
+            self.assertFalse(setup_globals["_stable_build_enabled"]())
+
+    def test_wheel_build_drops_stale_pybind_artifacts(self) -> None:
+        """A stale _C_thin*.so must not ride along as package data.
+
+        Otherwise the wheel claims ``py3-none-any`` while holding a cpXXX
+        binary -- the mismatch that makes an install silently unusable on a
+        different Python.
+        """
+
+        package_dir = REPO_ROOT / "torch_custom" / "fla_npu" / "fla_npu"
+        stale = package_dir / "_C_thin.cpython-311-aarch64-linux-gnu.so"
+        build_wheel = runpy.run_path(str(REPO_ROOT / "scripts" / "build_wheel.py"))
+        prepare = build_wheel["_prepare_abi_free_launcher"]
+        env = {"FLA_NPU_BUILD_STABLE_ABI": "0"}  # do not compile anything
+        stale.write_bytes(b"stale pybind artifact")
+        try:
+            with mock.patch.dict(os.environ, env, clear=False):
+                os.environ.pop("FLA_NPU_BUILD_THIN", None)
+                prepare()
+            self.assertFalse(stale.exists(),
+                             "a stale _C_thin artifact survived the build")
+        finally:
+            if stale.exists():
+                stale.unlink()
+
     def test_generated_set_env_is_idempotent(self) -> None:
         rewrite_set_env = self.setup_globals["_rewrite_set_env"]
 

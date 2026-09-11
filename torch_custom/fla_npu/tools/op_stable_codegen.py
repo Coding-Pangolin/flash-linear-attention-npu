@@ -46,6 +46,7 @@ _ACLNN_TYPE = {
     "bool": "bool",
     "double": "double",
     "float": "float",
+    "char_ptr": "const char*",
 }
 
 # Adapters that already exist by hand (they need the ownership/shape handling
@@ -59,13 +60,18 @@ def unsupported_reasons(spec: dict) -> list[str]:
         reasons.append("spec disabled")
     for argument in spec["args"]:
         if argument["kind"] == "char_ptr":
-            reasons.append(f"char_ptr arg {argument['name']} needs an int code")
+            if not argument.get("enum"):
+                reasons.append(
+                    f"char_ptr arg {argument['name']} has no enum table")
         if argument["kind"] not in (*_ACLNN_TYPE, "char_ptr"):
             reasons.append(f"unsupported kind {argument['kind']}")
     outputs = spec.get("outputs") or [spec.get("output") or {}]
     for entry in outputs:
         if "alloc" in entry:
             reasons.append("raw alloc expression (ATen idiom)")
+        if entry.get("dtype") not in (None, "same", "source", *_DTYPE_ID,
+                                      "output_dtype"):
+            reasons.append(f"unsupported output dtype {entry.get('dtype')!r}")
     if spec.get("helpers"):
         reasons.append("spec helpers use ATen idioms")
     return reasons
@@ -101,6 +107,9 @@ def _schema(spec: dict) -> str:
             parts.append(f"int {name}")
         elif kind in ("double", "float"):
             parts.append(f"float {name}")
+        elif kind == "char_ptr":
+            # Encoded as an int: the stable conversions carry no strings.
+            parts.append(f"int {name}")
     # The raw stream is an explicit argument: the stable accelerator stream API
     # returns 0 on torch_npu, so the Python wrapper forwards the caller's stream.
     parts.append("int stream")
@@ -142,6 +151,19 @@ def generate_cpp(spec: dict) -> str:
     aclnn_args = [a for a in spec["args"] if not a.get("cpp_only")]
     lines: list[str] = []
     lines.append(f"// ---- generated: {name} ----")
+    for argument in spec["args"]:
+        if argument["kind"] == "char_ptr":
+            arg = _arg_cpp(argument)
+            lines.append(f"inline const char* {name}_{arg}_name(int64_t code) {{")
+            lines.append("  switch (code) {")
+            for code, value in enumerate(argument["enum"]):
+                lines.append(f'    case {code}: return "{value}";')
+            lines.append("    default:")
+            lines.append("      throw std::runtime_error(")
+            lines.append(
+                f'          "{name}: bad {arg} code " + std::to_string(code));')
+            lines.append("  }")
+            lines.append("}")
     lines.append(f"using {name}_GetWorkspaceFn = int (*)(")
     lines.append("    " + ",\n    ".join(
         _ACLNN_TYPE[a["kind"]] for a in aclnn_args) + ",")
@@ -188,6 +210,9 @@ def generate_cpp(spec: dict) -> str:
             lines.append(f"  const int64_t {cpp_name} = to<int64_t>(stack[{index}]);")
         elif kind in ("double", "float"):
             lines.append(f"  const double {cpp_name} = to<double>(stack[{index}]);")
+        elif kind == "char_ptr":
+            lines.append(
+                f"  const int64_t {cpp_name} = to<int64_t>(stack[{index}]);")
         index += 1
     lines.append(f"  const int64_t stream = to<int64_t>(stack[{index}]);")
     lines.append("")
@@ -212,6 +237,19 @@ def generate_cpp(spec: dict) -> str:
             else:
                 alloc = (f"allocate_sizes({sizes}, {dtype_expr}, "
                          f"{source}_meta)")
+        elif dtype == "output_dtype":
+            # dtype follows the char_ptr arg of the same name; the pybind codegen
+            # spells it as `output_dtype == "float32" ? kFloat : kBFloat16`.
+            enum_arg = next(a for a in spec["args"]
+                            if a["name"] == "output_dtype")
+            ids = [_DTYPE_ID[value] for value in enum_arg["enum"]]
+            expr = str(ids[-1])
+            for code in range(len(ids) - 2, -1, -1):
+                expr = f"(output_dtype == {code} ? {ids[code]} : {expr})"
+            alloc = (f"allocate_sizes({sizes}, {expr}, {source}_meta)"
+                     if sizes is not None
+                     else f"allocate_sizes({{{source}_meta.sizes}}, {expr}, "
+                          f"{source}_meta)")
         elif dtype in _DTYPE_ID:
             dtype_expr = str(_DTYPE_ID[dtype])
             alloc = (f"allocate_sizes({sizes}, {dtype_expr}, {source}_meta)"
@@ -256,6 +294,8 @@ def generate_cpp(spec: dict) -> str:
             view_index += 1
         elif kind == "int_array":
             tokens.append(f"{cpp_name}_view.get()")
+        elif kind == "char_ptr":
+            tokens.append(f"{name}_{cpp_name}_name({cpp_name})")
         else:
             tokens.append(cpp_name)
     for position in range(len(outputs)):

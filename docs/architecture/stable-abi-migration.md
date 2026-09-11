@@ -271,9 +271,9 @@ ctypes 仍是最终回退。下面统计的是 **stable 后端的覆盖率**：
 | 类别 | 数量 | 说明 |
 | --- | --- | --- |
 | 手写 stable 适配 | 2 | `npu_recurrent_gated_delta_rule`、`npu_recurrent_kda`（T1/T2/T3/T6/T7 全绿） |
-| **codegen 生成**（本轮新增） | **11** | `fast_gelu(_custom/_backward)`、`kda_gate_cumsum`、`chunk_scaled_dot_kkt`、`chunk_bwd_dv_local`、`chunk_bwd_dqkwg`、`prepare_wy_repr_bwd(_da/_full)`、`recompute_w_u_fwd`、`chunk_gated_delta_rule_bwd_finalize` |
-| **stable 覆盖合计** | **13 / 26** | 生成的 11 个中已实测 4 个 parity 全 0.0（`fast_gelu`、`kda_gate_cumsum`、`chunk_scaled_dot_kkt`、`chunk_bwd_dv_local`） |
-| 待适配（手工） | 13 | 阻塞原因只有三类，见下 |
+| **codegen 生成**（本轮新增） | **14** | `fast_gelu(_custom/_backward)`、`kda_gate_cumsum`、`chunk_scaled_dot_kkt`、`chunk_bwd_dv_local`、`chunk_bwd_dqkwg`、`prepare_wy_repr_bwd(_da/_full)`、`recompute_w_u_fwd`、`chunk_gated_delta_rule_bwd_finalize`、`solve_tri`、`chunk_local_cumsum`、`chunk_kda_bwd_intra` |
+| **stable 覆盖合计** | **16 / 26** | 生成的 14 个中已实测 **6 个 parity 全 0.0**（`fast_gelu`、`kda_gate_cumsum`、`chunk_scaled_dot_kkt`、`chunk_bwd_dv_local`、`solve_tri`、`chunk_local_cumsum`） |
+| 待适配 | 11 | 只剩**一类**阻塞：`alloc`/`helpers` 用 ATen 惯用法 |
 
 **已消除的阻塞：stable 转换不支持 `int[]`。** torch 2.9 的 stable 头里既没有
 `aoti_torch_*list*` shim，也没有 `ToImpl<std::vector<T>>`——而 12+ 个算子都有
@@ -286,7 +286,7 @@ ctypes 仍是最终回退。下面统计的是 **stable 后端的覆盖率**：
 
 | 阻塞 | 影响算子 | 解法 |
 | --- | --- | --- |
-| `char_ptr` 入参（layout / output_dtype / input_layout） | 8 | 沿用 KDA 的做法编码成 int（可在 spec 里加 `enum` 字段由生成器自动出映射） |
+| `char_ptr` 入参（layout / output_dtype / input_layout） | 0（✅ 已解决） | spec 里加 `"enum": [...]`，生成器自动出"int 码 ↔ 字符串"映射并接到 aclnn（`solve_tri`/`chunk_local_cumsum`/`chunk_kda_bwd_intra` 已按此接入并 parity 0.0） |
 | 输出用 `alloc` 原始 C++（ATen 惯用法） | 8 | 加一层 ATen 形状的门面（`at::empty`/`empty_like`/`Tensor::options()` → shim 分配），让现有 alloc 字符串原样编译 |
 | spec `helpers` 用 ATen 惯用法 | 5 | 同上，门面覆盖后自动可用 |
 

@@ -55,8 +55,13 @@ class StableShim:
 
 
 def main() -> int:
-    if not STABLE_LIB:
-        raise SystemExit("set FLA_NPU_STABLE_LIB to the built libfla_npu_thin.so")
+    # Either FLA_NPU_STABLE_LIB points at a build tree, or an installed wheel
+    # carries the launcher next to the package -- both are ordinary customer
+    # setups, so accept whichever resolves instead of demanding the env var.
+    if not _stable.available():
+        raise SystemExit(
+            "no Stable-ABI launcher: set FLA_NPU_STABLE_LIB to a built "
+            "libfla_npu_thin.so, or install a wheel that bundles one")
     import regression_thin_ops as suite
 
     shim = StableShim()

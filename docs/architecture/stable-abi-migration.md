@@ -736,6 +736,22 @@ SKIP 全部带具体原因，而不是"跳过"。这一批里还多出两类值�
 `aclnnCausalConv1d`）。所以前向场景在 `env390` 上验证、在完整 OPP 的那一轮里记为 SKIP；
 代码是统一的，环境不是。
 
+而且合并后 950 侧也重新跑过一遍（此前那一轮用的是合并前的代码）：
+
+```
+baseline written for Ascend950PR_9579: 38 passed, 6 skipped
+ALL PASS: Ascend950 stable parity
+```
+
+比合并前的 34+5 多了一组：合并带进来的新场景（`chunk_fwd_h` 的 flag 变体等）在 A5 上也跑了。
+6 条 SKIP 与 910b 上同源——`chunk_fwd_o` 的四个组合、`head_first=False`、以及
+`chunk_fwd_h(save_new_value=False)` 这条"参考实现用 Python 校验就拒"的记录。
+
+**241 上的一个环境教训**：跑这轮时 `torch.npu.set_device(0)` 直接挂住（进程停在
+`locks_lock_inode_wait`），`npu-smi` 显示 NPU 0 的 Health 变成 `Warning`。用
+`ASCEND_RT_VISIBLE_DEVICES=3` 换到健康卡后一切正常——以后遇到"还没进场景就卡住"，
+先看卡的 Health，而不是怀疑代码。
+
 ### 9.4 host 侧：与 ctypes、与 pybind 两把尺子（`bench_stable_host.py --baseline`）
 
 同一套场景输入，只换"基准是谁"，就能回答两个不同的问题。

@@ -227,6 +227,7 @@
       "conv1d_prefill(dim=32,head_num=2)": 0.0,
       "conv1d_spec_decode": 0.0,
       "conv1d_update": 0.0,
+      "conv1d_update_gather_padding[defined rows]": 0.0,
       "conv1d_width3_no_bias": 0.0,
       "fast_gelu_custom": 0.0,
       "fast_gelu_custom_backward": 0.0,
@@ -249,24 +250,8 @@
     },
     "skipped": {
       "Ascend950-only: fwd_prepare / bwd_finalize / fwd(a5)": "requires Ascend950, this host reports 'Ascend910B3'",
-      "conv1d_varlen_initial_state": "both backends rejected the inputs: 561002"
+      "conv1d_varlen_initial_state": "both backends rejected the inputs: 561002",
+      "conv1d_varlen_pad_slot": "both backends rejected the inputs: 561002"
     }
-  },
-  "Ascend950PR_9579": {
-    "passed": {
-      "bwd_finalize(dense)": 0.0,
-      "chunk_gated_delta_rule_fwd(BNSD_B2_Hk2_Hv4_T128_V128)": 0.0,
-      "chunk_gated_delta_rule_fwd(BSND_B1_Hk2_Hv2_T128_V128)": 0.0,
-      "chunk_gated_delta_rule_fwd(BSND_B2_Hk4_Hv4_T128_V128)": 0.0,
-      "chunk_gated_delta_rule_fwd(TND_varlen_exp2_l2norm)": 0.0,
-      "fwd_prepare(a_log only)": 0.0,
-      "fwd_prepare(a_log+dt_bias)": 0.0,
-      "fwd_prepare(case0)": 0.0,
-      "fwd_prepare(no gate flags)": 0.0,
-      "fwd_prepare(output_a=False)": 0.0,
-      "fwd_prepare(sigmoid=False)": 0.0,
-      "recurrent_kda(dense BSND)": 0.0
-    },
-    "skipped": {}
   }
 }

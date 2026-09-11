@@ -115,7 +115,10 @@ op_api_parity.py: 26 个算子比对，0 漂移        stable_coverage.py --stri
 
 生成后有两条离线门禁会立刻报错，不需要 NPU：
 `tools/op_api_parity.py`（Python 签名与 ctypes 逐参数比对）与
-`tools/stable_coverage.py`（适配器覆盖 + 场景轴声明）。改完 `.inc` 必须重编 `.so`：
+`tools/stable_coverage.py`（适配器覆盖 + 场景轴声明）与
+`tools/op_abi_parity.py`（**spec 描述的 aclnn 实参列表 vs 实现实际传给 aclnn 的**，
+不需要 OPP 头文件——上游 #390 改 `aclnnCausalConv1d` ABI 时就是这条把它抓出来）。
+改完 `.inc` 必须重编 `.so`：
 构建会把 `.inc` 的 md5 编译进产物，加载时与 Python glue 的 `_GENERATED_HASH` 比对，
 不一致直接抛错并给出重编命令。
 

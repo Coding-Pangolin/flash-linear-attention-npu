@@ -119,55 +119,68 @@ struct TensorMeta {
   bool contiguous = false;
 };
 
-TensorMeta meta_of(const torch::stable::Tensor& tensor) {
-  TensorMeta meta;
+// Fills `meta` from a raw handle.  Deliberately does not construct a
+// torch::stable::Tensor: that constructor steals ownership of the handle, so a
+// temporary would release the dispatcher's own tensor and crash later.  The two
+// overloads below exist so call sites read naturally.
+void fill_meta(AtenTensorHandle handle, TensorMeta* meta) {
   // A missing optional arrives as a null handle.  Short-circuiting here keeps
   // this launcher inside the aoti_torch_* set that older libtorch builds export
   // (aoti_torch_is_defined / aoti_torch_is_contiguous are 2.9-only).
-  const AtenTensorHandle handle = tensor.get();
   if (handle == nullptr) {
-    return meta;
+    return;
   }
-  meta.defined = true;
+  meta->defined = true;
   void* tensor_data = nullptr;
   TORCH_ERROR_CODE_CHECK(aoti_torch_get_data_ptr(handle, &tensor_data));
-  TORCH_ERROR_CODE_CHECK(aoti_torch_get_dim(handle, &meta.ndim));
+  TORCH_ERROR_CODE_CHECK(aoti_torch_get_dim(handle, &meta->ndim));
   int64_t* sizes = nullptr;
   int64_t* strides = nullptr;
   TORCH_ERROR_CODE_CHECK(aoti_torch_get_sizes(handle, &sizes));
   TORCH_ERROR_CODE_CHECK(aoti_torch_get_strides(handle, &strides));
-  meta.sizes.assign(sizes, sizes + meta.ndim);
-  meta.strides.assign(strides, strides + meta.ndim);
+  meta->sizes.assign(sizes, sizes + meta->ndim);
+  meta->strides.assign(strides, strides + meta->ndim);
   TORCH_ERROR_CODE_CHECK(
-      aoti_torch_get_storage_offset(handle, &meta.storage_offset));
+      aoti_torch_get_storage_offset(handle, &meta->storage_offset));
   // Storage extent in elements, exactly like the ctypes path computes it from
   // `untyped_storage().nbytes() // element_size`.  (aoti_torch_get_storage_numel
   // is the *view* numel, which is wrong for paged/offset states.)
   int64_t storage_bytes = 0;
   TORCH_ERROR_CODE_CHECK(aoti_torch_get_storage_size(handle, &storage_bytes));
-  TORCH_ERROR_CODE_CHECK(aoti_torch_get_dtype(handle, &meta.scalar_type));
-  const int64_t item_size = element_size(meta.scalar_type);
-  meta.storage_numel = storage_bytes / item_size;
+  TORCH_ERROR_CODE_CHECK(aoti_torch_get_dtype(handle, &meta->scalar_type));
+  const int64_t item_size = element_size(meta->scalar_type);
+  meta->storage_numel = storage_bytes / item_size;
   // aclCreateTensor wants the *storage* base address and takes storage_offset
   // separately; the shim's data_ptr already includes the offset, so subtract it
   // back out or the offset would be applied twice (see the same note in
   // csrc_thin/src/tensor_desc.cpp).
-  meta.data = static_cast<uint8_t*>(tensor_data) -
-              meta.storage_offset * item_size;
+  meta->data = static_cast<uint8_t*>(tensor_data) -
+               meta->storage_offset * item_size;
   TORCH_ERROR_CODE_CHECK(
-      aoti_torch_get_device_type(handle, &meta.device_type));
+      aoti_torch_get_device_type(handle, &meta->device_type));
   TORCH_ERROR_CODE_CHECK(
-      aoti_torch_get_device_index(handle, &meta.device_index));
+      aoti_torch_get_device_index(handle, &meta->device_index));
   // Computed locally rather than via aoti_torch_is_contiguous.
   int64_t expected = 1;
-  meta.contiguous = true;
-  for (int64_t dim = meta.ndim - 1; dim >= 0; --dim) {
-    if (meta.sizes[dim] != 1 && meta.strides[dim] != expected) {
-      meta.contiguous = false;
+  meta->contiguous = true;
+  for (int64_t dim = meta->ndim - 1; dim >= 0; --dim) {
+    if (meta->sizes[dim] != 1 && meta->strides[dim] != expected) {
+      meta->contiguous = false;
       break;
     }
-    expected *= meta.sizes[dim];
+    expected *= meta->sizes[dim];
   }
+}
+
+TensorMeta meta_of(const torch::stable::Tensor& tensor) {
+  TensorMeta meta;
+  fill_meta(tensor.get(), &meta);
+  return meta;
+}
+
+TensorMeta meta_of_handle(AtenTensorHandle handle) {
+  TensorMeta meta;
+  fill_meta(handle, &meta);
   return meta;
 }
 
@@ -178,6 +191,14 @@ TensorMeta meta_optional(const std::optional<torch::stable::Tensor>& tensor) {
     return TensorMeta{};
   }
   return meta_of(*tensor);
+}
+
+TensorMeta meta_optional_handle(std::optional<AtenTensorHandle> handle) {
+  TensorMeta meta;
+  if (handle.has_value()) {
+    fill_meta(*handle, &meta);
+  }
+  return meta;
 }
 
 // RAII wrapper around aclCreateTensor / aclDestroyTensor.  Mirrors the ctypes
@@ -231,15 +252,17 @@ using GetWorkspaceFn = int (*)(const aclTensor*, const aclTensor*,
 // ---------------------------------------------------------------------------
 // Op implementation.
 // ---------------------------------------------------------------------------
-Tensor run_recurrent_gated_delta_rule(const Tensor& query, const Tensor& key,
-                                      const Tensor& value, const Tensor& state,
-                                      const Tensor& beta,
-                                      const Tensor& actual_seq_lengths,
-                                      const Tensor& ssm_state_indices,
-                                      const std::optional<Tensor>&
+Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
+                                      AtenTensorHandle key,
+                                      AtenTensorHandle value,
+                                      AtenTensorHandle state,
+                                      AtenTensorHandle beta,
+                                      AtenTensorHandle actual_seq_lengths,
+                                      AtenTensorHandle ssm_state_indices,
+                                      std::optional<AtenTensorHandle>
                                           num_accepted_tokens,
-                                      const std::optional<Tensor>& g,
-                                      const std::optional<Tensor>& gk,
+                                      std::optional<AtenTensorHandle> g,
+                                      std::optional<AtenTensorHandle> gk,
                                       double scale, int64_t stream) {
   auto& rt = fla_npu_thin::Runtime::instance();
   auto get_ws = reinterpret_cast<GetWorkspaceFn>(
@@ -249,19 +272,32 @@ Tensor run_recurrent_gated_delta_rule(const Tensor& query, const Tensor& key,
 
   // Output allocation: same shape/dtype/device as `value` (identical to the
   // ctypes/pybind paths, which allocate `_shape(value)` with value's options).
-  Tensor out = torch::stable::empty_like(value);
+  // Allocated through the C shim, not torch::stable::empty_like: the latter is
+  // an aten::empty_like dispatcher round trip (and would also need `value` as a
+  // Tensor, reviving the stealing temporary).
+  const TensorMeta value_meta = meta_of_handle(value);
+  std::vector<int64_t> out_strides(value_meta.sizes.size(), 1);
+  for (size_t dim = value_meta.sizes.size(); dim-- > 1;) {
+    out_strides[dim - 1] = out_strides[dim] * value_meta.sizes[dim];
+  }
+  AtenTensorHandle out_handle = nullptr;
+  TORCH_ERROR_CODE_CHECK(aoti_torch_empty_strided(
+      static_cast<int64_t>(value_meta.sizes.size()), value_meta.sizes.data(),
+      out_strides.data(), value_meta.scalar_type, value_meta.device_type,
+      value_meta.device_index, &out_handle));
+  Tensor out(out_handle);  // steals the new reference we just created
   const TensorMeta out_meta = meta_of(out);
 
-  AclTensorView v_query(meta_of(query));
-  AclTensorView v_key(meta_of(key));
-  AclTensorView v_value(meta_of(value));
-  AclTensorView v_beta(meta_of(beta));
-  AclTensorView v_state(meta_of(state));
-  AclTensorView v_seq(meta_of(actual_seq_lengths));
-  AclTensorView v_idx(meta_of(ssm_state_indices));
-  AclTensorView v_g(meta_optional(g));
-  AclTensorView v_gk(meta_optional(gk));
-  AclTensorView v_accepted(meta_optional(num_accepted_tokens));
+  AclTensorView v_query(meta_of_handle(query));
+  AclTensorView v_key(meta_of_handle(key));
+  AclTensorView v_value(meta_of_handle(value));
+  AclTensorView v_beta(meta_of_handle(beta));
+  AclTensorView v_state(meta_of_handle(state));
+  AclTensorView v_seq(meta_of_handle(actual_seq_lengths));
+  AclTensorView v_idx(meta_of_handle(ssm_state_indices));
+  AclTensorView v_g(meta_optional_handle(g));
+  AclTensorView v_gk(meta_optional_handle(gk));
+  AclTensorView v_accepted(meta_optional_handle(num_accepted_tokens));
   AclTensorView v_out(meta_of(out));
 
   uint64_t workspace_size = 0;
@@ -309,19 +345,21 @@ void boxed_recurrent_gated_delta_rule(StableIValue* stack,
                                       uint64_t num_outputs) {
   (void)num_inputs;
   (void)num_outputs;
-  // Two attempts at handle-level unboxing (`to<AtenTensorHandle>`) segfaulted at
-  // call time, and the second one isolated it to this conversion rather than the
-  // optional path: a bare handle out of an IValue does not carry the ownership
-  // that torch::stable::Tensor takes over, so the launcher must keep the Tensor
-  // form (~2us of shared_ptr per argument).  Left for a debugger session; the
-  // measured prize is ~14-20us per call.
-  const Tensor query = to<Tensor>(stack[0]);
-  const Tensor key = to<Tensor>(stack[1]);
-  const Tensor value = to<Tensor>(stack[2]);
-  const Tensor state = to<Tensor>(stack[3]);
-  const Tensor beta = to<Tensor>(stack[4]);
-  const Tensor actual_seq_lengths = to<Tensor>(stack[5]);
-  const Tensor ssm_state_indices = to<Tensor>(stack[6]);
+  // Required tensors are unboxed straight to handles, and every downstream use
+  // goes through `meta_of_handle` / `fill_meta`, which never wrap a handle in a
+  // stealing torch::stable::Tensor.  The earlier attempts crashed precisely
+  // because `meta_of(const Tensor&)` accepted the handle through the implicit
+  // `Tensor(AtenTensorHandle)` constructor, whose temporary released the
+  // dispatcher's own input tensor.
+  const AtenTensorHandle query = to<AtenTensorHandle>(stack[0]);
+  const AtenTensorHandle key = to<AtenTensorHandle>(stack[1]);
+  const AtenTensorHandle value = to<AtenTensorHandle>(stack[2]);
+  const AtenTensorHandle state = to<AtenTensorHandle>(stack[3]);
+  const AtenTensorHandle beta = to<AtenTensorHandle>(stack[4]);
+  const AtenTensorHandle actual_seq_lengths = to<AtenTensorHandle>(stack[5]);
+  const AtenTensorHandle ssm_state_indices = to<AtenTensorHandle>(stack[6]);
+  // Optionals stay in the Tensor form so their liveness is explicit; only the
+  // handle is forwarded.
   const auto num_accepted_tokens = to<std::optional<Tensor>>(stack[7]);
   const auto g = to<std::optional<Tensor>>(stack[8]);
   const auto gk = to<std::optional<Tensor>>(stack[9]);
@@ -329,7 +367,13 @@ void boxed_recurrent_gated_delta_rule(StableIValue* stack,
   const int64_t stream = to<int64_t>(stack[11]);
   Tensor out = run_recurrent_gated_delta_rule(
       query, key, value, state, beta, actual_seq_lengths, ssm_state_indices,
-      num_accepted_tokens, g, gk, scale, stream);
+      num_accepted_tokens.has_value()
+          ? std::optional<AtenTensorHandle>(num_accepted_tokens->get())
+          : std::nullopt,
+      g.has_value() ? std::optional<AtenTensorHandle>(g->get()) : std::nullopt,
+      gk.has_value() ? std::optional<AtenTensorHandle>(gk->get())
+                     : std::nullopt,
+      scale, stream);
   stack[0] = from(out);
 }
 

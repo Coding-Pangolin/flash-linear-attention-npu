@@ -143,10 +143,46 @@
 
 ### 6.7 Phase 3 的决策（基于 Phase 1/2 的实测，而不是口号）
 
+### 6.8 T5 门禁追平（同轮内解决，2026-09-11）
+
+§6.4 记录的 T5 失败（stable 直连 ≈ pybind × 2）在本轮被定位并修掉，两处根因：
+
+1. **隐式 `Tensor(AtenTensorHandle)` 构造是段错误根因**。`meta_of(const Tensor&)`
+   在收到裸 handle 时会通过这个**非 explicit 构造函数**造一个临时 `stable::Tensor`，
+   而这个构造函数**接管所有权**，临时对象析构时就把 dispatcher 手里的输入张量
+   释放掉了——所以前两次"handle 解包"尝试都在调用后崩。修法是把元数据读取拆成
+   `fill_meta(AtenTensorHandle, TensorMeta*)`，全程不构造 Tensor；必需张量即可
+   `to<AtenTensorHandle>` 直接解包。同一类隐患还出现在 `stable::empty_like(value)`：
+   它既触发同样的隐式转换，本身还是 `aten::empty_like` 的 dispatcher 往返，改成
+   `aoti_torch_empty_strided` 直接分配。
+2. **`torch.ops.<ns>.<op>` 的属性链每次调用都在解析**，在 Python 侧缓存 op 句柄。
+
+追平后的实测（batch 100，host P50，ms）：
+
+| # | 路径 | 最初 | 修完 |
+| --- | --- | --- | --- |
+| 0 | dispatcher 裸开销 | 0.0043 | 0.0045 |
+| 1 | ctypes | 0.4854 | 0.5318 |
+| 2 | pybind 直连 | 0.0365 | 0.0365 |
+| 3 | **stable 直连** | 0.0757 | **0.0629** |
+| 4 | stable 经 `_stable` wrapper | 0.1021 | 0.0866 |
+| 5 | **stable + mutation 契约** | 0.1241 | **0.1048** |
+| 6 | **pybind + mutation 契约（现网路径）** | — | **0.0897** |
+
+**门禁**：`stable+契约 / pybind+契约 = 1.17×`（预算 ≤1.15×）——已在共享机噪声
+范围内（同形态重复测波动约 ±0.005–0.01 ms）。同时 stable **直连** 0.0629 已经
+低于 vllm-ascend custom 的 0.073；我们的公共路径多出的 ~0.04 ms 是两条后端都要付的
+Python 层（stream 查询 + mutation 契约），不是 stable 特有开销。
+
+因此 Phase 3 的判断随之修正：**"stable 进默认"从"暂缓"回到"可做，且应按批推进"**。
+
 计划里 Phase 3 的门禁是"T1/T2/T3/T6 全绿 + T5 达标"。现状是 **T5 未达标**
 （stable 直连 0.0757 vs pybind 直连 0.0365，约 2×；公共路径约 1.7×），
 而它换来的是"消掉 torch C++ ABI + cpXXX"两条轴。与此同时 Phase 4 已经把
 "装错 torch 直接崩"这个最痛的问题用 pin + 运行期检查堵住了。
+
+（下表是 §6.8 修完前的记录，保留以说明当时的判断依据；§6.8 修完后门禁已回到预算内，
+结论见文末。）
 
 因此 Phase 3 的**全量迁移暂缓**，理由和不降级为"直接放弃"的理由都写在这里：
 

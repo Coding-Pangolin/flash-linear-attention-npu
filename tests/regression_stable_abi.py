@@ -214,6 +214,12 @@ def main():
     state_r, _ = inputs["make_state"]()
     stream = int(torch_npu._C._npu_getCurrentRawStream(device_index))
     ext = _thin._extension()
+    # Cache the op handle once: the torch.ops attribute chain costs a few us per
+    # call and is not what we are measuring.
+    _stable_op = torch.ops.fla_npu_thin.npu_recurrent_gated_delta_rule
+    pybind_public = _wrap_mutable_direct_op(
+        "npu_recurrent_gated_delta_rule",
+        _thin.npu_recurrent_gated_delta_rule)
 
     def thin_direct():
         return ext.npu_recurrent_gated_delta_rule(
@@ -222,7 +228,7 @@ def main():
             inputs["ssm_state_indices"], None, inputs["g"], None, stream)
 
     def stable_direct():
-        return torch.ops.fla_npu_thin.npu_recurrent_gated_delta_rule(
+        return _stable_op(
             inputs["query"], inputs["key"], inputs["value"], state_r,
             inputs["beta"], inputs["actual_seq_lengths"],
             inputs["ssm_state_indices"], None, inputs["g"], None,
@@ -246,6 +252,12 @@ def main():
             actual_seq_lengths=inputs["actual_seq_lengths"],
             ssm_state_indices=inputs["ssm_state_indices"],
             num_accepted_tokens=None))
+        f = bench(lambda: pybind_public(
+            inputs["query"], inputs["key"], inputs["value"], state_b,
+            beta=inputs["beta"], g=inputs["g"], scale=inputs["scale"],
+            actual_seq_lengths=inputs["actual_seq_lengths"],
+            ssm_state_indices=inputs["ssm_state_indices"],
+            num_accepted_tokens=None))
     print("T5 host P50 (ms):")
     print(f"  0 dispatcher only (_stream_probe)  {probe:.4f}   <- bare torch.ops cost")
     print(f"  1 ctypes                          {a:.4f}")
@@ -253,6 +265,9 @@ def main():
     print(f"  3 stable op direct (stream fixed)  {e:.4f}   <- dispatcher cost")
     print(f"  4 stable via _stable wrapper        {c:.4f}   <- + python stream/wrapper")
     print(f"  5 stable + mutation contract        {d:.4f}")
+    print(f"  6 pybind + mutation contract        {f:.4f}  <- current production")
+    print(f"  gate: stable+contract / pybind+contract = {d / f:.2f}x "
+          f"(budget 1.15x)")
     print("ALL PASS: stable-abi Phase 1")
 
 

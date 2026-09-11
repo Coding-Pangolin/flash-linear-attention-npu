@@ -176,6 +176,59 @@ Python 层（stream 查询 + mutation 契约），不是 stable 特有开销。
 
 因此 Phase 3 的判断随之修正：**"stable 进默认"从"暂缓"回到"可做，且应按批推进"**。
 
+### 6.9 Phase 3 第二个算子：npu_recurrent_kda（2026-09-11）
+
+按计划取 `npu_recurrent_kda`（双输出 + 5 个 optional 输入 + `layout` 字符串），
+一次覆盖"多返回 + optional + 字符串入参"三类适配能力，同时它是 950 上已验证可用的
+算子（GDR 在 950 上 ctypes 本身就 161002）。
+
+实现与验证结果：
+
+| 项 | 结果 |
+| --- | --- |
+| T1 parity（inplace，out/final_state/state） | **全 0.0** |
+| T2 mutation 契约 | inplace +1、non-inplace +0 ✓ |
+| T5 host P50（ms） | ctypes 0.6262 / pybind 0.0763 / stable 0.0878 / **stable+契约 0.1003 = pybind 1.15×** |
+| ELF 符号 | 42 个 `aoti_torch_*`；**0 个 ATen/c10** |
+
+过程中拿到三条对 codegen 有直接约束力的结论：
+
+1. **stable 头只能出现在一个 TU 里**：`torch/csrc/stable/tensor_inl.h` 里有非 inline 的
+   成员函数定义（`Tensor::scalar_type()`），多 TU 直接 `multiple definition`。所以
+   `stable_ops.cpp` 作为唯一 TU，把各算子文件 `#include` 进来——和 pybind 侧
+   `ops_generated.cpp` 的聚合方式天然一致。
+2. **同一命名空间在一个 TU 里只能有一个 `STABLE_TORCH_LIBRARY` / `_IMPL` 块**：
+   宏展开成固定的 static-init 符号名，第二次定义就是重定义。各算子只能导出
+   "schema 字符串 + boxed 入口"，注册统一在聚合文件里写一次。
+3. **两个所有权陷阱**：`aoti_torch_new_tensor_handle` 得到的句柄与输入句柄共享
+   所有权，作为第二输出会导致重复释放（堆损坏）；把输入 IValue 直接复制到输出槽
+   同理。因此 inplace 的 `final_state` 由 Python 层返回调用方张量本身（**ctypes
+   也正是返回同一个对象**），C++ 只负责"kernel 已写回"的语义；non-inplace 则在
+   Python 层用"scratch + 走 inplace"实现——这正是 ctypes 的做法，也让 mutation
+   契约自然成立（调用方张量确实没被写，version 不 bump）。
+4. 顺带把 `Tensor::defined()` 从 C++ 里去掉（它内部调用 2.9-only 的
+   `aoti_torch_is_defined`），改为自己记录"有没有第二输出"——产物符号数 42 → 38，
+   这也是 2.7.1 能加载它的必要条件。
+
+### 6.10 Phase 2 结论修正：跨版本"加载"成立，"设备级运行"未达标
+
+用同一份 2.9 头编出的 x86_64 产物在 241 上实测：
+
+| 环境 | 结果 |
+| --- | --- |
+| torch 2.9（py3.12，构建环境） | ✓ 加载 + 调用（GDR 全流程 parity 0.0） |
+| torch 2.7.1（py3.10，fzy + env_a5all） | **加载成功**（38 符号）✓；**首次调用段错误** ✗ |
+
+定位证据：同一环境下 ctypes 的 `npu_recurrent_kda`（inplace 与 non-inplace）
+都正常输出 → 崩溃在我们的 stable 调用里；同一份产物在 2.9 上同一算子完全正常。
+所以这是**运行期 shim/dispatcher 的版本差异**，需要一次调试器会话（下一步候选：
+逐个屏蔽 descriptor 建销 / 输出打包 / launch，二分出是哪个 `aoti_torch_*` 在
+2.7.1 上语义不同）。
+
+**因此 Phase 2 的门禁（同一产物在 ≥2 个 torch 版本上 parity 全绿）尚未满足**，
+当前结论只能写到："跨版本**加载与注册**成立；跨版本**运行**在 2.7.1 上待修"。
+最低可运行版本暂按 2.9 计。
+
 计划里 Phase 3 的门禁是"T1/T2/T3/T6 全绿 + T5 达标"。现状是 **T5 未达标**
 （stable 直连 0.0757 vs pybind 直连 0.0365，约 2×；公共路径约 1.7×），
 而它换来的是"消掉 torch C++ ABI + cpXXX"两条轴。与此同时 Phase 4 已经把

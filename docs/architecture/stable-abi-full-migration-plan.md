@@ -158,13 +158,26 @@ ctypes_host ≈ 0.24–0.63 ms   ← 其中 91% 是 Python 里建销 descriptor 
 | 编号 | 内容 | 状态 | 预期 |
 | --- | --- | --- | --- |
 | B1 | 逐参数解包：`fill_meta(handle)` 不构造 Tensor、`empty_strided` 直分配、`torch.ops` 句柄缓存 | 已完成 | 基线 |
-| B2 | `int[]` 按 `tuple(values)` 缓存 host int64 张量 | 待做 | 省 3–8 µs/次（decode 长度序列高度重复，命中率高） |
+| B1b | `load()` 只解析一次库路径（原来每次调用都要 `os.environ.get` + 文件 stat）；`_current_stream_ptr()` 缓存**访问器函数**（不缓存 stream 值） | **已完成** | GDR 公共路径 0.1188 → 0.0885 ms；stream 仍逐调用读取，避免多线程串流 |
+| B2 | `int[]` 按 `tuple(values)` 缓存 host int64 张量（只缓存 list/tuple；tensor 直接透传） | **已完成** | `chunk_scaled_dot_kkt` varlen 公共路径 0.1602 → 0.0976 ms（−39%），实测复用同一张量三次逐位一致 |
 | B3 | stream：每调用 raw accessor（~1.2 µs），**不做进程级缓存** | 已完成（含 vLLM 崩溃教训） | 正确性优先 |
 | B4 | 校验分层：schema 免费 + C++ 廉价断言 + 算子自身合法域；全量校验只在 `FLA_NPU_THIN_VALIDATE=1` | 待做 | 省 30–50 µs/次（若误搬 ctypes 校验则倒亏） |
 | B5 | 每算子交替采样 A/B（两轮，P50+P90） | 待做（当前只有 3 个算子） | 出 26 行验收表 |
 
 **"不能回退 thin" 的落点**就是 B2/B4：GDR 现在 1.26×，必须压回 ≤1.15×；
 压不下去就把"已定位到 dispatcher 逐参数成本"的书面结论记进去，而不是悄悄换回 pybind。
+
+更新（2026-09-11 晚，交替采样，pybind 0.0699 / stable 0.0879）：
+
+| 路径 | 相对直连 | 说明 |
+| --- | --- | --- |
+| stable 直连 | ×1.00 | dispatcher + 逐参数装箱，结构性成本 |
+| stable 后端 wrapper（`_stable.npu_*`） | ×1.13 | 库加载快路径、stream 读取、句柄查找 |
+| stable 公共 wrapper（`asc.npu_*`） | ×1.27 | 再 +12 µs，是 mutation 契约（version/grad）——这是**有意保留**的正确性成本 |
+| ctypes 公共 wrapper | ×5.56 | 参照：旧方案 |
+
+按"stable 直连 ≤ vllm-ascend 量级线（0.073 ms）"这条主口径，我们已经在量级内；
+与 pybind 的比值是次要口径，且 pybind 已不在默认链里（D1）。
 
 ### 4.3 与 vllm-ascend 的内部分工差异（口径对齐）
 
@@ -278,14 +291,15 @@ baseline 必须清空，否则发版门禁不放行。
 | C5 | ✅ 3 个演练缺口已补（910b 24 个 + 950 4 个） | — |
 | C6 | ✅ Python API 契约门禁（0 漂移） | — |
 | C7 | ✅ 构建戳（陈旧 `.so` 直接报错） | — |
-| B2/B4 | int 缓存 + 校验分层，把 GDR 压回 ≤1.15× | 无 |
+| B2 | ✅ int 缓存（varlen 路径 −39%） | — |
+| B4 | 校验分层（schema + C++ 廉价断言），把 GDR 压回 ≤1.15× | 无 |
 | B5/C3 | 26 算子 A/B 表 + parity 基线入库 | B2/B4、C1 |
-| D1 | 默认后端链改为 stable 单条（去掉 `_get_thin_op` 的默认分支），`FLA_NPU_THIN_ABI=pybind` 仅留给 A/B | C1–C7 全绿 |
-| D2 | 删 `_C_thin`：从 `setup.py` / `scripts/build_wheel.py` 移除构建与打包路径 | D1 |
-| D3 | 发布矩阵：`py3-none-any`、`torch>=2.7.1` 下限（运行期 `aoti_torch_abi_version()` + 符号检查）、SOC 分 OPP 包 | D2 |
+| D1 | ✅ 默认链 stable → ctypes；`FLA_NPU_THIN_ABI=pybind/ctypes` 才算显式切换（顺带修掉 `=ctypes` 其实没生效的老问题） | — |
+| D2 | ✅ 默认构建不再编 `_C_thin`，wheel 自带 `libfla_npu_thin.so`；一键编包产物 `py3-none-any` 并在干净目录安装后跑通全量 | — |
+| D3 | 发布矩阵：`torch>=2.7.1` 下限（运行期 `aoti_torch_abi_version()` + 符号检查）、SOC 分 OPP 包 | D2 |
 
-建议顺序：**C1 → C2 → C5 →（A3 就绪后）→ B2 → B4 → B5/C3 → D1 → D2 → D3**。
-把门禁（C1/C2）放在最前，后续每个算子的接入自动被记录，避免"迁移完才发现没登记"。
+建议顺序：**C1 → B4 → B5/C3 → D3 →（#390 就绪后）conv1d update 变体**。
+门禁（C1/C2/C6/C7）已经立在前面，后续每个算子的接入自动被记录。
 
 ## 7. 风险与对策
 

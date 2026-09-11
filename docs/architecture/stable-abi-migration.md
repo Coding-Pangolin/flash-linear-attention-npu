@@ -266,7 +266,7 @@ stable 各调一次，两轮独立复跑）给出可信比值：
 | 阶段 | 交付 | 证据 |
 | --- | --- | --- |
 | Phase 0 清点 + 静态门禁 | `tools/stable_abi_audit.py` | 对现状 `_C_thin.so` 报 13 个不稳定符号 + 链接 libtorch_python；对新产物通过 |
-| Phase 1 单算子竖切 | GDR stable 适配 + 测试驱动 | T1/T2/T3/T6 全绿；T5 GDR 1.26×、KDA 1.11×（交替采样） |
+| Phase 1 单算子竖切 | GDR + KDA stable 适配、测试驱动 | T1/T2/T3/T6/T7 全绿；T8 记录"stable stream API 在 NPU 返回 0"；T5 GDR 1.26×、KDA 1.11×（交替采样） |
 | Phase 2 跨版本 | 同一产物跨 torch | 2.9 头编译的 x86_64 产物在 2.7.1 与 2.9 上 parity 全 0.0、契约正确、host 1.05× |
 | Phase 3 codegen + 迁移 | **按算子决策**：stable 可选、pybind 默认 | §6.11 的决策与三个触发条件 |
 | Phase 4 打包 | `_build_info.py`、wheel pin、运行期 ABI 检查、`FLA_NPU_THIN_ABI` 三后端 | 221 上编包实测（METADATA pin、mismatch 报错、bypass、三后端解析） |

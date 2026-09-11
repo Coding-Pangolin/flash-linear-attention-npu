@@ -159,6 +159,20 @@ def main():
         print("T8 skipped: build has no debug probe")
 
     # --- T3 multi-thread / multi-stream -------------------------------------
+    # --- T7 illegal input must error (type need not match the ctypes path) ---
+    bad = inputs["query"].float()  # fp32 where bf16 is required
+    try:
+        _stable.npu_recurrent_gated_delta_rule(
+            bad, inputs["key"], inputs["value"], state_s, beta=inputs["beta"],
+            g=inputs["g"], scale=inputs["scale"],
+            actual_seq_lengths=inputs["actual_seq_lengths"],
+            ssm_state_indices=inputs["ssm_state_indices"],
+            num_accepted_tokens=None)
+    except Exception as exc:  # noqa: BLE001
+        print(f"PASS T7 illegal input rejected ({type(exc).__name__})")
+    else:
+        raise AssertionError("T7: fp32 query was accepted")
+
     golden = None
     state_g, _ = inputs["make_state"]()
     golden = ct.npu_recurrent_gated_delta_rule(

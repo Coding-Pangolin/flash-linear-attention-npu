@@ -27,10 +27,31 @@ _LAYOUT_CODES = {"BSND": 0, "TND": 1}
 
 def _lib_path() -> str:
     path = os.environ.get(_LIB_ENV)
-    if not path:
-        raise RuntimeError(
-            f"{_LIB_ENV} is not set; point it at the built libfla_npu_thin.so")
-    return path
+    if path:
+        return path
+    # Wheels that ship the ABI-free launcher place it next to this module.
+    bundled = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))), "libfla_npu_thin.so")
+    if os.path.exists(bundled):
+        return bundled
+    raise RuntimeError(
+        f"{_LIB_ENV} is not set and no bundled libfla_npu_thin.so was found")
+
+
+def _current_stream_ptr() -> int:
+    """Raw NPU stream of the calling thread (same guarded accessor as _thin)."""
+
+    import torch
+
+    try:
+        import torch_npu
+
+        raw_stream = getattr(torch_npu._C, "_npu_getCurrentRawStream", None)
+        if raw_stream is not None:
+            return int(raw_stream(torch.npu.current_device()))
+    except Exception:
+        pass
+    return int(torch.npu.current_stream().npu_stream)
 
 
 def load() -> None:
@@ -99,8 +120,7 @@ def npu_recurrent_gated_delta_rule(
     import torch
     import torch_npu
 
-    stream = int(
-        torch_npu._C._npu_getCurrentRawStream(torch.npu.current_device()))
+    stream = _current_stream_ptr()
     return _op("npu_recurrent_gated_delta_rule")(
         query,
         key,
@@ -183,8 +203,7 @@ def npu_recurrent_kda(
 
     scale_value = (128.0 ** -0.5) if scale is None else float(scale)
     lower = -5.0 if lower_bound is None else float(lower_bound)
-    stream = int(
-        torch_npu._C._npu_getCurrentRawStream(torch.npu.current_device()))
+    stream = _current_stream_ptr()
     out, final_state = _op("npu_recurrent_kda")(
         q,
         k,

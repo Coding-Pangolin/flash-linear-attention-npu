@@ -230,6 +230,47 @@ torch 轴（C++ ABI）确实被消掉了，最低可运行版本可低到 2.7.1�
 
 ### 6.10b 修正前的记录（保留以说明排查过程）
 
+### 6.11 交替采样 A/B 与 Phase 3 决策（2026-09-11 最终）
+
+共享机上单次基准的波动可达 ±20%，所以最后用**交替采样**（同一循环里 pybind 与
+stable 各调一次，两轮独立复跑）给出可信比值：
+
+| 算子 | pybind P50 (ms) | stable P50 (ms) | 比值 P50 | 比值 P90 |
+| --- | --- | --- | --- | --- |
+| `recurrent_gated_delta_rule`（wrapper 极轻） | 0.0734 / 0.0738 | 0.0932 / 0.0933 | **1.264 / 1.270×** | 1.247 / 1.255× |
+| `recurrent_kda` | 0.0833 / 0.0842 | 0.0923 / 0.0938 | **1.108 / 1.113×** | 1.102 / 1.115× |
+
+两轮一致到 ±1%，说明这不是噪声而是稳定差异。**结论：**
+
+1. stable 相对 pybind 的溢价取决于 **pybind wrapper 本身有多重**：KDA 的 pybind
+   wrapper（kwargs、layout 字符串、更多校验）本就要花 ~0.08 ms，dispatcher 那部分
+   只让它贵 11%；GDR 的 wrapper 极轻（0.074 ms），dispatcher 就显出 26%。
+2. 按 T5 门禁（≤1.15×）：**KDA 达标（1.11×），GDR 不达标（1.26×）**。
+3. 因此 Phase 3 的决策是"**按算子决定**"，而不是一刀切：
+
+   - **默认仍是 pybind**（`FLA_NPU_THIN_ABI` 不设）；这两条 ABI 轴的风险已经由
+     Phase 4 的 pin + 运行期 ABI 检查压住了（装错 torch 从"崩"变成"pip 拒装/清晰报错"）。
+   - **stable 作为可选后端保留并可用**（`FLA_NPU_THIN_ABI=stable`），适合
+     "Python 版本矩阵 / torch 补丁升级必须重出包"成为主要痛点的场景。
+   - **全量 codegen + 23 个算子迁移暂不投入**，触发条件写死为其中任意一条：
+     (a) 需要支持新的 Python 版本而 pybind 侧无法出包；
+     (b) 客户明确要求"一个产物跨 torch 版本"；
+     (c) GDR 这类轻 wrapper 算子的 dispatcher 溢价被消除（例如上游给出更省的
+         boxed 入口或我们找到批量解包手段）。
+
+   这与计划原文一致：codegen 后端只有在决定"stable 进默认"之后才值得投入，
+   否则就是同时维护两套生成后端而只用一套。
+
+## 7. 阶段完成情况总表
+
+| 阶段 | 交付 | 证据 |
+| --- | --- | --- |
+| Phase 0 清点 + 静态门禁 | `tools/stable_abi_audit.py` | 对现状 `_C_thin.so` 报 13 个不稳定符号 + 链接 libtorch_python；对新产物通过 |
+| Phase 1 单算子竖切 | GDR stable 适配 + 测试驱动 | T1/T2/T3/T6 全绿；T5 GDR 1.26×、KDA 1.11×（交替采样） |
+| Phase 2 跨版本 | 同一产物跨 torch | 2.9 头编译的 x86_64 产物在 2.7.1 与 2.9 上 parity 全 0.0、契约正确、host 1.05× |
+| Phase 3 codegen + 迁移 | **按算子决策**：stable 可选、pybind 默认 | §6.11 的决策与三个触发条件 |
+| Phase 4 打包 | `_build_info.py`、wheel pin、运行期 ABI 检查、`FLA_NPU_THIN_ABI` 三后端 | 221 上编包实测（METADATA pin、mismatch 报错、bypass、三后端解析） |
+
 用同一份 2.9 头编出的 x86_64 产物在 241 上实测：
 
 | 环境 | 结果 |

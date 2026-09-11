@@ -142,6 +142,8 @@ def main() -> int:
         suite.scenario_conv1d_prefill,
         suite.scenario_conv1d_varlen_initial_state,
         suite.scenario_conv1d_update,
+        suite.scenario_conv1d_gather_padding,
+        suite.scenario_conv1d_varlen_pad_slot,
         suite.scenario_conv1d_bwd_bnsd,
         suite.scenario_chunk_kda_fwd,
         suite.scenario_chunk_kda_fwd_variants,

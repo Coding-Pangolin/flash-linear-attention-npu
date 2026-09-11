@@ -522,3 +522,45 @@ T5 明细（host P50，ms；batch 8 / batch 100 两轮）：
    所有权语义与 `torch::stable::Tensor` 不同），已回退并记为 Phase 3 第一项待解问题；
    若解决，预计可回收 ~2us × 11 ≈ 20us，把 stable 直连压到 ~0.045–0.055，
    回到 Gate 附近。
+
+## 8. 覆盖到 26/26 与三条门禁（2026-09-11 晚，910b + 950 双机实测）
+
+§7.1/§7.3 之后的第二次刷新。本轮把最后一个算子接进来，并把"改了代码、
+忘了配套动作"这一类问题变成门禁。
+
+| 项 | 结果 | 证据 |
+| --- | --- | --- |
+| 适配覆盖 | **26/26**（24 codegen + 2 手写） | `tools/stable_coverage.py --strict` 退出码 0 |
+| 910b 全量 parity | **256 PASS / 0 FAIL**，24 个算子被真实调用 | `regression_stable_full.py`，`ALL PASS: full stable parity` |
+| 950 专属 parity | **15 PASS / 0 FAIL**，4 个算子 | `regression_stable_a5.py`，`ALL PASS: Ascend950 stable parity` |
+| Python API 契约 | 26 个算子 **0 漂移** | `tools/op_api_parity.py` |
+| 产物 | 245 736 B、0 个 `_ZN2at/_ZN3c10`、38 个 `aoti_torch_*`、带构建戳 | 221 上 `nm -D` |
+| 跨 torch 版本 | 2.9 头编出的 950 产物在 2.7.1 运行时跑通全部 A5 场景 | 241：py3.12+torch2.9 编译，py3.10+torch2.7.1 运行 |
+
+本轮修掉的三个真问题（都不是"再跑一遍就好了"的偶发）：
+
+1. **`npu_causal_conv1d` 的输出形状**：ctypes 的 `_infer_causal_conv1d_y` 依赖
+   `run_mode`/`head_num`/`x.dim()`，spec 用一条 `alloc` 表达式原样搬运，门面按
+   `at::empty`/`empty_like` 承接。prefill、`head_num` 重排、update、spec-decode、
+   width3 五种形态与 ctypes 逐位一致，含 `conv_states` 原地写回。
+   varlen 的 `query_start_loc` 形态在 A2 上被内核拒绝（aclnn 561002），
+   **两条路径同样被拒**，因此记为 SKIP 而不是通过。
+2. **入参的 `when` 条件被 stable 生成器忽略**：`fwd_prepare` 的 `a_log`/`dt_bias`
+   只有在 `use_gate_in_kernel` 为真时才允许下发（ctypes 写成 `arg if flag else None`），
+   stable 之前会把非空指针原样传下去，A5 报 161002。生成器现在按条件把描述符
+   置空，并把条件变量提前声明——它可能排在引用它的参数之后。
+3. **stack 下标**：把条件变量提到前面时，顺手丢掉了"stream 位于最后一个输入槽"
+   的记账；编译照样通过，A5 首次调用就 segfault。现在 `generate_cpp` 在生成后断言
+   读取下标恰为 `0..len(params)`、写回恰为 `0..outputs-1`，并已用负例验证能拦下。
+
+另外，本轮把 **`.so` 与 Python glue 必须同源** 做成硬检查：`.inc` 的 md5 由
+`build_stable.py` 编进库（导出 `fla_npu_thin_source_hash()`），`_stable.load()` 与
+`_stable_generated._GENERATED_HASH` 比对，不一致直接报错并给出重编命令。
+起因是改了 `.inc` 没重编 `.so`，三次实跑结果作废、多花了一轮排查。
+
+Python 侧 API 契约的修法也记在这里：`tools/op_api_parity.py` 用 `ast` 把
+`_aclnn_ctypes.py` 与 stable 后端逐参数比对，本轮抓出 10 个算子的漂移，其中 6 个
+会直接抛 TypeError（位置参数默认值丢失、参数被漏掉、位置参数被改成关键字、
+关键字改名、默认值语义从 False 变成 None）。修法不是逐个打补丁，而是让
+`tools/sync_spec_python.py` 从 ctypes 反推 spec 的 `python` 块，并让生成器支持
+"位置参数带默认值"与"必填关键字参数"。

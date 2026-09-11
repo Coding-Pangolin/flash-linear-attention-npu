@@ -21,9 +21,15 @@
     }
   ],
   "python": {
-    "positional": ["k", "w", "u", "g"],
+    "positional": [
+      "k",
+      "w",
+      "u",
+      "g"
+    ],
     "derive_chunk_indices": true,
     "defaults": {
+      "g": "None",
       "gk": "None",
       "initial_state": "None",
       "output_final_state": "False",
@@ -34,19 +40,62 @@
     }
   },
   "args": [
-    {"name": "k", "kind": "tensor"},
-    {"name": "w", "kind": "tensor"},
-    {"name": "u", "kind": "tensor"},
-    {"name": "g", "kind": "optional_tensor"},
-    {"name": "gk", "kind": "optional_tensor"},
-    {"name": "initial_state", "kind": "optional_tensor"},
-    {"name": "output_final_state", "kind": "bool"},
-    {"name": "chunk_size", "kind": "int64", "default": "64"},
-    {"name": "cu_seqlens", "kind": "int_array"},
-    {"name": "chunk_indices", "kind": "int_array"},
-    {"name": "state_v_first", "kind": "bool"},
-    {"name": "h", "kind": "out_tensor"},
-    {"name": "v_new", "kind": "out_tensor"},
-    {"name": "final_state", "kind": "out_tensor"}
+    {
+      "name": "k",
+      "kind": "tensor"
+    },
+    {
+      "name": "w",
+      "kind": "tensor"
+    },
+    {
+      "name": "u",
+      "kind": "tensor"
+    },
+    {
+      "name": "g",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "gk",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "initial_state",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "output_final_state",
+      "kind": "bool"
+    },
+    {
+      "name": "chunk_size",
+      "kind": "int64",
+      "default": "64"
+    },
+    {
+      "name": "cu_seqlens",
+      "kind": "int_array"
+    },
+    {
+      "name": "chunk_indices",
+      "kind": "int_array"
+    },
+    {
+      "name": "state_v_first",
+      "kind": "bool"
+    },
+    {
+      "name": "h",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "v_new",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "final_state",
+      "kind": "out_tensor"
+    }
   ]
 }

@@ -66,6 +66,17 @@
       "key",
       "value",
       "state"
+    ],
+    "defaults": {
+      "scale": "1.0",
+      "num_accepted_tokens": "None",
+      "g": "None",
+      "gk": "None"
+    },
+    "required": [
+      "beta",
+      "actual_seq_lengths",
+      "ssm_state_indices"
     ]
   }
 }

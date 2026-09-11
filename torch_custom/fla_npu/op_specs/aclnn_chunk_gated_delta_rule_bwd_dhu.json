@@ -22,7 +22,15 @@
     }
   ],
   "python": {
-    "positional": ["q", "k", "w", "d_o", "dv", "scale", "chunk_size"],
+    "positional": [
+      "q",
+      "k",
+      "w",
+      "d_o",
+      "dv",
+      "scale",
+      "chunk_size"
+    ],
     "defaults": {
       "g": "None",
       "gK": "None",
@@ -30,26 +38,83 @@
       "dht": "None",
       "cu_seqlens": "None",
       "chunk_indices": "None",
-      "use_exp2": "False"
+      "use_exp2": "False",
+      "transpose_state_layout": "False"
     }
   },
   "args": [
-    {"name": "q", "kind": "tensor"},
-    {"name": "k", "kind": "tensor"},
-    {"name": "w", "kind": "tensor"},
-    {"name": "d_o", "kind": "tensor"},
-    {"name": "dv", "kind": "tensor"},
-    {"name": "g", "kind": "optional_tensor"},
-    {"name": "gK", "kind": "optional_tensor"},
-    {"name": "h0", "kind": "optional_tensor"},
-    {"name": "dht", "kind": "optional_tensor"},
-    {"name": "cu_seqlens", "kind": "int_array"},
-    {"name": "chunk_indices", "kind": "int_array"},
-    {"name": "scale", "kind": "double"},
-    {"name": "chunk_size", "kind": "int64"},
-    {"name": "use_exp2", "kind": "bool"},
-    {"name": "dh", "kind": "out_tensor"},
-    {"name": "dh0", "kind": "out_tensor"},
-    {"name": "dv2", "kind": "out_tensor"}
+    {
+      "name": "q",
+      "kind": "tensor"
+    },
+    {
+      "name": "k",
+      "kind": "tensor"
+    },
+    {
+      "name": "w",
+      "kind": "tensor"
+    },
+    {
+      "name": "d_o",
+      "kind": "tensor"
+    },
+    {
+      "name": "dv",
+      "kind": "tensor"
+    },
+    {
+      "name": "g",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "gK",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "h0",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "dht",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "cu_seqlens",
+      "kind": "int_array"
+    },
+    {
+      "name": "chunk_indices",
+      "kind": "int_array"
+    },
+    {
+      "name": "scale",
+      "kind": "double"
+    },
+    {
+      "name": "chunk_size",
+      "kind": "int64"
+    },
+    {
+      "name": "use_exp2",
+      "kind": "bool"
+    },
+    {
+      "name": "transpose_state_layout",
+      "kind": "bool",
+      "cpp_only": true
+    },
+    {
+      "name": "dh",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "dh0",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "dv2",
+      "kind": "out_tensor"
+    }
   ]
 }

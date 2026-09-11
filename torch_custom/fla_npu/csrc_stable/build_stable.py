@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
@@ -28,6 +29,20 @@ ROOT = Path(__file__).resolve().parents[1]          # torch_custom/fla_npu
 CSRC_STABLE = ROOT / "csrc_stable" / "src"
 CSRC_THIN = ROOT / "csrc_thin"
 CSRC_STABLE_INCLUDE = ROOT / "csrc_stable" / "include"
+GENERATED = ROOT / "csrc_stable" / "generated" / "ops_stable_generated.inc"
+
+
+def generated_hash() -> str:
+    """md5 of the generated adapters this build compiles in.
+
+    The build stamp below and `_stable_generated._GENERATED_HASH` are the same
+    value, and the Python side refuses to call into a library whose stamp does
+    not match the glue it was imported with -- a .so left over from an earlier
+    codegen run otherwise fails deep inside the dispatcher (or worse, silently
+    launches on a stale stream).
+    """
+
+    return hashlib.md5(GENERATED.read_bytes()).hexdigest()
 
 
 def torch_paths() -> tuple[list[str], str]:
@@ -57,6 +72,7 @@ def main() -> int:
         "-shared",
         "-fvisibility=hidden",
         *(["-DFLA_STABLE_NO_DEBUG_PROBE"] if args.no_debug_probe else []),
+        f'-DFLA_STABLE_SOURCE_HASH="{generated_hash()}"',
         "-I", str(CSRC_THIN / "include"),
         "-I", str(CSRC_STABLE_INCLUDE),
         *[f"-I{path}" for path in includes],

@@ -326,6 +326,41 @@ stable 张量的副本（shared_ptr）**不偷所有权**。已核对的必需�
 | Phase 3 codegen + 迁移 | **按算子决策**：stable 可选、pybind 默认 | §6.11 的决策与三个触发条件 |
 | Phase 4 打包 | `_build_info.py`、wheel pin、运行期 ABI 检查、`FLA_NPU_THIN_ABI` 三后端 | 221 上编包实测（METADATA pin、mismatch 报错、bypass、三后端解析） |
 
+### 7.3 覆盖刷新：A1 门面接线之后（2026-09-11，取代 §7.1 的 16/26）
+
+§7.1 的 `16/26` 已被本轮实测取代，保留原文只用于说明排查过程。当前状态：
+
+| 类别 | 数量 | 说明 |
+| --- | --- | --- |
+| codegen 生成 | **23** | 原 14 个 + 门面接线解锁的 9 个（`chunk_fwd_o`、`chunk_fwd_h`、`chunk_gated_delta_rule_fwd(_h/_prepare)`、`chunk_kda_fwd/bwd`、`chunk_bwd_dqkwg`、`causal_conv1d_bwd`、`chunk_gated_delta_rule_bwd_dhu` 等，`--parse-only` 逐条打印） |
+| 手写 | 2 | `npu_recurrent_gated_delta_rule`、`npu_recurrent_kda` |
+| **stable 覆盖合计** | **25 / 26** | 只剩 `npu_causal_conv1d`（等上游 #390 ABI） |
+| 已适配但未进全量演练 | 3 | `chunk_gated_delta_rule_bwd_finalize`、`chunk_gated_delta_rule_fwd_prepare`、`recurrent_kda` |
+
+一次性通过证据（221 / 910B3，`_thin` 整体改道 stable 的 `regression_stable_full.py`）：
+
+```
+stable ops exercised: 22
+243 PASS / 0 FAIL   ->   ALL PASS: full stable parity
+libfla_npu_thin.so = 243 536 B;  undefined _ZN2at/_ZN3c10 = 0;  aoti_torch_* = 41
+```
+
+门面接线的实现要点与两个新根因（都已修）：
+
+1. `csrc_stable/include/thin_stable/at_facade.h` 提供 spec 文本需要的 ATen 子集
+   （`at_shim::{Tensor, TensorOptions, empty, empty_like, kFloat, kBFloat16, kHalf}`），
+   `alloc` 原文里的 `at::` 由生成器**机械替换成 `shim::`**（不能 `namespace at =`，
+   会与 torch 头里的真 `at` 命名空间歧义）。
+2. **可选输出槽的 StableIValue 编码**：`Tensor?` 槽必须打包
+   `from(std::optional<Tensor>(...))` 或 `from(std::nullopt)`，不能 `from(Tensor)`；
+   `when` 为假的槽同样必须 `nullopt`。生成器按 `optional_output_mask()` 区分，
+   非 optional 算子另外用 `output_present[i]` 显式记录存在性（避开 2.9-only 的
+   `aoti_torch_is_defined`）。
+3. Python 侧**不再 eval C++ 的 `when` 表达式**（`bwd_dhu` 上会 SyntaxError）——
+   C++ 已按同一 `when` 打包 nullopt，Python 只需 `tuple(result)`。
+4. 生成 wrapper 必须带 `python.pre`（否则 `chunk_kda_fwd` 的 `lower_bound=None`
+   转型报错）与 `python.return_code`（否则 12 元组返回变 11 元组，报 output count mismatch）。
+
 用同一份 2.9 头编出的 x86_64 产物在 241 上实测：
 
 | 环境 | 结果 |

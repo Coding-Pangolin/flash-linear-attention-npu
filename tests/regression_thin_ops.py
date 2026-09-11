@@ -936,6 +936,18 @@ def scenario_chunk_gated_delta_rule_fwd():
 
 
 def main():
+    # This driver *is* the pybind comparison: it calls the compiled ``_C_thin``
+    # through _thin.  The default wheel no longer ships that extension, so say
+    # so instead of dying inside an import -- regression_stable_full.py is the
+    # driver for the default wheel, and it reroutes the same scenarios.
+    try:
+        _thin._extension()
+    except Exception as exc:
+        raise SystemExit(
+            "regression_thin_ops needs the pybind build (FLA_NPU_BUILD_THIN=1) "
+            "with FLA_NPU_THIN_ABI=pybind; the default ABI-free wheel carries "
+            "no _C_thin. Run regression_stable_full.py for that one. "
+            f"Original error: {exc}")
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
     scenarios = [

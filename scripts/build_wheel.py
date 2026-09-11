@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import os
 import shlex
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 
@@ -28,6 +31,74 @@ def _install_command(wheel_path: Path) -> str:
         "--force-reinstall --no-cache-dir --no-deps "
         f"{shlex.quote(str(wheel_path))}"
     )
+
+
+def _runtime_pins() -> list[str]:
+    """torch / torch_npu pins derived from the build environment."""
+
+    pins: list[str] = []
+    try:
+        import torch
+
+        pins.append(f"torch=={torch.__version__}")
+    except Exception:
+        pass
+    try:
+        import torch_npu
+
+        pins.append(f"torch_npu=={torch_npu.__version__}")
+    except Exception:
+        pass
+    return pins
+
+
+def _inject_runtime_pins(wheel_path: Path) -> None:
+    """Add Requires-Dist pins to a wheel that carries a compiled launcher.
+
+    pyproject.toml owns ``[project]`` metadata, so ``install_requires`` in
+    setup.py is ignored; the pins have to be injected into the produced wheel.
+    They exist so pip refuses to install the ABI-matched extension next to a
+    different torch/torch_npu instead of failing at import time.
+    """
+
+    with zipfile.ZipFile(wheel_path) as archive:
+        infos = archive.infolist()
+        blobs = {info.filename: archive.read(info.filename) for info in infos}
+
+    if not any(name.endswith(".so") and "_C_thin" in name for name in blobs):
+        return  # pure-python wheel: nothing to pin
+    pins = _runtime_pins()
+    if not pins:
+        return
+    meta_name = next(name for name in blobs
+                     if name.endswith(".dist-info/METADATA"))
+    meta = blobs[meta_name].decode("utf-8")
+    if any(f"Requires-Dist: {pin}" in meta for pin in pins):
+        return
+    lines = meta.splitlines()
+    insert_at = len(lines)
+    for index, line in enumerate(lines):
+        if line.startswith("Requires-Dist:"):
+            insert_at = index + 1
+    lines[insert_at:insert_at] = [f"Requires-Dist: {pin}" for pin in pins]
+    blobs[meta_name] = ("\n".join(lines) + "\n").encode("utf-8")
+
+    record_name = next(name for name in blobs if name.endswith(".dist-info/RECORD"))
+    digest = base64.urlsafe_b64encode(
+        hashlib.sha256(blobs[meta_name]).digest()).rstrip(b"=").decode()
+    size = len(blobs[meta_name])
+    record = [
+        f"{meta_name},sha256={digest},{size}"
+        if line.startswith(meta_name + ",") else line
+        for line in blobs[record_name].decode("utf-8").splitlines()
+    ]
+    blobs[record_name] = ("\n".join(record) + "\n").encode("utf-8")
+
+    with zipfile.ZipFile(wheel_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for info in infos:
+            archive.writestr(info, blobs[info.filename])
+    print(f"[fla-npu build] pinned {', '.join(pins)} into the wheel metadata",
+          flush=True)
 
 
 def _collect_build_args(args: argparse.Namespace) -> str:
@@ -192,6 +263,8 @@ def main() -> int:
     if not wheel_files:
         raise RuntimeError(f"Expected wheel was not produced under {wheel_dir}")
     wheel_path = wheel_files[-1]
+
+    _inject_runtime_pins(wheel_path)
 
     print(f"[fla-npu build] Wheel: {wheel_path}", flush=True)
     print(f"[fla-npu build] Install command:", flush=True)

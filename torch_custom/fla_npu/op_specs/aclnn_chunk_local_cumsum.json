@@ -23,7 +23,7 @@
     {"name": "reverse", "kind": "bool"},
     {"name": "scale", "kind": "double"},
     {"name": "head_first", "kind": "bool"},
-    {"name": "output_dtype", "kind": "char_ptr"},
+    {"name": "output_dtype", "kind": "char_ptr", "enum": ["float32", "bfloat16"]},
     {"name": "out", "kind": "out_tensor"}
   ]
 }

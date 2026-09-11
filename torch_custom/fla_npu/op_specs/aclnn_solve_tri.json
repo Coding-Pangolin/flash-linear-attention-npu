@@ -17,7 +17,7 @@
     {"name": "x", "kind": "tensor"},
     {"name": "cu_seqlens", "kind": "int_array"},
     {"name": "chunk_indices", "kind": "int_array"},
-    {"name": "layout", "kind": "char_ptr"},
+    {"name": "layout", "kind": "char_ptr", "enum": ["bsnd", "bnsd", "tnd", "ntd"]},
     {"name": "out", "kind": "out_tensor"}
   ]
 }

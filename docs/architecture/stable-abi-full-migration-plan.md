@@ -329,9 +329,40 @@ baseline 必须清空，否则发版门禁不放行。
 
 ## 6. 剩余工作与推进顺序
 
+### 6.1 #390 已合入 main：适配它之前必须先拿到新 OPP（2026-09-11 实测）
+
+`origin/main` 的当前 tip 就是 "Merge pull request #390 from LiuZonggu/causal-conv1d"，
+它带来 4 个新入口（`npu_causal_conv1d_fn`、`npu_causal_conv1d_update`、
+`npu_chunk_gdn_bwd_intra`、`npu_chunk_kda_bwd_recompute`），并把
+`npu_causal_conv1d` 改成兼容壳、**同时更换了 `aclnnCausalConv1d` 的 ABI**：
+
+| 位置 | 旧原型（我们手上的 OPP，`env_cgdrfwd_full/.../aclnnop/aclnn_causal_conv1d.h`） | 新代码（main 的 ctypes/`_launch_causal_conv1d`） |
+| --- | --- | --- |
+| 4–7 | `aclIntArray*`（queryStartLoc / cacheIndices / initialStateMode / numAcceptedTokens） | `aclTensor*`（query_start_loc / cache_indices / has_initial_state / num_accepted_tokens） |
+| 8–11 | `int64_t activationMode` … | `aclIntArray*`（四个 CPU 版本） |
+| 12 | `int64_t padSlotId` | `const char* activation` |
+| 13–16 | `runMode / headNum / out` | `padSlotId / nullBlockId / runMode / headNum / maxQueryLen / out` |
+
+实测（221，把 main 的两个文件覆盖到安装态再调用）：
+
+```
+legacy npu_causal_conv1d（新 ctypes + 旧 OPP）→ 进程静默退出（无 traceback，ABI 不匹配）
+同一调用（旧 ctypes + 旧 OPP）        → OK shape=(2,4,16)
+```
+
+也就是说 **main 的 conv1d 需要配套的新 OPP**（op_api 头 + kernel），而 221 上的
+OPP 是 #390 之前的；241 的 A5 OPP 里干脆没有 `aclnnCausalConv1d`
+（`Unable to resolve aclnn symbol`）。因此 **merge main 会让 conv1d 在本环境不可验证**，
+本轮先把 merge 退回（未推送），保持分支停在已被完整验证的基线上。
+
+拿到新 OPP 之后这一步就变成纯机械工作：4 个新 op 各写一份 spec（conv1d 家族共用一个
+ABI，`python` 块负责 activation 字符串与 CPU 元数据数组的归一），跑
+`sync_spec_python.py` + `op_api_parity.py` + 设备侧场景；覆盖门禁现在就会直接列出
+缺哪些适配器（实测：`ctypes operators: 30`，4 个 FAIL）。
+
 | 阶段 | 内容 | 前置 |
 | --- | --- | --- |
-| A3 | ✅ `npu_causal_conv1d` 已适配；剩 `causal_conv1d_update`（#390 的 ABI 变体） | 上游 #390 定稿 |
+| A3 | `npu_causal_conv1d` 已适配（#390 之前的 ABI）；`causal_conv1d_fn` / `_update` / `chunk_gdn_bwd_intra` / `chunk_kda_bwd_recompute` 待适配 | **卡在新的 OPP**：#390 已合入 main，但它同时换了 `aclnnCausalConv1d` 的 ABI（见 §6.1），我们手上的 OPP 还是旧原型 |
 | C1–C2 | `scenarios` + 覆盖矩阵门禁 | **C2 已实现**；C1 的逐算子轴值核对待补（当前靠 spec 反推 + 演练记录） |
 | C5 | ✅ 3 个演练缺口已补（910b 24 个 + 950 4 个） | — |
 | C6 | ✅ Python API 契约门禁（0 漂移） | — |

@@ -162,6 +162,35 @@ def available() -> bool:
         return False
 
 
+def causal_conv1d_launcher():
+    """The internal aclnnCausalConv1d launch op, or None when it is absent."""
+
+    if not available():
+        return None
+    try:
+        from . import _stable_generated as generated
+
+        return getattr(generated, "_causal_conv1d_launch", None)
+    except Exception:
+        return None
+
+
+# The conv1d family is three public APIs over one aclnn ABI, so its "stable
+# backend" is the *launch* rather than a separate wrapper: the shared
+# implementation is re-exported here (same function object, so the Python
+# surface cannot drift), and the launch inside it goes through the internal op
+# above whenever the launcher is loaded.  See
+# docs/architecture/stable-abi-migration.md.
+PASSTHROUGH_OPS = ("npu_causal_conv1d", "npu_causal_conv1d_fn",
+                   "npu_causal_conv1d_update")
+
+from ._aclnn_ctypes import (  # noqa: E402  (documented above)
+    npu_causal_conv1d,
+    npu_causal_conv1d_fn,
+    npu_causal_conv1d_update,
+)
+
+
 def _op(name: str):
     """Cached torch.ops handle: the attribute chain is not free per call."""
 

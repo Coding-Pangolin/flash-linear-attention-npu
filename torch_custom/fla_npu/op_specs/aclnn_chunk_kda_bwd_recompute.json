@@ -1,0 +1,129 @@
+{
+  "aclnn_name": "aclnnChunkKdaBwdRecompute",
+  "python_name": "npu_chunk_kda_bwd_recompute",
+  "nd_only": true,
+  "mutated": [],
+  "outputs": [
+    {
+      "arg": "w",
+      "alloc": "at::empty({v.size(0), g.size(1), v.size(2), 128}, v.options())"
+    },
+    {
+      "arg": "u",
+      "alloc": "at::empty({v.size(0), g.size(1), v.size(2), 128}, v.options())"
+    },
+    {
+      "arg": "qg",
+      "alloc": "at::empty({g.size(0), g.size(1), g.size(2), 128}, g.options())"
+    },
+    {
+      "arg": "kg",
+      "alloc": "at::empty({g.size(0), g.size(1), g.size(2), 128}, g.options())"
+    },
+    {
+      "arg": "gk",
+      "when": "use_gate_in_kernel",
+      "alloc": "at::empty({g.size(0), g.size(1), g.size(2), 128}, g.options().dtype(at::kFloat))"
+    }
+  ],
+  "python": {
+    "return_code": "return (result[4], result[0], result[1], result[2], result[3])",
+    "positional": [
+      "q",
+      "k",
+      "v",
+      "g",
+      "beta",
+      "a",
+      "chunk_size"
+    ],
+    "defaults": {
+      "A_log": "None",
+      "dt_bias": "None",
+      "cu_seqlens": "None",
+      "chunk_indices": "None",
+      "use_gate_in_kernel": "True",
+      "use_exp2": "True",
+      "lower_bound": "-5.0"
+    }
+  },
+  "args": [
+    {
+      "name": "q",
+      "kind": "tensor"
+    },
+    {
+      "name": "k",
+      "kind": "tensor"
+    },
+    {
+      "name": "v",
+      "kind": "tensor"
+    },
+    {
+      "name": "g",
+      "kind": "tensor"
+    },
+    {
+      "name": "beta",
+      "kind": "tensor"
+    },
+    {
+      "name": "a",
+      "kind": "tensor"
+    },
+    {
+      "name": "A_log",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "dt_bias",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "cu_seqlens",
+      "kind": "int_array"
+    },
+    {
+      "name": "chunk_indices",
+      "kind": "int_array"
+    },
+    {
+      "name": "chunk_size",
+      "kind": "int64"
+    },
+    {
+      "name": "use_exp2",
+      "kind": "bool"
+    },
+    {
+      "name": "lower_bound",
+      "kind": "double"
+    },
+    {
+      "name": "use_gate_in_kernel",
+      "kind": "bool",
+      "cpp_only": true
+    },
+    {
+      "name": "w",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "u",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "qg",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "kg",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "gk",
+      "kind": "out_tensor"
+    }
+  ]
+}

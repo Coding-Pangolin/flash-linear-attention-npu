@@ -61,6 +61,10 @@ def _call_kind(node: ast.expr) -> str | None:
     if isinstance(node, ast.Name):
         # A bare local such as an activation/layout buffer built earlier.
         return None
+    if isinstance(node, ast.IfExp):
+        # `ctx.tensor(out, 'out') if out is not None else ctypes.c_void_p(0)`:
+        # both branches are the same aclnn slot (a null tensor when absent).
+        return _call_kind(node.body) or _call_kind(node.orelse)
     if not isinstance(node, ast.Call):
         return None
     func = node.func
@@ -204,8 +208,6 @@ def implementation_kinds() -> dict[str, dict]:
 
     result: dict[str, dict] = {}
     for name, node in functions.items():
-        if not name.startswith("npu_"):
-            continue
         found = _aclnn_call(node)
         if found is None:
             # Delegating to a helper that owns the _call_aclnn (conv1d family).
@@ -252,8 +254,15 @@ def spec_kinds() -> dict[str, dict]:
         kinds = [SPEC_ALIASES.get(argument["kind"], argument["kind"])
                  for argument in spec["args"]
                  if not argument.get("cpp_only")]
-        out[spec["python_name"]] = {"aclnn": spec["aclnn_name"], "kinds": kinds,
-                                    "spec": path.name}
+        out[spec["python_name"]] = {
+            "aclnn": spec["aclnn_name"],
+            "kinds": kinds,
+            "spec": path.name,
+            # An internal spec describes a launcher op; the implementation that
+            # owns the aclnn call is named explicitly (conv1d's shared launcher)
+            # because there is no ctypes function with the internal op's name.
+            "impl": spec.get("impl", spec["python_name"]),
+        }
     return out
 
 
@@ -263,10 +272,11 @@ def evaluate() -> dict:
     rows: list[dict] = []
     for name in sorted(specs):
         spec = specs[name]
-        impl = implementation.get(name)
+        impl = implementation.get(spec["impl"])
         problems: list[str] = []
         if impl is None:
-            problems.append("not found in the ctypes module")
+            problems.append(
+                f"implementation {spec['impl']!r} not found in the ctypes module")
         elif impl.get("kinds") is None:
             problems.append(f"aclnn argument list unresolved ({impl.get('note')})")
         else:

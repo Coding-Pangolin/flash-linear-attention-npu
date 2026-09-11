@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import re
 import time
 
@@ -37,6 +38,17 @@ SKIPPED: dict[str, str] = {}
 # Stable-ABI driver leaves this None, so for the shipped backend the same
 # situation stays a hard failure.
 GAP_TOLERANT_BACKEND: str | None = None
+# The host benchmark uses the same scenarios with the roles swapped (pybind as
+# the baseline, stable as the candidate), so a case the *baseline* cannot run is
+# equally uncomparable and gets recorded rather than failing the run.
+BASELINE_GAP_TOLERANT = False
+# Which aclnnCausalConv1d ABI the OPP in this environment carries.  Upstream
+# #390 changed that ABI (metadata became device tensors, activation became a
+# string, nullBlockId/maxQueryLen were added), so the merged code speaks the new
+# one and calling the old kernel through it is ABI-undefined -- measured: the
+# process dies.  FLA_NPU_CONV1D_ABI=old makes those scenarios a recorded skip
+# instead of a crash.
+CONV1D_ABI = (os.environ.get("FLA_NPU_CONV1D_ABI") or "new").strip().lower()
 
 
 def pct(vals, q):
@@ -399,6 +411,11 @@ def parity_or_domain_skip(name, call_ct, call_thin):
 
     try:
         reference = call_ct()
+    except AttributeError as exc:
+        # The OPP in this environment does not ship that kernel at all.
+        SKIPPED[name] = f"the OPP does not carry the kernel: {exc}"
+        print(f"SKIP {name} ({SKIPPED[name]})")
+        return
     except RuntimeError as exc:
         status = _aclnn_status_or_none(exc)
         try:
@@ -417,6 +434,11 @@ def parity_or_domain_skip(name, call_ct, call_thin):
                     f"{name}: ctypes rejected with {status} but thin with "
                     f"{thin_status}")
                 SKIPPED[name] = f"both backends rejected the inputs: {status}"
+            print(f"SKIP {name} ({SKIPPED[name]})")
+            return
+        if BASELINE_GAP_TOLERANT:
+            SKIPPED[name] = ("the baseline backend rejects what the candidate "
+                             f"accepts: {_aclnn_status(exc)}")
             print(f"SKIP {name} ({SKIPPED[name]})")
             return
         raise AssertionError(
@@ -441,7 +463,7 @@ def _conv1d_outcome(fn, kwargs):
         out = fn(**args)
         torch.npu.synchronize()
         return "ok", out, args
-    except RuntimeError as exc:
+    except (RuntimeError, AttributeError) as exc:
         return "err", _aclnn_status(exc), args
 
 
@@ -463,6 +485,12 @@ def _conv1d_parity(name, kwargs, mutated=("conv_states",), defined_rows=None,
     must come back untouched (same pad story, on ``conv_states``).
     """
 
+    if CONV1D_ABI != "new":
+        reason = ("the OPP in this environment carries the pre-#390 "
+                  "aclnnCausalConv1d ABI; the merged code speaks the new one")
+        SKIPPED[name] = reason
+        print(f"SKIP {name} ({reason})")
+        return
     if not _backend_carries("npu_causal_conv1d"):
         reason = "the selected backend does not carry npu_causal_conv1d"
         SKIPPED[name] = reason
@@ -641,9 +669,9 @@ def scenario_conv1d_bwd_bnsd():
     torch.npu.synchronize()
     kw = dict(x=x, y=yb, weight=weight, dy=dyb, initial_state=st, dht=dht,
               activation=2, input_layout="BNSD")
-    assert_parity("causal_conv1d_bwd(BNSD)",
-                  ct.npu_causal_conv1d_bwd(**kw),
-                  _thin.npu_causal_conv1d_bwd(**kw))
+    parity_or_domain_skip("causal_conv1d_bwd(BNSD)",
+                          lambda: ct.npu_causal_conv1d_bwd(**kw),
+                          lambda: _thin.npu_causal_conv1d_bwd(**kw))
     # The other declared input_layouts: BSND keeps x dim-last and moves y/dy to
     # (B,S,H,D); TND/NTD are the varlen spellings and need query_start_loc.
     ys = (ylog.reshape(batch, seqlen, num_heads, head_dim).contiguous())

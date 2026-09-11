@@ -1907,6 +1907,24 @@ PAD_SLOT_ID = -1
 NULL_BLOCK_ID = 0
 
 
+def _stable_causal_conv1d_launcher():
+    """The launcher's internal aclnnCausalConv1d op, or None to stay on ctypes.
+
+    The conv1d family is the one case where the Python layer is shared: three
+    public APIs (legacy / fn / update) differ only in how they marshal into one
+    aclnn ABI, so instead of three adapters the launcher exposes that ABI once
+    and the shared launcher below hands the launch to it.  Imported lazily --
+    the ctypes module has to keep working with no launcher present.
+    """
+
+    try:
+        from fla_npu.ops.ascendc import _stable
+
+        return _stable.causal_conv1d_launcher()
+    except Exception:
+        return None
+
+
 def _launch_causal_conv1d(
     x,
     weight,
@@ -1929,6 +1947,27 @@ def _launch_causal_conv1d(
     max_query_len=-1,
 ):
     """Build the single aclnnCausalConv1d ABI shared by all Python APIs."""
+
+    # One Python implementation, two launch paths.  Everything above this line
+    # (validation, metadata normalisation, the update copy-back) is shared by
+    # every backend; what this migration replaces is the launch itself --
+    # building and destroying a descriptor forest per call.  So when the
+    # Stable-ABI launcher is loaded it takes over exactly that step, and this
+    # function keeps building the aclnn call itself when it is not.
+    launcher = _stable_causal_conv1d_launcher()
+    if launcher is not None:
+        return launcher(
+            x=x, weight=weight, bias=bias, conv_states=conv_states,
+            query_start_loc=query_start_loc, cache_indices=cache_indices,
+            has_initial_state=has_initial_state,
+            num_accepted_tokens=num_accepted_tokens,
+            query_start_loc_cpu=query_start_loc_cpu,
+            cache_indices_cpu=cache_indices_cpu,
+            has_initial_state_cpu=has_initial_state_cpu,
+            num_accepted_tokens_cpu=num_accepted_tokens_cpu,
+            activation=str(activation), pad_slot_id=int(pad_slot_id),
+            null_block_id=int(null_block_id), run_mode=int(run_mode),
+            head_num=int(head_num), max_query_len=int(max_query_len))
 
     out = _infer_causal_conv1d_y(x, int(head_num), int(run_mode))
     activation_buffer = ctypes.create_string_buffer(str(activation).encode("utf-8"))

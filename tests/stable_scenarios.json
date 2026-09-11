@@ -230,12 +230,6 @@
       "chunk_local_cumsum(varlen_single_fp16)": 0.0,
       "chunk_scaled_dot_kkt(bf16)": 0.0,
       "chunk_scaled_dot_kkt(fp16)": 0.0,
-      "conv1d_prefill(dim=16,head_num=0)": 0.0,
-      "conv1d_prefill(dim=32,head_num=2)": 0.0,
-      "conv1d_spec_decode": 0.0,
-      "conv1d_update": 0.0,
-      "conv1d_update_gather_padding[defined rows]": 0.0,
-      "conv1d_width3_no_bias": 0.0,
       "fast_gelu_custom": 0.0,
       "fast_gelu_custom_backward": 0.0,
       "kda_gate_cumsum(bf16)": 0.0,
@@ -273,8 +267,14 @@
       "chunk_kda_bwd(recompute)": "reference rejects by validation (npu_chunk_kda_bwd: disable_recompute=false is reserved but not support); thin rejects via the kernel (npu_chunk_kda_bwd: disable_recompute=false is reserved but not supported.)",
       "chunk_kda_bwd(state_v_first)": "reference rejects by validation (npu_chunk_kda_bwd: state_v_first=true is reserved but not supported.); thin rejects via the kernel (npu_chunk_kda_bwd: state_v_first=true is reserved but not supported.)",
       "chunk_local_cumsum(head_first_false)": "both backends rejected the inputs: 161001",
-      "conv1d_varlen_initial_state": "both backends rejected the inputs: 561002",
-      "conv1d_varlen_pad_slot": "both backends rejected the inputs: 561002"
+      "conv1d_prefill(dim=16,head_num=0)": "the OPP in this environment carries the pre-#390 aclnnCausalConv1d ABI; the merged code speaks the new one",
+      "conv1d_prefill(dim=32,head_num=2)": "the OPP in this environment carries the pre-#390 aclnnCausalConv1d ABI; the merged code speaks the new one",
+      "conv1d_spec_decode": "the OPP in this environment carries the pre-#390 aclnnCausalConv1d ABI; the merged code speaks the new one",
+      "conv1d_update": "the OPP in this environment carries the pre-#390 aclnnCausalConv1d ABI; the merged code speaks the new one",
+      "conv1d_update_gather_padding": "the OPP in this environment carries the pre-#390 aclnnCausalConv1d ABI; the merged code speaks the new one",
+      "conv1d_varlen_initial_state": "the OPP in this environment carries the pre-#390 aclnnCausalConv1d ABI; the merged code speaks the new one",
+      "conv1d_varlen_pad_slot": "the OPP in this environment carries the pre-#390 aclnnCausalConv1d ABI; the merged code speaks the new one",
+      "conv1d_width3_no_bias": "the OPP in this environment carries the pre-#390 aclnnCausalConv1d ABI; the merged code speaks the new one"
     }
   },
   "Ascend950PR_9579": {

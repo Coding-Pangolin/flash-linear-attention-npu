@@ -56,6 +56,10 @@ BASELINE = TESTS_DIR / "stable_coverage_baseline.json"
 _DEF_RE = re.compile(r"^def\s+(npu_[a-z0-9_]+)\s*\(", re.MULTILINE)
 _SCHEMA_RE = re.compile(r"kSchema_(npu_[a-z0-9_]+)\s*=")
 _LAYOUT_CODES_RE = re.compile(r"_LAYOUT_CODES\s*=\s*\{([^}]*)\}")
+_REEXPORT_RE = re.compile(
+    # The block may carry a trailing comment (which can contain a parenthesis),
+    # so the closing parenthesis is matched at the start of a line.
+    r"from\s+\.?_aclnn_ctypes\s+import\s*\(([\s\S]*?)\n\)", re.MULTILINE)
 
 # Axes are attached to the arguments that actually carry them.  Names are taken
 # from the ctypes signatures, not invented: these are the arguments that switch
@@ -84,7 +88,19 @@ def generated_ops() -> list[str]:
 
 
 def hand_written_ops() -> list[str]:
-    return sorted(set(_DEF_RE.findall(_read(OPS_DIR / "_stable.py"))))
+    """Adapters defined in _stable.py, either written there or re-exported.
+
+    The conv1d family is re-exported from the reference because its Python layer
+    is shared (three APIs, one ABI); a re-export is still the read of "this
+    module carries a stable entry for that operator", which is what the gate
+    needs, so both forms count.
+    """
+
+    text = _read(OPS_DIR / "_stable.py")
+    names = set(_DEF_RE.findall(text))
+    for block in _REEXPORT_RE.findall(text):
+        names.update(re.findall(r"\b(npu_[a-z0-9_]+)\b", block))
+    return sorted(names)
 
 
 def python_wrappers() -> list[str]:
@@ -118,6 +134,33 @@ def load_specs() -> dict[str, dict]:
         spec["_path"] = path.name
         specs[name] = spec
     return specs
+
+
+def internal_specs(specs: dict[str, dict]) -> dict[str, dict]:
+    """Specs that describe a launcher-internal op rather than a public one.
+
+    The conv1d family is three public APIs over one aclnn ABI, and the ABI is
+    what the launcher carries; its spec is marked ``internal`` and is checked
+    against the shared implementation instead of against a ctypes function of
+    the same name.
+    """
+
+    return {name: spec for name, spec in specs.items()
+            if spec.get("internal")}
+
+
+def passthrough_ops() -> set[str]:
+    """Names whose stable backend is the shared implementation (conv1d).
+
+    Read from the source rather than imported: this gate has to run without
+    torch, and importing the ascendc package needs it.
+    """
+
+    text = (OPS_DIR / "_stable.py").read_text(encoding="utf-8")
+    match = re.search(r"PASSTHROUGH_OPS\s*=\s*\((.*?)\)", text, re.S)
+    if not match:
+        return set()
+    return set(re.findall(r'"([^"]+)"', match.group(1)))
 
 
 def load_baseline() -> dict:
@@ -170,6 +213,16 @@ def evaluate() -> dict:
     wrappers = set(python_wrappers())
     specs = load_specs()
     shared_layouts = hand_written_layouts().get("_shared", [])
+    passthrough = passthrough_ops()
+    internal = internal_specs(specs)
+
+    # An internal spec describes a launcher op that no ctypes function
+    # implements, so it must not show up in the public matrix -- but it must
+    # still be registered, or the shared launcher would silently fall back.
+    missing_internal = sorted(name for name in internal
+                              if name not in gen and name not in hand)
+    problems_internal = [
+        f"internal op {name!r} has no adapter" for name in missing_internal]
 
     rows: list[dict] = []
     for name in ctypes_names:
@@ -190,7 +243,7 @@ def evaluate() -> dict:
         }
         if source is None:
             row["problems"].append("no stable adapter")
-        if spec is None and source is not None:
+        if spec is None and source is not None and name not in passthrough:
             row["problems"].append("adapter without spec")
         if spec is not None:
             derived = _axes(spec)
@@ -232,7 +285,8 @@ def evaluate() -> dict:
                         f"scenario axis {axis!r} names unsupported values {unknown}")
         rows.append(row)
 
-    orphans = sorted((gen | hand) - set(ctypes_names))
+    # Internal ops have no ctypes counterpart by design; everything else must.
+    orphans = sorted((gen | hand) - set(ctypes_names) - set(internal))
     for name in orphans:
         rows.append({
             "op": name,
@@ -250,6 +304,7 @@ def evaluate() -> dict:
 
     blockers = [f"{row['op']}: {'; '.join(row['problems'])}"
                 for row in rows if row["problems"]]
+    blockers += problems_internal
     blockers += [f"generated but no Python wrapper: {name}"
                  for name in generated_without_wrapper]
     blockers += [f"Python wrapper without registration: {name}"

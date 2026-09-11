@@ -1,0 +1,102 @@
+{
+  "aclnn_name": "aclnnChunkGdnBwdIntra",
+  "python_name": "npu_chunk_gdn_bwd_intra",
+  "nd_only": true,
+  "mutated": [],
+  "outputs": [
+    {
+      "arg": "w",
+      "alloc": "at::empty({q.size(0), v.size(1), q.size(2), q.size(3)}, q.options())"
+    },
+    {
+      "arg": "u",
+      "source": "v",
+      "dtype": "same"
+    },
+    {
+      "arg": "dv_local",
+      "source": "v",
+      "dtype": "same"
+    }
+  ],
+  "args": [
+    {
+      "name": "q",
+      "kind": "tensor"
+    },
+    {
+      "name": "k",
+      "kind": "tensor"
+    },
+    {
+      "name": "v",
+      "kind": "tensor"
+    },
+    {
+      "name": "g",
+      "kind": "tensor"
+    },
+    {
+      "name": "beta",
+      "kind": "tensor"
+    },
+    {
+      "name": "A",
+      "kind": "tensor"
+    },
+    {
+      "name": "d_o",
+      "kind": "tensor"
+    },
+    {
+      "name": "cu_seqlens",
+      "kind": "int_array"
+    },
+    {
+      "name": "chunk_indices",
+      "kind": "int_array"
+    },
+    {
+      "name": "scale",
+      "kind": "double"
+    },
+    {
+      "name": "chunk_size",
+      "kind": "int64"
+    },
+    {
+      "name": "use_exp2",
+      "kind": "bool"
+    },
+    {
+      "name": "w",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "u",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "dv_local",
+      "kind": "out_tensor"
+    }
+  ],
+  "python": {
+    "positional": [
+      "q",
+      "k",
+      "v",
+      "g",
+      "beta",
+      "A",
+      "d_o",
+      "scale",
+      "chunk_size"
+    ],
+    "defaults": {
+      "cu_seqlens": "None",
+      "chunk_indices": "None",
+      "use_exp2": "True"
+    }
+  }
+}

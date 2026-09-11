@@ -136,6 +136,10 @@ def main() -> int:
     for path in sorted(SPEC_DIR.glob("*.json")):
         spec = json.loads(path.read_text(encoding="utf-8"))
         name = spec["python_name"]
+        if spec.get("internal"):
+            # Internal launcher ops (the shared conv1d ABI) have no public
+            # Python surface to keep in step with ctypes.
+            continue
         if name not in reference:
             print(f"?? {name}: not in {REFERENCE.name}")
             problems += 1

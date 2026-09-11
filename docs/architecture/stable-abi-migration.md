@@ -119,6 +119,48 @@
 
 ### 6.5 Phase 2 结果（2026-09-11，241 x86_64，同一产物跨版本）
 
+### 6.6 Phase 4 结果（2026-09-11，221 编包实测）
+
+三项都已在真实 wheel 上验证：
+
+1. **构建期版本记录**：`fla_npu/_build_info.py` 记录
+   `TORCH_VERSION / TORCH_GIT_VERSION / TORCH_NPU_VERSION / TORCH_CXX11_ABI`
+   （实测内容 `2.9.0+cpu / 0fabc3ba… / 2.9.0.post2+gitaacef07 / True`）。
+2. **wheel 依赖 pin**：`pyproject.toml` 的 `[project]` 会覆盖 `setup.py` 的
+   `install_requires`，所以 pin 由 `scripts/build_wheel.py` 在产物上注入
+   （含 RECORD 哈希同步）。实测 METADATA：
+   `Requires-Dist: torch==2.9.0+cpu`、`Requires-Dist: torch_npu==2.9.0.post2+gitaacef07`。
+3. **运行期 ABI 检查**：`_prepare_direct_runtime()` 首次调用时比对构建版本；
+   实测把 `_build_info.TORCH_VERSION` 改成 `2.8.0+cpu` 后报
+   "…was built against torch 2.8.0+cpu but torch 2.9.0+cpu is imported…" 并给出
+   重装/绕过指引；`FLA_NPU_SKIP_ABI_CHECK=1` 时按预期放行。
+4. **三后端开关** `FLA_NPU_THIN_ABI`（实测解析到的后端模块）：
+   unset → `_thin`（pybind，默认）；`stable` → `_stable`（torch.ops stable）；
+   `ctypes` → `_aclnn_ctypes`。
+
+尚未落地：wheel 平台标签改成不依赖 Python 版本（只有在 stable 取代 pybind、
+不再打包 `_C_thin` 之后才有意义）。
+
+### 6.7 Phase 3 的决策（基于 Phase 1/2 的实测，而不是口号）
+
+计划里 Phase 3 的门禁是"T1/T2/T3/T6 全绿 + T5 达标"。现状是 **T5 未达标**
+（stable 直连 0.0757 vs pybind 直连 0.0365，约 2×；公共路径约 1.7×），
+而它换来的是"消掉 torch C++ ABI + cpXXX"两条轴。与此同时 Phase 4 已经把
+"装错 torch 直接崩"这个最痛的问题用 pin + 运行期检查堵住了。
+
+因此 Phase 3 的**全量迁移暂缓**，理由和不降级为"直接放弃"的理由都写在这里：
+
+- **不放默认**：换 stable 的代价是每调用 +0.04 ms（11 张量参数算子），按
+  30 次/step 约 +1.2 ms/step，而我们无法用测试证明这值得；
+- **不放弃**：`FLA_NPU_THIN_ABI=stable` 已经可用，凡是"Python 版本矩阵"或
+  "torch 补丁升级必须重出包"成为主要痛点的场景，可以按需打开；
+- **继续的条件**：先解决 §6.4 第 4 条的逐参数解包（`to<AtenTensorHandle>` 段错误，
+  预期回收 ~20us，能把 stable 直连压到 0.045–0.055）。这一项需要调试器会话，
+  已作为 Phase 3 的第一项登记；解决后再评估是否把 codegen 后端扩到 25 个算子。
+
+codegen 侧的准备（spec → stable 适配）不受此阻塞，但只有在决定"stable 进默认"
+之后才值得投入——否则就是维护两套生成后端却不使用其中一套。
+
 **结论：一个用 torch 2.9 头编出的产物，能在 torch 2.7.1(py3.10) 与 2.9(py3.12)
 上同时加载并注册成功。**
 

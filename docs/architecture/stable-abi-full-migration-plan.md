@@ -241,6 +241,12 @@ vllm-ascend 走的是同一条 dispatcher 路线（C++ op + `EXEC_NPU_CMD`），
 C2 从 spec 反推出的轴逐条对账。**维度的合法值必须从 ctypes 实现反推，不允许凭印象写**；
 反推不出来的轴（例如没有 `enum` 表的 `char_ptr`）在矩阵里标 `UNVERIFIABLE`，而不是假装已声明。
 
+现状（2026-09-11 收尾）：声明式 `scenarios` 只用在推导看不出来的轴上
+（conv1d 的 `run_mode`/`head_num`/`activation_mode`、bwd 的 `activation`）；其余算子的轴
+由 `enum`/变长参数/布尔参数自动反推，**并用 `tools/coverage_gap_report.py` 按算子逐轴
+检查"是否真有场景跑过"**（字符串轴逐个补齐或记录，布尔 flag 逐个补用例或记录），
+所以不需要在 26 个 spec 里重抄一遍推导结果。
+
 ### C2. `tools/stable_coverage.py`（已实现，离线门禁，不需要 NPU）
 
 ```

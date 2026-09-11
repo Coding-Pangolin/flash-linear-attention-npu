@@ -50,6 +50,14 @@
     "positional": [
       "g",
       "chunk_size"
-    ]
+    ],
+    "defaults": {
+      "A_log": "None",
+      "dt_bias": "None",
+      "cu_seqlens": "None",
+      "use_gate_in_kernel": "False",
+      "safe_gate": "False",
+      "lower_bound": "None"
+    }
   }
 }

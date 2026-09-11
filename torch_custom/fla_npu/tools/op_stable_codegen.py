@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -209,6 +210,7 @@ def generate_cpp(spec: dict) -> str:
     aclnn_args = [a for a in spec["args"] if not a.get("cpp_only")]
     uses_alloc = any("alloc" in entry for entry in output_spec)
     optional_mask = optional_output_mask(spec)
+    conditions = input_conditions(spec)
     lines: list[str] = []
     lines.append(f"// ---- generated: {name} ----")
     for argument in spec["args"]:
@@ -235,17 +237,21 @@ def generate_cpp(spec: dict) -> str:
     lines.append("                 uint64_t num_outputs) {")
     lines.append("  (void)num_inputs;")
     lines.append("  (void)num_outputs;")
-    index = 0
-    for cpp_name, kind, cpp_only in params:
+    # Flags that only steer allocation or descriptor construction are declared
+    # before the argument loop: an input's `when` expression may name a flag the
+    # schema lists *after* it (fwd_prepare drops a_log unless
+    # use_gate_in_kernel), and the loop needs it in scope while building that
+    # input's descriptor.
+    for index, (cpp_name, kind, cpp_only) in enumerate(params):
+        if not cpp_only:
+            continue
+        if kind == "bool":
+            lines.append(f"  const bool {cpp_name} = to<bool>(stack[{index}]);")
+        else:
+            lines.append(
+                f"  const {kind} {cpp_name} = to<int64_t>(stack[{index}]);")
+    for index, (cpp_name, kind, cpp_only) in enumerate(params):
         if cpp_only:
-            # Conditions such as `use_beta_sigmoid_in_kernel` drive output
-            # allocation; keep them as plain locals.
-            if kind == "bool":
-                lines.append(f"  const bool {cpp_name} = to<bool>(stack[{index}]);")
-            else:
-                lines.append(
-                    f"  const {kind} {cpp_name} = to<int64_t>(stack[{index}]);")
-            index += 1
             continue
         if kind == "tensor":
             lines.append(f"  const Tensor {cpp_name}_t = to<Tensor>(stack[{index}]);")
@@ -257,13 +263,17 @@ def generate_cpp(spec: dict) -> str:
         elif kind == "optional_tensor":
             lines.append(
                 f"  const auto {cpp_name}_t = to<std::optional<Tensor>>(stack[{index}]);")
+            present = f"{cpp_name}_t.has_value()"
+            if conditions.get(cpp_name):
+                present = f"({present} && ({conditions[cpp_name]}))"
+            lines.append(f"  const bool {cpp_name}_present = {present};")
             lines.append(
                 f"  const TensorMeta {cpp_name}_meta = "
-                f"{cpp_name}_t.has_value() ? meta_of(*{cpp_name}_t) : TensorMeta();")
+                f"{cpp_name}_present ? meta_of(*{cpp_name}_t) : TensorMeta();")
             if uses_alloc:
                 lines.append(
                     f"  const std::optional<shim::Tensor> {cpp_name} = "
-                    f"{cpp_name}_t.has_value() "
+                    f"{cpp_name}_present "
                     f"? std::optional<shim::Tensor>(shim::Tensor(*{cpp_name}_t)) "
                     f": std::nullopt;")
         elif kind == "int_array":
@@ -297,7 +307,10 @@ def generate_cpp(spec: dict) -> str:
                 lines.append(
                     f"  const int64_t {cpp_name} = to<int64_t>(stack[{index}]);")
         index += 1
-    lines.append(f"  const int64_t stream = to<int64_t>(stack[{index}]);")
+    # The stream is the last *input*: one past the declared, non-output
+    # parameters.  (The loop variable cannot be used -- the loop above is an
+    # enumerated one, so it ends at len(params) - 1.)
+    lines.append(f"  const int64_t stream = to<int64_t>(stack[{len(params)}]);")
     lines.append("")
     lines.append("  auto& rt = Runtime::instance();")
     lines.append(f"  auto get_ws = reinterpret_cast<{name}_GetWorkspaceFn>(")
@@ -461,7 +474,40 @@ def generate_cpp(spec: dict) -> str:
             lines.append(f"  stack[{position}] = from({value});")
     lines.append("}")
     lines.append("")
+    _check_stack_indices(name, lines, len(params), len(outputs))
     return "\n".join(lines)
+
+
+# `to<Tensor>`, `to<std::optional<Tensor>>`, `to<int64_t>` ... all one read.
+_STACK_READ_RE = re.compile(r"\bto<.+>\(stack\[(?P<index>\d+)\]\)")
+_STACK_WRITE_RE = re.compile(r"^\s*stack\[(?P<index>\d+)\] = ")
+
+
+def _check_stack_indices(name: str, lines: list[str], num_inputs: int,
+                         num_outputs: int) -> None:
+    """Fail the generation step if the boxed stack bookkeeping is off.
+
+    The dispatcher hands over ``max(num_inputs, num_outputs)`` slots: the first
+    ``num_inputs`` are the inputs (the stream is the last of them) and the
+    kernel writes its outputs back into the front.  Reading the stream from the
+    slot before the end compiles fine and then launches on a garbage stream, so
+    the indices are asserted here instead of being trusted.
+    """
+
+    reads = [int(match.group("index"))
+             for line in lines
+             if (match := _STACK_READ_RE.search(line)) is not None]
+    if sorted(reads) != list(range(num_inputs + 1)):
+        raise ValueError(
+            f"{name}: stack reads {sorted(reads)} are not exactly "
+            f"0..{num_inputs} (one read per input plus the stream)")
+    writes = [int(match.group("index"))
+              for line in lines
+              if (match := _STACK_WRITE_RE.match(line)) is not None]
+    if sorted(writes) != list(range(num_outputs)):
+        raise ValueError(
+            f"{name}: stack writes {sorted(writes)} are not exactly "
+            f"0..{num_outputs - 1}")
 
 
 def schema_order(spec: dict) -> list[tuple[str, str]]:
@@ -486,21 +532,69 @@ def output_rules(spec: dict) -> list[tuple[int, str | None]]:
             for index in range(len(outputs))]
 
 
+def input_conditions(spec: dict) -> dict[str, str]:
+    """cpp parameter name -> ``when`` expression for inputs that carry one.
+
+    An input may be dropped before the aclnn call even though the caller passed
+    it -- the ctypes reference spells this as ``arg if flag else None`` and the
+    kernel rejects the non-null pointer (fwd_prepare: a_log/dt_bias are only
+    valid while in-kernel gating is on).
+    """
+
+    return {_arg_cpp(argument): argument["when"] for argument in spec["args"]
+            if argument.get("when") and argument["kind"] != "out_tensor"}
+
+
 def generate_python(spec: dict) -> str:
     name = spec["python_name"]
     py = spec.get("python", {})
     positional = py.get("positional", [])
     defaults = py.get("defaults", {})
+    required = set(py.get("required", ()))
+    hidden = set(py.get("hidden", ()))
     ignored = py.get("ignored", [])
     kw = [a["name"] for a in spec["args"]
-          if a["name"] not in positional and a["kind"] != "out_tensor"]
+          if a["name"] not in positional and a["kind"] != "out_tensor"
+          and a["name"] not in hidden]
     kw = [k for k in kw if k not in ignored]
     sig_kw = kw + [k for k in ignored if k not in kw]
-    signature = ", ".join(positional)
+
+    def spelled(parameter: str, *, positional_param: bool) -> str:
+        """One parameter, with the default ctypes exposes (if any).
+
+        Positional parameters are bare unless ``defaults`` names them (the
+        spec's defaults come from ctypes, where they are always trailing).
+        Keyword-only parameters default to ``None`` unless ctypes requires
+        them, in which case ``required`` spells them bare -- Python allows a
+        required keyword-only parameter after a defaulted one, which is how the
+        ctypes signature reads too.
+        """
+
+        if parameter in defaults:
+            return f"{parameter}={defaults[parameter]}"
+        if positional_param or parameter in required:
+            return parameter
+        return f"{parameter}=None"
+
+    # A positional parameter without a default may not follow one that has a
+    # default: that would be a syntax error in the generated wrapper, and it
+    # would also mean the spec no longer describes the ctypes signature (where
+    # the defaults are always trailing).
+    seen_default = False
+    for parameter in positional:
+        if parameter in defaults:
+            seen_default = True
+        elif seen_default:
+            raise ValueError(
+                f"{name}: positional parameter {parameter!r} has no default but "
+                f"follows one that does; ctypes keeps defaults trailing")
+
+    signature = ", ".join(
+        spelled(parameter, positional_param=True) for parameter in positional)
     if sig_kw:
         separator = "*, " if not positional else ", *, "
         signature += separator + ", ".join(
-            f"{key}={defaults.get(key, 'None')}" for key in sig_kw)
+            spelled(key, positional_param=False) for key in sig_kw)
     lines = [f"def {name}({signature}):"]
     # The same pre-block the pybind wrapper gets: default resolution (scale,
     # lower_bound, layout) and explicit ctypes fallbacks for sub-domains the
@@ -526,6 +620,11 @@ def generate_python(spec: dict) -> str:
         lines.append(f"    return {target}")
     for argument in spec["args"]:
         if argument["kind"] == "out_tensor":
+            continue
+        if argument["name"] in hidden:
+            # Required by the aclnn prototype but not part of the public ctypes
+            # signature (the reference fills it internally).  It travels as
+            # None, which is what the reference passes for these slots.
             continue
         lines.append(f'        "{argument["name"]}": {argument["name"]},')
     lines.append("    })")
@@ -633,6 +732,10 @@ void register_generated_defs(Library& m) {
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text("\n".join(header + body + footer) + "\n",
                         encoding="utf-8")
+    # The same md5 is injected into the .so by csrc_stable/build_stable.py; the
+    # two are compared at load time so a stale library cannot run with fresh
+    # glue (see _stable.py).
+    generated_hash = hashlib.md5(args.out.read_bytes()).hexdigest()
     print(f"wrote {args.out} ({len(supported)} adapters)")
 
     # Python glue: same user-facing signatures as the pybind wrappers, with the
@@ -640,6 +743,8 @@ void register_generated_defs(Library& m) {
     py_lines = [
         '"""Generated by tools/op_stable_codegen.py -- do not edit by hand."""',
         "from ._stable import _call  # noqa: F401",
+        "",
+        f'_GENERATED_HASH = "{generated_hash}"',
         "",
         "_SIG = {",
     ]

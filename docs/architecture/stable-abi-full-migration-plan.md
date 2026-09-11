@@ -6,13 +6,15 @@
 
 ## 0. 与上一版方案的差异（2026-09-11 实测后刷新）
 
-| 项 | v1（方案刚写下时） | v2（本文，A1/A2 已落地） |
-| --- | --- | --- |
-| 覆盖 | 16/26，剩 10 个卡在 `alloc`/`helpers` 的 ATen 惯用法 | **25/26**：门面接线后 23 个由 codegen 生成 + 2 个手写；只剩 `npu_causal_conv1d`（等上游 #390 ABI） |
-| 一次性通过 | 无 | `tests/regression_stable_full.py`（`_thin` 整体改道 stable）**243 PASS / 0 FAIL**，22 个算子被真实调用 |
-| 性能 | 只有 GDR/KDA 两个数 | GDR 1.26×（**未达标**）、KDA 1.11×（达标）、`fast_gelu` 0.34×；stable 直连 0.0629–0.0757 ms，已在 vllm custom（0.073 ms）量级 |
-| 后端取舍 | stable 可选、pybind 默认 | **stable 为唯一后端**；pybind 仅作过渡期 A/B 对照，随后整体删除 |
-| 场景覆盖 | 口头"没丢场景" | 机器化：spec `scenarios` + `tools/stable_coverage.py` + parity 基线 JSON + 回退计数（Phase C，本轮新增设计） |
+| 项 | v1（方案刚写下时） | v2（A1/A2 落地） | v3（本文，含 conv1d 与 API 契约） |
+| --- | --- | --- | --- |
+| 覆盖 | 16/26，剩 10 个卡在 `alloc`/`helpers` 的 ATen 惯用法 | 25/26 | **26/26**：`npu_causal_conv1d` 已接入（`alloc` 表达 `head_num` 重排），只剩上游 #390 的 update 变体未定稿 |
+| 一次性通过 | 无 | 243 PASS（22 个算子被调用） | **910b：256 PASS / 0 FAIL，24 个算子被调用；950：15 PASS / ALL PASS**（A5 专属 4 场景） |
+| Python API 契约 | 未检查 | 未检查 | **ctypes 为唯一真源**：`tools/op_api_parity.py` 报 0 漂移（本轮修掉 10 个算子的签名漂移） |
+| 性能 | 只有 GDR/KDA 两个数 | GDR 1.26×、KDA 1.11×、fast_gelu 0.34× | 同上（B2/B4 未做，GDR 仍未达标） |
+| 后端取舍 | stable 可选、pybind 默认 | stable 默认 | **stable 为唯一后端**；pybind 仅作 A/B 对照，随后删除 |
+| 场景覆盖 | 口头"没丢场景" | 覆盖矩阵门禁（C2） | 门禁 + **每算子演练记录**（910b 24 个 + 950 4 个 + 2 条显式 SKIP 带原因） |
+| 产物一致性 | 无 | 无 | **构建戳**：`.so` 与 Python glue 的生成 hash 不一致时加载即报错（本轮踩过陈旧 `.so` 的坑） |
 
 ## 1. 三条需求对应到可测门禁
 
@@ -33,9 +35,11 @@
 当前证据（221 / 910B3，本轮复跑）：
 
 ```
-libfla_npu_thin.so  243 536 B
-undefined  _ZN2at/_ZN3c10 = 0     aoti_torch_* = 41
-regression_stable_full.py:  243 PASS / 0 FAIL,  "ALL PASS: full stable parity"
+libfla_npu_thin.so  245 736 B
+undefined  _ZN2at/_ZN3c10 = 0     aoti_torch_* = 38     导出构建戳符号 = 1
+regression_stable_full.py (910B3):  256 PASS / 0 FAIL   "ALL PASS: full stable parity"
+regression_stable_a5.py   (950PR):   15 PASS / 0 FAIL   "ALL PASS: Ascend950 stable parity"
+op_api_parity.py: 26 个算子比对，0 漂移        stable_coverage.py --strict: 退出码 0
 ```
 
 ## 2. 算子清单与当前状态（26 = ctypes 全量）
@@ -45,17 +49,17 @@ regression_stable_full.py:  243 PASS / 0 FAIL,  "ALL PASS: full stable parity"
 
 | # | 算子 | 适配来源 | 张量参数 | 全量演练 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `npu_causal_conv1d` | **缺** | – | ✗ | 待 A3；`conv_states` 原地更新，等上游 #390 ABI 定稿 |
+| 1 | `npu_causal_conv1d` | GEN | 4 | ✓ | 输出形状按 `run_mode`/`head_num`/`x.dim()` 走 `alloc`；prefill / head_num 重排 / update / spec-decode / width3 全过（含 `conv_states` 原地写）；varlen 形式 A2 与 ctypes 同样被内核拒绝（561002），记为 SKIP |
 | 2 | `npu_causal_conv1d_bwd` | GEN | 10 | ✓ | `input_layout` 走 enum |
 | 3 | `npu_chunk_bwd_dqkwg` | GEN | 14 | ✓ | 可选输出 `when` 条件 |
 | 4 | `npu_chunk_bwd_dv_local` | GEN | 7 | ✓ | |
 | 5 | `npu_chunk_fwd_h` | GEN | 9 | ✓ | |
 | 6 | `npu_chunk_fwd_o` | GEN | 6 | ✓ | `output_layout` 走 enum |
 | 7 | `npu_chunk_gated_delta_rule_bwd_dhu` | GEN | 12 | ✓ | `Tensor?` 槽 nullopt 化的第一个现场 |
-| 8 | `npu_chunk_gated_delta_rule_bwd_finalize` | GEN | 19 | **✗** | 已注册，测试场景待补（Phase C5） |
+| 8 | `npu_chunk_gated_delta_rule_bwd_finalize` | GEN | 19 | ✓(A5) | 910b 无该内核 → 显式 SKIP；950 上由 `regression_stable_a5.py` 覆盖 |
 | 9 | `npu_chunk_gated_delta_rule_fwd` | GEN | 18 | ✓ | 4 layout × flag 组合 |
 | 10 | `npu_chunk_gated_delta_rule_fwd_h` | GEN | 9 | ✓ | |
-| 11 | `npu_chunk_gated_delta_rule_fwd_prepare` | GEN | 16 | **✗** | 已注册，测试场景待补（Phase C5） |
+| 11 | `npu_chunk_gated_delta_rule_fwd_prepare` | GEN | 16 | ✓(A5) | 6 个场景全过：`a_log`/`dt_bias` 仅在 `use_gate_in_kernel` 时下发（此前 stable 漏掉该 `when`，A5 报 161002） |
 | 12 | `npu_chunk_kda_bwd` | GEN | 26 | ✓ | 参数量最大 |
 | 13 | `npu_chunk_kda_bwd_intra` | GEN | 14 | ✓ | |
 | 14 | `npu_chunk_kda_fwd` | GEN | 19 | ✓ | 201 组 flag/layout 组合，本轮全绿 |
@@ -69,12 +73,14 @@ regression_stable_full.py:  243 PASS / 0 FAIL,  "ALL PASS: full stable parity"
 | 22 | `npu_prepare_wy_repr_bwd_full` | GEN | 12 | ✓ | |
 | 23 | `npu_recompute_w_u_fwd` | GEN | 8 | ✓ | |
 | 24 | `npu_recurrent_gated_delta_rule` | 手写 | 11 | ✓ | |
-| 25 | `npu_recurrent_kda` | 手写 | 13 | **✗** | 单独驱动 `regression_stable_abi_kda.py` 全绿，未并进全量脚本 |
+| 25 | `npu_recurrent_kda` | 手写 | 13 | ✓ | 已并入全量脚本（dense BSND + varlen + in-place state 一致） |
 | 26 | `npu_solve_tri` | GEN | 2 | ✓ | `layout` 走 enum；`ntd` 是上游内核坏域，见 §8 |
 
-统计：**生成 23 + 手写 2 = 25/26 有 stable 适配**；缺口 4 处 =
-1 个未适配（`npu_causal_conv1d`）+ 3 个已适配但未纳入全量演练（8、11、25）。
-`tools/op_stable_codegen.py --parse-only` 会逐算子打印这份状态，可直接进 CI。
+统计：**生成 24 + 手写 2 = 26/26 有 stable 适配**。演练面：910b 覆盖 24 个，
+950 覆盖 4 个（含 2 个 910b 无法加载的 A5 内核），两条 SKIP 都带原因
+（`conv1d` varlen 被内核拒绝、A5 内核需要 950 主机）。
+`tools/op_stable_codegen.py --parse-only` 逐算子打印适配状态，
+`tools/stable_coverage.py --strict` 对"缺适配"直接 FAIL。
 
 ## 3. 新增一个算子的完整改动面
 
@@ -93,10 +99,18 @@ regression_stable_full.py:  243 PASS / 0 FAIL,  "ALL PASS: full stable parity"
 
 改动计数：
 
-- **spec JSON 1 个**（`aclnn_name` / `python_name` / `args` / `outputs` / `python` / `scenarios`）；
+- **spec JSON 1 个**（`aclnn_name` / `python_name` / `args` / `outputs` / `python` / `scenarios`），
+  其中 `python` 块**不要手写**：`python tools/sync_spec_python.py --write` 从
+  `_aclnn_ctypes.py` 反推 `positional`/`defaults`/`required`（ctypes 是唯一的 API 真源）；
 - **测试场景 1 个**；
 - **白名单 0 处**——`_get_direct_op` 按算子名动态解析；`MUTATED_ARGUMENTS` / `MUTATION_FLAGS` 只在"有 inplace 语义"时才加一行；
 - 生成产物 2 个（`.inc` 与 `_stable_generated.py`）由脚本产出。
+
+生成后有两条离线门禁会立刻报错，不需要 NPU：
+`tools/op_api_parity.py`（Python 签名与 ctypes 逐参数比对）与
+`tools/stable_coverage.py`（适配器覆盖 + 场景轴声明）。改完 `.inc` 必须重编 `.so`：
+构建会把 `.inc` 的 md5 编译进产物，加载时与 Python glue 的 `_GENERATED_HASH` 比对，
+不一致直接抛错并给出重编命令。
 
 spec 里三类"坑"已有固定写法，新算子照抄即可：
 
@@ -219,21 +233,54 @@ baseline 必须清空，否则发版门禁不放行。
 
 `FLA_NPU_THIN_TRACE=1` 时打印/计数"算子 + 场景标签"；CI 在合法域内断言计数为 0。
 
-### C5. 补全本轮暴露的 3 个演练缺口
+### C5. 补全演练缺口（已完成）
 
-`npu_chunk_gated_delta_rule_bwd_finalize`、`npu_chunk_gated_delta_rule_fwd_prepare`、
-`npu_recurrent_kda` 已适配但没进全量脚本——先补场景，避免"注册了=覆盖了"的错觉。
+三个"注册了但没演练"的算子全部补上：`npu_recurrent_kda` 并入
+`regression_stable_full.py`；`npu_chunk_gated_delta_rule_fwd_prepare` /
+`_bwd_finalize` 在 910b 上打印带原因的 SKIP，在 950 上由
+`tests/regression_stable_a5.py` 全量跑（15 PASS）。
+
+### C6. Python API 契约（新增，已实现）
+
+`tools/op_api_parity.py` 用 `ast` 解析 `_aclnn_ctypes.py` 与 stable 后端，
+逐算子比对参数顺序、位置/关键字归属、默认值缺失与变化。它在本轮抓出 10 个算子
+的漂移，其中 6 个是**会直接抛 TypeError** 的：
+
+| 漂移 | 算子 | 后果 |
+| --- | --- | --- |
+| 位置参数默认值丢失（`initial_state=None`/`dht=None`） | `npu_causal_conv1d_bwd` | `f(x, y, w, dy)` 报缺参 |
+| 整个参数被漏掉（`transpose_state_layout`） | `npu_chunk_gated_delta_rule_bwd_dhu` | 传该参数报 TypeError |
+| 位置参数被改成关键字（`g`） | `npu_chunk_gated_delta_rule_fwd_h` | 位置调用报 TypeError |
+| 位置默认值丢失（`chunk_size=64`） | `npu_chunk_gated_delta_rule_fwd_prepare`、`npu_chunk_kda_fwd` | 省略即报缺参 |
+| 关键字改名（`chunk_indices` vs ctypes 的 `chunk_indices_out`） | `npu_chunk_local_cumsum` | 按 ctypes 名调用报 TypeError |
+| 默认值语义变化（`False` → `None`） | `npu_kda_gate_cumsum` | 不传该 flag 时行为不同 |
+
+修法不是逐个打补丁，而是把 `python` 块改成从 ctypes 反推
+（`tools/sync_spec_python.py`），并让生成器支持"位置参数带默认值"与
+"必填关键字参数"。规格里的 `python.positional`/`defaults` 从此由工具维护。
+
+### C7. 产物一致性（新增，已实现）
+
+`.inc` 改了但忘记重编 `.so` 时，此前会退化成一个难读的 dispatcher 错误，
+甚至静默用错 stream。现在构建把 `.inc` 的 md5 通过
+`-DFLA_STABLE_SOURCE_HASH=` 编进 `libfla_npu_thin.so`（导出
+`fla_npu_thin_source_hash()`），`_stable.load()` 用 ctypes 读出来与
+`_stable_generated._GENERATED_HASH` 比对；不一致直接抛
+"was built from different generated adapters ... Rebuild ..."。负例已实测
+（把 glue 的 hash 改掉后加载报错），旧产物（无该符号）按兼容处理。
 
 ## 6. 剩余工作与推进顺序
 
 | 阶段 | 内容 | 前置 |
 | --- | --- | --- |
-| A3 | `npu_causal_conv1d` + `causal_conv1d_update` 适配（`conv_states` in-place、`int[]`、layout enum） | 上游 #390 ABI 定稿 |
-| C1–C2 | `scenarios` + 覆盖矩阵门禁 | **C2 已实现**；C1 的逐算子轴值核对待补 |
-| C5 | 补 3 个演练缺口 | C1 |
+| A3 | ✅ `npu_causal_conv1d` 已适配；剩 `causal_conv1d_update`（#390 的 ABI 变体） | 上游 #390 定稿 |
+| C1–C2 | `scenarios` + 覆盖矩阵门禁 | **C2 已实现**；C1 的逐算子轴值核对待补（当前靠 spec 反推 + 演练记录） |
+| C5 | ✅ 3 个演练缺口已补（910b 24 个 + 950 4 个） | — |
+| C6 | ✅ Python API 契约门禁（0 漂移） | — |
+| C7 | ✅ 构建戳（陈旧 `.so` 直接报错） | — |
 | B2/B4 | int 缓存 + 校验分层，把 GDR 压回 ≤1.15× | 无 |
 | B5/C3 | 26 算子 A/B 表 + parity 基线入库 | B2/B4、C1 |
-| D1 | 默认后端链改为 stable 单条（去掉 `_get_thin_op` 的默认分支），`FLA_NPU_THIN_ABI=pybind` 仅留给 A/B | C1–C5 全绿 |
+| D1 | 默认后端链改为 stable 单条（去掉 `_get_thin_op` 的默认分支），`FLA_NPU_THIN_ABI=pybind` 仅留给 A/B | C1–C7 全绿 |
 | D2 | 删 `_C_thin`：从 `setup.py` / `scripts/build_wheel.py` 移除构建与打包路径 | D1 |
 | D3 | 发布矩阵：`py3-none-any`、`torch>=2.7.1` 下限（运行期 `aoti_torch_abi_version()` + 符号检查）、SOC 分 OPP 包 | D2 |
 
@@ -244,6 +291,8 @@ baseline 必须清空，否则发版门禁不放行。
 
 | 风险 | 影响 | 对策 |
 | --- | --- | --- |
+| codegen 的 stack 下标一旦写错（例如 stream 取到倒数第二个槽） | 编译通过、正常算子可能"碰巧"能跑，换一个 SOC 就直接 segfault | `generate_cpp` 生成后断言"读到的下标恰为 `0..len(params)`、写回恰为 `0..outputs-1`"；负例已实测能拦下 |
+| `.so` 与 Python glue 来自不同 codegen 轮次 | dispatcher 报错或静默用错 stream；本轮因此白跑三次 | C7 的构建戳（加载即比对，报错给出重编命令） |
 | dispatcher 逐参数成本（~2 µs/张量）是硬下限 | 11 张量参数以上算子难做到 1.0× | 主验收口径用"**stable 直连 vs vllm 量级线（0.073 ms）**"，而不是"vs pybind"；pybind 的公共层开销本就不该被当作基线 |
 | 轻 wrapper 算子比值偏高（GDR 1.26×） | 30 次/step × +0.02 ms ≈ +0.6 ms/step | B2/B4；并把该比值写进文档而非隐藏 |
 | 删除 `_C_thin` 后回退手段变少 | 出问题只能退 ctypes（更慢）或回滚版本 | D1 与 D2 分成两个 commit，中间留一个"stable 为默认但 pybind 仍可显式启用"的可回退点 |

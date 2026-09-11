@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 import time
 
 import torch
@@ -279,6 +280,124 @@ def scenario_bwd_dhu():
     assert_parity("chunk_gated_delta_rule_bwd_dhu",
                   ct.npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, do, dv, **kw),
                   _thin.npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, do, dv, **kw))
+
+
+def _clone_args(kwargs):
+    def clone(value):
+        if torch.is_tensor(value):
+            return value.clone()
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        return value
+
+    return {key: clone(value) for key, value in kwargs.items()}
+
+
+def _aclnn_status(exc):
+    match = re.search(r"(?:aclnnStatus|status|failed:)\s*=?\s*(\d{4,6})",
+                      str(exc))
+    return match.group(1) if match else str(exc)[:120]
+
+
+def _conv1d_outcome(fn, kwargs):
+    args = _clone_args(kwargs)
+    try:
+        out = fn(**args)
+        torch.npu.synchronize()
+        return "ok", out, args
+    except RuntimeError as exc:
+        return "err", _aclnn_status(exc), args
+
+
+def _conv1d_parity(name, kwargs, mutated=("conv_states",)):
+    """Compare npu_causal_conv1d through both backends on *separate* copies.
+
+    ``conv_states`` is written in place, so the two backends must not share it:
+    each gets a private clone and both the outputs and the mutated state are
+    compared.  When the kernel rejects the inputs outright, parity means the
+    same rejection on both paths -- recorded as SKIP with the aclnn status
+    rather than counted as coverage.
+    """
+
+    kind_ct, out_ct, args_ct = _conv1d_outcome(ct.npu_causal_conv1d, kwargs)
+    kind_th, out_th, args_th = _conv1d_outcome(_thin.npu_causal_conv1d, kwargs)
+    assert kind_ct == kind_th, (
+        f"{name}: ctypes={kind_ct} but thin={kind_th} "
+        f"({out_ct if kind_ct == 'err' else ''})")
+    if kind_ct == "err":
+        assert out_ct == out_th, (
+            f"{name}: aclnn status mismatch ctypes={out_ct} thin={out_th}")
+        print(f"SKIP {name} (both backends rejected the inputs: {out_ct})")
+        return
+    assert_parity(name, out_ct, out_th)
+    for flag in mutated:
+        if args_ct.get(flag) is None:
+            continue
+        diff = float((args_ct[flag].float() - args_th[flag].float()).abs().max().item())
+        assert diff == 0.0, f"{name}: {flag} diff={diff}"
+        print(f"PASS {name}({flag})")
+
+
+def _seq(n, start):
+    return (torch.arange(n).float() + start)
+
+
+def scenario_conv1d_prefill():
+    """Reference: test_npu_causal_conv1d_prefill_* (run_mode=0)."""
+
+    for dim, head_num in ((16, 0), (32, 2)):
+        x = (_seq(2 * 4 * dim, 1.0).reshape(2, 4, dim)).to(torch.bfloat16).npu()
+        weight = (_seq(4 * dim, 101.0).reshape(4, dim)).to(torch.bfloat16).npu()
+        bias = _seq(dim, 201.0).to(torch.bfloat16).npu()
+        states = _seq(2 * 3 * dim, 301.0).reshape(2, 3, dim).to(torch.bfloat16).npu()
+        _conv1d_parity(f"conv1d_prefill(dim={dim},head_num={head_num})", dict(
+            x=x, weight=weight, bias=bias, conv_states=states,
+            activation_mode=1, pad_slot_id=-1, run_mode=0, head_num=head_num))
+
+
+def scenario_conv1d_varlen_initial_state():
+    """Reference: test_npu_causal_conv1d_varlen_initial_state_* (run_mode=0).
+
+    A2 rejects the varlen form outright (aclnnCausalConv1dGetWorkspaceSize
+    561002) on both backends; the helper records that as SKIP with the status
+    instead of pretending the case is covered.
+    """
+
+    x = _seq(5 * 16, 1.0).to(torch.bfloat16).npu()
+    weight = _seq(4 * 16, 101.0).reshape(4, 16).to(torch.bfloat16).npu()
+    states = _seq(2 * 3 * 16, 301.0).reshape(2, 3, 16).to(torch.bfloat16).npu()
+    _conv1d_parity("conv1d_varlen_initial_state", dict(
+        x=x, weight=weight, bias=None, conv_states=states,
+        query_start_loc=[0, 2, 5], cache_indices=[0, 1],
+        initial_state_mode=[1, 0], activation_mode=0, pad_slot_id=-1,
+        run_mode=0))
+
+
+def scenario_conv1d_update():
+    """Reference: test_npu_causal_conv1d_update_* and _spec_decode_*."""
+
+    cases = [
+        ("update", dict(x=_seq(2 * 16, 1.0).reshape(2, 16).to(torch.bfloat16).npu(),
+                        weight=_seq(4 * 16, 101.0).reshape(4, 16).to(torch.bfloat16).npu(),
+                        bias=_seq(16, 201.0).to(torch.bfloat16).npu(),
+                        conv_states=_seq(2 * 3 * 16, 301.0).reshape(2, 3, 16).to(torch.bfloat16).npu(),
+                        cache_indices=[0, 1], activation_mode=1,
+                        pad_slot_id=-1, run_mode=1)),
+        ("spec_decode", dict(x=_seq(2 * 4 * 16, 1.0).reshape(2, 4, 16).to(torch.bfloat16).npu(),
+                             weight=_seq(4 * 16, 101.0).reshape(4, 16).to(torch.bfloat16).npu(),
+                             bias=_seq(16, 201.0).to(torch.bfloat16).npu(),
+                             conv_states=_seq(2 * 6 * 16, 301.0).reshape(2, 6, 16).to(torch.bfloat16).npu(),
+                             cache_indices=[0, 1], num_accepted_tokens=[2, 4],
+                             activation_mode=0, pad_slot_id=-1, run_mode=1)),
+        ("width3_no_bias", dict(x=_seq(3 * 16, 1.0).reshape(3, 16).to(torch.bfloat16).npu(),
+                                weight=_seq(3 * 16, 101.0).reshape(3, 16).to(torch.bfloat16).npu(),
+                                bias=None,
+                                conv_states=_seq(3 * 2 * 16, 301.0).reshape(3, 2, 16).to(torch.bfloat16).npu(),
+                                cache_indices=[0, 1, 2], activation_mode=0,
+                                pad_slot_id=-1, run_mode=1)),
+    ]
+    for label, kwargs in cases:
+        _conv1d_parity(f"conv1d_{label}", kwargs)
 
 
 def scenario_conv1d_bwd_bnsd():
@@ -555,7 +674,7 @@ def scenario_chunk_local_cumsum():
         ct.npu_chunk_local_cumsum(varlen, chunk_size=64, cu_seqlens=cu,
                                   chunk_indices_out=ci),
         _thin.npu_chunk_local_cumsum(varlen, chunk_size=64, cu_seqlens=cu,
-                                     chunk_indices=ci))
+                                     chunk_indices_out=ci))
 
 
 def scenario_scaled_dot_kkt():
@@ -609,6 +728,36 @@ def scenario_kda_gate_cumsum():
             f"kda_gate_cumsum({suffix})",
             ct.npu_kda_gate_cumsum(g, cs, **kw),
             _thin.npu_kda_gate_cumsum(g, cs, **kw))
+
+
+def scenario_recurrent_kda():
+    """Recurrent KDA forward through both backends, in-place state included.
+
+    The shape/settings mirror the Ascend950 driver so the same scenario is
+    exercised on A2 as well; the state tensor is written in place, so each
+    backend gets its own clone and both are compared afterwards.
+    """
+
+    B, T, H, HV, K, V = 2, 2, 2, 4, 128, 128
+    dt = torch.bfloat16
+    q = torch.randn(B, T, H, K, dtype=dt, device="npu")
+    k = torch.randn(B, T, H, K, dtype=dt, device="npu")
+    v = torch.randn(B, T, HV, V, dtype=dt, device="npu")
+    g = -torch.rand(B, T, HV, K, dtype=torch.float32, device="npu") * 5 - 1e-3
+    beta = torch.rand(B, T, HV, dtype=torch.float32, device="npu") * 0.8 + 0.1
+    cu = torch.tensor([0, T, 2 * T], dtype=torch.int64, device="npu")
+    torch.npu.synchronize()
+    st_c = torch.zeros(B, HV, V, K, dtype=torch.float32, device="npu")
+    st_t = st_c.clone()
+    kw = dict(cu_seqlens=cu, scale=K ** -0.5, layout="BSND",
+              state_v_first=True)
+    oc = ct.npu_recurrent_kda(q, k, v, g, beta, st_c, **kw)
+    ot = _thin.npu_recurrent_kda(q, k, v, g, beta, st_t, **kw)
+    torch.npu.synchronize()
+    assert_parity("recurrent_kda(dense BSND)", oc, ot)
+    diff = float((st_c.float() - st_t.float()).abs().max().item())
+    assert diff == 0.0, f"recurrent_kda: state diff={diff}"
+    print("PASS recurrent_kda(state)")
 
 
 def scenario_chunk_gated_delta_rule_fwd():
@@ -713,10 +862,14 @@ def main():
         scenario_solve_tri_dense,
         scenario_kda_gate_cumsum,
         scenario_chunk_gated_delta_rule_fwd,
+        scenario_conv1d_prefill,
+        scenario_conv1d_varlen_initial_state,
+        scenario_conv1d_update,
+        scenario_recurrent_kda,
     ]
     for fn in scenarios:
         fn()
-    print("ALL PASS: 21 thin-op parity scenarios")
+    print(f"ALL PASS: {len(scenarios)} thin-op parity scenarios")
 
 
 if __name__ == "__main__":

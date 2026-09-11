@@ -10,6 +10,22 @@
 #include "stable_recurrent_kda.cpp"
 #include "../generated/ops_stable_generated.inc"
 
+// Build stamp: the md5 of the generated adapters this library was compiled
+// from, injected by csrc_stable/build_stable.py.  fla_npu/ops/ascendc/_stable.py
+// reads it (through ctypes, no torch needed) and refuses to run against a
+// library that does not match the Python glue it was imported with, so a stale
+// .so cannot silently drive kernels with old schemas or old stack indices.
+#ifndef FLA_STABLE_SOURCE_HASH
+#define FLA_STABLE_SOURCE_HASH "unknown"
+#endif
+// The library is built with -fvisibility=hidden, so the stamp has to ask for
+// default visibility explicitly -- otherwise ctypes cannot find the symbol and
+// the check would silently pass for every artifact.
+extern "C" __attribute__((visibility("default")))
+const char* fla_npu_thin_source_hash() {
+  return FLA_STABLE_SOURCE_HASH;
+}
+
 // Exactly one library-definition block and one implementation block per
 // namespace per TU: the macros expand to a fixed static-init symbol name, so a
 // second block for the same namespace would be a redefinition.  The codegen

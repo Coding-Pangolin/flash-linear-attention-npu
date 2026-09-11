@@ -66,6 +66,7 @@ def main() -> int:
     scenarios = [
         suite.scenario_fast_gelu,
         suite.scenario_recurrent_gated_delta_rule,
+        suite.scenario_recurrent_kda,
         suite.scenario_recompute,
         suite.scenario_pwy_full,
         suite.scenario_pwy,
@@ -75,6 +76,9 @@ def main() -> int:
         suite.scenario_chunk_fwd_h,
         suite.scenario_chunk_fwd_o,
         suite.scenario_bwd_dhu,
+        suite.scenario_conv1d_prefill,
+        suite.scenario_conv1d_varlen_initial_state,
+        suite.scenario_conv1d_update,
         suite.scenario_conv1d_bwd_bnsd,
         suite.scenario_chunk_kda_fwd,
         suite.scenario_chunk_kda_fwd_variants,
@@ -90,6 +94,25 @@ def main() -> int:
     for scenario in scenarios:
         print(f"--- entering {scenario.__name__}", flush=True)
         scenario()
+
+    # Two operators only exist in the Ascend950 OPP
+    # (chunk_gated_delta_rule_fwd_prepare / _bwd_finalize).  They are exercised
+    # by their own driver instead of being silently absent: on a non-950 host
+    # this prints an explicit SKIP naming them, so the coverage record says why
+    # rather than counting them as covered.
+    device = str(torch.npu.get_device_name(0))
+    if "950" in device:
+        import regression_950_ops as a5
+
+        a5._thin = shim
+        for scenario in (a5.scenario_fwd_prepare, a5.scenario_bwd_finalize,
+                         a5.scenario_chunk_gated_delta_rule_fwd_a5):
+            print(f"--- entering {scenario.__name__} (Ascend950)",
+                  flush=True)
+            scenario()
+    else:
+        print(f"SKIP chunk_gated_delta_rule_fwd_prepare / _bwd_finalize / "
+              f"fwd(a5): requires Ascend950, this host reports {device!r}")
     print(f"\nstable ops exercised: {len(shim.calls)}")
     for name in sorted(shim.calls):
         print(f"  {name}: {shim.calls[name]} call(s)")

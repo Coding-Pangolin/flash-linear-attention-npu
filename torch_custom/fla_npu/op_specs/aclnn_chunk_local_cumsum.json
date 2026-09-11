@@ -8,7 +8,7 @@
     "positional": ["g", "chunk_size"],
     "defaults": {
       "cu_seqlens": "None",
-      "chunk_indices": "None",
+      "chunk_indices_out": "None",
       "reverse": "False",
       "scale": "1.0",
       "head_first": "True",
@@ -18,7 +18,7 @@
   "args": [
     {"name": "g", "kind": "tensor"},
     {"name": "cu_seqlens", "kind": "int_array"},
-    {"name": "chunk_indices", "kind": "int_array"},
+    {"name": "chunk_indices_out", "kind": "int_array"},
     {"name": "chunk_size", "kind": "int64"},
     {"name": "reverse", "kind": "bool"},
     {"name": "scale", "kind": "double"},

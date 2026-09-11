@@ -1,0 +1,86 @@
+{
+  "aclnn_name": "aclnnCausalConv1d",
+  "python_name": "npu_causal_conv1d",
+  "nd_only": true,
+  "mutated": [
+    "conv_states"
+  ],
+  "output": {
+    "arg": "out",
+    "alloc": "(run_mode == 0 && head_num > 0) ? ((x.dim() == 3) ? at::empty({x.size(0), head_num, x.size(1), x.size(2) / head_num}, x.options()) : ((x.dim() == 2) ? at::empty({head_num, x.size(0), x.size(1) / head_num}, x.options()) : at::empty_like(x))) : at::empty_like(x)"
+  },
+  "args": [
+    {
+      "name": "x",
+      "kind": "tensor"
+    },
+    {
+      "name": "weight",
+      "kind": "tensor"
+    },
+    {
+      "name": "bias",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "conv_states",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "query_start_loc",
+      "kind": "int_array"
+    },
+    {
+      "name": "cache_indices",
+      "kind": "int_array"
+    },
+    {
+      "name": "initial_state_mode",
+      "kind": "int_array"
+    },
+    {
+      "name": "num_accepted_tokens",
+      "kind": "int_array"
+    },
+    {
+      "name": "activation_mode",
+      "kind": "int64"
+    },
+    {
+      "name": "pad_slot_id",
+      "kind": "int64"
+    },
+    {
+      "name": "run_mode",
+      "kind": "int64"
+    },
+    {
+      "name": "head_num",
+      "kind": "int64"
+    },
+    {
+      "name": "out",
+      "kind": "out_tensor"
+    }
+  ],
+  "python": {
+    "positional": [
+      "x",
+      "weight",
+      "bias",
+      "conv_states"
+    ],
+    "defaults": {
+      "bias": "None",
+      "conv_states": "None",
+      "query_start_loc": "None",
+      "cache_indices": "None",
+      "initial_state_mode": "None",
+      "num_accepted_tokens": "None",
+      "activation_mode": "0",
+      "pad_slot_id": "-1",
+      "run_mode": "0",
+      "head_num": "0"
+    }
+  }
+}

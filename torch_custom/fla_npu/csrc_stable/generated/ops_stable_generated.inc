@@ -186,6 +186,118 @@ inline std::vector<int64_t> kda_fwd_h_sizes(const shim::Tensor& q, const shim::T
 }
 }  // namespace
 
+// ---- generated: npu_causal_conv1d ----
+using npu_causal_conv1d_GetWorkspaceFn = int (*)(
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclIntArray*,
+    const aclIntArray*,
+    const aclIntArray*,
+    const aclIntArray*,
+    int64_t,
+    int64_t,
+    int64_t,
+    int64_t,
+    aclTensor*,
+    uint64_t*, aclOpExecutor**);
+constexpr const char* kSchema_npu_causal_conv1d =
+    "npu_causal_conv1d(Tensor x, Tensor weight, Tensor? bias, Tensor? conv_states, Tensor? query_start_loc, Tensor? cache_indices, Tensor? initial_state_mode, Tensor? num_accepted_tokens, int activation_mode, int pad_slot_id, int run_mode, int head_num, int stream) -> Tensor";
+
+void boxed_npu_causal_conv1d(StableIValue* stack, uint64_t num_inputs,
+                 uint64_t num_outputs) {
+  (void)num_inputs;
+  (void)num_outputs;
+  const Tensor x_t = to<Tensor>(stack[0]);
+  const TensorMeta x_meta = meta_of(x_t);
+  const shim::Tensor x(x_t);
+  const Tensor weight_t = to<Tensor>(stack[1]);
+  const TensorMeta weight_meta = meta_of(weight_t);
+  const shim::Tensor weight(weight_t);
+  const auto bias_t = to<std::optional<Tensor>>(stack[2]);
+  const bool bias_present = bias_t.has_value();
+  const TensorMeta bias_meta = bias_present ? meta_of(*bias_t) : TensorMeta();
+  const std::optional<shim::Tensor> bias = bias_present ? std::optional<shim::Tensor>(shim::Tensor(*bias_t)) : std::nullopt;
+  const auto conv_states_t = to<std::optional<Tensor>>(stack[3]);
+  const bool conv_states_present = conv_states_t.has_value();
+  const TensorMeta conv_states_meta = conv_states_present ? meta_of(*conv_states_t) : TensorMeta();
+  const std::optional<shim::Tensor> conv_states = conv_states_present ? std::optional<shim::Tensor>(shim::Tensor(*conv_states_t)) : std::nullopt;
+  const auto query_start_loc_t = to<std::optional<Tensor>>(stack[4]);
+  const std::vector<int64_t> query_start_loc = query_start_loc_t.has_value() ? host_int_values(query_start_loc_t->get()) : std::vector<int64_t>();
+  AclIntArrayView query_start_loc_view(query_start_loc);
+  const auto cache_indices_t = to<std::optional<Tensor>>(stack[5]);
+  const std::vector<int64_t> cache_indices = cache_indices_t.has_value() ? host_int_values(cache_indices_t->get()) : std::vector<int64_t>();
+  AclIntArrayView cache_indices_view(cache_indices);
+  const auto initial_state_mode_t = to<std::optional<Tensor>>(stack[6]);
+  const std::vector<int64_t> initial_state_mode = initial_state_mode_t.has_value() ? host_int_values(initial_state_mode_t->get()) : std::vector<int64_t>();
+  AclIntArrayView initial_state_mode_view(initial_state_mode);
+  const auto num_accepted_tokens_t = to<std::optional<Tensor>>(stack[7]);
+  const std::vector<int64_t> num_accepted_tokens = num_accepted_tokens_t.has_value() ? host_int_values(num_accepted_tokens_t->get()) : std::vector<int64_t>();
+  AclIntArrayView num_accepted_tokens_view(num_accepted_tokens);
+  const int64_t activation_mode = to<int64_t>(stack[8]);
+  const int64_t pad_slot_id = to<int64_t>(stack[9]);
+  const int64_t run_mode = to<int64_t>(stack[10]);
+  const int64_t head_num = to<int64_t>(stack[11]);
+  const int64_t stream = to<int64_t>(stack[12]);
+
+  auto& rt = Runtime::instance();
+  auto get_ws = reinterpret_cast<npu_causal_conv1d_GetWorkspaceFn>(
+      rt.symbol("aclnnCausalConv1dGetWorkspaceSize"));
+  auto launch = reinterpret_cast<LaunchFn>(
+      rt.symbol("aclnnCausalConv1d"));
+  uint64_t workspace_size = 0;
+  aclOpExecutor* executor = nullptr;
+
+  std::vector<shim::Tensor> outputs;
+  outputs.push_back((run_mode == 0 && head_num > 0) ? ((x.dim() == 3) ? shim::empty({x.size(0), head_num, x.size(1), x.size(2) / head_num}, x.options()) : ((x.dim() == 2) ? shim::empty({head_num, x.size(0), x.size(1) / head_num}, x.options()) : shim::empty_like(x))) : shim::empty_like(x));
+
+  std::vector<std::unique_ptr<AclTensorView>> views;
+  views.push_back(std::make_unique<AclTensorView>(x_meta));
+  views.push_back(std::make_unique<AclTensorView>(weight_meta));
+  views.push_back(std::make_unique<AclTensorView>(bias_meta));
+  views.push_back(std::make_unique<AclTensorView>(conv_states_meta));
+  views.push_back(std::make_unique<AclTensorView>(outputs[0].defined() ? meta_of(outputs[0].tensor()) : TensorMeta()));
+
+  const int get_ret = get_ws(
+      views[0]->get(),
+      views[1]->get(),
+      views[2]->get(),
+      views[3]->get(),
+      query_start_loc_view.get(),
+      cache_indices_view.get(),
+      initial_state_mode_view.get(),
+      num_accepted_tokens_view.get(),
+      activation_mode,
+      pad_slot_id,
+      run_mode,
+      head_num,
+      views[4]->get(),
+      &workspace_size, &executor);
+  if (get_ret != 0) {
+    throw std::runtime_error(
+        "aclnnCausalConv1dGetWorkspaceSize failed: " +
+        std::to_string(get_ret));
+  }
+  Tensor workspace;
+  void* workspace_ptr = nullptr;
+  if (workspace_size != 0) {
+    workspace = allocate_bytes(static_cast<int64_t>(workspace_size),
+                                   x_meta);
+    TORCH_ERROR_CODE_CHECK(
+        aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
+  }
+  const int launch_ret = launch(workspace_ptr, workspace_size,
+                                executor,
+                                reinterpret_cast<void*>(stream));
+  if (launch_ret != 0) {
+    throw std::runtime_error(
+        "aclnnCausalConv1d failed: " +
+        std::to_string(launch_ret));
+  }
+  stack[0] = from(outputs[0].tensor());
+}
+
 // ---- generated: npu_causal_conv1d_bwd ----
 inline const char* npu_causal_conv1d_bwd_input_layout_name(int64_t code) {
   switch (code) {
@@ -224,8 +336,9 @@ void boxed_npu_causal_conv1d_bwd(StableIValue* stack, uint64_t num_inputs,
   const TensorMeta x_meta = meta_of(x_t);
   const shim::Tensor x(x_t);
   const auto y_t = to<std::optional<Tensor>>(stack[1]);
-  const TensorMeta y_meta = y_t.has_value() ? meta_of(*y_t) : TensorMeta();
-  const std::optional<shim::Tensor> y = y_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*y_t)) : std::nullopt;
+  const bool y_present = y_t.has_value();
+  const TensorMeta y_meta = y_present ? meta_of(*y_t) : TensorMeta();
+  const std::optional<shim::Tensor> y = y_present ? std::optional<shim::Tensor>(shim::Tensor(*y_t)) : std::nullopt;
   const Tensor weight_t = to<Tensor>(stack[2]);
   const TensorMeta weight_meta = meta_of(weight_t);
   const shim::Tensor weight(weight_t);
@@ -233,11 +346,13 @@ void boxed_npu_causal_conv1d_bwd(StableIValue* stack, uint64_t num_inputs,
   const TensorMeta dy_meta = meta_of(dy_t);
   const shim::Tensor dy(dy_t);
   const auto initial_state_t = to<std::optional<Tensor>>(stack[4]);
-  const TensorMeta initial_state_meta = initial_state_t.has_value() ? meta_of(*initial_state_t) : TensorMeta();
-  const std::optional<shim::Tensor> initial_state = initial_state_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
+  const bool initial_state_present = initial_state_t.has_value();
+  const TensorMeta initial_state_meta = initial_state_present ? meta_of(*initial_state_t) : TensorMeta();
+  const std::optional<shim::Tensor> initial_state = initial_state_present ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
   const auto dht_t = to<std::optional<Tensor>>(stack[5]);
-  const TensorMeta dht_meta = dht_t.has_value() ? meta_of(*dht_t) : TensorMeta();
-  const std::optional<shim::Tensor> dht = dht_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*dht_t)) : std::nullopt;
+  const bool dht_present = dht_t.has_value();
+  const TensorMeta dht_meta = dht_present ? meta_of(*dht_t) : TensorMeta();
+  const std::optional<shim::Tensor> dht = dht_present ? std::optional<shim::Tensor>(shim::Tensor(*dht_t)) : std::nullopt;
   const auto query_start_loc_t = to<std::optional<Tensor>>(stack[6]);
   const std::vector<int64_t> query_start_loc = query_start_loc_t.has_value() ? host_int_values(query_start_loc_t->get()) : std::vector<int64_t>();
   AclIntArrayView query_start_loc_view(query_start_loc);
@@ -367,9 +482,11 @@ void boxed_npu_chunk_bwd_dqkwg(StableIValue* stack, uint64_t num_inputs,
   const std::vector<int64_t> chunk_indices_values = chunk_indices_t.has_value() ? host_int_values(chunk_indices_t->get()) : std::vector<int64_t>();
   AclIntArrayView chunk_indices_view(chunk_indices_values);
   const auto w_t = to<std::optional<Tensor>>(stack[10]);
-  const TensorMeta w_meta = w_t.has_value() ? meta_of(*w_t) : TensorMeta();
+  const bool w_present = w_t.has_value();
+  const TensorMeta w_meta = w_present ? meta_of(*w_t) : TensorMeta();
   const auto g_gamma_t = to<std::optional<Tensor>>(stack[11]);
-  const TensorMeta g_gamma_meta = g_gamma_t.has_value() ? meta_of(*g_gamma_t) : TensorMeta();
+  const bool g_gamma_present = g_gamma_t.has_value();
+  const TensorMeta g_gamma_meta = g_gamma_present ? meta_of(*g_gamma_t) : TensorMeta();
   const double scale = to<double>(stack[12]);
   const int64_t chunk_size = to<int64_t>(stack[13]);
   const bool use_exp2 = to<bool>(stack[14]);
@@ -490,9 +607,11 @@ void boxed_npu_chunk_bwd_dv_local(StableIValue* stack, uint64_t num_inputs,
   const Tensor g_t = to<Tensor>(stack[3]);
   const TensorMeta g_meta = meta_of(g_t);
   const auto g_gamma_t = to<std::optional<Tensor>>(stack[4]);
-  const TensorMeta g_gamma_meta = g_gamma_t.has_value() ? meta_of(*g_gamma_t) : TensorMeta();
+  const bool g_gamma_present = g_gamma_t.has_value();
+  const TensorMeta g_gamma_meta = g_gamma_present ? meta_of(*g_gamma_t) : TensorMeta();
   const auto A_t = to<std::optional<Tensor>>(stack[5]);
-  const TensorMeta A_meta = A_t.has_value() ? meta_of(*A_t) : TensorMeta();
+  const bool A_present = A_t.has_value();
+  const TensorMeta A_meta = A_present ? meta_of(*A_t) : TensorMeta();
   const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[6]);
   const std::vector<int64_t> cu_seqlens_values = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
   AclIntArrayView cu_seqlens_view(cu_seqlens_values);
@@ -598,14 +717,17 @@ void boxed_npu_chunk_fwd_h(StableIValue* stack, uint64_t num_inputs,
   const TensorMeta u_meta = meta_of(u_t);
   const shim::Tensor u(u_t);
   const auto g_t = to<std::optional<Tensor>>(stack[3]);
-  const TensorMeta g_meta = g_t.has_value() ? meta_of(*g_t) : TensorMeta();
-  const std::optional<shim::Tensor> g = g_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*g_t)) : std::nullopt;
+  const bool g_present = g_t.has_value();
+  const TensorMeta g_meta = g_present ? meta_of(*g_t) : TensorMeta();
+  const std::optional<shim::Tensor> g = g_present ? std::optional<shim::Tensor>(shim::Tensor(*g_t)) : std::nullopt;
   const auto gk_t = to<std::optional<Tensor>>(stack[4]);
-  const TensorMeta gk_meta = gk_t.has_value() ? meta_of(*gk_t) : TensorMeta();
-  const std::optional<shim::Tensor> gk = gk_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*gk_t)) : std::nullopt;
+  const bool gk_present = gk_t.has_value();
+  const TensorMeta gk_meta = gk_present ? meta_of(*gk_t) : TensorMeta();
+  const std::optional<shim::Tensor> gk = gk_present ? std::optional<shim::Tensor>(shim::Tensor(*gk_t)) : std::nullopt;
   const auto initial_state_t = to<std::optional<Tensor>>(stack[5]);
-  const TensorMeta initial_state_meta = initial_state_t.has_value() ? meta_of(*initial_state_t) : TensorMeta();
-  const std::optional<shim::Tensor> initial_state = initial_state_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
+  const bool initial_state_present = initial_state_t.has_value();
+  const TensorMeta initial_state_meta = initial_state_present ? meta_of(*initial_state_t) : TensorMeta();
+  const std::optional<shim::Tensor> initial_state = initial_state_present ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
   const bool output_final_state = to<bool>(stack[6]);
   const int64_t chunk_size = to<int64_t>(stack[7]);
   const bool save_new_value = to<bool>(stack[8]);
@@ -738,8 +860,9 @@ void boxed_npu_chunk_fwd_o(StableIValue* stack, uint64_t num_inputs,
   const TensorMeta h_meta = meta_of(h_t);
   const shim::Tensor h(h_t);
   const auto g_t = to<std::optional<Tensor>>(stack[4]);
-  const TensorMeta g_meta = g_t.has_value() ? meta_of(*g_t) : TensorMeta();
-  const std::optional<shim::Tensor> g = g_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*g_t)) : std::nullopt;
+  const bool g_present = g_t.has_value();
+  const TensorMeta g_meta = g_present ? meta_of(*g_t) : TensorMeta();
+  const std::optional<shim::Tensor> g = g_present ? std::optional<shim::Tensor>(shim::Tensor(*g_t)) : std::nullopt;
   const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[5]);
   const std::vector<int64_t> cu_seqlens = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
   AclIntArrayView cu_seqlens_view(cu_seqlens);
@@ -833,12 +956,13 @@ using npu_chunk_gated_delta_rule_bwd_dhu_GetWorkspaceFn = int (*)(
     aclTensor*,
     uint64_t*, aclOpExecutor**);
 constexpr const char* kSchema_npu_chunk_gated_delta_rule_bwd_dhu =
-    "npu_chunk_gated_delta_rule_bwd_dhu(Tensor q, Tensor k, Tensor w, Tensor d_o, Tensor dv, Tensor? g, Tensor? gK, Tensor? h0, Tensor? dht, Tensor? cu_seqlens, Tensor? chunk_indices, float scale, int chunk_size, bool use_exp2, int stream) -> (Tensor, Tensor?, Tensor)";
+    "npu_chunk_gated_delta_rule_bwd_dhu(Tensor q, Tensor k, Tensor w, Tensor d_o, Tensor dv, Tensor? g, Tensor? gK, Tensor? h0, Tensor? dht, Tensor? cu_seqlens, Tensor? chunk_indices, float scale, int chunk_size, bool use_exp2, bool transpose_state_layout, int stream) -> (Tensor, Tensor?, Tensor)";
 
 void boxed_npu_chunk_gated_delta_rule_bwd_dhu(StableIValue* stack, uint64_t num_inputs,
                  uint64_t num_outputs) {
   (void)num_inputs;
   (void)num_outputs;
+  const bool transpose_state_layout = to<bool>(stack[14]);
   const Tensor q_t = to<Tensor>(stack[0]);
   const TensorMeta q_meta = meta_of(q_t);
   const shim::Tensor q(q_t);
@@ -855,17 +979,21 @@ void boxed_npu_chunk_gated_delta_rule_bwd_dhu(StableIValue* stack, uint64_t num_
   const TensorMeta dv_meta = meta_of(dv_t);
   const shim::Tensor dv(dv_t);
   const auto g_t = to<std::optional<Tensor>>(stack[5]);
-  const TensorMeta g_meta = g_t.has_value() ? meta_of(*g_t) : TensorMeta();
-  const std::optional<shim::Tensor> g = g_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*g_t)) : std::nullopt;
+  const bool g_present = g_t.has_value();
+  const TensorMeta g_meta = g_present ? meta_of(*g_t) : TensorMeta();
+  const std::optional<shim::Tensor> g = g_present ? std::optional<shim::Tensor>(shim::Tensor(*g_t)) : std::nullopt;
   const auto gK_t = to<std::optional<Tensor>>(stack[6]);
-  const TensorMeta gK_meta = gK_t.has_value() ? meta_of(*gK_t) : TensorMeta();
-  const std::optional<shim::Tensor> gK = gK_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*gK_t)) : std::nullopt;
+  const bool gK_present = gK_t.has_value();
+  const TensorMeta gK_meta = gK_present ? meta_of(*gK_t) : TensorMeta();
+  const std::optional<shim::Tensor> gK = gK_present ? std::optional<shim::Tensor>(shim::Tensor(*gK_t)) : std::nullopt;
   const auto h0_t = to<std::optional<Tensor>>(stack[7]);
-  const TensorMeta h0_meta = h0_t.has_value() ? meta_of(*h0_t) : TensorMeta();
-  const std::optional<shim::Tensor> h0 = h0_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*h0_t)) : std::nullopt;
+  const bool h0_present = h0_t.has_value();
+  const TensorMeta h0_meta = h0_present ? meta_of(*h0_t) : TensorMeta();
+  const std::optional<shim::Tensor> h0 = h0_present ? std::optional<shim::Tensor>(shim::Tensor(*h0_t)) : std::nullopt;
   const auto dht_t = to<std::optional<Tensor>>(stack[8]);
-  const TensorMeta dht_meta = dht_t.has_value() ? meta_of(*dht_t) : TensorMeta();
-  const std::optional<shim::Tensor> dht = dht_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*dht_t)) : std::nullopt;
+  const bool dht_present = dht_t.has_value();
+  const TensorMeta dht_meta = dht_present ? meta_of(*dht_t) : TensorMeta();
+  const std::optional<shim::Tensor> dht = dht_present ? std::optional<shim::Tensor>(shim::Tensor(*dht_t)) : std::nullopt;
   const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[9]);
   const std::vector<int64_t> cu_seqlens = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
   AclIntArrayView cu_seqlens_view(cu_seqlens);
@@ -875,7 +1003,7 @@ void boxed_npu_chunk_gated_delta_rule_bwd_dhu(StableIValue* stack, uint64_t num_
   const double scale = to<double>(stack[11]);
   const int64_t chunk_size = to<int64_t>(stack[12]);
   const bool use_exp2 = to<bool>(stack[13]);
-  const int64_t stream = to<int64_t>(stack[14]);
+  const int64_t stream = to<int64_t>(stack[15]);
 
   auto& rt = Runtime::instance();
   auto get_ws = reinterpret_cast<npu_chunk_gated_delta_rule_bwd_dhu_GetWorkspaceFn>(
@@ -1014,11 +1142,14 @@ void boxed_npu_chunk_gated_delta_rule_bwd_finalize(StableIValue* stack, uint64_t
   const Tensor a_t = to<Tensor>(stack[10]);
   const TensorMeta a_meta = meta_of(a_t);
   const auto q_rstd_t = to<std::optional<Tensor>>(stack[11]);
-  const TensorMeta q_rstd_meta = q_rstd_t.has_value() ? meta_of(*q_rstd_t) : TensorMeta();
+  const bool q_rstd_present = q_rstd_t.has_value();
+  const TensorMeta q_rstd_meta = q_rstd_present ? meta_of(*q_rstd_t) : TensorMeta();
   const auto k_rstd_t = to<std::optional<Tensor>>(stack[12]);
-  const TensorMeta k_rstd_meta = k_rstd_t.has_value() ? meta_of(*k_rstd_t) : TensorMeta();
+  const bool k_rstd_present = k_rstd_t.has_value();
+  const TensorMeta k_rstd_meta = k_rstd_present ? meta_of(*k_rstd_t) : TensorMeta();
   const auto beta_raw_t = to<std::optional<Tensor>>(stack[13]);
-  const TensorMeta beta_raw_meta = beta_raw_t.has_value() ? meta_of(*beta_raw_t) : TensorMeta();
+  const bool beta_raw_present = beta_raw_t.has_value();
+  const TensorMeta beta_raw_meta = beta_raw_present ? meta_of(*beta_raw_t) : TensorMeta();
   const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[14]);
   const std::vector<int64_t> cu_seqlens_values = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
   AclIntArrayView cu_seqlens_view(cu_seqlens_values);
@@ -1182,6 +1313,11 @@ void boxed_npu_chunk_gated_delta_rule_fwd(StableIValue* stack, uint64_t num_inpu
                  uint64_t num_outputs) {
   (void)num_inputs;
   (void)num_outputs;
+  const bool output_final_state = to<bool>(stack[17]);
+  const bool disable_recompute = to<bool>(stack[18]);
+  const bool return_intermediate_states = to<bool>(stack[19]);
+  const bool use_gate_in_kernel = to<bool>(stack[20]);
+  const bool use_beta_sigmoid_in_kernel = to<bool>(stack[21]);
   const Tensor q_t = to<Tensor>(stack[0]);
   const TensorMeta q_meta = meta_of(q_t);
   const shim::Tensor q(q_t);
@@ -1198,14 +1334,17 @@ void boxed_npu_chunk_gated_delta_rule_fwd(StableIValue* stack, uint64_t num_inpu
   const TensorMeta beta_meta = meta_of(beta_t);
   const shim::Tensor beta(beta_t);
   const auto a_log_t = to<std::optional<Tensor>>(stack[5]);
-  const TensorMeta a_log_meta = a_log_t.has_value() ? meta_of(*a_log_t) : TensorMeta();
-  const std::optional<shim::Tensor> a_log = a_log_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*a_log_t)) : std::nullopt;
+  const bool a_log_present = a_log_t.has_value();
+  const TensorMeta a_log_meta = a_log_present ? meta_of(*a_log_t) : TensorMeta();
+  const std::optional<shim::Tensor> a_log = a_log_present ? std::optional<shim::Tensor>(shim::Tensor(*a_log_t)) : std::nullopt;
   const auto dt_bias_t = to<std::optional<Tensor>>(stack[6]);
-  const TensorMeta dt_bias_meta = dt_bias_t.has_value() ? meta_of(*dt_bias_t) : TensorMeta();
-  const std::optional<shim::Tensor> dt_bias = dt_bias_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*dt_bias_t)) : std::nullopt;
+  const bool dt_bias_present = dt_bias_t.has_value();
+  const TensorMeta dt_bias_meta = dt_bias_present ? meta_of(*dt_bias_t) : TensorMeta();
+  const std::optional<shim::Tensor> dt_bias = dt_bias_present ? std::optional<shim::Tensor>(shim::Tensor(*dt_bias_t)) : std::nullopt;
   const auto initial_state_t = to<std::optional<Tensor>>(stack[7]);
-  const TensorMeta initial_state_meta = initial_state_t.has_value() ? meta_of(*initial_state_t) : TensorMeta();
-  const std::optional<shim::Tensor> initial_state = initial_state_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
+  const bool initial_state_present = initial_state_t.has_value();
+  const TensorMeta initial_state_meta = initial_state_present ? meta_of(*initial_state_t) : TensorMeta();
+  const std::optional<shim::Tensor> initial_state = initial_state_present ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
   const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[8]);
   const std::vector<int64_t> cu_seqlens = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
   AclIntArrayView cu_seqlens_view(cu_seqlens);
@@ -1220,11 +1359,6 @@ void boxed_npu_chunk_gated_delta_rule_fwd(StableIValue* stack, uint64_t num_inpu
   const bool use_qk_l2norm_in_kernel = to<bool>(stack[14]);
   const bool allow_neg_eigval = to<bool>(stack[15]);
   const bool state_v_first = to<bool>(stack[16]);
-  const bool output_final_state = to<bool>(stack[17]);
-  const bool disable_recompute = to<bool>(stack[18]);
-  const bool return_intermediate_states = to<bool>(stack[19]);
-  const bool use_gate_in_kernel = to<bool>(stack[20]);
-  const bool use_beta_sigmoid_in_kernel = to<bool>(stack[21]);
   const int64_t stream = to<int64_t>(stack[22]);
 
   auto& rt = Runtime::instance();
@@ -1379,14 +1513,17 @@ void boxed_npu_chunk_gated_delta_rule_fwd_h(StableIValue* stack, uint64_t num_in
   const TensorMeta u_meta = meta_of(u_t);
   const shim::Tensor u(u_t);
   const auto g_t = to<std::optional<Tensor>>(stack[3]);
-  const TensorMeta g_meta = g_t.has_value() ? meta_of(*g_t) : TensorMeta();
-  const std::optional<shim::Tensor> g = g_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*g_t)) : std::nullopt;
+  const bool g_present = g_t.has_value();
+  const TensorMeta g_meta = g_present ? meta_of(*g_t) : TensorMeta();
+  const std::optional<shim::Tensor> g = g_present ? std::optional<shim::Tensor>(shim::Tensor(*g_t)) : std::nullopt;
   const auto gk_t = to<std::optional<Tensor>>(stack[4]);
-  const TensorMeta gk_meta = gk_t.has_value() ? meta_of(*gk_t) : TensorMeta();
-  const std::optional<shim::Tensor> gk = gk_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*gk_t)) : std::nullopt;
+  const bool gk_present = gk_t.has_value();
+  const TensorMeta gk_meta = gk_present ? meta_of(*gk_t) : TensorMeta();
+  const std::optional<shim::Tensor> gk = gk_present ? std::optional<shim::Tensor>(shim::Tensor(*gk_t)) : std::nullopt;
   const auto initial_state_t = to<std::optional<Tensor>>(stack[5]);
-  const TensorMeta initial_state_meta = initial_state_t.has_value() ? meta_of(*initial_state_t) : TensorMeta();
-  const std::optional<shim::Tensor> initial_state = initial_state_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
+  const bool initial_state_present = initial_state_t.has_value();
+  const TensorMeta initial_state_meta = initial_state_present ? meta_of(*initial_state_t) : TensorMeta();
+  const std::optional<shim::Tensor> initial_state = initial_state_present ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
   const bool output_final_state = to<bool>(stack[6]);
   const int64_t chunk_size = to<int64_t>(stack[7]);
   const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[8]);
@@ -1500,6 +1637,8 @@ void boxed_npu_chunk_gated_delta_rule_fwd_prepare(StableIValue* stack, uint64_t 
                  uint64_t num_outputs) {
   (void)num_inputs;
   (void)num_outputs;
+  const bool use_beta_sigmoid_in_kernel = to<bool>(stack[13]);
+  const bool use_gate_in_kernel = to<bool>(stack[14]);
   const Tensor q_t = to<Tensor>(stack[0]);
   const TensorMeta q_meta = meta_of(q_t);
   const shim::Tensor q(q_t);
@@ -1516,11 +1655,13 @@ void boxed_npu_chunk_gated_delta_rule_fwd_prepare(StableIValue* stack, uint64_t 
   const TensorMeta beta_meta = meta_of(beta_t);
   const shim::Tensor beta(beta_t);
   const auto a_log_t = to<std::optional<Tensor>>(stack[5]);
-  const TensorMeta a_log_meta = a_log_t.has_value() ? meta_of(*a_log_t) : TensorMeta();
-  const std::optional<shim::Tensor> a_log = a_log_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*a_log_t)) : std::nullopt;
+  const bool a_log_present = (a_log_t.has_value() && (use_gate_in_kernel));
+  const TensorMeta a_log_meta = a_log_present ? meta_of(*a_log_t) : TensorMeta();
+  const std::optional<shim::Tensor> a_log = a_log_present ? std::optional<shim::Tensor>(shim::Tensor(*a_log_t)) : std::nullopt;
   const auto dt_bias_t = to<std::optional<Tensor>>(stack[6]);
-  const TensorMeta dt_bias_meta = dt_bias_t.has_value() ? meta_of(*dt_bias_t) : TensorMeta();
-  const std::optional<shim::Tensor> dt_bias = dt_bias_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*dt_bias_t)) : std::nullopt;
+  const bool dt_bias_present = (dt_bias_t.has_value() && (use_gate_in_kernel));
+  const TensorMeta dt_bias_meta = dt_bias_present ? meta_of(*dt_bias_t) : TensorMeta();
+  const std::optional<shim::Tensor> dt_bias = dt_bias_present ? std::optional<shim::Tensor>(shim::Tensor(*dt_bias_t)) : std::nullopt;
   const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[7]);
   const std::vector<int64_t> cu_seqlens = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
   AclIntArrayView cu_seqlens_view(cu_seqlens);
@@ -1531,8 +1672,6 @@ void boxed_npu_chunk_gated_delta_rule_fwd_prepare(StableIValue* stack, uint64_t 
   const bool allow_neg_eigval = to<bool>(stack[10]);
   const bool use_exp2 = to<bool>(stack[11]);
   const bool output_a = to<bool>(stack[12]);
-  const bool use_beta_sigmoid_in_kernel = to<bool>(stack[13]);
-  const bool use_gate_in_kernel = to<bool>(stack[14]);
   const int64_t stream = to<int64_t>(stack[15]);
 
   auto& rt = Runtime::instance();
@@ -1700,38 +1839,48 @@ void boxed_npu_chunk_kda_bwd(StableIValue* stack, uint64_t num_inputs,
   const TensorMeta Akk_meta = meta_of(Akk_t);
   const shim::Tensor Akk(Akk_t);
   const auto w_t = to<std::optional<Tensor>>(stack[7]);
-  const TensorMeta w_meta = w_t.has_value() ? meta_of(*w_t) : TensorMeta();
-  const std::optional<shim::Tensor> w = w_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*w_t)) : std::nullopt;
+  const bool w_present = w_t.has_value();
+  const TensorMeta w_meta = w_present ? meta_of(*w_t) : TensorMeta();
+  const std::optional<shim::Tensor> w = w_present ? std::optional<shim::Tensor>(shim::Tensor(*w_t)) : std::nullopt;
   const auto qg_t = to<std::optional<Tensor>>(stack[8]);
-  const TensorMeta qg_meta = qg_t.has_value() ? meta_of(*qg_t) : TensorMeta();
-  const std::optional<shim::Tensor> qg = qg_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*qg_t)) : std::nullopt;
+  const bool qg_present = qg_t.has_value();
+  const TensorMeta qg_meta = qg_present ? meta_of(*qg_t) : TensorMeta();
+  const std::optional<shim::Tensor> qg = qg_present ? std::optional<shim::Tensor>(shim::Tensor(*qg_t)) : std::nullopt;
   const auto kg_t = to<std::optional<Tensor>>(stack[9]);
-  const TensorMeta kg_meta = kg_t.has_value() ? meta_of(*kg_t) : TensorMeta();
-  const std::optional<shim::Tensor> kg = kg_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*kg_t)) : std::nullopt;
+  const bool kg_present = kg_t.has_value();
+  const TensorMeta kg_meta = kg_present ? meta_of(*kg_t) : TensorMeta();
+  const std::optional<shim::Tensor> kg = kg_present ? std::optional<shim::Tensor>(shim::Tensor(*kg_t)) : std::nullopt;
   const auto v_new_t = to<std::optional<Tensor>>(stack[10]);
-  const TensorMeta v_new_meta = v_new_t.has_value() ? meta_of(*v_new_t) : TensorMeta();
-  const std::optional<shim::Tensor> v_new = v_new_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*v_new_t)) : std::nullopt;
+  const bool v_new_present = v_new_t.has_value();
+  const TensorMeta v_new_meta = v_new_present ? meta_of(*v_new_t) : TensorMeta();
+  const std::optional<shim::Tensor> v_new = v_new_present ? std::optional<shim::Tensor>(shim::Tensor(*v_new_t)) : std::nullopt;
   const auto h_t = to<std::optional<Tensor>>(stack[11]);
-  const TensorMeta h_meta = h_t.has_value() ? meta_of(*h_t) : TensorMeta();
-  const std::optional<shim::Tensor> h = h_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*h_t)) : std::nullopt;
+  const bool h_present = h_t.has_value();
+  const TensorMeta h_meta = h_present ? meta_of(*h_t) : TensorMeta();
+  const std::optional<shim::Tensor> h = h_present ? std::optional<shim::Tensor>(shim::Tensor(*h_t)) : std::nullopt;
   const Tensor d_o_t = to<Tensor>(stack[12]);
   const TensorMeta d_o_meta = meta_of(d_o_t);
   const shim::Tensor d_o(d_o_t);
   const auto raw_g_t = to<std::optional<Tensor>>(stack[13]);
-  const TensorMeta raw_g_meta = raw_g_t.has_value() ? meta_of(*raw_g_t) : TensorMeta();
-  const std::optional<shim::Tensor> raw_g = raw_g_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*raw_g_t)) : std::nullopt;
+  const bool raw_g_present = raw_g_t.has_value();
+  const TensorMeta raw_g_meta = raw_g_present ? meta_of(*raw_g_t) : TensorMeta();
+  const std::optional<shim::Tensor> raw_g = raw_g_present ? std::optional<shim::Tensor>(shim::Tensor(*raw_g_t)) : std::nullopt;
   const auto A_log_t = to<std::optional<Tensor>>(stack[14]);
-  const TensorMeta A_log_meta = A_log_t.has_value() ? meta_of(*A_log_t) : TensorMeta();
-  const std::optional<shim::Tensor> A_log = A_log_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*A_log_t)) : std::nullopt;
+  const bool A_log_present = A_log_t.has_value();
+  const TensorMeta A_log_meta = A_log_present ? meta_of(*A_log_t) : TensorMeta();
+  const std::optional<shim::Tensor> A_log = A_log_present ? std::optional<shim::Tensor>(shim::Tensor(*A_log_t)) : std::nullopt;
   const auto dt_bias_t = to<std::optional<Tensor>>(stack[15]);
-  const TensorMeta dt_bias_meta = dt_bias_t.has_value() ? meta_of(*dt_bias_t) : TensorMeta();
-  const std::optional<shim::Tensor> dt_bias = dt_bias_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*dt_bias_t)) : std::nullopt;
+  const bool dt_bias_present = dt_bias_t.has_value();
+  const TensorMeta dt_bias_meta = dt_bias_present ? meta_of(*dt_bias_t) : TensorMeta();
+  const std::optional<shim::Tensor> dt_bias = dt_bias_present ? std::optional<shim::Tensor>(shim::Tensor(*dt_bias_t)) : std::nullopt;
   const auto initial_state_t = to<std::optional<Tensor>>(stack[16]);
-  const TensorMeta initial_state_meta = initial_state_t.has_value() ? meta_of(*initial_state_t) : TensorMeta();
-  const std::optional<shim::Tensor> initial_state = initial_state_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
+  const bool initial_state_present = initial_state_t.has_value();
+  const TensorMeta initial_state_meta = initial_state_present ? meta_of(*initial_state_t) : TensorMeta();
+  const std::optional<shim::Tensor> initial_state = initial_state_present ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
   const auto dht_t = to<std::optional<Tensor>>(stack[17]);
-  const TensorMeta dht_meta = dht_t.has_value() ? meta_of(*dht_t) : TensorMeta();
-  const std::optional<shim::Tensor> dht = dht_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*dht_t)) : std::nullopt;
+  const bool dht_present = dht_t.has_value();
+  const TensorMeta dht_meta = dht_present ? meta_of(*dht_t) : TensorMeta();
+  const std::optional<shim::Tensor> dht = dht_present ? std::optional<shim::Tensor>(shim::Tensor(*dht_t)) : std::nullopt;
   const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[18]);
   const std::vector<int64_t> cu_seqlens = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
   AclIntArrayView cu_seqlens_view(cu_seqlens);
@@ -2064,6 +2213,9 @@ void boxed_npu_chunk_kda_fwd(StableIValue* stack, uint64_t num_inputs,
                  uint64_t num_outputs) {
   (void)num_inputs;
   (void)num_outputs;
+  const bool output_final_state = to<bool>(stack[17]);
+  const bool disable_recompute = to<bool>(stack[18]);
+  const bool return_intermediate_states = to<bool>(stack[19]);
   const Tensor q_t = to<Tensor>(stack[0]);
   const TensorMeta q_meta = meta_of(q_t);
   const shim::Tensor q(q_t);
@@ -2080,14 +2232,17 @@ void boxed_npu_chunk_kda_fwd(StableIValue* stack, uint64_t num_inputs,
   const TensorMeta beta_meta = meta_of(beta_t);
   const shim::Tensor beta(beta_t);
   const auto A_log_t = to<std::optional<Tensor>>(stack[5]);
-  const TensorMeta A_log_meta = A_log_t.has_value() ? meta_of(*A_log_t) : TensorMeta();
-  const std::optional<shim::Tensor> A_log = A_log_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*A_log_t)) : std::nullopt;
+  const bool A_log_present = A_log_t.has_value();
+  const TensorMeta A_log_meta = A_log_present ? meta_of(*A_log_t) : TensorMeta();
+  const std::optional<shim::Tensor> A_log = A_log_present ? std::optional<shim::Tensor>(shim::Tensor(*A_log_t)) : std::nullopt;
   const auto dt_bias_t = to<std::optional<Tensor>>(stack[6]);
-  const TensorMeta dt_bias_meta = dt_bias_t.has_value() ? meta_of(*dt_bias_t) : TensorMeta();
-  const std::optional<shim::Tensor> dt_bias = dt_bias_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*dt_bias_t)) : std::nullopt;
+  const bool dt_bias_present = dt_bias_t.has_value();
+  const TensorMeta dt_bias_meta = dt_bias_present ? meta_of(*dt_bias_t) : TensorMeta();
+  const std::optional<shim::Tensor> dt_bias = dt_bias_present ? std::optional<shim::Tensor>(shim::Tensor(*dt_bias_t)) : std::nullopt;
   const auto initial_state_t = to<std::optional<Tensor>>(stack[7]);
-  const TensorMeta initial_state_meta = initial_state_t.has_value() ? meta_of(*initial_state_t) : TensorMeta();
-  const std::optional<shim::Tensor> initial_state = initial_state_t.has_value() ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
+  const bool initial_state_present = initial_state_t.has_value();
+  const TensorMeta initial_state_meta = initial_state_present ? meta_of(*initial_state_t) : TensorMeta();
+  const std::optional<shim::Tensor> initial_state = initial_state_present ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
   const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[8]);
   const std::vector<int64_t> cu_seqlens = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
   AclIntArrayView cu_seqlens_view(cu_seqlens);
@@ -2102,9 +2257,6 @@ void boxed_npu_chunk_kda_fwd(StableIValue* stack, uint64_t num_inputs,
   const double lower_bound = to<double>(stack[14]);
   const bool use_gate_in_kernel = to<bool>(stack[15]);
   const bool state_v_first = to<bool>(stack[16]);
-  const bool output_final_state = to<bool>(stack[17]);
-  const bool disable_recompute = to<bool>(stack[18]);
-  const bool return_intermediate_states = to<bool>(stack[19]);
   const int64_t stream = to<int64_t>(stack[20]);
 
   auto& rt = Runtime::instance();
@@ -2267,7 +2419,7 @@ using npu_chunk_local_cumsum_GetWorkspaceFn = int (*)(
     aclTensor*,
     uint64_t*, aclOpExecutor**);
 constexpr const char* kSchema_npu_chunk_local_cumsum =
-    "npu_chunk_local_cumsum(Tensor g, Tensor? cu_seqlens, Tensor? chunk_indices, int chunk_size, bool reverse, float scale, bool head_first, int output_dtype, int stream) -> Tensor";
+    "npu_chunk_local_cumsum(Tensor g, Tensor? cu_seqlens, Tensor? chunk_indices_out, int chunk_size, bool reverse, float scale, bool head_first, int output_dtype, int stream) -> Tensor";
 
 void boxed_npu_chunk_local_cumsum(StableIValue* stack, uint64_t num_inputs,
                  uint64_t num_outputs) {
@@ -2278,9 +2430,9 @@ void boxed_npu_chunk_local_cumsum(StableIValue* stack, uint64_t num_inputs,
   const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[1]);
   const std::vector<int64_t> cu_seqlens_values = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
   AclIntArrayView cu_seqlens_view(cu_seqlens_values);
-  const auto chunk_indices_t = to<std::optional<Tensor>>(stack[2]);
-  const std::vector<int64_t> chunk_indices_values = chunk_indices_t.has_value() ? host_int_values(chunk_indices_t->get()) : std::vector<int64_t>();
-  AclIntArrayView chunk_indices_view(chunk_indices_values);
+  const auto chunk_indices_out_t = to<std::optional<Tensor>>(stack[2]);
+  const std::vector<int64_t> chunk_indices_out_values = chunk_indices_out_t.has_value() ? host_int_values(chunk_indices_out_t->get()) : std::vector<int64_t>();
+  AclIntArrayView chunk_indices_out_view(chunk_indices_out_values);
   const int64_t chunk_size = to<int64_t>(stack[3]);
   const bool reverse = to<bool>(stack[4]);
   const double scale = to<double>(stack[5]);
@@ -2308,7 +2460,7 @@ void boxed_npu_chunk_local_cumsum(StableIValue* stack, uint64_t num_inputs,
   const int get_ret = get_ws(
       views[0]->get(),
       cu_seqlens_view.get(),
-      chunk_indices_view.get(),
+      chunk_indices_out_view.get(),
       chunk_size,
       reverse,
       scale,
@@ -2573,9 +2725,11 @@ void boxed_npu_kda_gate_cumsum(StableIValue* stack, uint64_t num_inputs,
   const Tensor g_t = to<Tensor>(stack[0]);
   const TensorMeta g_meta = meta_of(g_t);
   const auto A_log_t = to<std::optional<Tensor>>(stack[1]);
-  const TensorMeta A_log_meta = A_log_t.has_value() ? meta_of(*A_log_t) : TensorMeta();
+  const bool A_log_present = A_log_t.has_value();
+  const TensorMeta A_log_meta = A_log_present ? meta_of(*A_log_t) : TensorMeta();
   const auto dt_bias_t = to<std::optional<Tensor>>(stack[2]);
-  const TensorMeta dt_bias_meta = dt_bias_t.has_value() ? meta_of(*dt_bias_t) : TensorMeta();
+  const bool dt_bias_present = dt_bias_t.has_value();
+  const TensorMeta dt_bias_meta = dt_bias_present ? meta_of(*dt_bias_t) : TensorMeta();
   const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[3]);
   const std::vector<int64_t> cu_seqlens_values = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
   AclIntArrayView cu_seqlens_view(cu_seqlens_values);
@@ -3022,9 +3176,11 @@ void boxed_npu_recompute_w_u_fwd(StableIValue* stack, uint64_t num_inputs,
   const Tensor A_t = to<Tensor>(stack[3]);
   const TensorMeta A_meta = meta_of(A_t);
   const auto g_t = to<std::optional<Tensor>>(stack[4]);
-  const TensorMeta g_meta = g_t.has_value() ? meta_of(*g_t) : TensorMeta();
+  const bool g_present = g_t.has_value();
+  const TensorMeta g_meta = g_present ? meta_of(*g_t) : TensorMeta();
   const auto gk_t = to<std::optional<Tensor>>(stack[5]);
-  const TensorMeta gk_meta = gk_t.has_value() ? meta_of(*gk_t) : TensorMeta();
+  const bool gk_present = gk_t.has_value();
+  const TensorMeta gk_meta = gk_present ? meta_of(*gk_t) : TensorMeta();
   const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[6]);
   const std::vector<int64_t> cu_seqlens_values = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
   AclIntArrayView cu_seqlens_view(cu_seqlens_values);
@@ -3188,6 +3344,7 @@ namespace {
 template <typename Library>
 void register_generated_defs(Library& m) {
 
+  m.def(kSchema_npu_causal_conv1d);
   m.def(kSchema_npu_causal_conv1d_bwd);
   m.def(kSchema_npu_chunk_bwd_dqkwg);
   m.def(kSchema_npu_chunk_bwd_dv_local);
@@ -3215,6 +3372,7 @@ void register_generated_defs(Library& m) {
 
 template <typename Library>
 void register_generated_impls(Library& m) {
+  m.impl("npu_causal_conv1d", &boxed_npu_causal_conv1d);
   m.impl("npu_causal_conv1d_bwd", &boxed_npu_causal_conv1d_bwd);
   m.impl("npu_chunk_bwd_dqkwg", &boxed_npu_chunk_bwd_dqkwg);
   m.impl("npu_chunk_bwd_dv_local", &boxed_npu_chunk_bwd_dv_local);

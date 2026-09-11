@@ -531,7 +531,7 @@ T5 明细（host P50，ms；batch 8 / batch 100 两轮）：
 | 项 | 结果 | 证据 |
 | --- | --- | --- |
 | 适配覆盖 | **26/26**（24 codegen + 2 手写） | `tools/stable_coverage.py --strict` 退出码 0 |
-| 910b 全量 parity | **256 PASS / 0 FAIL**，24 个算子被真实调用 | `regression_stable_full.py`，`ALL PASS: full stable parity` |
+| 910b 全量 parity | **266 PASS / 0 FAIL**，250 个场景 + 11 条带原因 SKIP（见 §8.5） | `regression_stable_full.py`，`ALL PASS: full stable parity` |
 | 950 专属 parity | **15 PASS / 0 FAIL**，4 个算子 | `regression_stable_a5.py`，`ALL PASS: Ascend950 stable parity` |
 | Python API 契约 | 26 个算子 **0 漂移** | `tools/op_api_parity.py` |
 | 产物 | 245 736 B、0 个 `_ZN2at/_ZN3c10`、38 个 `aoti_torch_*`、带构建戳 | 221 上 `nm -D` |
@@ -647,10 +647,37 @@ main（#390 之后）：    specs checked: 26   mismatched: 1
 
 ```
 public dispatch: 24 operators, backends ['stable'], no fallback
-ALL PASS: full stable parity          (259 PASS，基线 246 + 3 条带原因 SKIP)
+ALL PASS: full stable parity          (当时 259 PASS，基线 246 + 3 条带原因 SKIP)
 ```
 
 顺带把四种模式的行为钉住了：默认 `stable`；`FLA_NPU_THIN_TRACE=1` 逐算子打印
 `[fla-npu] <op>: stable`；`FLA_NPU_THIN_ABI=ctypes` 显示 `ctypes` 但**不计**回退
 （那是显式选择）；`FLA_NPU_THIN_VALIDATE=1` 显示 `ctypes` 并记一次回退（带原因）。
 这样"某个算子悄悄退回 ctypes"这件事从"没人会发现"变成"跑一次就报"。
+
+### 8.5 场景广度补强：把"声明了但没跑"找出来（2026-09-11 收尾）
+
+`tools/coverage_gap_report.py` 按**算子**对齐"声明的合法域"与"跑过的场景"——
+全局字符串匹配会骗人（别的算子跑过 BSND 会让 `chunk_fwd_o` 看起来也跑过），
+所以场景名先按算子过滤，再逐轴比对。它找出的缺口逐条处理：
+
+| 算子 | 结果 |
+| --- | --- |
+| `chunk_fwd_o` | 新增 **NTD** 通过；BSND / TND / `use_exp2` / `transpose_state_layout` → 内核 161001，两条后端一致 → SKIP |
+| `causal_conv1d_bwd` | 新增 BSND / TND / NTD → 内核 561002（两条后端一致）→ SKIP；本 OPP 只有 BNSD 可用 |
+| `chunk_local_cumsum` | 新增 `output_dtype=bfloat16` 通过；`head_first=False` → 161001 → SKIP |
+| `recurrent_kda` | 新增 **TND**（含 in-place state 一致）通过 |
+| `chunk_kda_bwd_intra` | 新增 **BSND** 通过 |
+| `chunk_gated_delta_rule_fwd` | 场景标签补上 layout（`BNSD_B2_...`），覆盖记录才能读出来 |
+
+改完的基线：910B3 **250 通过 + 11 条带原因 SKIP**（原来 246 + 3），全量 **266 PASS**。
+SKIP 全部带具体 aclnn 状态码，而不是"跳过"。
+
+两个新发现，都记进了文档而不是藏起来：
+
+1. conv1d 家族在本 OPP 上只有最基础的那种形态可用（前向 varlen、反向三种 layout 全部
+   561002）——这正好解释了 #390 为什么必须同时换 OPP。
+2. `npu_solve_tri(layout="tnd")` 会让进程**静默崩溃**，ctypes 与 stable 都一样。
+   崩溃没有可兼容的语义，所以三处（ctypes 参考、stable 的 `python.pre`、pybind 的
+   `_thin.py`）都改成显式拒绝并说明原因；`scenario_solve_tri_guards` 钉住"两条后端
+   都必须报错而不是崩"。

@@ -187,6 +187,7 @@ def main() -> int:
         suite.scenario_chunk_local_cumsum,
         suite.scenario_scaled_dot_kkt,
         suite.scenario_solve_tri_dense,
+        suite.scenario_solve_tri_guards,
         suite.scenario_kda_gate_cumsum,
         suite.scenario_chunk_gated_delta_rule_fwd,
     ]

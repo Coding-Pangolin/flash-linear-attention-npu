@@ -9,6 +9,7 @@ Usage:  python -m unittest tests.test_stable_gates
 """
 from __future__ import annotations
 
+import ast
 import ctypes
 import hashlib
 import importlib.util
@@ -99,6 +100,37 @@ class GeneratedArtifactTest(unittest.TestCase):
         good = lines + ["  const int64_t stream = to<int64_t>(stack[15]);"]
         good.append("  stack[0] = from(outputs[0]);")
         codegen._check_stack_indices("demo", good, 15, 1)
+
+    def test_generated_wrappers_call_the_schema_positionally(self) -> None:
+        """Every wrapper must hand the dispatcher one value per schema slot.
+
+        This is the check that operator-level tests cannot always provide: two
+        of the operators have no kernel in any available OPP, so the only thing
+        that can be verified about them is that their wrapper builds the call
+        the schema describes.  It is also exactly the bug that shipped once --
+        hidden ABI slots were skipped instead of passed as None, shifting every
+        argument after them ("unable to cast 1 to Tensor").
+        """
+
+        tree = ast.parse(GENERATED_PY.read_text(encoding="utf-8"))
+        schema_sizes: dict[str, int] = {}
+        call_sizes: dict[str, int] = {}
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Assign)
+                    and getattr(node.targets[0], "id", "") == "_SIG"
+                    and isinstance(node.value, ast.Dict)):
+                for key, value in zip(node.value.keys, node.value.values):
+                    schema_sizes[key.value] = len(value.elts)
+            # _op("<name>")(<args...>)
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Call)
+                    and getattr(node.func.func, "id", "") == "_op"
+                    and isinstance(node.func.args[0], ast.Constant)):
+                call_sizes[node.func.args[0].value] = len(node.args)
+        self.assertTrue(schema_sizes and call_sizes)
+        self.assertEqual(sorted(schema_sizes), sorted(call_sizes))
+        for name, size in call_sizes.items():
+            # The schema is the inputs; the wrapper appends the stream.
+            self.assertEqual(size, schema_sizes[name] + 1, name)
 
 
 class GateCommandTest(unittest.TestCase):

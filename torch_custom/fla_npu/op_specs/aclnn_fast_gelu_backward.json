@@ -3,13 +3,29 @@
   "python_name": "npu_fast_gelu_custom_backward",
   "nd_only": true,
   "mutated": [],
-  "output": {"arg": "out", "source": "grad", "dtype": "same"},
+  "output": {
+    "arg": "out",
+    "source": "grad",
+    "dtype": "same"
+  },
   "python": {
-    "positional": ["grad", "self"]
+    "positional": [
+      "grad",
+      "self"
+    ]
   },
   "args": [
-    {"name": "grad", "kind": "tensor"},
-    {"name": "self", "kind": "tensor"},
-    {"name": "out", "kind": "out_tensor"}
+    {
+      "name": "grad",
+      "kind": "tensor"
+    },
+    {
+      "name": "self",
+      "kind": "tensor"
+    },
+    {
+      "name": "out",
+      "kind": "out_tensor"
+    }
   ]
 }

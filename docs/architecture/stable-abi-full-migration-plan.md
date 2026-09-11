@@ -179,6 +179,33 @@ ctypes_host ≈ 0.24–0.63 ms   ← 其中 91% 是 Python 里建销 descriptor 
 按"stable 直连 ≤ vllm-ascend 量级线（0.073 ms）"这条主口径，我们已经在量级内；
 与 pybind 的比值是次要口径，且 pybind 已不在默认链里（D1）。
 
+### 4.4 逐算子 host A/B（B5，2026-09-11 实测）
+
+`tests/bench_stable_host.py` 复用 `regression_thin_ops` 的场景输入（即已被证明逐位
+一致的那些输入），只把两个后端的调用挂上计时器，跑 4 轮取 P50。测的是
+**host enqueue**：不含 `synchronize`；两次调用之间的 parity 比对会强制同步，
+所以两条后端面对同样的（空闲流水）条件，**比值可比**，绝对值比背靠背 decode 低。
+
+结果（910B3，24 个可跑算子，单位 ms）：**每一个算子 stable 都明显快于 ctypes**，
+比值区间 **0.19×–0.39×**（即快 2.6–5.3 倍）。
+
+| 算子 | ctypes | stable | 比值 |
+| --- | --- | --- | --- |
+| `npu_chunk_local_cumsum`（最差） | 0.4282 | 0.1659 | 0.39× |
+| `npu_chunk_kda_bwd` | 0.9533 | 0.3421 | 0.36× |
+| `npu_fast_gelu_custom` | 0.3408 | 0.1106 | 0.32× |
+| `npu_chunk_gated_delta_rule_fwd` | 0.7890 | 0.2119 | 0.27× |
+| `npu_solve_tri` | 1.1486 | 0.2705 | 0.24× |
+| `npu_chunk_bwd_dqkwg` | 1.1547 | 0.2544 | 0.22× |
+| `npu_recurrent_kda`（最好） | 0.6832 | 0.1307 | 0.19× |
+
+完整 24 行落在 `tests/bench_stable_host_910b.json`（可 diff 的历史记录）。
+剩下 2 个（`chunk_gated_delta_rule_fwd_prepare` / `_bwd_finalize`）是 A5 专属内核，
+910b 上不参与这张表；它们的正确性由 `regression_stable_a5.py` 在 950 上覆盖。
+
+结论：**"不回退 thin" 这条要求在本轮拿到了逐算子的证据**——不是抽样外推，
+而是 24/24 都快于我们此前实际发货的 ctypes 路径。
+
 ### 4.3 与 vllm-ascend 的内部分工差异（口径对齐）
 
 vllm-ascend 走的是同一条 dispatcher 路线（C++ op + `EXEC_NPU_CMD`），差异只在：
@@ -305,7 +332,7 @@ baseline 必须清空，否则发版门禁不放行。
 | B2 | ✅ int 缓存（varlen 路径 −39%） | — |
 | B4 | 校验分层（schema + C++ 廉价断言），把 GDR 压回 ≤1.15× | 无 |
 | C3 | ✅ parity 基线入库（910B3 245 + 950PR 12，丢失场景即 FAIL） | — |
-| B5 | 26 算子 A/B 表 | B4、C1 |
+| B5 | ✅ 逐算子 A/B 表（`tests/bench_stable_host.py`，24 个可跑算子全部快于 ctypes，比值 0.19–0.39×） | — |
 | D1 | ✅ 默认链 stable → ctypes；`FLA_NPU_THIN_ABI=pybind/ctypes` 才算显式切换（顺带修掉 `=ctypes` 其实没生效的老问题） | — |
 | D2 | ✅ 默认构建不再编 `_C_thin`，wheel 自带 `libfla_npu_thin.so`；一键编包产物 `py3-none-any` 并在干净目录安装后跑通全量 | — |
 | D3 | ✅ 发布矩阵：ABI-free wheel 声明 `torch>=2.7.1` / `torch_npu>=2.7.1` 下限（pybind wheel 仍是精确 pin），加载失败时给出"需要 ≥2.7.1"的明确报错 | — |

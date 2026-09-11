@@ -31,6 +31,13 @@
 - **正确性**：每场景 ctypes vs stable 逐输出 `diff == 0.0`（含 None 掩码与返回顺序），inplace / version 契约一致。
 - **依赖**：wheel `py3-none-any`，包内只有 `libfla_npu_thin.so`；`nm -D` 里 0 个 `_ZN2at/_ZN3c10`；同一产物在 torch 2.7.1 与 2.9 上都能加载并通过 parity。
 - **失败语义**：合法输入逐位一致；非法输入保证**报错、不崩**，报错类型不保证同型（与 vllm-ascend 一致）。
+  需要精确消息时用 `FLA_NPU_THIN_VALIDATE=1`（整条调用改走 ctypes 参考实现，全量 Python 校验 +
+  同一个 kernel，合法输入结果不变）：
+
+  ```
+  default      RuntimeError: aclnnChunkFwdHGetWorkspaceSize failed: 161002
+  validate=1   RuntimeError: npu_chunk_fwd_h: exactly one of g and gk must be provided.
+  ```
 
 当前证据（221 / 910B3，本轮复跑）：
 
@@ -161,7 +168,7 @@ ctypes_host ≈ 0.24–0.63 ms   ← 其中 91% 是 Python 里建销 descriptor 
 | B1b | `load()` 只解析一次库路径（原来每次调用都要 `os.environ.get` + 文件 stat）；`_current_stream_ptr()` 缓存**访问器函数**（不缓存 stream 值） | **已完成** | GDR 公共路径 0.1188 → 0.0885 ms；stream 仍逐调用读取，避免多线程串流 |
 | B2 | `int[]` 按 `tuple(values)` 缓存 host int64 张量（只缓存 list/tuple；tensor 直接透传） | **已完成** | `chunk_scaled_dot_kkt` varlen 公共路径 0.1602 → 0.0976 ms（−39%），实测复用同一张量三次逐位一致 |
 | B3 | stream：每调用 raw accessor（~1.2 µs），**不做进程级缓存** | 已完成（含 vLLM 崩溃教训） | 正确性优先 |
-| B4 | 校验分层：schema 免费 + C++ 廉价断言 + 算子自身合法域；全量校验只在 `FLA_NPU_THIN_VALIDATE=1` | 待做 | 省 30–50 µs/次（若误搬 ctypes 校验则倒亏） |
+| B4 | ✅ 校验分层：schema 免费 + 算子自身合法域；`FLA_NPU_THIN_VALIDATE=1` 时整条调用走 ctypes 参考实现（全量 Python 校验 + 同一个 kernel，结果逐位一致），用于报错定位与"launcher vs kernel"二分 | 已完成 | 默认不付校验成本；非法输入在 VALIDATE 下给出精确消息 |
 | B5 | 每算子交替采样 A/B（两轮，P50+P90） | 待做（当前只有 3 个算子） | 出 26 行验收表 |
 
 **"不能回退 thin" 的落点**就是 B2/B4：GDR 现在 1.26×，必须压回 ≤1.15×；

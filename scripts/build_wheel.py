@@ -52,6 +52,37 @@ def _runtime_pins() -> list[str]:
     return pins
 
 
+def _prepare_abi_free_launcher() -> None:
+    """Stage the ABI-free launcher and drop stale pybind leftovers.
+
+    ``pip wheel`` builds in a temporary copy of the project, so preparing the
+    package directory here (before the wheel is built) is what actually decides
+    what ships: without it a stale ``_C_thin*.so`` from an earlier in-place build
+    gets packaged as data and the wheel claims ``py3-none-any`` while holding a
+    cpXXX binary.
+    """
+
+    package_dir = REPO_ROOT / "torch_custom" / "fla_npu" / "fla_npu"
+    if not package_dir.is_dir():
+        return
+    if os.getenv("FLA_NPU_BUILD_THIN", "TRUE").upper() in {"0", "FALSE", "NO",
+                                                          "OFF"}:
+        for pattern in ("_C_thin*.so", "_C_thin*.pyd"):
+            for stale in package_dir.glob(pattern):
+                stale.unlink()
+                print(f"[fla-npu build] dropped stale {stale.name}", flush=True)
+    if os.getenv("FLA_NPU_BUILD_STABLE_ABI", "FALSE").upper() not in {
+            "1", "TRUE", "YES", "ON"}:
+        return
+    builder = (REPO_ROOT / "torch_custom" / "fla_npu" / "csrc_stable"
+               / "build_stable.py")
+    target = package_dir / "libfla_npu_thin.so"
+    subprocess.run([sys.executable, str(builder), "--no-debug-probe",
+                    "--out", str(target)], check=True)
+    print(f"[fla-npu build] staged {target.name} ({target.stat().st_size} bytes)",
+          flush=True)
+
+
 def _inject_runtime_pins(wheel_path: Path) -> None:
     """Add Requires-Dist pins to a wheel that carries a compiled launcher.
 
@@ -239,6 +270,7 @@ def main() -> int:
 
     wheel_dir = _resolve_output_dir(args.wheel_dir)
     wheel_dir.mkdir(parents=True, exist_ok=True)
+    _prepare_abi_free_launcher()
     command = [
         sys.executable,
         "-m",

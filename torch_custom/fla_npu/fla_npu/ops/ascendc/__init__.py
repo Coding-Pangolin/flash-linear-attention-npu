@@ -286,6 +286,9 @@ def _get_torch_op(name: str):
 @functools.lru_cache(maxsize=None)
 def _get_direct_op(name: str):
     _prepare_direct_runtime()
+    stable_op = _get_stable_op(name)
+    if stable_op is not None:
+        return _wrap_mutable_direct_op(name, stable_op)
     thin_op = _get_thin_op(name)
     if thin_op is not None:
         return _wrap_mutable_direct_op(name, thin_op)
@@ -295,9 +298,38 @@ def _get_direct_op(name: str):
         raise AttributeError(f"fla_npu.ops.ascendc has no ctypes Ascend C op {name}.") from exc
     return _wrap_mutable_direct_op(name, op)
 
+
+def _stable_backend_selected() -> bool:
+    return (os.environ.get("FLA_NPU_THIN_ABI") or "").strip().lower() == "stable"
+
+
+def _get_stable_op(name: str):
+    """Return the Stable-ABI backend entry for *name* when it is selected.
+
+    ``FLA_NPU_THIN_ABI`` selects the backend explicitly:
+      * unset / ``pybind`` -> compiled ``_C_thin`` (current default)
+      * ``stable``         -> ``libfla_npu_thin.so`` via torch.ops, falling back
+                              to pybind/ctypes for operators it does not carry
+      * ``ctypes``         -> always the Python ctypes path
+    """
+
+    if not _stable_backend_selected():
+        return None
+    try:
+        from . import _stable
+    except Exception:
+        return None
+    if not _stable.available():
+        return None
+    return getattr(_stable, name, None)
+
+
 def _get_thin_op(name: str):
     """Return the thin C++ adapter for *name* when enabled, else None."""
 
+    mode = (os.environ.get("FLA_NPU_THIN_ABI") or "").strip().lower()
+    if mode == "ctypes":
+        return None
     flag = os.environ.get("FLA_NPU_THIN_LAUNCHER")
     if flag is not None and flag.upper() in {"0", "FALSE", "NO", "OFF"}:
         return None

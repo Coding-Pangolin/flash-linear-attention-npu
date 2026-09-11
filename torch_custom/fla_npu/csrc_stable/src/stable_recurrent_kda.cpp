@@ -147,9 +147,9 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
     *has_final_state = false;
     return;
   }
-  *has_final_state = true;
   if (!inplace_final_state) {
     *final_state = state_holder;  // the scratch we allocated and own
+    *has_final_state = true;
     return;
   }
   // Inplace: the result lives in the caller's own tensor.  Handing that handle
@@ -159,7 +159,11 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
   // the input StableIValue has the same problem.  The Python wrapper therefore
   // substitutes the caller's tensor (exactly what ctypes returns) and the
   // kernel's own contract (state is an in/out ref) is what guarantees the value.
-  *final_state = Tensor();  // undefined -> Python fills it in
+  // Slot 1 must be *nullopt* here, not an undefined Tensor: packing a
+  // default-constructed Tensor hands the dispatcher an uninitialised handle,
+  // which crashes (torch 2.7.1 reproduced it reliably; 2.9 only got lucky).
+  *final_state = Tensor();
+  *has_final_state = false;  // Python substitutes the caller's tensor
 }
 
 void boxed_recurrent_kda(StableIValue* stack, uint64_t num_inputs,

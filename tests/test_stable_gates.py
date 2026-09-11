@@ -48,7 +48,10 @@ class GeneratedArtifactTest(unittest.TestCase):
         match = re.search(r'^_GENERATED_HASH = "([0-9a-f]{32})"$', glue,
                           re.MULTILINE)
         self.assertIsNotNone(match, "glue carries no _GENERATED_HASH")
-        expected = hashlib.md5(GENERATED_INC.read_bytes()).hexdigest()
+        # Newline-normalised: the file is CRLF in a Windows checkout and LF
+        # elsewhere, and the stamp must not depend on that.
+        expected = hashlib.md5(
+            GENERATED_INC.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
         self.assertEqual(
             match.group(1), expected,
             "ops_stable_generated.inc and _stable_generated.py are out of sync; "
@@ -135,6 +138,26 @@ class GateCommandTest(unittest.TestCase):
         self.assertTrue(
             any("not-a-layout" in p for p in problems),
             f"an impossible scenario value was accepted: {problems}")
+
+    def test_coverage_gate_records_integer_axes(self) -> None:
+        """Integer knobs are declared rather than derived.
+
+        conv1d's legal domain is not visible in its argument *kinds*:
+        ``run_mode`` switches prefill/update, ``head_num`` switches the output
+        reshape, and ``activation_mode`` switches the epilogue.  Those values
+        come from the unit tests, so they are declared in the spec and the gate
+        has to accept them (they are backed by real arguments) and keep them in
+        the reported axis set.
+        """
+
+        module = _load_tool("stable_coverage.py")
+        report = module.evaluate()
+        row = next(entry for entry in report["rows"]
+                   if entry["op"] == "npu_causal_conv1d")
+        self.assertEqual(row["problems"], [])
+        self.assertEqual(row["axes"]["run_mode"], [0, 1])
+        self.assertEqual(row["axes"]["head_num"], [0, 2])
+        self.assertEqual(row["axes"]["activation_mode"], [0, 1])
 
 
 class BuildStampTest(unittest.TestCase):

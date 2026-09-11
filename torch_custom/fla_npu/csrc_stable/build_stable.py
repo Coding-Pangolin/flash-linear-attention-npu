@@ -40,9 +40,17 @@ def generated_hash() -> str:
     not match the glue it was imported with -- a .so left over from an earlier
     codegen run otherwise fails deep inside the dispatcher (or worse, silently
     launches on a stale stream).
+
+    Newlines are normalised first: git checks the file out with CRLF on Windows
+    and LF everywhere else, and a stamp that changes with the checkout would
+    reject a perfectly good library.
     """
 
-    return hashlib.md5(GENERATED.read_bytes()).hexdigest()
+    return hashlib.md5(_normalised(GENERATED.read_bytes())).hexdigest()
+
+
+def _normalised(payload: bytes) -> bytes:
+    return payload.replace(b"\r\n", b"\n")
 
 
 def torch_paths() -> tuple[list[str], str]:

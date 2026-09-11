@@ -735,7 +735,10 @@ void register_generated_defs(Library& m) {
     # The same md5 is injected into the .so by csrc_stable/build_stable.py; the
     # two are compared at load time so a stale library cannot run with fresh
     # glue (see _stable.py).
-    generated_hash = hashlib.md5(args.out.read_bytes()).hexdigest()
+    # Newline-normalised, exactly like csrc_stable/build_stable.py: the stamp
+    # must not depend on whether git checked the file out with CRLF.
+    generated_hash = hashlib.md5(
+        args.out.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
     print(f"wrote {args.out} ({len(supported)} adapters)")
 
     # Python glue: same user-facing signatures as the pybind wrappers, with the

@@ -98,5 +98,11 @@
       "name": "dh0",
       "kind": "out_tensor"
     }
-  ]
+  ],
+  "scenarios": {
+    "activation": [
+      0,
+      1
+    ]
+  }
 }

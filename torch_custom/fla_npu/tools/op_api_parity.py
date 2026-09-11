@@ -75,6 +75,14 @@ def signatures(path: Path) -> dict[str, dict]:
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name.startswith("npu_"):
             out[node.name] = _signature(node)
+        elif (isinstance(node, ast.ImportFrom)
+              and (node.module or "").endswith("_aclnn_ctypes")):
+            # A backend may re-export the reference function instead of defining
+            # its own wrapper (the conv1d family shares one implementation);
+            # the signature is the reference's by construction.
+            for alias in node.names:
+                if alias.name.startswith("npu_"):
+                    out[alias.asname or alias.name] = {"reexport": True}
     return out
 
 
@@ -136,6 +144,9 @@ def evaluate() -> dict:
             if name not in table:
                 continue
             found = True
+            if table[name].get("reexport"):
+                rows.append({"op": name, "backend": label, "problems": []})
+                continue
             # Every backend that exposes the operator is compared, not just the
             # one that happens to answer first: FLA_NPU_THIN_ABI switches
             # between them, so a caller must not hit a renamed keyword by

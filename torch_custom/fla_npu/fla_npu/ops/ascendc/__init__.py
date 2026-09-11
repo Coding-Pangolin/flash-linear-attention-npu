@@ -309,6 +309,22 @@ def _abi_mode() -> str:
     return (os.environ.get("FLA_NPU_THIN_ABI") or "").strip().lower()
 
 
+def _validate_requested() -> bool:
+    """Whether the caller asked for full input validation.
+
+    The launcher checks what is free (the dispatcher schema) and otherwise lets
+    the operator report its own illegal-domain errors, which is what keeps the
+    hot path cheap.  FLA_NPU_THIN_VALIDATE=1 switches to the ctypes reference
+    for the whole call: it performs the full Python validation and drives the
+    same kernel, so results stay bit-identical while illegal inputs produce a
+    precise message instead of an aclnn status.  It is a diagnosis switch, not
+    a performance mode.
+    """
+
+    value = os.environ.get("FLA_NPU_THIN_VALIDATE")
+    return value is not None and value.upper() in {"1", "TRUE", "YES", "ON"}
+
+
 def _pybind_requested() -> bool:
     """Whether the pybind launcher was asked for explicitly."""
 
@@ -329,6 +345,8 @@ def _stable_backend_selected() -> bool:
     # pybind launcher, so FLA_NPU_THIN_ABI=ctypes still picked the stable
     # backend and the documented "force the reference path" escape hatch did
     # nothing.
+    if _validate_requested():
+        return False
     return _abi_mode() not in ("pybind", "ctypes")
 
 

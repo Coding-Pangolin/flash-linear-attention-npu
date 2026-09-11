@@ -210,7 +210,25 @@ Python 层（stream 查询 + mutation 契约），不是 stable 特有开销。
    `aoti_torch_is_defined`），改为自己记录"有没有第二输出"——产物符号数 42 → 38，
    这也是 2.7.1 能加载它的必要条件。
 
-### 6.10 Phase 2 结论修正：跨版本"加载"成立，"设备级运行"未达标
+### 6.10 Phase 2 完成：同一产物在 torch 2.7.1 与 2.9 上都跑通 parity
+
+**（2026-09-11 复测，门禁已满足）** 上面的三处结论里，第 1、2 条成立，
+第 3 条被修掉后不再是阻塞：
+
+根因是 **KDA 在 inplace 分支把 `has_final_state` 置真、却返回一个默认构造
+（未初始化 handle）的 `Tensor`**：dispatcher 会拿这个未初始化句柄去转换，
+torch 2.7.1 上稳定崩，2.9 上只是"运气好没崩"。改成该分支返回 **nullopt**
+（由 Python 层替换成调用方张量）后：
+
+| 环境（同一份 2.9 头编出的 x86_64 产物） | T1 parity | T2 契约 | host P50（ms） |
+| --- | --- | --- | --- |
+| torch **2.7.1**（py3.10，fzy + env_a5all） | **out/final_state/state 全 0.0** | inplace +1 / non-inplace +0 ✓ | ctypes 0.0904 / pybind 0.0128 / stable 0.0135 / stable+契约 0.0244（**1.05× pybind**） |
+| torch 2.9（py3.12，221 构建环境） | 全 0.0 | ✓ | ctypes 0.6316 / pybind 0.0760 / stable 0.0876 / stable+契约 0.0999 |
+
+**Phase 2 门禁（同一产物在 ≥2 个 torch 版本上 parity 全绿）由此满足**：
+torch 轴（C++ ABI）确实被消掉了，最低可运行版本可低到 2.7.1。
+
+### 6.10b 修正前的记录（保留以说明排查过程）
 
 用同一份 2.9 头编出的 x86_64 产物在 241 上实测：
 
@@ -228,6 +246,8 @@ Python 层（stream 查询 + mutation 契约），不是 stable 特有开销。
 **因此 Phase 2 的门禁（同一产物在 ≥2 个 torch 版本上 parity 全绿）尚未满足**，
 当前结论只能写到："跨版本**加载与注册**成立；跨版本**运行**在 2.7.1 上待修"。
 最低可运行版本暂按 2.9 计。
+
+（这一条在 §6.10 里已修掉：nullopt 化第二输出即可。）
 
 计划里 Phase 3 的门禁是"T1/T2/T3/T6 全绿 + T5 达标"。现状是 **T5 未达标**
 （stable 直连 0.0757 vs pybind 直连 0.0365，约 2×；公共路径约 1.7×），

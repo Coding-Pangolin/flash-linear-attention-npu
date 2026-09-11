@@ -281,6 +281,9 @@
     "passed": {
       "bwd_finalize(dense)": 0.0,
       "chunk_fwd_h": 0.0,
+      "chunk_fwd_h(final_state)": 0.0,
+      "chunk_fwd_h(state_v_first)": 0.0,
+      "chunk_fwd_h(use_exp2)": 0.0,
       "chunk_fwd_o(BNSD)": 0.0,
       "chunk_fwd_o(NTD)": 0.0,
       "chunk_gated_delta_rule_fwd(BNSD_B2_Hk2_Hv4_T128_V128)": 0.0,
@@ -289,6 +292,7 @@
       "chunk_gated_delta_rule_fwd(TND_varlen_exp2_l2norm)": 0.0,
       "chunk_gated_delta_rule_fwd_h(dense)": 0.0,
       "chunk_gated_delta_rule_fwd_h(final)": 0.0,
+      "chunk_gated_delta_rule_fwd_h(state_v_first)": 0.0,
       "chunk_local_cumsum(fixed_bf16)": 0.0,
       "chunk_local_cumsum(fixed_fp16)": 0.0,
       "chunk_local_cumsum(odd_t_bf16)": 0.0,
@@ -315,6 +319,7 @@
       "solve_tri(bsnd_fp16_bt64)": 0.0
     },
     "skipped": {
+      "chunk_fwd_h(save_new_value_false)": "reference rejects by validation (npu_chunk_fwd_h: save_new_value must be True.); thin rejects via the kernel (161002)",
       "chunk_fwd_o(BSND)": "both backends rejected the inputs: 161001",
       "chunk_fwd_o(TND)": "both backends rejected the inputs: 161001",
       "chunk_fwd_o(transpose_state_layout)": "both backends rejected the inputs: 161001",

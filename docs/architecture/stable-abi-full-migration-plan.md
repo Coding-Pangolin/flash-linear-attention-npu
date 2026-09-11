@@ -9,11 +9,11 @@
 | 项 | v1（方案刚写下时） | v2（A1/A2 落地） | v3（本文，含 conv1d 与 API 契约） |
 | --- | --- | --- | --- |
 | 覆盖 | 16/26，剩 10 个卡在 `alloc`/`helpers` 的 ATen 惯用法 | 25/26 | **26/26**：`npu_causal_conv1d` 已接入（`alloc` 表达 `head_num` 重排），只剩上游 #390 的 update 变体未定稿 |
-| 一次性通过 | 无 | 243 PASS（22 个算子被调用） | **910b：272 PASS / 0 FAIL（256 场景 + 16 条带原因 SKIP）；950：39 PASS / ALL PASS（34 场景 + 5 条带原因 SKIP，覆盖 A5 OPP 里 10 个可跑算子）** |
+| 一次性通过 | 无 | 243 PASS（22 个算子被调用） | 合并 #390 前：910b 272 PASS（256 场景 + 16 SKIP）、950 39 PASS（34 + 5）。**合并 main 后**：910b **259 PASS（250 场景 + 22 条带原因 SKIP，其中 8 条是需要 post-#390 OPP 的 conv1d 前向）**、950 **38 场景 + 6 SKIP**；见 §9 |
 | Python API 契约 | 未检查 | 未检查 | **ctypes 为唯一真源**：`tools/op_api_parity.py` 报 0 漂移（本轮修掉 10 个算子的签名漂移） |
 | 性能 | 只有 GDR/KDA 两个数 | GDR 1.26×、KDA 1.11×、fast_gelu 0.34× | 同上（B2/B4 未做，GDR 仍未达标） |
 | 后端取舍 | stable 可选、pybind 默认 | stable 默认 | **stable 为唯一后端**；pybind 仅作 A/B 对照，随后删除 |
-| 场景覆盖 | 口头"没丢场景" | 覆盖矩阵门禁（C2） | 门禁 + **每算子演练记录**（910b 24 个 + 950 4 个 + 2 条显式 SKIP 带原因） |
+| 场景覆盖 | 口头"没丢场景" | 覆盖矩阵门禁（C2） | 门禁 + 每算子演练记录；910b 覆盖 24 个可跑算子，950 覆盖它 OPP 里有的 10 个；所有跑不了的场景都带原因（aclnn 状态码 / 参考实现的校验拒绝 / 缺 kernel / 需要另一个 OPP） |
 | 产物一致性 | 无 | 无 | **构建戳**：`.so` 与 Python glue 的生成 hash 不一致时加载即报错（本轮踩过陈旧 `.so` 的坑） |
 
 ## 1. 三条需求对应到可测门禁
@@ -45,7 +45,7 @@
 libfla_npu_thin.so  245 736 B
 undefined  _ZN2at/_ZN3c10 = 0     aoti_torch_* = 38     导出构建戳符号 = 1
 regression_stable_full.py (910B3):  272 PASS / 0 FAIL   "ALL PASS: full stable parity"
-regression_stable_a5.py   (950PR):   39 PASS / 0 FAIL   "ALL PASS: Ascend950 stable parity"
+regression_stable_a5.py   (950PR):   38 场景 + 6 SKIP        "ALL PASS: Ascend950 stable parity"
 op_api_parity.py: 26 个算子比对，0 漂移        stable_coverage.py --strict: 退出码 0
 ```
 

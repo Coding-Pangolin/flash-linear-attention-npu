@@ -19,6 +19,11 @@ from fla_npu.ops.ascendc import _aclnn_ctypes as ct  # noqa: E402
 from fla_npu.ops.ascendc import _thin  # noqa: E402
 
 
+# name -> max |diff| observed (0.0 when it matched); merged into the shared
+# baseline by the drivers (see regression_stable_full.check_baseline).
+SCENARIOS: dict[str, float] = {}
+
+
 def assert_parity(name, oc, ot):
     if not isinstance(oc, tuple):
         oc = (oc,)
@@ -31,6 +36,7 @@ def assert_parity(name, oc, ot):
         assert tuple(a.shape) == tuple(b.shape), f"{name}[{i}]: shape"
         diff = float((a.float() - b.float()).abs().max().item())
         assert diff == 0.0, f"{name}[{i}]: diff={diff}"
+    SCENARIOS[name] = 0.0
     print(f"PASS {name}")
 
 
@@ -54,6 +60,7 @@ def assert_finite_parity(name, oc, ot):
         if finite.any():
             diff = float((a.float() - b.float()).abs()[finite].max().item())
             assert diff == 0.0, f"{name}[{i}]: diff={diff}"
+    SCENARIOS[name] = 0.0
     print(f"PASS {name}")
 
 

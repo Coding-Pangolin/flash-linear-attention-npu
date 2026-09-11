@@ -237,10 +237,21 @@ ALL COVERED: every ctypes operator has a stable adapter (recorded gaps only)
 `--strict` 退出码 1 并列出 `npu_causal_conv1d: no stable adapter`——即 A3 完成后
 baseline 必须清空，否则发版门禁不放行。
 
-### C3. parity 基线入库
+### C3. parity 基线入库（已实现）
 
-由 `scenarios` 生成用例，执行后把每场景的 `diff` 写进 `tests/stable_scenarios.json`。
-任何一次改动导致场景丢失或数值变化，都会在 diff 里显形。
+`tests/stable_scenarios.json` 按设备记录**这次跑过哪些场景**：
+
+```json
+{
+  "Ascend910B3":        {"passed": {"chunk_kda_fwd(BSND varlen=0 ...)": 0.0, ...}, "skipped": {...}},
+  "Ascend950PR_9579":   {"passed": {...}, "skipped": {}}
+}
+```
+
+写：`FLA_NPU_BASELINE_WRITE=1 python tests/regression_stable_full.py`；
+默认模式是**比对**——少了一个场景（丢 layout、丢 flag 组合）就 FAIL 并点名，
+数值不再是 0.0 也 FAIL。这样"覆盖"是仓库里的一份事实，而不是某次日志里的一行
+`ALL PASS`。当前记录：910B3 **245 通过 + 2 条带原因的 SKIP**，950PR **12 通过**。
 
 ### C4. 运行期回退可视化
 
@@ -293,7 +304,8 @@ baseline 必须清空，否则发版门禁不放行。
 | C7 | ✅ 构建戳（陈旧 `.so` 直接报错） | — |
 | B2 | ✅ int 缓存（varlen 路径 −39%） | — |
 | B4 | 校验分层（schema + C++ 廉价断言），把 GDR 压回 ≤1.15× | 无 |
-| B5/C3 | 26 算子 A/B 表 + parity 基线入库 | B2/B4、C1 |
+| C3 | ✅ parity 基线入库（910B3 245 + 950PR 12，丢失场景即 FAIL） | — |
+| B5 | 26 算子 A/B 表 | B4、C1 |
 | D1 | ✅ 默认链 stable → ctypes；`FLA_NPU_THIN_ABI=pybind/ctypes` 才算显式切换（顺带修掉 `=ctypes` 其实没生效的老问题） | — |
 | D2 | ✅ 默认构建不再编 `_C_thin`，wheel 自带 `libfla_npu_thin.so`；一键编包产物 `py3-none-any` 并在干净目录安装后跑通全量 | — |
 | D3 | 发布矩阵：`torch>=2.7.1` 下限（运行期 `aoti_torch_abi_version()` + 符号检查）、SOC 分 OPP 包 | D2 |

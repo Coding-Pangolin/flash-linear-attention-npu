@@ -28,7 +28,7 @@ torch.npu.set_compile_mode(jit_compile=False)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from regression_stable_full import StableShim  # noqa: E402
+from regression_stable_full import StableShim, check_baseline  # noqa: E402
 
 
 def main() -> int:
@@ -49,12 +49,18 @@ def main() -> int:
     for scenario in scenarios:
         print(f"--- entering {scenario.__name__}", flush=True)
         scenario()
+    import regression_thin_ops as suite_module
+
+    suite_module.SCENARIOS.update(a5.SCENARIOS)
     print(f"\nstable ops exercised: {len(shim.calls)}")
     for name in sorted(shim.calls):
         print(f"  {name}: {shim.calls[name]} call(s)")
     if shim.missing:
         print(f"MISSING ADAPTERS: {sorted(set(shim.missing))}")
         return 1
+    status = check_baseline(device, suite_module)
+    if status != 0:
+        return status
     print("ALL PASS: Ascend950 stable parity")
     return 0
 

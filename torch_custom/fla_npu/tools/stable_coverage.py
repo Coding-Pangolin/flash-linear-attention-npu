@@ -132,10 +132,13 @@ def _axes(spec: dict) -> dict:
     axes: dict[str, list] = {}
     unverifiable: list[str] = []
     flags: list[str] = []
+    arguments = set()
 
     for arg in spec.get("args", []):
         kind = arg.get("kind")
         name = arg.get("name", "")
+        if kind != "out_tensor":
+            arguments.add(name)
         if kind == "char_ptr":
             enum = arg.get("enum")
             if enum:
@@ -156,7 +159,8 @@ def _axes(spec: dict) -> dict:
 
     if flags:
         axes["flags"] = sorted(set(flags))
-    return {"axes": axes, "flags": sorted(set(flags)), "unverifiable": unverifiable}
+    return {"axes": axes, "flags": sorted(set(flags)),
+            "unverifiable": unverifiable, "arguments": arguments}
 
 
 def evaluate() -> dict:
@@ -209,8 +213,18 @@ def evaluate() -> dict:
             for axis, values in scenarios.items():
                 declared = row["axes"].get(axis)
                 if declared is None:
+                    # Derived axes are the free ones (enum tables, varlen and
+                    # spec-decode argument names, gating booleans).  An operator
+                    # usually has more: integer knobs such as conv1d's run_mode
+                    # or head_num, whose legal values only exist in the kernel
+                    # and in the unit tests.  A declaration backed by a real
+                    # argument is accepted and recorded; one naming something
+                    # that is not an argument at all is not.
+                    if axis in derived["arguments"]:
+                        row["axes"][axis] = list(values)
+                        continue
                     row["problems"].append(
-                        f"scenario axis {axis!r} is not derivable from the spec")
+                        f"scenario axis {axis!r} matches no argument of the spec")
                     continue
                 unknown = [v for v in values if v not in declared]
                 if unknown:

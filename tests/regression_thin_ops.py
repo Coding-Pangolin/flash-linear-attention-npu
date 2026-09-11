@@ -642,6 +642,77 @@ def scenario_conv1d_varlen_pad_slot():
         defined_rows=[0, 1, 4, 5, 6])
 
 
+def scenario_conv1d_new_apis():
+    """Upstream #390's replacement APIs, through the shared launcher.
+
+    ``causal_conv1d_fn`` and ``causal_conv1d_update`` are what the integration
+    is told to use from now on (the legacy ``npu_causal_conv1d`` is deprecated),
+    and they are the ones that take *device* metadata (query_start_loc,
+    cache_indices, has_initial_state) instead of host lists -- the shape the
+    vLLM call site has.  Both go through the same aclnn ABI, so they exercise
+    the same launch path with different marshalling above it.
+    """
+
+    if CONV1D_ABI != "new":
+        reason = ("the OPP in this environment carries the pre-#390 "
+                  "aclnnCausalConv1d ABI; the merged code speaks the new one")
+        for name in ("causal_conv1d_fn(dense)", "causal_conv1d_fn(varlen)",
+                     "causal_conv1d_update(dense)"):
+            SKIPPED[name] = reason
+            print(f"SKIP {name} ({reason})")
+        return
+
+    dt = torch.bfloat16
+    # fn, dense batch: 3-D (B, S, D) x needs no query_start_loc.
+    x = _seq(2 * 2 * 16, 1.0).reshape(2, 2, 16).to(dt).npu()
+    weight = _seq(4 * 16, 101.0).reshape(4, 16).to(dt).npu()
+    bias = _seq(16, 201.0).to(dt).npu()
+    parity_or_domain_skip(
+        "causal_conv1d_fn(dense)",
+        lambda: _fn_case(ct, x, weight, bias),
+        lambda: _fn_case(_thin, x, weight, bias))
+    # fn, varlen with device metadata (the vLLM-style call).
+    xv = _seq(5 * 16, 1.0).reshape(5, 16).to(dt).npu()
+    qsl = torch.tensor([0, 2, 5], dtype=torch.int32, device="npu")
+    cache = torch.tensor([0, 1], dtype=torch.int32, device="npu")
+    initial = torch.tensor([True, False], dtype=torch.bool, device="npu")
+    parity_or_domain_skip(
+        "causal_conv1d_fn(varlen)",
+        lambda: _fn_case(ct, xv, weight, None, qsl=qsl, cache=cache,
+                         initial=initial),
+        lambda: _fn_case(_thin, xv, weight, None, qsl=qsl, cache=cache,
+                         initial=initial))
+    # update: in-place on conv_state, returns the mutated x.
+    parity_or_domain_skip(
+        "causal_conv1d_update(dense)",
+        lambda: _update_case(ct, dt),
+        lambda: _update_case(_thin, dt))
+
+
+def _fn_case(backend, x, weight, bias, qsl=None, cache=None, initial=None):
+    dt = x.dtype
+    states = _seq(2 * 3 * 16, 301.0).reshape(2, 3, 16).to(dt).npu()
+    kwargs = {}
+    if qsl is not None:
+        kwargs = dict(query_start_loc=qsl, cache_indices=cache,
+                      has_initial_state=initial)
+    return backend.npu_causal_conv1d_fn(x, weight, bias, states,
+                                        activation="silu", **kwargs)
+
+
+def _update_case(backend, dt):
+    x = _seq(2 * 16, 1.0).reshape(2, 16).to(dt).npu()
+    weight = _seq(4 * 16, 101.0).reshape(4, 16).to(dt).npu()
+    bias = _seq(16, 201.0).to(dt).npu()
+    states = _seq(2 * 3 * 16, 301.0).reshape(2, 3, 16).to(dt).npu()
+    indices = torch.tensor([0, 1], dtype=torch.int32, device="npu")
+    out = backend.npu_causal_conv1d_update(
+        x, states, weight, bias, activation="silu",
+        conv_state_indices=indices)
+    torch.npu.synchronize()
+    return out, states
+
+
 def scenario_conv1d_bwd_bnsd():
     batch, num_heads, seqlen, head_dim, width = 2, 2, 9, 16, 2
     dim = num_heads * head_dim

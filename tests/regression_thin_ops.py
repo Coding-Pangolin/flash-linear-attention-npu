@@ -303,6 +303,17 @@ def _clone_args(kwargs):
     return {key: clone(value) for key, value in kwargs.items()}
 
 
+def _backend_carries(name: str) -> bool:
+    """Whether the selected thin backend exposes *name* at all.
+
+    The pybind launcher covers 25 of the 26 operators (it predates
+    npu_causal_conv1d), so a run against it records a skip rather than failing
+    on an attribute that was never part of that backend.
+    """
+
+    return callable(getattr(_thin, name, None))
+
+
 def _aclnn_status(exc):
     match = re.search(r"(?:aclnnStatus|status|failed:)\s*=?\s*(\d{4,6})",
                       str(exc))
@@ -329,6 +340,11 @@ def _conv1d_parity(name, kwargs, mutated=("conv_states",)):
     rather than counted as coverage.
     """
 
+    if not _backend_carries("npu_causal_conv1d"):
+        reason = "the selected backend does not carry npu_causal_conv1d"
+        SKIPPED[name] = reason
+        print(f"SKIP {name} ({reason})")
+        return
     kind_ct, out_ct, args_ct = _conv1d_outcome(ct.npu_causal_conv1d, kwargs)
     kind_th, out_th, args_th = _conv1d_outcome(_thin.npu_causal_conv1d, kwargs)
     assert kind_ct == kind_th, (

@@ -610,3 +610,32 @@ SIGNATURES MATCH: every backend exposes the ctypes call shape
 pybind 这一侧用 `tests/regression_thin_ops.py`（ctypes vs `_thin`）实测：
 **26 个场景 ALL PASS / 246 PASS**，其中 6 个 conv1d 场景显式 SKIP（pybind 覆盖 25/26，
 它本来就没有 `npu_causal_conv1d`）。
+
+### 8.3 新增门禁：spec 的 aclnn 实参列表 vs 实现（2026-09-11 收尾）
+
+本轮的教训来自 #390：它把 `aclnnCausalConv1d` 的 ABI 换了（4 个 `aclIntArray` 元数据槽
+变成 `aclTensor`、`activationMode` 变成 `const char*`、多了 `nullBlockId`/`maxQueryLen`），
+而我们的 spec 还写着旧表——**直到内核调用挂掉才发现**。既有的
+`op_abi_validate.py` 能查这类偏差，但它需要 aclnn 头文件，而头文件只在配套 OPP 里；
+我们手上恰好是旧 OPP，于是这个检查形同不存在。
+
+`tools/op_abi_parity.py` 改为读**实现**：解析 `_aclnn_ctypes.py` 里每个算子
+`_call_aclnn` 的实参列表（`lambda ctx: [...]`、本地 `build_args`、以及 conv1d 那种
+"算子 → 共享 launch helper"的一层间接），把每个实参归类成
+`tensor/int_array/int64/double/bool/char_ptr`，再与 spec 的 `args` 逐位比对。
+静态解析不了的地方报 UNRESOLVED 而不是猜。
+
+实测（同一份 spec、两份实现）：
+
+```
+当前分支（#390 之前）：specs checked: 26   mismatched: 0   ABI MATCH
+main（#390 之后）：    specs checked: 26   mismatched: 1
+    npu_causal_conv1d: aclnn arguments differ
+        spec: tensor×4, int_array×4, int64×4, tensor                    (13)
+        impl: tensor×8, int_array×4, char_ptr, int64×5, tensor          (19)
+```
+
+也就是说，这条门禁在**没有 OPP 头文件**的情况下，能提前把"spec 与实现的 ABI 脱节"
+指出来，并且把两侧的实参表都打印出来——下次合 main 时它会先响，而不是等内核崩。
+`tests/test_stable_gates.py` 现在 13 个用例：既查当前树为绿，也用一个被改过的实现
+副本验证它确实会响。

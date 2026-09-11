@@ -113,6 +113,41 @@ class GateCommandTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("SIGNATURES MATCH", result.stdout)
 
+    def test_abi_parity_gate_is_green(self) -> None:
+        result = self._run("tools/op_abi_parity.py")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("ABI MATCH", result.stdout)
+
+    def test_abi_parity_gate_flags_a_changed_aclnn_signature(self) -> None:
+        """The check that would have caught upstream #390, exercised.
+
+        #390 turned four aclIntArray metadata slots into aclTensors and swapped
+        an activationMode int for a const char*; nothing in the tree noticed
+        until a kernel call died.  Here the implementation is edited the same
+        way and the gate has to report it.
+        """
+
+        module = _load_tool("op_abi_parity.py")
+        source = (OPS_DIR.parent.parent.parent / "fla_npu" / "ops" / "ascendc"
+                  / "_aclnn_ctypes.py").read_text(encoding="utf-8")
+        self.assertIn("ctx.int_array(cu_seqlens)", source)
+        edited = source.replace("ctx.int_array(cu_seqlens)",
+                                "ctx.tensor(cu_seqlens, 'cu')", 1)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reference = Path(temp_dir) / "_aclnn_ctypes.py"
+            reference.write_text(edited, encoding="utf-8")
+            saved = module.REFERENCE
+            module.REFERENCE = reference
+            try:
+                report = module.evaluate()
+            finally:
+                module.REFERENCE = saved
+        flagged = {row["op"] for row in report["rows"] if row["problems"]}
+        self.assertTrue(flagged, "a changed aclnn signature was not reported")
+        detail = " ".join(problem for row in report["rows"]
+                          for problem in row["problems"])
+        self.assertIn("aclnn arguments differ", detail)
+
     def test_spec_python_blocks_are_synced(self) -> None:
         result = self._run("tools/sync_spec_python.py", "--check")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

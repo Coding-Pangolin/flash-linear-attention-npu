@@ -670,8 +670,16 @@ ALL PASS: full stable parity          (当时 259 PASS，基线 246 + 3 条带�
 | `chunk_kda_bwd_intra` | 新增 **BSND** 通过 |
 | `chunk_gated_delta_rule_fwd` | 场景标签补上 layout（`BNSD_B2_...`），覆盖记录才能读出来 |
 
-改完的基线：910B3 **250 通过 + 11 条带原因 SKIP**（原来 246 + 3），全量 **266 PASS**。
-SKIP 全部带具体 aclnn 状态码，而不是"跳过"。
+改完的基线：910B3 **256 通过 + 16 条带原因 SKIP**，全量 **272 PASS**。
+SKIP 全部带具体原因，而不是"跳过"。这一批里还多出两类值得记的：
+
+* `chunk_fwd_h(save_new_value=False)`、`chunk_kda_bwd(disable_recompute=False)`、
+  `chunk_kda_bwd(state_v_first=True)`——**参考实现用 Python 校验就拒了**
+  （`save_new_value must be True` / `disable_recompute=... must be ...`），而 launcher
+  把参数交给内核、由内核拒。两者都是报错、不崩，正好落在我们写的契约
+  （"非法输入报错、不必同型"）上；`parity_or_domain_skip` 把这两种情形分开记录，
+  避免把"内核之间的拒绝不一致"也当成正常。
+* `chunk_bwd_dqkwg(use_exp2/transpose_state_layout)`——两条后端都是 **561000**。
 
 两个新发现，都记进了文档而不是藏起来：
 

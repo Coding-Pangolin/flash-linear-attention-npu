@@ -249,6 +249,18 @@ def scenario_gated_fwd_h():
         _thin.npu_chunk_gated_delta_rule_fwd_h(
             k, w, u, g, initial_state=is0, output_final_state=True,
             chunk_size=cs))
+    # state_v_first is the other declared flag of this operator (it swaps the
+    # state's last two axes).
+    isv = torch.randn(B, Hv, V, K, dtype=torch.float32, device="npu")
+    torch.npu.synchronize()
+    parity_or_domain_skip(
+        "chunk_gated_delta_rule_fwd_h(state_v_first)",
+        lambda: ct.npu_chunk_gated_delta_rule_fwd_h(
+            k, w, u, g, initial_state=isv, output_final_state=True,
+            chunk_size=cs, state_v_first=True),
+        lambda: _thin.npu_chunk_gated_delta_rule_fwd_h(
+            k, w, u, g, initial_state=isv, output_final_state=True,
+            chunk_size=cs, state_v_first=True))
 
 
 def scenario_chunk_fwd_h():
@@ -258,6 +270,18 @@ def scenario_chunk_fwd_h():
     assert_parity("chunk_fwd_h",
                   ct.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs),
                   _thin.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs))
+    # The declared flags of this operator: each one switches a different kernel
+    # path, so they are covered rather than left to the default.
+    for label, kw in (("final_state", dict(output_final_state=True)),
+                      ("save_new_value_false", dict(save_new_value=False)),
+                      ("state_v_first", dict(state_v_first=True)),
+                      ("use_exp2", dict(use_exp2=True))):
+        torch.npu.synchronize()
+        parity_or_domain_skip(
+            f"chunk_fwd_h({label})",
+            lambda kw=kw: ct.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs, **kw),
+            lambda kw=kw: _thin.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs,
+                                                **kw))
 
 
 def scenario_chunk_fwd_o():
@@ -350,6 +374,20 @@ def _aclnn_status(exc):
     return match.group(1) if match else str(exc)[:120]
 
 
+def _aclnn_status_or_none(exc):
+    """The aclnn status in *exc*, or None when it is a Python-level error.
+
+    The launcher validates only what is free (the dispatcher schema); the
+    reference validates more in Python, so for an illegal input the two can
+    disagree about *how* they fail.  Kernel-vs-kernel rejections must still
+    match exactly, which is why the two cases are told apart rather than lumped
+    together.
+    """
+
+    match = re.search(r"(?:aclnnStatus|failed:)\s*=?\s*(\d{4,6})", str(exc))
+    return match.group(1) if match else None
+
+
 def parity_or_domain_skip(name, call_ct, call_thin):
     """Parity, or a recorded skip when the *reference* itself rejects the input.
 
@@ -362,15 +400,24 @@ def parity_or_domain_skip(name, call_ct, call_thin):
     try:
         reference = call_ct()
     except RuntimeError as exc:
-        status = _aclnn_status(exc)
+        status = _aclnn_status_or_none(exc)
         try:
             call_thin()
         except RuntimeError as thin_exc:
-            assert status == _aclnn_status(thin_exc), (
-                f"{name}: ctypes rejected with {status} but thin with "
-                f"{_aclnn_status(thin_exc)}")
-            SKIPPED[name] = f"both backends rejected the inputs: {status}"
-            print(f"SKIP {name} (both backends rejected the inputs: {status})")
+            thin_status = _aclnn_status_or_none(thin_exc)
+            if status is None:
+                # The reference refused it before reaching aclnn (its Python
+                # validation); the launcher passed it on and the kernel refused.
+                SKIPPED[name] = (
+                    f"reference rejects by validation "
+                    f"({str(exc).splitlines()[0][:70]}); thin rejects via the "
+                    f"kernel ({_aclnn_status(thin_exc)})")
+            else:
+                assert status == thin_status, (
+                    f"{name}: ctypes rejected with {status} but thin with "
+                    f"{thin_status}")
+                SKIPPED[name] = f"both backends rejected the inputs: {status}"
+            print(f"SKIP {name} ({SKIPPED[name]})")
             return
         raise AssertionError(
             f"{name}: ctypes rejected the inputs ({status}) but the thin "
@@ -828,6 +875,18 @@ def scenario_chunk_kda_bwd():
                              h, d_o, K ** -0.5, **kw),
         _thin.npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg,
                                 v_new, h, d_o, K ** -0.5, **kw))
+    # The remaining declared flags of this operator.
+    for label, extra in (("state_v_first", dict(state_v_first=True)),
+                         ("recompute", dict(disable_recompute=False))):
+        torch.npu.synchronize()
+        parity_or_domain_skip(
+            f"chunk_kda_bwd({label})",
+            lambda extra=extra: ct.npu_chunk_kda_bwd(
+                q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o,
+                K ** -0.5, **dict(kw, **extra)),
+            lambda extra=extra: _thin.npu_chunk_kda_bwd(
+                q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o,
+                K ** -0.5, **dict(kw, **extra)))
 
 
 def scenario_dqkwg():
@@ -859,6 +918,18 @@ def scenario_dqkwg():
                   ct.npu_chunk_bwd_dqkwg(q, k, v, g, h, do, dh, dv, cs, **kw),
                   _thin.npu_chunk_bwd_dqkwg(q, k, v, g, h, do, dh, dv, cs,
                                             **kw))
+    # use_exp2 / transpose_state_layout: both are declared, neither is the
+    # default, so they get their own cases (a rejected combination is recorded).
+    for label, extra in (("use_exp2", dict(use_exp2=True)),
+                         ("transpose_state_layout",
+                          dict(transpose_state_layout=True))):
+        torch.npu.synchronize()
+        parity_or_domain_skip(
+            f"chunk_bwd_dqkwg({label})",
+            lambda extra=extra: ct.npu_chunk_bwd_dqkwg(
+                q, k, v, g, h, do, dh, dv, cs, **dict(kw, **extra)),
+            lambda extra=extra: _thin.npu_chunk_bwd_dqkwg(
+                q, k, v, g, h, do, dh, dv, cs, **dict(kw, **extra)))
 
 
 def scenario_chunk_local_cumsum():
@@ -985,6 +1056,14 @@ def scenario_kda_gate_cumsum():
             f"kda_gate_cumsum({suffix})",
             ct.npu_kda_gate_cumsum(g, cs, **kw),
             _thin.npu_kda_gate_cumsum(g, cs, **kw))
+        # safe_gate is the operator's other declared flag.
+        torch.npu.synchronize()
+        parity_or_domain_skip(
+            f"kda_gate_cumsum({suffix},safe_gate)",
+            lambda g=g, kw=kw: ct.npu_kda_gate_cumsum(
+                g, cs, **dict(kw, safe_gate=True)),
+            lambda g=g, kw=kw: _thin.npu_kda_gate_cumsum(
+                g, cs, **dict(kw, safe_gate=True)))
 
 
 def scenario_recurrent_kda():

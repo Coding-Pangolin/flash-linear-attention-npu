@@ -23,7 +23,14 @@
     }
   ],
   "python": {
-    "positional": ["x", "y", "weight", "dy", "initial_state", "dht"],
+    "positional": [
+      "x",
+      "y",
+      "weight",
+      "dy",
+      "initial_state",
+      "dht"
+    ],
     "defaults": {
       "query_start_loc": "None",
       "activation": "0",
@@ -31,18 +38,63 @@
     }
   },
   "args": [
-    {"name": "x", "kind": "tensor"},
-    {"name": "y", "kind": "optional_tensor"},
-    {"name": "weight", "kind": "tensor"},
-    {"name": "dy", "kind": "tensor"},
-    {"name": "initial_state", "kind": "optional_tensor"},
-    {"name": "dht", "kind": "optional_tensor"},
-    {"name": "query_start_loc", "kind": "int_array"},
-    {"name": "activation", "kind": "int64"},
-    {"name": "input_layout", "kind": "char_ptr"},
-    {"name": "dx", "kind": "out_tensor"},
-    {"name": "dw", "kind": "out_tensor"},
-    {"name": "db", "kind": "out_tensor"},
-    {"name": "dh0", "kind": "out_tensor"}
+    {
+      "name": "x",
+      "kind": "tensor"
+    },
+    {
+      "name": "y",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "weight",
+      "kind": "tensor"
+    },
+    {
+      "name": "dy",
+      "kind": "tensor"
+    },
+    {
+      "name": "initial_state",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "dht",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "query_start_loc",
+      "kind": "int_array"
+    },
+    {
+      "name": "activation",
+      "kind": "int64"
+    },
+    {
+      "name": "input_layout",
+      "kind": "char_ptr",
+      "enum": [
+        "BSND",
+        "BNSD",
+        "NTD",
+        "TND"
+      ]
+    },
+    {
+      "name": "dx",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "dw",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "db",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "dh0",
+      "kind": "out_tensor"
+    }
   ]
 }

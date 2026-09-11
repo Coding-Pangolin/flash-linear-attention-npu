@@ -59,7 +59,15 @@
     }
   ],
   "python": {
-    "positional": ["q", "k", "v", "g", "beta", "scale", "chunk_size"],
+    "positional": [
+      "q",
+      "k",
+      "v",
+      "g",
+      "beta",
+      "scale",
+      "chunk_size"
+    ],
     "derive_chunk_indices": true,
     "pre": "layout = str(layout)\nsafe_gate = bool(safe_gate)\nuse_gate_in_kernel = bool(use_gate_in_kernel)\nstate_v_first = bool(state_v_first)\noutput_final_state = bool(output_final_state)\ndisable_recompute = bool(disable_recompute)\nreturn_intermediate_states = bool(return_intermediate_states)\nif scale is None:\n    scale = float(q.shape[2] if layout in (\"TND\", \"NTD\") else q.shape[3]) ** -0.5\nif lower_bound is None:\n    lower_bound = -5.0",
     "return_code": "out = [result[0]]\nout.append(result[1] if output_final_state else None)\nout.append(result[2] if (not use_gate_in_kernel or disable_recompute) else None)\nout.append(result[3])\nout.append(result[4])\nout.append(result[5] if disable_recompute else None)\nout.append(result[6] if disable_recompute else None)\nout.append(result[7] if disable_recompute else None)\nout.append(result[8] if disable_recompute else None)\nout.append(result[9] if disable_recompute else None)\nout.append(result[10] if (disable_recompute or return_intermediate_states) else None)\nout.append(initial_state)\nreturn tuple(out)",
@@ -80,36 +88,138 @@
     }
   },
   "args": [
-    {"name": "q", "kind": "tensor"},
-    {"name": "k", "kind": "tensor"},
-    {"name": "v", "kind": "tensor"},
-    {"name": "g", "kind": "tensor"},
-    {"name": "beta", "kind": "tensor"},
-    {"name": "A_log", "kind": "optional_tensor"},
-    {"name": "dt_bias", "kind": "optional_tensor"},
-    {"name": "initial_state", "kind": "optional_tensor"},
-    {"name": "cu_seqlens", "kind": "int_array"},
-    {"name": "chunk_indices", "kind": "int_array"},
-    {"name": "layout", "kind": "char_ptr"},
-    {"name": "scale", "kind": "double"},
-    {"name": "chunk_size", "kind": "int64"},
-    {"name": "safe_gate", "kind": "bool"},
-    {"name": "lower_bound", "kind": "double"},
-    {"name": "use_gate_in_kernel", "kind": "bool"},
-    {"name": "state_v_first", "kind": "bool"},
-    {"name": "output_final_state", "kind": "bool", "cpp_only": true},
-    {"name": "disable_recompute", "kind": "bool", "cpp_only": true},
-    {"name": "return_intermediate_states", "kind": "bool", "cpp_only": true},
-    {"name": "attn_out", "kind": "out_tensor"},
-    {"name": "final_state", "kind": "out_tensor"},
-    {"name": "gk", "kind": "out_tensor"},
-    {"name": "aqk", "kind": "out_tensor"},
-    {"name": "akk", "kind": "out_tensor"},
-    {"name": "w", "kind": "out_tensor"},
-    {"name": "u", "kind": "out_tensor"},
-    {"name": "qg", "kind": "out_tensor"},
-    {"name": "kg", "kind": "out_tensor"},
-    {"name": "v_new", "kind": "out_tensor"},
-    {"name": "h", "kind": "out_tensor"}
+    {
+      "name": "q",
+      "kind": "tensor"
+    },
+    {
+      "name": "k",
+      "kind": "tensor"
+    },
+    {
+      "name": "v",
+      "kind": "tensor"
+    },
+    {
+      "name": "g",
+      "kind": "tensor"
+    },
+    {
+      "name": "beta",
+      "kind": "tensor"
+    },
+    {
+      "name": "A_log",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "dt_bias",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "initial_state",
+      "kind": "optional_tensor"
+    },
+    {
+      "name": "cu_seqlens",
+      "kind": "int_array"
+    },
+    {
+      "name": "chunk_indices",
+      "kind": "int_array"
+    },
+    {
+      "name": "layout",
+      "kind": "char_ptr",
+      "enum": [
+        "BSND",
+        "BNSD",
+        "TND",
+        "NTD"
+      ]
+    },
+    {
+      "name": "scale",
+      "kind": "double"
+    },
+    {
+      "name": "chunk_size",
+      "kind": "int64"
+    },
+    {
+      "name": "safe_gate",
+      "kind": "bool"
+    },
+    {
+      "name": "lower_bound",
+      "kind": "double"
+    },
+    {
+      "name": "use_gate_in_kernel",
+      "kind": "bool"
+    },
+    {
+      "name": "state_v_first",
+      "kind": "bool"
+    },
+    {
+      "name": "output_final_state",
+      "kind": "bool",
+      "cpp_only": true
+    },
+    {
+      "name": "disable_recompute",
+      "kind": "bool",
+      "cpp_only": true
+    },
+    {
+      "name": "return_intermediate_states",
+      "kind": "bool",
+      "cpp_only": true
+    },
+    {
+      "name": "attn_out",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "final_state",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "gk",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "aqk",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "akk",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "w",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "u",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "qg",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "kg",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "v_new",
+      "kind": "out_tensor"
+    },
+    {
+      "name": "h",
+      "kind": "out_tensor"
+    }
   ]
 }

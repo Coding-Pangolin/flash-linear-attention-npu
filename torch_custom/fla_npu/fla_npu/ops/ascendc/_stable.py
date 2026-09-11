@@ -277,11 +277,10 @@ def _call(name: str, values: dict):
     result = _op(name)(*args)
     if not isinstance(result, tuple):
         result = (result,)
-    out = []
-    for index, when in generated._RET[name]:
-        keep = True if when is None else bool(eval(when, {}, values))
-        out.append(result[index] if keep else None)
-    return tuple(out) if len(out) > 1 else out[0]
+    # Absent optional outputs already arrive as None: the C++ side packs
+    # nullopt based on the same `when` rules, so re-evaluating them here (with
+    # C++ syntax!) is redundant and fragile.
+    return tuple(result) if len(result) > 1 else result[0]
 
 
 try:  # generated wrappers (optional: present when the codegen step has run)

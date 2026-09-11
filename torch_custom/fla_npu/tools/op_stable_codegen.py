@@ -67,18 +67,31 @@ def unsupported_reasons(spec: dict) -> list[str]:
             reasons.append(f"unsupported kind {argument['kind']}")
     outputs = spec.get("outputs") or [spec.get("output") or {}]
     for entry in outputs:
-        if "alloc" in entry:
-            reasons.append("raw alloc expression (ATen idiom)")
+        if "alloc" in entry and "at_shim" not in entry.get("alloc", ""):
+            # Alloc expressions are supported through the ATen-shaped facade
+            # (allocs are spliced verbatim); only idioms the facade lacks would
+            # need a manual adapter, and those show up as compile errors.
+            pass
         if entry.get("dtype") not in (None, "same", "source", *_DTYPE_ID,
                                       "output_dtype"):
             reasons.append(f"unsupported output dtype {entry.get('dtype')!r}")
-    if spec.get("helpers"):
-        reasons.append("spec helpers use ATen idioms")
     return reasons
 
 
 def _arg_cpp(argument: dict) -> str:
     return argument.get("cpp", argument["name"])
+
+
+def _shim(text: str) -> str:
+    """Rewrite the spec's ATen idioms onto the facade alias.
+
+    The alias cannot be called ``at``: torch's own headers (pulled in by
+    torch/csrc/stable) declare a real ``at`` namespace, and ``at::Tensor`` would
+    then be ambiguous.  ``shim::`` is unambiguous and keeps the spec text
+    otherwise verbatim.
+    """
+
+    return text.replace("at::", "shim::")
 
 
 def _cpp_params(spec: dict) -> list[tuple[str, str, bool]]:
@@ -119,9 +132,24 @@ def _schema(spec: dict) -> str:
     for index, _ in enumerate(outputs):
         entry = output_spec[index] if index < len(output_spec) else {}
         when = entry.get("when")
-        returns.append("Tensor?" if when else "Tensor")
+        always_null = entry.get("alloc", "").strip() == "at::Tensor()"
+        returns.append("Tensor?" if (when or always_null) else "Tensor")
     ret = returns[0] if len(returns) == 1 else "(" + ", ".join(returns) + ")"
     return f"{spec['python_name']}({', '.join(parts)}) -> {ret}"
+
+
+def optional_output_mask(spec: dict) -> list[bool]:
+    """Whether each out_tensor slot is declared ``Tensor?`` in the schema."""
+
+    outputs = [a for a in spec["args"] if a["kind"] == "out_tensor"]
+    entries = spec.get("outputs") or [spec.get("output") or {}]
+    mask = []
+    for index in range(len(outputs)):
+        entry = entries[index] if index < len(entries) else {}
+        mask.append(bool(entry.get("when"))
+                    or entry.get("alloc", "").strip() == "shim::Tensor()"
+                    or entry.get("alloc", "").strip() == "at::Tensor()")
+    return mask
 
 
 def _size_exprs(entry: dict, arg_names: set[str]) -> str | None:
@@ -142,6 +170,36 @@ def _size_exprs(entry: dict, arg_names: set[str]) -> str | None:
     return "{" + ", ".join(parts) + "}"
 
 
+def _alloc_text(entry: dict, default_source: str, arg_names: set[str]) -> str:
+    """Structured output description -> facade alloc expression.
+
+    Used for specs that mix raw ``alloc`` outputs with structured ones, so the
+    whole op can be emitted through the single facade path.
+    """
+
+    source = entry.get("source", default_source)
+    dtype = entry.get("dtype", "float32")
+    sizes = _size_exprs(entry, arg_names)
+    if dtype in ("same", "source") or dtype == "output_dtype":
+        options = f"{source}.options()"
+    elif dtype in _DTYPE_ID:
+        aten = {"float32": "at::kFloat", "bfloat16": "at::kBFloat16",
+                "float16": "at::kHalf", "int32": "at::kInt",
+                "int64": "at::kLong", "uint8": "at::kByte",
+                "bool": "at::kBool"}[dtype]
+        options = f"{source}.options().dtype({aten})"
+    else:
+        raise ValueError(f"unsupported output dtype {dtype!r}")
+    if dtype == "output_dtype":
+        # dtype follows the char_ptr arg; express it with the facade's constants.
+        options = (f"({source}.options().dtype("
+                   f'output_dtype == "float32" ? at::kFloat : at::kBFloat16))')
+    if sizes is None:
+        return f"at::empty_like({source})" if dtype in ("same", "source") \
+            else f"at::empty({{{source}.sizes()}}, {options})"
+    return f"at::empty({sizes}, {options})"
+
+
 def generate_cpp(spec: dict) -> str:
     name = spec["python_name"]
     outputs = [a for a in spec["args"] if a["kind"] == "out_tensor"]
@@ -149,6 +207,8 @@ def generate_cpp(spec: dict) -> str:
     params = _cpp_params(spec)
     arg_names = {p[0] for p in params}
     aclnn_args = [a for a in spec["args"] if not a.get("cpp_only")]
+    uses_alloc = any("alloc" in entry for entry in output_spec)
+    optional_mask = optional_output_mask(spec)
     lines: list[str] = []
     lines.append(f"// ---- generated: {name} ----")
     for argument in spec["args"]:
@@ -190,20 +250,34 @@ def generate_cpp(spec: dict) -> str:
         if kind == "tensor":
             lines.append(f"  const Tensor {cpp_name}_t = to<Tensor>(stack[{index}]);")
             lines.append(f"  const TensorMeta {cpp_name}_meta = meta_of({cpp_name}_t);")
+            if uses_alloc:
+                # Alloc expressions reference args by name (v.size(2), ...).
+                lines.append(
+                    f"  const shim::Tensor {cpp_name}({cpp_name}_t);")
         elif kind == "optional_tensor":
             lines.append(
                 f"  const auto {cpp_name}_t = to<std::optional<Tensor>>(stack[{index}]);")
             lines.append(
                 f"  const TensorMeta {cpp_name}_meta = "
                 f"{cpp_name}_t.has_value() ? meta_of(*{cpp_name}_t) : TensorMeta();")
+            if uses_alloc:
+                lines.append(
+                    f"  const std::optional<shim::Tensor> {cpp_name} = "
+                    f"{cpp_name}_t.has_value() "
+                    f"? std::optional<shim::Tensor>(shim::Tensor(*{cpp_name}_t)) "
+                    f": std::nullopt;")
         elif kind == "int_array":
             lines.append(
                 f"  const auto {cpp_name}_t = to<std::optional<Tensor>>(stack[{index}]);")
+            # Alloc text written against the pybind backend treats an int_array
+            # arg as std::vector<int64_t> (query_start_loc.empty(), .size()), so
+            # the values keep the arg's own name there.
+            values_name = cpp_name if uses_alloc else f"{cpp_name}_values"
             lines.append(
-                f"  const std::vector<int64_t> {cpp_name}_values = "
+                f"  const std::vector<int64_t> {values_name} = "
                 f"{cpp_name}_t.has_value() ? host_int_values({cpp_name}_t->get()) "
                 f": std::vector<int64_t>();")
-            lines.append(f"  AclIntArrayView {cpp_name}_view({cpp_name}_values);")
+            lines.append(f"  AclIntArrayView {cpp_name}_view({values_name});")
         elif kind == "bool":
             lines.append(f"  const bool {cpp_name} = to<bool>(stack[{index}]);")
         elif kind == "int64":
@@ -211,8 +285,17 @@ def generate_cpp(spec: dict) -> str:
         elif kind in ("double", "float"):
             lines.append(f"  const double {cpp_name} = to<double>(stack[{index}]);")
         elif kind == "char_ptr":
-            lines.append(
-                f"  const int64_t {cpp_name} = to<int64_t>(stack[{index}]);")
+            if uses_alloc:
+                # Alloc/comparison text uses the string form, so keep the code
+                # under a separate name.
+                lines.append(
+                    f"  const int64_t {cpp_name}_code = to<int64_t>(stack[{index}]);")
+                lines.append(
+                    f"  const std::string {cpp_name} = "
+                    f"{name}_{cpp_name}_name({cpp_name}_code);")
+            else:
+                lines.append(
+                    f"  const int64_t {cpp_name} = to<int64_t>(stack[{index}]);")
         index += 1
     lines.append(f"  const int64_t stream = to<int64_t>(stack[{index}]);")
     lines.append("")
@@ -224,9 +307,29 @@ def generate_cpp(spec: dict) -> str:
     lines.append("  uint64_t workspace_size = 0;")
     lines.append("  aclOpExecutor* executor = nullptr;")
     lines.append("")
-    lines.append("  std::vector<Tensor> outputs;")
+    if uses_alloc:
+        lines.append("  std::vector<shim::Tensor> outputs;")
+    else:
+        lines.append("  std::vector<Tensor> outputs;")
+        lines.append("  std::vector<bool> output_present;")
     for position, entry in enumerate(output_spec):
         when = entry.get("when")
+        if uses_alloc:
+            # Splice the spec's alloc text verbatim; the facade supplies the
+            # ATen shape it is written against.
+            text = entry.get("alloc")
+            if text is None:
+                text = _alloc_text(entry, params[0][0], arg_names)
+            text = _shim(text)
+            if when:
+                lines.append(f"  if ({when}) {{")
+                lines.append(f"    outputs.push_back({text});")
+                lines.append("  } else {")
+                lines.append("    outputs.push_back(shim::Tensor());")
+                lines.append("  }")
+            else:
+                lines.append(f"  outputs.push_back({text});")
+            continue
         source = entry.get("source", params[0][0])
         dtype = entry.get("dtype", "float32")
         sizes = _size_exprs(entry, arg_names)
@@ -261,11 +364,14 @@ def generate_cpp(spec: dict) -> str:
         if when:
             lines.append(f"  if ({when}) {{")
             lines.append(f"    outputs.push_back({alloc});")
+            lines.append("    output_present.push_back(true);")
             lines.append("  } else {")
             lines.append("    outputs.push_back(Tensor());")
+            lines.append("    output_present.push_back(false);")
             lines.append("  }")
         else:
             lines.append(f"  outputs.push_back({alloc});")
+            lines.append("  output_present.push_back(true);")
     lines.append("")
     lines.append("  std::vector<std::unique_ptr<AclTensorView>> views;")
     out_index = 0
@@ -279,9 +385,17 @@ def generate_cpp(spec: dict) -> str:
             lines.append(
                 f"  views.push_back(std::make_unique<AclTensorView>({cpp_name}_meta));")
     for position, _ in enumerate(outputs):
-        lines.append(
-            f"  views.push_back(std::make_unique<AclTensorView>("
-            f"meta_of(outputs[{position}])));")
+        if uses_alloc:
+            # An undefined output (at::Tensor()) must stay a null descriptor,
+            # exactly like the pybind path passing at::Tensor() through.
+            lines.append(
+                f"  views.push_back(std::make_unique<AclTensorView>("
+                f"outputs[{position}].defined() "
+                f"? meta_of(outputs[{position}].tensor()) : TensorMeta()));")
+        else:
+            lines.append(
+                f"  views.push_back(std::make_unique<AclTensorView>("
+                f"meta_of(outputs[{position}])));")
         out_index += 1
     lines.append("")
     tokens = []
@@ -295,7 +409,8 @@ def generate_cpp(spec: dict) -> str:
         elif kind == "int_array":
             tokens.append(f"{cpp_name}_view.get()")
         elif kind == "char_ptr":
-            tokens.append(f"{name}_{cpp_name}_name({cpp_name})")
+            tokens.append(f"{cpp_name}.c_str()" if uses_alloc
+                          else f"{name}_{cpp_name}_name({cpp_name})")
         else:
             tokens.append(cpp_name)
     for position in range(len(outputs)):
@@ -325,7 +440,25 @@ def generate_cpp(spec: dict) -> str:
     lines.append("        std::to_string(launch_ret));")
     lines.append("  }")
     for position in range(len(outputs)):
-        lines.append(f"  stack[{position}] = from(outputs[{position}]);")
+        slot_is_optional = optional_mask[position]
+        value = (f"outputs[{position}].tensor()" if uses_alloc
+                 else f"outputs[{position}]")
+        present = (f"outputs[{position}].defined()" if uses_alloc
+                   else f"output_present[{position}]")
+        if not uses_alloc:
+            # Track presence explicitly: Tensor::defined() pulls in the 2.9-only
+            # aoti_torch_is_defined symbol, which we must not depend on.
+            pass
+        if slot_is_optional:
+            # An optional slot's StableIValue is a *pointer to a heap
+            # StableIValue* (see FromImpl<std::optional<T>>), not a bare handle:
+            # packing from(Tensor) here makes the dispatcher dereference a
+            # tensor handle as a pointer (SIGSEGV inside to_ivalue).
+            lines.append(
+                f"  stack[{position}] = {present} "
+                f"? from(std::optional<Tensor>({value})) : from(std::nullopt);")
+        else:
+            lines.append(f"  stack[{position}] = from({value});")
     lines.append("}")
     lines.append("")
     return "\n".join(lines)
@@ -369,12 +502,36 @@ def generate_python(spec: dict) -> str:
         signature += separator + ", ".join(
             f"{key}={defaults.get(key, 'None')}" for key in sig_kw)
     lines = [f"def {name}({signature}):"]
-    lines.append(f'    return _call("{name}", {{')
+    # The same pre-block the pybind wrapper gets: default resolution (scale,
+    # lower_bound, layout) and explicit ctypes fallbacks for sub-domains the
+    # kernel itself does not support.
+    pre = py.get("pre")
+    if pre:
+        for raw_line in pre.splitlines():
+            lines.append(("    " + raw_line) if raw_line.strip() else "")
+    if py.get("derive_chunk_indices") and "chunk_size" in {
+            a["name"] for a in spec["args"]}:
+        lines.append("    if cu_seqlens and not chunk_indices:")
+        lines.append("        chunk_indices = []")
+        lines.append("        for _seq in range(len(cu_seqlens) - 1):")
+        lines.append("            _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]")
+        lines.append("            for _c in range((_len + chunk_size - 1) // chunk_size):")
+        lines.append("                chunk_indices.extend((_seq, _c))")
+    target = f'_call("{name}", {{'
+    if py.get("return_code"):
+        # Custom return shapes (e.g. kda_fwd's (*outputs, initial_state)) are
+        # expressed against `result`, the same convention as the pybind wrapper.
+        lines.append(f"    result = {target}")
+    else:
+        lines.append(f"    return {target}")
     for argument in spec["args"]:
         if argument["kind"] == "out_tensor":
             continue
         lines.append(f'        "{argument["name"]}": {argument["name"]},')
     lines.append("    })")
+    if py.get("return_code"):
+        for raw_line in py["return_code"].splitlines():
+            lines.append(("    " + raw_line) if raw_line.strip() else "")
     return "\n".join(lines)
 
 
@@ -407,6 +564,7 @@ def main() -> int:
     header = [
         "// Generated by tools/op_stable_codegen.py -- do not edit by hand.",
         "// Included by csrc_stable/src/stable_ops.cpp (single TU).",
+        '#include "thin_stable/at_facade.h"',
         "#include <memory>",
         "#include <optional>",
         "#include <stdexcept>",
@@ -416,6 +574,12 @@ def main() -> int:
         "namespace {",
         "using torch::stable::Tensor;",
         "using fla_npu_thin::Runtime;",
+        "using fla_npu_thin::stable::at_shim::TensorOptions;",
+        "using fla_npu_thin::stable::at_shim::empty;",
+        "using fla_npu_thin::stable::at_shim::empty_like;",
+        "using fla_npu_thin::stable::at_shim::kBFloat16;",
+        "using fla_npu_thin::stable::at_shim::kFloat;",
+        "using fla_npu_thin::stable::at_shim::kHalf;",
         "using fla_npu_thin::stable::AclIntArrayView;",
         "using fla_npu_thin::stable::AclTensorView;",
         "using fla_npu_thin::stable::LaunchFn;",
@@ -430,9 +594,27 @@ def main() -> int:
         "using fla_npu_thin::stable::meta_of;",
         "using fla_npu_thin::stable::meta_of_handle;",
         "using fla_npu_thin::stable::size_of;",
+        "",
+        "// Spec alloc expressions are written as at::empty(...)/at::Tensor();",
+        "// the facade supplies exactly that surface on top of the stable shims.",
+        "namespace shim = fla_npu_thin::stable::at_shim;",
         "}  // namespace",
         "",
     ]
+    # Spec helpers are written against the same ATen subset; emit each unique
+    # block once (they are pure functions over at::Tensor views).
+    helpers = []
+    seen_helpers: set[str] = set()
+    for spec, _, _ in supported:
+        text = (spec.get("helpers") or "").strip()
+        if text and text not in seen_helpers:
+            seen_helpers.add(text)
+            helpers.append(text)
+    if helpers:
+        header.append("namespace {")
+        header.extend(_shim(text) for text in helpers)
+        header.append("}  // namespace")
+        header.append("")
     footer = ["""
 namespace {
 // Registration hooks called from stable_ops.cpp's single def/impl blocks.

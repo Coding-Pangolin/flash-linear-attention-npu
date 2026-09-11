@@ -752,6 +752,23 @@ ALL PASS: Ascend950 stable parity
 `ASCEND_RT_VISIBLE_DEVICES=3` 换到健康卡后一切正常——以后遇到"还没进场景就卡住"，
 先看卡的 Health，而不是怀疑代码。
 
+### 9.5 #390 推荐的**新 API** 也进了回归
+
+#390 把 `npu_causal_conv1d` 标记为废弃，让大家改用 `causal_conv1d_fn` /
+`causal_conv1d_update`。这两个正是集成分会调用的入口（也是唯一能传**设备侧元数据**的形式），
+所以它们单独加了场景，在 #390 的 OPP 上实测：
+
+```
+PASS causal_conv1d_fn(dense)       # 3-D (B,S,D) x
+PASS causal_conv1d_fn(varlen)      # 2-D (T,D) x + query_start_loc / cache_indices /
+                                   # has_initial_state 全为设备张量（vLLM 那种调法）
+PASS causal_conv1d_update(dense)   # 含 conv_state 原地更新（输出与状态都比对）
+```
+
+它们与 legacy 入口共用同一条 aclnn ABI，所以跑的是同一条发射路径，差别只在上面那层
+Python marshalling——这正是"共用实现、只搬发射"这个设计要覆盖的东西。
+（在只有旧 ABI 的那份 OPP 上，这三条与其余 conv1d 前向一起记为"需要 post-#390 OPP"。）
+
 ### 9.4 host 侧：与 ctypes、与 pybind 两把尺子（`bench_stable_host.py --baseline`）
 
 同一套场景输入，只换"基准是谁"，就能回答两个不同的问题。

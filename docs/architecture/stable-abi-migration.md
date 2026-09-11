@@ -290,6 +290,26 @@ ctypes 仍是最终回退。下面统计的是 **stable 后端的覆盖率**：
 | 输出用 `alloc` 原始 C++（ATen 惯用法） | 8 | 加一层 ATen 形状的门面（`at::empty`/`empty_like`/`Tensor::options()` → shim 分配），让现有 alloc 字符串原样编译 |
 | spec `helpers` 用 ATen 惯用法 | 5 | 同上，门面覆盖后自动可用 |
 
+**门面已落盘**：`csrc_stable/include/thin_stable/at_facade.h` 提供
+`at_shim::{Tensor, TensorOptions, empty, empty_like, kFloat, kBFloat16, ...}`，
+全部基于 stable 元数据、经 `aoti_torch_empty_strided` 分配，`Tensor` 持有
+stable 张量的副本（shared_ptr）**不偷所有权**。已核对的必需子集（来自 spec 原文）：
+`at::empty({...}, v.options())`、`at::empty_like(x)`、`at::Tensor()`（"恒为 null"的
+输出，如 `chunk_kda_bwd` 的 `dh0/dA/dbias`）、`.size(i)`、`.options().dtype(at::kFloat)`、
+以及 `helpers` 里的 `const at::Tensor&` 形参。
+
+**接线（下一步，已明确）**：
+1. 生成器对 `alloc` spec 改用门面：张量参数额外暴露一个以参数名命名的 `at::Tensor`
+   视图（alloc 原文就是按参数名引用，如 `v.size(2)`），char_ptr 变成 `std::string`
+   （`output_layout == "BNSD"` 这类比较要字符串）；
+2. `alloc == "at::Tensor()"` 的输出槽按 `Tensor?` 处理并打包 `nullopt`
+   （**注意**：`when` 为假时也必须打包 `nullopt`——本期在生成代码里发现并修掉了
+   这个隐患，它与 KDA 那次崩溃同源：把未初始化/未定义的 Tensor 交给 dispatcher）；
+3. spec `helpers` 去重后在聚合文件里只发一份；
+4. 接线完成后预计 8+5 个算子一次性解锁，stable 覆盖到 24/26（余下 2 个是
+   `chunk_gated_delta_rule_fwd`/`chunk_kda_fwd` 这类既用 helpers 又用条件输出的
+   复杂 spec，需要逐条核对）。
+
 ### 7.2 本轮新增能力
 
 - `tools/op_stable_codegen.py`：从现有 spec 生成 stable 适配器（单/多输出、可选输出、

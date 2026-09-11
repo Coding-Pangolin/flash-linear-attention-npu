@@ -79,7 +79,7 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
                        bool use_beta_sigmoid_in_kernel, bool allow_neg_eigval,
                        bool safe_gate, double lower_bound,
                        bool state_v_first, int64_t stream, Tensor* out,
-                       Tensor* final_state) {
+                       Tensor* final_state, bool* has_final_state) {
   auto& rt = fla_npu_thin::Runtime::instance();
   auto get_ws = reinterpret_cast<KdaGetWorkspaceFn>(
       rt.symbol("aclnnRecurrentKdaGetWorkspaceSize"));
@@ -144,8 +144,10 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
   }
   if (!output_final_state) {
     *final_state = Tensor();
+    *has_final_state = false;
     return;
   }
+  *has_final_state = true;
   if (!inplace_final_state) {
     *final_state = state_holder;  // the scratch we allocated and own
     return;
@@ -190,6 +192,7 @@ void boxed_recurrent_kda(StableIValue* stack, uint64_t num_inputs,
 
   Tensor out;
   Tensor final_state;
+  bool has_final_state = false;
   run_recurrent_kda(
       q, k, v, g, beta, initial_state,
       cu_seqlens.has_value()
@@ -208,10 +211,11 @@ void boxed_recurrent_kda(StableIValue* stack, uint64_t num_inputs,
       layout_code, scale, output_final_state, inplace_final_state,
       use_qk_l2norm_in_kernel, use_gate_in_kernel,
       use_beta_sigmoid_in_kernel, allow_neg_eigval, safe_gate, lower_bound,
-      state_v_first, stream, &out, &final_state);
+      state_v_first, stream, &out, &final_state, &has_final_state);
   stack[0] = from(out);
-  stack[1] = final_state.defined() ? from(final_state)
-                                   : from(std::nullopt);
+  // Tracked explicitly: Tensor::defined() calls aoti_torch_is_defined, which
+  // older libtorch builds (2.7.x) do not export.
+  stack[1] = has_final_state ? from(final_state) : from(std::nullopt);
 }
 
 }  // namespace

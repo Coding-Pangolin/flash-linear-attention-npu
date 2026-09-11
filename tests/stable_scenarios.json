@@ -265,5 +265,45 @@
       "conv1d_varlen_initial_state": "both backends rejected the inputs: 561002",
       "conv1d_varlen_pad_slot": "both backends rejected the inputs: 561002"
     }
+  },
+  "Ascend950PR_9579": {
+    "passed": {
+      "bwd_finalize(dense)": 0.0,
+      "chunk_fwd_o(BNSD)": 0.0,
+      "chunk_fwd_o(NTD)": 0.0,
+      "chunk_gated_delta_rule_fwd(BNSD_B2_Hk2_Hv4_T128_V128)": 0.0,
+      "chunk_gated_delta_rule_fwd(BSND_B1_Hk2_Hv2_T128_V128)": 0.0,
+      "chunk_gated_delta_rule_fwd(BSND_B2_Hk4_Hv4_T128_V128)": 0.0,
+      "chunk_gated_delta_rule_fwd(TND_varlen_exp2_l2norm)": 0.0,
+      "chunk_local_cumsum(fixed_bf16)": 0.0,
+      "chunk_local_cumsum(fixed_fp16)": 0.0,
+      "chunk_local_cumsum(odd_t_bf16)": 0.0,
+      "chunk_local_cumsum(odd_t_fp16)": 0.0,
+      "chunk_local_cumsum(output_dtype_bf16)": 0.0,
+      "chunk_local_cumsum(reverse_scale_fp16)": 0.0,
+      "chunk_local_cumsum(varlen_single_fp16)": 0.0,
+      "fwd_prepare(a_log only)": 0.0,
+      "fwd_prepare(a_log+dt_bias)": 0.0,
+      "fwd_prepare(case0)": 0.0,
+      "fwd_prepare(no gate flags)": 0.0,
+      "fwd_prepare(output_a=False)": 0.0,
+      "fwd_prepare(sigmoid=False)": 0.0,
+      "recurrent_kda(dense BSND)": 0.0,
+      "solve_tri(bnsd_bf16)": 0.0,
+      "solve_tri(bnsd_fp16)": 0.0,
+      "solve_tri(bsnd_bf16_bt128)": 0.0,
+      "solve_tri(bsnd_bf16_bt16)": 0.0,
+      "solve_tri(bsnd_bf16_bt64)": 0.0,
+      "solve_tri(bsnd_fp16_bt128)": 0.0,
+      "solve_tri(bsnd_fp16_bt16)": 0.0,
+      "solve_tri(bsnd_fp16_bt64)": 0.0
+    },
+    "skipped": {
+      "chunk_fwd_o(BSND)": "both backends rejected the inputs: 161001",
+      "chunk_fwd_o(TND)": "both backends rejected the inputs: 161001",
+      "chunk_fwd_o(transpose_state_layout)": "both backends rejected the inputs: 161001",
+      "chunk_fwd_o(use_exp2)": "both backends rejected the inputs: 161001",
+      "chunk_local_cumsum(head_first_false)": "both backends rejected the inputs: 161001"
+    }
   }
 }

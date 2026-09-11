@@ -697,3 +697,22 @@ BSND、conv1d_bwd 各 layout、cumsum 的 dtype/head_first）在 pybind 后端�
 A/B 通道且正在退役（D2 已把它移出默认构建），所以这里的选择是**把它如实记录**，
 而不是为了它拖住主路径；`GAP_TOLERANT_BACKEND` 只在 pybind 驱动里打开，
 Stable-ABI 驱动保持严格——同一情形在 stable 上仍然是硬失败。
+
+### 8.7 Ascend950 侧也扩到同一批算子（2026-09-11 收尾）
+
+950 侧原先只有 4 个 A5 专属场景。查过 A5 OPP 的符号后（`aclnnChunkFwdO`、
+`aclnnSolveTri`、`aclnnChunkLocalCumsum`、`aclnnRecurrentKda` 都在；
+`aclnnCausalConv1d` / `aclnnRecurrentGatedDeltaRule` / `aclnnChunkKdaBwdIntra` 不在），
+把能跑的同一批场景也挂到 A5 驱动上：
+
+```
+baseline written for Ascend950PR_9579: 29 passed, 5 skipped
+ALL PASS: Ascend950 stable parity
+```
+
+从 **12 通过** 变成 **29 通过 + 5 条带原因 SKIP**（SKIP 是 chunk_fwd_o 的四个组合与
+`head_first=False`，A5 内核同样 161001 拒绝）。也就是说同一套 stable 层现在在两个
+SOC 上都跑过一批共同的算子，而不只是 A5 专属那几个。
+
+顺带修了一处环境问题：241 上的包副本还停留在没有 `tnd` 守卫的版本，`solve_tri_guards`
+一跑就打到了裸内核（挂住而不是报错）——同步包文件并重编 A5 产物后正常。

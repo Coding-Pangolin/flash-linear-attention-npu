@@ -736,6 +736,35 @@ SKIP 全部带具体原因，而不是"跳过"。这一批里还多出两类值�
 `aclnnCausalConv1d`）。所以前向场景在 `env390` 上验证、在完整 OPP 的那一轮里记为 SKIP；
 代码是统一的，环境不是。
 
+### 9.4 host 侧：与 ctypes、与 pybind 两把尺子（`bench_stable_host.py --baseline`）
+
+同一套场景输入，只换"基准是谁"，就能回答两个不同的问题。
+
+**对 ctypes（旧发货路径）**：24 个算子全部更快，比值 0.19×–0.39×（快 2.6–5.3 倍）。
+
+**对 pybind（ABI 绑定的那套 thin）**：23 个算子，**21 个持平或更快**，只有 3 个略慢，
+最差 1.24×：
+
+| 算子 | pybind | stable | 比值 |
+| --- | --- | --- | --- |
+| `chunk_kda_fwd`（最差） | 0.1637 | 0.2030 | 1.24 |
+| `chunk_gated_delta_rule_fwd` | 0.1502 | 0.1725 | 1.15 |
+| `recurrent_gated_delta_rule` | 0.1195 | 0.1239 | 1.04 |
+| `chunk_kda_bwd` / `chunk_fwd_o` / `kda_gate_cumsum` / `chunk_local_cumsum` | — | — | ≈0.97–0.99 |
+| `recurrent_kda` / `chunk_fwd_h` / `chunk_gated_delta_rule_fwd_h` | — | — | 0.92–0.95 |
+| `prepare_wy_repr_bwd(_full/_da)` / `chunk_bwd_dv_local` | — | — | 0.81–0.88 |
+| `scaled_dot_kkt` / `fast_gelu` / `chunk_bwd_dqkwg` / `fast_gelu_backward` | — | — | **0.54–0.72** |
+
+（完整 23 行在 `tests/bench_stable_vs_pybind_910b.json`。）
+
+这张表还带来一个实打实的优化：把生成 wrapper 从"构造 dict + `_call` 按 `_SIG` 重排"
+改成**按 schema 顺序直接位置调用**之后，`recurrent_gated_delta_rule` 从 1.14 → 1.04、
+`chunk_kda_bwd` 从 1.13 → 0.99、`chunk_fwd_h` 从 1.05 → 0.96，宽算子（19 个张量参数）
+从 1.30 → 1.24。改完之后 API 契约与 ABI 门禁仍是 0 漂移。
+
+剩下那两个 1.1–1.2× 的算子是"参数最多的那些"：dispatcher 每个张量参数约 2 µs 的装箱
+成本是结构性下限（vllm-ascend 同路线，实测 0.073 ms 也是这个量级）。
+
 ### 8.6 扩展后的场景集在 pybind 后端也跑了一遍
 
 新增的场景（chunk_fwd_o 各 layout、solve_tri 守卫、recurrent_kda TND、kda_bwd_intra

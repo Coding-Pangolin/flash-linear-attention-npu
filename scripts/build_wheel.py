@@ -15,6 +15,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# Lowest torch whose stable headers/symbols the launcher was verified against.
+# Built against 2.9 headers, loaded and run under 2.7.1 (241: py3.10 +
+# torch 2.7.1.post5 + torch_npu 2.7.1.post5, full Ascend950 scenario set).
+STABLE_ABI_MIN_TORCH = "2.7.1"
+
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 
@@ -93,17 +98,30 @@ def _inject_runtime_pins(wheel_path: Path) -> None:
 
     pyproject.toml owns ``[project]`` metadata, so ``install_requires`` in
     setup.py is ignored; the pins have to be injected into the produced wheel.
-    They exist so pip refuses to install the ABI-matched extension next to a
-    different torch/torch_npu instead of failing at import time.
+
+    Two different contracts, two spellings:
+
+    * the pybind wheel (``_C_thin``) is ABI-matched, so it pins the exact torch
+      and torch_npu it was built against -- installing it next to a different
+      one is a hard error, not a warning;
+    * the Stable-ABI wheel (``libfla_npu_thin.so``) only needs the ``aoti_torch_*``
+      runtime symbols, which exist from 2.7.1 on, so it declares a *lower bound*.
+      One wheel then serves every torch/torch_npu above it.
     """
 
     with zipfile.ZipFile(wheel_path) as archive:
         infos = archive.infolist()
         blobs = {info.filename: archive.read(info.filename) for info in infos}
 
-    if not any(name.endswith(".so") and "_C_thin" in name for name in blobs):
-        return  # pure-python wheel: nothing to pin
-    pins = _runtime_pins()
+    has_pybind = any(name.endswith(".so") and "_C_thin" in name for name in blobs)
+    has_stable = any(name.endswith("libfla_npu_thin.so") for name in blobs)
+    if has_pybind:
+        pins = _runtime_pins()
+    elif has_stable:
+        pins = [f"torch>={STABLE_ABI_MIN_TORCH}",
+                f"torch_npu>={STABLE_ABI_MIN_TORCH}"]
+    else:
+        return  # pure-ctypes wheel: nothing to declare
     if not pins:
         return
     meta_name = next(name for name in blobs

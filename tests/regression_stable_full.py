@@ -173,6 +173,7 @@ def main() -> int:
         suite.scenario_chunk_fwd_h,
         suite.scenario_chunk_fwd_o,
         suite.scenario_bwd_dhu,
+        suite.scenario_conv1d_new_apis,
         suite.scenario_conv1d_prefill,
         suite.scenario_conv1d_varlen_initial_state,
         suite.scenario_conv1d_update,

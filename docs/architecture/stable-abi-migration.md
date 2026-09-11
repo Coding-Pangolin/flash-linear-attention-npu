@@ -263,6 +263,41 @@ stable 各调一次，两轮独立复跑）给出可信比值：
 
 ## 7. 阶段完成情况总表
 
+### 7.1 算子覆盖矩阵（2026-09-11）
+
+先把"覆盖"说清楚：**没有场景丢失**——默认的 pybind 路径覆盖全部 26 个算子，
+ctypes 仍是最终回退。下面统计的是 **stable 后端的覆盖率**：
+
+| 类别 | 数量 | 说明 |
+| --- | --- | --- |
+| 手写 stable 适配 | 2 | `npu_recurrent_gated_delta_rule`、`npu_recurrent_kda`（T1/T2/T3/T6/T7 全绿） |
+| **codegen 生成**（本轮新增） | **11** | `fast_gelu(_custom/_backward)`、`kda_gate_cumsum`、`chunk_scaled_dot_kkt`、`chunk_bwd_dv_local`、`chunk_bwd_dqkwg`、`prepare_wy_repr_bwd(_da/_full)`、`recompute_w_u_fwd`、`chunk_gated_delta_rule_bwd_finalize` |
+| **stable 覆盖合计** | **13 / 26** | 生成的 11 个中已实测 4 个 parity 全 0.0（`fast_gelu`、`kda_gate_cumsum`、`chunk_scaled_dot_kkt`、`chunk_bwd_dv_local`） |
+| 待适配（手工） | 13 | 阻塞原因只有三类，见下 |
+
+**已消除的阻塞：stable 转换不支持 `int[]`。** torch 2.9 的 stable 头里既没有
+`aoti_torch_*list*` shim，也没有 `ToImpl<std::vector<T>>`——而 12+ 个算子都有
+`cu_seqlens`/`chunk_indices` 这类 `int[]?` 入参。解法：在**我们自己的 schema** 里
+把 int 数组表示成 **host int64 张量**（Python 侧一键转换），C++ 侧用
+`host_int_values()` 读出值再建 `aclIntArray`（`AclIntArrayView`）。这样每个算子都能
+表达，不依赖 list shim；实测 `kda_gate_cumsum`/`chunk_scaled_dot_kkt` 走的就是这条路。
+
+**剩余 13 个的三类阻塞**（`tools/op_stable_codegen.py --parse-only` 会逐条列出）：
+
+| 阻塞 | 影响算子 | 解法 |
+| --- | --- | --- |
+| `char_ptr` 入参（layout / output_dtype / input_layout） | 8 | 沿用 KDA 的做法编码成 int（可在 spec 里加 `enum` 字段由生成器自动出映射） |
+| 输出用 `alloc` 原始 C++（ATen 惯用法） | 8 | 加一层 ATen 形状的门面（`at::empty`/`empty_like`/`Tensor::options()` → shim 分配），让现有 alloc 字符串原样编译 |
+| spec `helpers` 用 ATen 惯用法 | 5 | 同上，门面覆盖后自动可用 |
+
+### 7.2 本轮新增能力
+
+- `tools/op_stable_codegen.py`：从现有 spec 生成 stable 适配器（单/多输出、可选输出、
+  optional 张量、int 数组、标量、`cpp_only` 条件），产出
+  `csrc_stable/generated/ops_stable_generated.inc`，由 `stable_ops.cpp` 单 TU 聚合注册。
+- `tests/regression_stable_abi_generated.py`：生成算子的 parity 驱动（ctypes 参考）。
+- 产物：`libfla_npu_thin.so` 136 KB、**0 个 ATen/c10 符号**。
+
 | 阶段 | 交付 | 证据 |
 | --- | --- | --- |
 | Phase 0 清点 + 静态门禁 | `tools/stable_abi_audit.py` | 对现状 `_C_thin.so` 报 13 个不稳定符号 + 链接 libtorch_python；对新产物通过 |

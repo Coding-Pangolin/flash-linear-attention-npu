@@ -21,6 +21,7 @@ namespace fla_npu_thin {
 namespace stable {
 
 typedef struct aclTensor aclTensor;
+typedef struct aclIntArray aclIntArray;
 typedef struct aclOpExecutor aclOpExecutor;
 
 constexpr int32_t kAclFormatNd = 2;
@@ -83,8 +84,8 @@ using AclCreateTensorFn = aclTensor* (*)(const int64_t*, uint64_t, int32_t,
                                          const int64_t*, uint64_t, void*);
 using AclDestroyTensorFn = int (*)(aclTensor*);
 using LaunchFn = int (*)(void*, uint64_t, aclOpExecutor*, void*);
-using AclCreateIntArrayFn = struct aclIntArray* (*)(const int64_t*, uint64_t);
-using AclDestroyIntArrayFn = int (*)(struct aclIntArray*);
+using AclCreateIntArrayFn = aclIntArray* (*)(const int64_t*, uint64_t);
+using AclDestroyIntArrayFn = int (*)(aclIntArray*);
 
 struct TensorMeta {
   bool defined = false;
@@ -160,6 +161,14 @@ inline TensorMeta meta_of(const torch::stable::Tensor& tensor) {
   return meta_of_handle(tensor.get());
 }
 
+inline int64_t size_of(const TensorMeta& meta, int64_t dim) {
+  if (dim < 0 || dim >= meta.ndim) {
+    throw std::runtime_error(
+        "fla_npu_thin(stable): size_of dim out of range");
+  }
+  return meta.sizes[static_cast<size_t>(dim)];
+}
+
 inline TensorMeta meta_optional_handle(std::optional<AtenTensorHandle> handle) {
   TensorMeta meta;
   if (handle.has_value()) {
@@ -225,6 +234,23 @@ inline torch::stable::Tensor allocate_like(const TensorMeta& meta) {
   return torch::stable::Tensor(handle);  // steals the new reference
 }
 
+// Allocate a contiguous tensor with explicit sizes/dtype on `device_source`'s
+// device (used by the generated adapters, whose output shapes come from the
+// spec's structured `output` description).
+inline torch::stable::Tensor allocate_sizes(
+    const std::vector<int64_t>& sizes, int32_t dtype,
+    const TensorMeta& device_source) {
+  std::vector<int64_t> strides(sizes.size(), 1);
+  for (size_t dim = sizes.size(); dim-- > 1;) {
+    strides[dim - 1] = strides[dim] * sizes[dim];
+  }
+  AtenTensorHandle handle = nullptr;
+  TORCH_ERROR_CODE_CHECK(aoti_torch_empty_strided(
+      static_cast<int64_t>(sizes.size()), sizes.data(), strides.data(), dtype,
+      device_source.device_type, device_source.device_index, &handle));
+  return torch::stable::Tensor(handle);
+}
+
 // Allocate a 1-D byte buffer (workspace) on `meta`'s device.
 inline torch::stable::Tensor allocate_bytes(int64_t bytes,
                                             const TensorMeta& meta) {
@@ -237,6 +263,79 @@ inline torch::stable::Tensor allocate_bytes(int64_t bytes,
       &handle));
   return torch::stable::Tensor(handle);
 }
+
+// ---------------------------------------------------------------------------
+// int[] arguments.
+//
+// torch 2.9's stable value conversions have no list support at all (no
+// aoti_torch_*list* shim, no ToImpl<std::vector<T>>), so an `int[]` schema
+// argument cannot be read on this side of the ABI.  The launchers therefore
+// take such arrays as a *host int64 tensor* instead (the Python wrapper builds
+// one) and the values are copied out here.  That keeps every op expressible
+// without a list-capable shim.
+// ---------------------------------------------------------------------------
+inline std::vector<int64_t> host_int_values(AtenTensorHandle handle) {
+  std::vector<int64_t> values;
+  if (handle == nullptr) {
+    return values;
+  }
+  TensorMeta meta;
+  fill_meta(handle, &meta);
+  if (!meta.defined) {
+    return values;
+  }
+  const int64_t count = meta.storage_numel > 0 ? meta.storage_numel : 0;
+  if (meta.scalar_type == 4) {  // kLong
+    const auto* data = static_cast<const int64_t*>(meta.data);
+    values.assign(data, data + count);
+  } else if (meta.scalar_type == 3) {  // kInt
+    const auto* data = static_cast<const int32_t*>(meta.data);
+    values.reserve(static_cast<size_t>(count));
+    for (int64_t index = 0; index < count; ++index) {
+      values.push_back(static_cast<int64_t>(data[index]));
+    }
+  } else {
+    throw std::runtime_error(
+        "fla_npu_thin(stable): int[] argument must be an int32/int64 tensor");
+  }
+  return values;
+}
+
+// RAII aclIntArray built from host values (a null/empty vector yields nullptr,
+// matching the ctypes path where an absent option is passed as nullptr).
+class AclIntArrayView {
+ public:
+  explicit AclIntArrayView(const std::vector<int64_t>& values)
+      : owned_(values) {
+    if (owned_.empty()) {
+      return;
+    }
+    auto create = reinterpret_cast<AclCreateIntArrayFn>(
+        Runtime::instance().symbol("aclCreateIntArray"));
+    ptr_ = create(owned_.data(), static_cast<uint64_t>(owned_.size()));
+    if (ptr_ == nullptr) {
+      throw std::runtime_error(
+          "fla_npu_thin(stable): aclCreateIntArray returned nullptr");
+    }
+  }
+
+  ~AclIntArrayView() {
+    if (ptr_ != nullptr) {
+      auto destroy = reinterpret_cast<AclDestroyIntArrayFn>(
+          Runtime::instance().symbol("aclDestroyIntArray"));
+      destroy(ptr_);
+    }
+  }
+
+  AclIntArrayView(const AclIntArrayView&) = delete;
+  AclIntArrayView& operator=(const AclIntArrayView&) = delete;
+
+  aclIntArray* get() const { return ptr_; }
+
+ private:
+  std::vector<int64_t> owned_;
+  aclIntArray* ptr_ = nullptr;
+};
 
 }  // namespace stable
 }  // namespace fla_npu_thin

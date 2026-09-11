@@ -8,6 +8,7 @@
 // ops_generated.cpp.
 #include "stable_recurrent_gdr.cpp"
 #include "stable_recurrent_kda.cpp"
+#include "../generated/ops_stable_generated.inc"
 
 // Exactly one library-definition block and one implementation block per
 // namespace per TU: the macros expand to a fixed static-init symbol name, so a
@@ -19,6 +20,7 @@ STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.def("_stream_probe(int device_index) -> (int, int)");
 #endif
+  register_generated_defs(m);
 }
 
 STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
@@ -27,4 +29,5 @@ STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.impl("_stream_probe", &boxed_stream_probe);
 #endif
+  register_generated_impls(m);
 }

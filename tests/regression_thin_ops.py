@@ -330,7 +330,8 @@ def _conv1d_outcome(fn, kwargs):
         return "err", _aclnn_status(exc), args
 
 
-def _conv1d_parity(name, kwargs, mutated=("conv_states",)):
+def _conv1d_parity(name, kwargs, mutated=("conv_states",), defined_rows=None,
+                   frozen_state_slots=None):
     """Compare npu_causal_conv1d through both backends on *separate* copies.
 
     ``conv_states`` is written in place, so the two backends must not share it:
@@ -338,6 +339,13 @@ def _conv1d_parity(name, kwargs, mutated=("conv_states",)):
     compared.  When the kernel rejects the inputs outright, parity means the
     same rejection on both paths -- recorded as SKIP with the aclnn status
     rather than counted as coverage.
+
+    ``defined_rows`` names the output rows the kernel is required to write.  A
+    pad slot (``cache_indices == pad_slot_id``) is skipped by the kernel, so its
+    output row is uninitialised memory: it is *not* part of the contract and
+    comparing it across two separate allocations would only ever measure the
+    allocator's leftovers.  ``frozen_state_slots`` names the state rows that
+    must come back untouched (same pad story, on ``conv_states``).
     """
 
     if not _backend_carries("npu_causal_conv1d"):
@@ -356,13 +364,33 @@ def _conv1d_parity(name, kwargs, mutated=("conv_states",)):
         SKIPPED[name] = f"both backends rejected the inputs: {out_ct}"
         print(f"SKIP {name} (both backends rejected the inputs: {out_ct})")
         return
-    assert_parity(name, out_ct, out_th)
+    if defined_rows is None:
+        assert_parity(name, out_ct, out_th)
+    else:
+        assert_parity(f"{name}[defined rows]", out_ct[defined_rows],
+                      out_th[defined_rows])
     for flag in mutated:
         if args_ct.get(flag) is None:
             continue
-        diff = float((args_ct[flag].float() - args_th[flag].float()).abs().max().item())
+        if frozen_state_slots is None:
+            left, right = args_ct[flag], args_th[flag]
+        else:
+            keep = [index for index in range(args_ct[flag].shape[0])
+                    if index not in frozen_state_slots]
+            left, right = args_ct[flag][keep], args_th[flag][keep]
+        diff = float((left.float() - right.float()).abs().max().item())
         assert diff == 0.0, f"{name}: {flag} diff={diff}"
         print(f"PASS {name}({flag})")
+        if frozen_state_slots is not None:
+            # Untouched is the contract for a pad slot, not merely "equal on
+            # both paths": compare against the value handed in.
+            original = kwargs[flag]
+            frozen = [index for index in range(original.shape[0])
+                      if index in frozen_state_slots]
+            drift = float((args_ct[flag][frozen].float()
+                           - original[frozen].float()).abs().max().item())
+            assert drift == 0.0, f"{name}: pad state slot changed by {drift}"
+            print(f"PASS {name}(pad state slots untouched)")
 
 
 def _seq(n, start):
@@ -425,6 +453,50 @@ def scenario_conv1d_update():
     ]
     for label, kwargs in cases:
         _conv1d_parity(f"conv1d_{label}", kwargs)
+
+
+def scenario_conv1d_gather_padding():
+    """Reference: test_npu_causal_conv1d_update_with_batch_gather_padding_*.
+
+    ``cache_indices`` carries pad_slot_id for the rows the kernel must skip:
+    rows 3-4 of the output are uninitialised by contract, and state slots 0, 2,
+    4 and 6 must come back untouched (the unit test checks the same two
+    things).  Only the defined part is compared.
+    """
+
+    x = _seq(5 * 3 * 16, 1.0).reshape(5, 3, 16).to(torch.bfloat16).npu()
+    weight = _seq(4 * 16, 101.0).reshape(4, 16).to(torch.bfloat16).npu()
+    states = _seq(7 * 3 * 16, 301.0).reshape(7, 3, 16).to(torch.bfloat16).npu()
+    _conv1d_parity(
+        "conv1d_update_gather_padding",
+        dict(x=x, weight=weight,
+             bias=_seq(16, 201.0).to(torch.bfloat16).npu(),
+             conv_states=states, cache_indices=[1, 3, 5, -1, -1],
+             activation_mode=1, pad_slot_id=-1, run_mode=1),
+        defined_rows=[0, 1, 2],
+        frozen_state_slots={0, 2, 4, 6})
+
+
+def scenario_conv1d_varlen_pad_slot():
+    """Reference: test_npu_causal_conv1d_varlen_pad_slot_matches_valid_segments.
+
+    A whole sequence is a pad slot (cache_indices == pad_slot_id), which the
+    kernel must skip without touching its state row.
+    """
+
+    x = _seq(7 * 16, 1.0).to(torch.bfloat16).npu()
+    weight = _seq(4 * 16, 101.0).reshape(4, 16).to(torch.bfloat16).npu()
+    states = _seq(2 * 3 * 16, 301.0).reshape(2, 3, 16).to(torch.bfloat16).npu()
+    # Sequence 1 (tokens 2-3) is a pad slot: its output rows are uninitialised,
+    # so only the tokens of sequences 0 (0-1) and 2 (4-6) are compared.
+    _conv1d_parity(
+        "conv1d_varlen_pad_slot",
+        dict(x=x, weight=weight,
+             bias=_seq(16, 201.0).to(torch.bfloat16).npu(),
+             conv_states=states, query_start_loc=[0, 2, 4, 7],
+             cache_indices=[0, -1, 1], initial_state_mode=[1, 0, 1],
+             activation_mode=0, pad_slot_id=-1, run_mode=0),
+        defined_rows=[0, 1, 4, 5, 6])
 
 
 def scenario_conv1d_bwd_bnsd():

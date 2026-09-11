@@ -681,3 +681,19 @@ SKIP 全部带具体 aclnn 状态码，而不是"跳过"。
    崩溃没有可兼容的语义，所以三处（ctypes 参考、stable 的 `python.pre`、pybind 的
    `_thin.py`）都改成显式拒绝并说明原因；`scenario_solve_tri_guards` 钉住"两条后端
    都必须报错而不是崩"。
+
+### 8.6 扩展后的场景集在 pybind 后端也跑了一遍
+
+新增的场景（chunk_fwd_o 各 layout、solve_tri 守卫、recurrent_kda TND、kda_bwd_intra
+BSND、conv1d_bwd 各 layout、cumsum 的 dtype/head_first）在 pybind 后端同样跑：
+**250 PASS / ALL PASS（26 个场景）**。差异只有两类，都是记录而不是静默：
+
+| 记录 | 数量 | 原因 |
+| --- | --- | --- |
+| `the selected backend does not carry npu_causal_conv1d` | 6 | pybind 扩展本来就只有 25/26 个算子 |
+| `pybind backend rejects what the reference accepts: 161001` | 1 | `chunk_local_cumsum(output_dtype="bfloat16")`：ctypes 与 stable 都 OK（输出 bf16），**pybind 扩展报 161001**（实测 `output_dtype="float32"` 正常、`"bfloat16"` 失败，且扩展只接受字符串） |
+
+第二条是这次才发现的后端差异：以前没人跑过 `output_dtype` 变体。pybind 是 opt-in 的
+A/B 通道且正在退役（D2 已把它移出默认构建），所以这里的选择是**把它如实记录**，
+而不是为了它拖住主路径；`GAP_TOLERANT_BACKEND` 只在 pybind 驱动里打开，
+Stable-ABI 驱动保持严格——同一情形在 stable 上仍然是硬失败。

@@ -152,16 +152,16 @@ def main() -> int:
 
     rows = []
     for op_name, per_backend in sorted(SAMPLES.items()):
-        ctypes_ms = p50(per_backend.get("ctypes", []))
+        ctypes_ms = p50(per_backend.get(baseline_label, []))
         stable_ms = p50(per_backend.get("stable", []))
-        if not per_backend.get("ctypes") or not per_backend.get("stable"):
+        if not per_backend.get(baseline_label) or not per_backend.get("stable"):
             continue
         rows.append({
             "op": op_name,
             "ctypes_ms": round(ctypes_ms, 4),
             "stable_ms": round(stable_ms, 4),
             "stable_over_ctypes": round(stable_ms / ctypes_ms, 3),
-            "samples": len(per_backend["ctypes"]),
+            "samples": len(per_backend[baseline_label]),
         })
 
     rows.sort(key=lambda row: row["stable_over_ctypes"], reverse=True)

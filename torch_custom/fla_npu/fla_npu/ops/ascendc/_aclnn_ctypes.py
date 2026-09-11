@@ -2922,6 +2922,17 @@ def npu_chunk_kda_bwd_intra(
 
 
 def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
+    layout = str(layout)
+    if layout == "tnd":
+        # Measured on Ascend910B3 with the OPP in this tree: the tnd spelling
+        # kills the process inside aclnnSolveTri, with and without cu_seqlens.
+        # Crashing has no defined semantics to be compatible with, so refuse it
+        # with a message instead -- see docs/architecture/stable-abi-migration.md.
+        raise RuntimeError(
+            "npu_solve_tri: layout='tnd' is refused because the operator "
+            "crashes the process on this OPP (verified on both the ctypes and "
+            "the Stable-ABI path). Use layout='bsnd'/'bnsd', or 'ntd' if the "
+            "zero-filled result is acceptable.")
     x_contig = x.contiguous()
     out = _empty_like(x_contig)
     layout_arg = ctypes.c_char_p(str(layout).encode("utf-8"))

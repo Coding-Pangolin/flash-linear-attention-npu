@@ -610,9 +610,16 @@ def npu_chunk_gated_delta_rule_bwd_finalize(q, k, v, v_new, do, du, g, beta, h, 
 def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
     ext = _extension()
     layout = str(layout)
-    # bsnd/bnsd (dense) and tnd (dense or varlen) match ctypes bit-exactly; ntd is
-    # broken upstream (ctypes returns all zeros and thin is not the transpose of
-    # tnd), so keep ntd on the ctypes path until the kernel is fixed.
+    # tnd kills the operator process on this OPP (measured on both backends, with
+    # and without cu_seqlens), so refuse it instead of crashing. ntd is broken the
+    # other way (ctypes returns all zeros for it) and stays on the ctypes path
+    # until the kernel is fixed.
+    if layout == "tnd":
+        raise RuntimeError(
+            "npu_solve_tri: layout='tnd' is refused because the operator crashes "
+            "the process on this OPP (verified on both the ctypes and the "
+            "Stable-ABI path). Use layout='bsnd'/'bnsd', or 'ntd' if the "
+            "zero-filled result is acceptable.")
     if layout == "ntd":
         from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
         return _ct.npu_solve_tri(x, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, layout=layout)

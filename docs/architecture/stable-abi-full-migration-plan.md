@@ -9,7 +9,7 @@
 | 项 | v1（方案刚写下时） | v2（A1/A2 落地） | v3（本文，含 conv1d 与 API 契约） |
 | --- | --- | --- | --- |
 | 覆盖 | 16/26，剩 10 个卡在 `alloc`/`helpers` 的 ATen 惯用法 | 25/26 | **26/26**：`npu_causal_conv1d` 已接入（`alloc` 表达 `head_num` 重排），只剩上游 #390 的 update 变体未定稿 |
-| 一次性通过 | 无 | 243 PASS（22 个算子被调用） | **910b：256 PASS / 0 FAIL，24 个算子被调用；950：15 PASS / ALL PASS**（A5 专属 4 场景） |
+| 一次性通过 | 无 | 243 PASS（22 个算子被调用） | **910b：266 PASS / 0 FAIL（250 场景 + 11 条带原因 SKIP）；950：15 PASS / ALL PASS**（A5 专属 4 场景） |
 | Python API 契约 | 未检查 | 未检查 | **ctypes 为唯一真源**：`tools/op_api_parity.py` 报 0 漂移（本轮修掉 10 个算子的签名漂移） |
 | 性能 | 只有 GDR/KDA 两个数 | GDR 1.26×、KDA 1.11×、fast_gelu 0.34× | 同上（B2/B4 未做，GDR 仍未达标） |
 | 后端取舍 | stable 可选、pybind 默认 | stable 默认 | **stable 为唯一后端**；pybind 仅作 A/B 对照，随后删除 |
@@ -44,7 +44,7 @@
 ```
 libfla_npu_thin.so  245 736 B
 undefined  _ZN2at/_ZN3c10 = 0     aoti_torch_* = 38     导出构建戳符号 = 1
-regression_stable_full.py (910B3):  256 PASS / 0 FAIL   "ALL PASS: full stable parity"
+regression_stable_full.py (910B3):  266 PASS / 0 FAIL   "ALL PASS: full stable parity"
 regression_stable_a5.py   (950PR):   15 PASS / 0 FAIL   "ALL PASS: Ascend950 stable parity"
 op_api_parity.py: 26 个算子比对，0 漂移        stable_coverage.py --strict: 退出码 0
 ```
@@ -288,7 +288,38 @@ baseline 必须清空，否则发版门禁不放行。
 写：`FLA_NPU_BASELINE_WRITE=1 python tests/regression_stable_full.py`；
 默认模式是**比对**——少了一个场景（丢 layout、丢 flag 组合）就 FAIL 并点名，
 数值不再是 0.0 也 FAIL。这样"覆盖"是仓库里的一份事实，而不是某次日志里的一行
-`ALL PASS`。当前记录：910B3 **245 通过 + 2 条带原因的 SKIP**，950PR **12 通过**。
+`ALL PASS`。当前记录：910B3 **250 通过 + 11 条带原因的 SKIP**，950PR **12 通过**。
+
+### C3b. 场景广度补强（2026-09-11 收尾）
+
+`tools/coverage_gap_report.py` 把"声明的合法域"和"实际跑过的场景"按**算子**对齐
+（不是全局字符串匹配，否则别的算子跑过的 BSND 会替它"顶包"），找出一批
+"声明了但没跑"的轴值，逐个补齐或用 SKIP 记录：
+
+| 算子 | 补的结果 |
+| --- | --- |
+| `chunk_fwd_o` | 新增 **NTD** 通过；BSND / TND / `use_exp2` / `transpose_state_layout` 被本 OPP 内核拒绝（161001，两条后端一致）→ 记为 SKIP |
+| `causal_conv1d_bwd` | 新增 BSND / TND / NTD 三个 layout：**都被内核拒绝**（561002）→ 记为 SKIP；只有 BNSD 这一种在本 OPP 可用 |
+| `chunk_local_cumsum` | 新增 `output_dtype=bfloat16` 通过；`head_first=False` 被拒（161001）→ SKIP |
+| `recurrent_kda` | 新增 **TND**（含 in-place state 一致性）通过 |
+| `chunk_kda_bwd_intra` | 新增 **BSND** 通过 |
+| `solve_tri` | 见下：tnd 从"崩溃"变成"明确拒绝" |
+
+顺带把 `chunk_gated_delta_rule_fwd` 在 910b 的场景标签改成带 layout
+（`BNSD_B2_...`）——原来只写 shape，覆盖记录里看不出跑的是哪个 layout
+（BSND/TND/NTD 由 950 的驱动覆盖）。
+
+一个值得记的事实：conv1d 家族（前向 varlen、反向三种 layout）在本 OPP 上**全部**
+561002 被拒——这说明 `aclnnCausalConv1d` 在这份 OPP 里只实现了最基础的那种形态，
+也正好解释了 #390 为什么要同时更新 OPP。
+
+### C3c. `solve_tri` 的 tnd：从"进程崩溃"到"明确拒绝"
+
+补场景时发现 `npu_solve_tri(layout="tnd")` 会让进程**静默死亡**（无 traceback），
+而且 ctypes 与 stable **两条后端都一样**（有/无 cu_seqlens 都试过）。崩溃没有可兼容的
+语义，所以三处（ctypes 参考实现、stable 的 `python.pre`、pybind 的 `_thin.py`）都改成
+显式抛错，并说明原因与替代方案（`bsnd`/`bnsd`，或接受全零结果的 `ntd`）。
+`scenario_solve_tri_guards` 把这件事钉住：两条后端都必须**拒绝**而不是崩。
 
 ### C4. 运行期回退可视化（已实现）
 

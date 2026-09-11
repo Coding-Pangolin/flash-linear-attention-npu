@@ -329,7 +329,7 @@ baseline 必须清空，否则发版门禁不放行。
 
 ## 6. 剩余工作与推进顺序
 
-### 6.1 #390 已合入 main：适配它之前必须先拿到新 OPP（2026-09-11 实测）
+### 6.1 #390 已合入 main：conv1d 家族有 OPP 可验，两个 recompute 算子还没有 kernel（2026-09-11 实测）
 
 `origin/main` 的当前 tip 就是 "Merge pull request #390 from LiuZonggu/causal-conv1d"，
 它带来 4 个新入口（`npu_causal_conv1d_fn`、`npu_causal_conv1d_update`、
@@ -359,6 +359,31 @@ OPP 是 #390 之前的；241 的 A5 OPP 里干脆没有 `aclnnCausalConv1d`
 ABI，`python` 块负责 activation 字符串与 CPU 元数据数组的归一），跑
 `sync_spec_python.py` + `op_api_parity.py` + 设备侧场景；覆盖门禁现在就会直接列出
 缺哪些适配器（实测：`ctypes operators: 30`，4 个 FAIL）。
+
+**同日继续查证：四个新算子的 OPP 供给并不一样。**
+
+| 新算子 | aclnn 入口 | 可用 OPP 里有没有 kernel | 能否在本机验证 |
+| --- | --- | --- | --- |
+| `npu_causal_conv1d_fn` | `aclnnCausalConv1d`（新 ABI） | ✅ `/data/fangziyang/code/0908/env390` 就是新 ABI 头 + 实现 | ✅ 实测 legacy / fn / update 三个入口都 OK |
+| `npu_causal_conv1d_update` | 同上 | ✅ 同上 | ✅ 同上 |
+| `npu_chunk_gdn_bwd_intra` | `aclnnChunkGdnBwdIntra` | ❌ 扫遍 0908 下所有 `libcust_opapi.so`，符号数为 0 | ❌ `Unable to resolve aclnn symbol` |
+| `npu_chunk_kda_bwd_recompute` | `aclnnChunkKdaBwdRecompute` | ❌ 同上 | ❌ 同上 |
+
+所以"适配 #390"实际是两件事：
+
+1. **conv1d 家族可以做、而且能验**：把测试环境切到 `env390` 的 OPP
+   （`ASCEND_CUSTOM_OPP_PATH=<env390>/fla_npu/opp/vendors/fla_npu_transformer:.../op_api/lib`）。
+   三个 Python 入口共用同一条 ABI，但每个入口固定了不同的槽位——
+   legacy 固定 `null_block_id=-1`；fn 固定 `run_mode=0`；update 固定 `run_mode=1`、
+   `pad_slot_id=-(1<<63)`，并且**把结果 copy 回 `x` / `out`**。因此生成器需要补一个
+   "常量参数"能力（`const`），或者这三个走手写适配；这一层目前是空的。
+2. **两个 recompute 算子只能等 OPP**：kernel 不在任何可用 OPP 里，写出来的适配器
+   无法验证——按本方案的规矩，不验的东西不进主干。它们在 main 的 ctypes 里存在，
+   所以一旦合 main，覆盖门禁会立刻把它们标成缺口（实测 `ctypes operators: 30`，
+   4 个 FAIL，与门禁的预期行为一致）。
+
+本轮结论：**不合 main**（与用户既定口径一致："#390 只用来验证，不并进我们分支"），
+分支继续停在全绿基线上；上面两张表就是下一步的全部输入。
 
 | 阶段 | 内容 | 前置 |
 | --- | --- | --- |

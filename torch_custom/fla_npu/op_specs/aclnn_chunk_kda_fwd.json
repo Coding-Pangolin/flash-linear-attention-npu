@@ -72,6 +72,7 @@
     "pre": "layout = str(layout)\nsafe_gate = bool(safe_gate)\nuse_gate_in_kernel = bool(use_gate_in_kernel)\nstate_v_first = bool(state_v_first)\noutput_final_state = bool(output_final_state)\ndisable_recompute = bool(disable_recompute)\nreturn_intermediate_states = bool(return_intermediate_states)\nif scale is None:\n    scale = float(q.shape[2] if layout in (\"TND\", \"NTD\") else q.shape[3]) ** -0.5\nif lower_bound is None:\n    lower_bound = -5.0",
     "return_code": "out = [result[0]]\nout.append(result[1] if output_final_state else None)\nout.append(result[2] if (not use_gate_in_kernel or disable_recompute) else None)\nout.append(result[3])\nout.append(result[4])\nout.append(result[5] if disable_recompute else None)\nout.append(result[6] if disable_recompute else None)\nout.append(result[7] if disable_recompute else None)\nout.append(result[8] if disable_recompute else None)\nout.append(result[9] if disable_recompute else None)\nout.append(result[10] if (disable_recompute or return_intermediate_states) else None)\nout.append(initial_state)\nreturn tuple(out)",
     "defaults": {
+      "chunk_size": "64",
       "layout": "\"BSND\"",
       "initial_state": "None",
       "output_final_state": "False",

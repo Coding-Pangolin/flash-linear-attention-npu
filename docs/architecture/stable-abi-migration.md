@@ -690,6 +690,52 @@ SKIP 全部带具体原因，而不是"跳过"。这一批里还多出两类值�
    `_thin.py`）都改成显式拒绝并说明原因；`scenario_solve_tri_guards` 钉住"两条后端
    都必须报错而不是崩"。
 
+## 9. 并入 #390（rebase 到最新 main）后的适配
+
+`origin/main` 的 tip 就是 #390 的 merge，所以这一步是"把分支推到 main 上并把它的
+算子接进来"。它带来两件事：
+
+1. **`aclnnCausalConv1d` 换 ABI**：4 个 `aclIntArray` 元数据槽变成 `aclTensor`、
+   `activationMode` 变成 `const char*`、多了 `nullBlockId` / `maxQueryLen`；
+2. **4 个新入口**：`causal_conv1d_fn`、`causal_conv1d_update`、
+   `chunk_gdn_bwd_intra`、`chunk_kda_bwd_recompute`（旧的 `npu_causal_conv1d`
+   变成弃用壳，三个 API 共用一个 ABI）。
+
+### 9.1 conv1d 家族：Python 层共用，只把发射搬进 launcher
+
+三个公开 API 的差别只在"怎么把参数拼成那一个 ABI"（校验、CPU 元数据数组、activation
+字符串、update 的结果 copy 回 `x`），这层重复写一遍没有意义，也会随时间漂移。所以：
+
+* launcher 侧把这**一个 ABI** 做成内部 op `_causal_conv1d_launch`（spec 标
+  `"internal": true`，用 `"impl": "_launch_causal_conv1d"` 指明"谁拥有 aclnn 调用"，
+  这样 ABI 门禁仍然会盯着它）；
+* ctypes 的 `_launch_causal_conv1d` 在 launcher 已加载时把**发射**交给它，否则自己
+  走 `_call_aclnn`；
+* `_stable.py` 把三个公开函数**直接 re-export**（同一个函数对象），所以 Python 表面
+  不可能漂移，`op_api_parity` 对它们是"同一对象"而不是"看起来一样"。
+
+### 9.2 另外两个新算子
+
+`npu_chunk_gdn_bwd_intra`、`npu_chunk_kda_bwd_recompute` 按常规 spec 生成适配器。
+但**它们的 kernel 不在任何可用 OPP 里**（扫过 0908 下所有 `libcust_opapi.so`，
+符号数为 0），所以只能交付代码、不能交付验证——这一点写在下面的环境注记里，
+`coverage_gap_report.py` 也会把它们列成"没有场景"。
+
+### 9.3 验证结果与环境注记（910B3 / 221）
+
+| 项 | 结果 |
+| --- | --- |
+| 离线门禁 | coverage 30 算子 0 缺口、API 契约 55 对 0 漂移、**ABI 契约 28 个 0 不符**、spec 同步 0 |
+| 合并后全量（完整 OPP） | **259 PASS**，基线 **250 通过 + 22 条带原因 SKIP** |
+| 其中 conv1d 反向 | 通过（它的 ABI 没变） |
+| conv1d 前向 8 个场景 | 记为"需要 post-#390 的 OPP"，并在 #390 的 OPP(`env390`) 上**全部通过**：prefill ×2、update、spec-decode、width3、gather-padding，含 in-place state 与 pad-slot 语义 |
+| `FLA_NPU_CONV1D_ABI=old` | 把"本 OPP 是 #390 之前的 ABI"变成一条记录，而不是 ABI 未定义的调用（实测会直接杀进程） |
+
+**环境注记**：手上没有哪一份 OPP 同时具备"新 conv1d ABI"和"其余 25 个 kernel"——
+`env390` 是只为 causal_conv1d 编的单算子 OPP（`nm` 里只有一个
+`aclnnCausalConv1d`）。所以前向场景在 `env390` 上验证、在完整 OPP 的那一轮里记为 SKIP；
+代码是统一的，环境不是。
+
 ### 8.6 扩展后的场景集在 pybind 后端也跑了一遍
 
 新增的场景（chunk_fwd_o 各 layout、solve_tri 守卫、recurrent_kda TND、kda_bwd_intra

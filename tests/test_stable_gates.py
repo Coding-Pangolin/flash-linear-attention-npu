@@ -59,7 +59,9 @@ class GeneratedArtifactTest(unittest.TestCase):
 
     def test_every_spec_has_a_stable_adapter(self) -> None:
         inc = GENERATED_INC.read_text(encoding="utf-8")
-        generated = set(re.findall(r"kSchema_(npu_[a-z0-9_]+)\s*=", inc))
+        # Internal launcher ops are named with a leading underscore (the shared
+        # conv1d ABI), so the pattern is not restricted to npu_ prefixes.
+        generated = set(re.findall(r"kSchema_([a-z0-9_]+)\s*=", inc))
         hand_written = {
             name for name in re.findall(r"^def\s+(npu_[a-z0-9_]+)\s*\(",
                                         (OPS_DIR / "_stable.py").read_text(
@@ -71,10 +73,14 @@ class GeneratedArtifactTest(unittest.TestCase):
         for path in sorted(SPEC_DIR.glob("*.json")):
             spec = json.loads(path.read_text(encoding="utf-8"))
             specs[spec["python_name"]] = path.name
+        internal = {name for name, path in specs.items()
+                    if json.loads((SPEC_DIR / path).read_text(
+                        encoding="utf-8")).get("internal")}
         missing = sorted(set(specs) - generated - hand_written)
         self.assertEqual(missing, [], f"specs without an adapter: {missing}")
         orphan = sorted(generated - set(specs))
         self.assertEqual(orphan, [], f"adapters without a spec: {orphan}")
+        self.assertTrue(internal, "the conv1d internal spec is missing")
 
     def test_codegen_rejects_mismatched_stack_indices(self) -> None:
         """The check that would have caught the A5 segfault, exercised."""
@@ -174,25 +180,25 @@ class GateCommandTest(unittest.TestCase):
             any("not-a-layout" in p for p in problems),
             f"an impossible scenario value was accepted: {problems}")
 
-    def test_coverage_gate_records_integer_axes(self) -> None:
-        """Integer knobs are declared rather than derived.
+    def test_coverage_gate_accepts_the_conv1d_passthrough(self) -> None:
+        """The conv1d family has no per-operator spec, by design.
 
-        conv1d's legal domain is not visible in its argument *kinds*:
-        ``run_mode`` switches prefill/update, ``head_num`` switches the output
-        reshape, and ``activation_mode`` switches the epilogue.  Those values
-        come from the unit tests, so they are declared in the spec and the gate
-        has to accept them (they are backed by real arguments) and keep them in
-        the reported axis set.
+        Three public APIs share one Python layer and one aclnn ABI, so the
+        stable backend for them is the *launch* (an internal op) rather than
+        three adapters.  The gate must accept that without reporting them as
+        missing adapters, and it must still demand that the internal op is
+        registered -- which is what makes the shared launcher able to do
+        anything at all.
         """
 
         module = _load_tool("stable_coverage.py")
         report = module.evaluate()
-        row = next(entry for entry in report["rows"]
-                   if entry["op"] == "npu_causal_conv1d")
-        self.assertEqual(row["problems"], [])
-        self.assertEqual(row["axes"]["run_mode"], [0, 1])
-        self.assertEqual(row["axes"]["head_num"], [0, 2])
-        self.assertEqual(row["axes"]["activation_mode"], [0, 1])
+        for name in module.passthrough_ops():
+            row = next(entry for entry in report["rows"]
+                       if entry["op"] == name)
+            self.assertEqual(row["problems"], [], name)
+            self.assertIsNone(row["spec"], name)
+        self.assertTrue(module.internal_specs(module.load_specs()))
 
 
 class BuildStampTest(unittest.TestCase):
@@ -212,6 +218,12 @@ class BuildStampTest(unittest.TestCase):
             (parent / "__init__.py").write_text("", encoding="utf-8")
         for name in ("_stable.py", "_stable_generated.py"):
             shutil.copy2(OPS_DIR / name, package / name)
+        # _stable re-exports the conv1d family from the reference module, so the
+        # private copy needs that one too (and whatever it imports).
+        for extra in ("_aclnn_ctypes.py", "_runtime.py", "_kda_policy.py"):
+            source = OPS_DIR / extra
+            if source.exists():
+                shutil.copy2(source, package / extra)
         saved = {name: module_ for name, module_ in sys.modules.items()
                  if name.startswith("fla_npu")}
         for name in list(saved):

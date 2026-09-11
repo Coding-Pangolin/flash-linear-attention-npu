@@ -456,7 +456,7 @@ ABI，`python` 块负责 activation 字符串与 CPU 元数据数组的归一）
 | B2 | ✅ int 缓存（varlen 路径 −39%） | — |
 | B4 | 校验分层（schema + C++ 廉价断言），把 GDR 压回 ≤1.15× | 无 |
 | C3 | ✅ parity 基线入库（910B3 245 + 950PR 12，丢失场景即 FAIL） | — |
-| B5 | ✅ 逐算子 A/B 表（`tests/bench_stable_host.py`，24 个可跑算子全部快于 ctypes，比值 0.19–0.39×） | — |
+| B5 | ✅ 逐算子 A/B 表，两把尺子：对 ctypes 24/24 更快（0.19–0.39×）；对 pybind 23 个里 21 个持平或更快（最差 1.24×） | 见 §4.4 与 §9.4 |
 | D1 | ✅ 默认链 stable → ctypes；`FLA_NPU_THIN_ABI=pybind/ctypes` 才算显式切换（顺带修掉 `=ctypes` 其实没生效的老问题） | — |
 | D2 | ✅ 默认构建不再编 `_C_thin`，wheel 自带 `libfla_npu_thin.so`；一键编包产物 `py3-none-any` 并在干净目录安装后跑通全量 | — |
 | D3 | ✅ 发布矩阵：ABI-free wheel 声明 `torch>=2.7.1` / `torch_npu>=2.7.1` 下限（pybind wheel 仍是精确 pin），加载失败时给出"需要 ≥2.7.1"的明确报错 | — |

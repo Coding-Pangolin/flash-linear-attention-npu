@@ -384,6 +384,17 @@ def _host_ints(values):
     return tensor
 
 
+def _char_code(op_name: str, argument: str, value):
+    """Map a string argument to the int code the stable schema carries."""
+
+    from . import _stable_generated as generated
+
+    table = generated._ENUM[op_name][argument]
+    if value is None:
+        return 0
+    return table[value] if isinstance(value, str) else value
+
+
 def _call(name: str, values: dict):
     """Invoke a generated stable op from its user-facing argument values."""
 

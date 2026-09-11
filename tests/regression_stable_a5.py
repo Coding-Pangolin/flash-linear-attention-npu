@@ -48,18 +48,26 @@ def main() -> int:
         a5.scenario_recurrent_kda,
         a5.scenario_chunk_gated_delta_rule_fwd_a5,
     ]
-    # These operators have Ascend950 kernels too (checked with nm on the OPP:
-    # aclnnChunkFwdO / aclnnSolveTri / aclnnChunkLocalCumsum are all present),
-    # so the same scenarios run here and the 950 baseline covers them as well.
-    # The rest of the suite is not portable: the A5 OPP carries neither
-    # aclnnCausalConv1d nor aclnnRecurrentGatedDeltaRule, and several A2 inputs
-    # are outside the A5 kernels' accepted domain.
+    # Everything below has an Ascend950 kernel.  The list comes from nm on the
+    # OPP (GetWorkspaceSize symbols), which carries 11 of the 26 operators:
+    # ChunkFwdH, ChunkFwdO, ChunkGatedDeltaRule{BwdFinalize,Fwd,FwdH,FwdPrepare},
+    # ChunkLocalCumsum, ChunkScaledDotKkt, RecomputeWUFwd, RecurrentKda,
+    # SolveTri.  The rest cannot run here at all -- no aclnnCausalConv1d, no
+    # aclnnRecurrentGatedDeltaRule, no KDA backward, no fast_gelu -- which is
+    # why this driver is the A5 slice of the suite rather than the whole thing.
     scenarios += [
+        suite_module.scenario_chunk_fwd_h,
         suite_module.scenario_chunk_fwd_o,
+        suite_module.scenario_gated_fwd_h,
         suite_module.scenario_chunk_local_cumsum,
+        suite_module.scenario_scaled_dot_kkt,
         suite_module.scenario_solve_tri_dense,
         suite_module.scenario_solve_tri_guards,
     ]
+    # npu_recompute_w_u_fwd is deliberately absent: its A5 kernel never returns
+    # for these inputs (measured with ctypes alone and a 180s timeout, so it is
+    # the kernel, not the launcher).  A hang cannot be turned into an error from
+    # the host, so it is excluded and recorded here instead.
     for scenario in scenarios:
         print(f"--- entering {scenario.__name__}", flush=True)
         scenario()

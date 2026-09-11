@@ -706,13 +706,19 @@ Stable-ABI 驱动保持严格——同一情形在 stable 上仍然是硬失败�
 把能跑的同一批场景也挂到 A5 驱动上：
 
 ```
-baseline written for Ascend950PR_9579: 29 passed, 5 skipped
+baseline written for Ascend950PR_9579: 34 passed, 5 skipped
 ALL PASS: Ascend950 stable parity
 ```
 
-从 **12 通过** 变成 **29 通过 + 5 条带原因 SKIP**（SKIP 是 chunk_fwd_o 的四个组合与
-`head_first=False`，A5 内核同样 161001 拒绝）。也就是说同一套 stable 层现在在两个
-SOC 上都跑过一批共同的算子，而不只是 A5 专属那几个。
+从 **12 通过** 变成 **34 通过 + 5 条带原因 SKIP**（SKIP 是 chunk_fwd_o 的四个组合与
+`head_first=False`，A5 内核同样 161001 拒绝）。A5 侧现在覆盖到它 OPP 里有的 10 个
+算子：`chunk_fwd_h`、`chunk_fwd_o`、`chunk_gated_delta_rule_fwd(_h)`、`fwd_prepare`、
+`bwd_finalize`、`chunk_local_cumsum`、`chunk_scaled_dot_kkt`、`recurrent_kda`、
+`solve_tri`。
+
+**A5 OPP 里第 11 个算子 `recompute_w_u_fwd` 故意不在列表里**：它的 A5 kernel 对这些
+输入**永远不返回**（只用 ctypes 单测 + 180s 超时复现，所以是内核而不是我们的层）。
+挂死没法从 host 侧变成异常，因此排除并在此记录。
 
 顺带修了一处环境问题：241 上的包副本还停留在没有 `tnd` 守卫的版本，`solve_tri_guards`
 一跑就打到了裸内核（挂住而不是报错）——同步包文件并重编 A5 产物后正常。

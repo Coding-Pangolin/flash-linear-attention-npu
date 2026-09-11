@@ -19,6 +19,17 @@ import os
 _LIB_ENV = "FLA_NPU_STABLE_LIB"
 _loaded_path: str | None = None
 _OP_CACHE: dict[str, object] = {}
+# Cached objects for the hot path.  `torch`/`torch_npu` are plain module
+# handles and the raw-stream accessor is a plain function: caching *those* is
+# safe.  The stream itself is never cached -- that is what corrupted the vLLM
+# run earlier, where a process-global stream pointer followed a different
+# thread.
+_torch = None
+_torch_npu = None
+_raw_stream_fn = None
+# int[] argument cache: value tuple -> host int64 tensor (see _host_ints).
+_INT_CACHE: dict[tuple, object] = {}
+_INT_CACHE_MAX = 64
 
 # The stable value conversions have no std::string support, so string enum
 # arguments travel as int codes.
@@ -41,28 +52,55 @@ def _lib_path() -> str:
 def _current_stream_ptr() -> int:
     """Raw NPU stream of the calling thread (same guarded accessor as _thin)."""
 
-    import torch
-
+    global _raw_stream_fn
+    torch = _modules()[0]
+    if _raw_stream_fn is not None:
+        return int(_raw_stream_fn(torch.npu.current_device()))
     try:
-        import torch_npu
-
-        raw_stream = getattr(torch_npu._C, "_npu_getCurrentRawStream", None)
-        if raw_stream is not None:
-            return int(raw_stream(torch.npu.current_device()))
+        torch_npu = _modules()[1]
+        if not torch_npu:
+            raise AttributeError("torch_npu is not importable")
+        _raw_stream_fn = getattr(torch_npu._C, "_npu_getCurrentRawStream")
     except Exception:
-        pass
-    return int(torch.npu.current_stream().npu_stream)
+        _raw_stream_fn = False  # look the slow way from now on
+    if not _raw_stream_fn:
+        return int(torch.npu.current_stream().npu_stream)
+    return int(_raw_stream_fn(torch.npu.current_device()))
+
+
+def _modules():
+    """(torch, torch_npu) once imported; kept out of the per-call path."""
+
+    global _torch, _torch_npu
+    if _torch is None:
+        import torch as _t
+
+        _torch = _t
+    if _torch_npu is None:
+        try:
+            import torch_npu as _tn
+
+            _torch_npu = _tn
+        except Exception:
+            _torch_npu = False
+    return _torch, _torch_npu
 
 
 def load() -> None:
     """dlopen the stable library through torch (no-op when already loaded)."""
 
     global _loaded_path
+    # Hot path: once a library is loaded, re-resolving it means an environment
+    # lookup plus a filesystem stat on every single operator call (~47us
+    # measured).  Only an explicitly different FLA_NPU_STABLE_LIB re-resolves.
+    if _loaded_path is not None:
+        requested = os.environ.get(_LIB_ENV)
+        if not requested or requested == _loaded_path:
+            return
     path = _lib_path()
     if _loaded_path == path:
         return
-    import torch
-
+    torch = _modules()[0]
     torch.ops.load_library(path)
     _check_build_stamp(path)
     _loaded_path = path
@@ -280,13 +318,29 @@ def npu_recurrent_kda(
 # ---------------------------------------------------------------------------
 def _host_ints(values):
     """int[] arguments travel as host int64 tensors (no list support in the
-    stable conversions)."""
+    stable conversions).
+
+    Decode-time calls reuse the same length list over and over (a batch of
+    identical sequences), and building a tensor costs ~18us, so the result is
+    cached by value.  Only list/tuple inputs are cached: a tensor is passed
+    through, and anything else is converted without caching.
+    """
 
     if values is None:
         return None
     import torch
 
-    return torch.tensor(list(values), dtype=torch.int64, device="cpu")
+    if not isinstance(values, (list, tuple)):
+        return torch.tensor(list(values), dtype=torch.int64, device="cpu")
+    key = tuple(values)
+    cached = _INT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    tensor = torch.tensor(list(values), dtype=torch.int64, device="cpu")
+    if len(_INT_CACHE) >= _INT_CACHE_MAX:
+        _INT_CACHE.clear()
+    _INT_CACHE[key] = tensor
+    return tensor
 
 
 def _call(name: str, values: dict):

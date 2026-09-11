@@ -58,7 +58,7 @@
       "g",
       "beta"
     ],
-    "pre": "layout = str(layout)\nif scale is None:\n    scale = float(q.shape[3]) ** -0.5\nif cu_seqlens is not None and chunk_indices is None:\n    chunk_indices = []\n    for _seq in range(len(cu_seqlens) - 1):\n        _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]\n        for _c in range((_len + int(chunk_size) - 1) // int(chunk_size)):\n            chunk_indices.extend((_seq, _c))\na_log = None\ndt_bias = None",
+    "pre": "layout = str(layout)\nif scale is None:\n    if q.dim() != 4:\n        raise RuntimeError(\n            \"npu_chunk_gated_delta_rule_fwd: q, k and v must be rank-4 \"\n            \"tensors.\")\n    scale = float(q.shape[3]) ** -0.5\nif cu_seqlens is not None and chunk_indices is None:\n    chunk_indices = []\n    for _seq in range(len(cu_seqlens) - 1):\n        _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]\n        for _c in range((_len + int(chunk_size) - 1) // int(chunk_size)):\n            chunk_indices.extend((_seq, _c))\na_log = None\ndt_bias = None",
     "return_code": "out = [result[0]]\nif output_final_state:\n    out.append(result[1])\nelse:\n    out.append(None)\nif not disable_recompute:\n    out.append(result[7])\n    out.append(result[8])\nif return_intermediate_states:\n    out.append(result[9])\nreturn tuple(out)",
     "defaults": {
       "initial_state": "None",

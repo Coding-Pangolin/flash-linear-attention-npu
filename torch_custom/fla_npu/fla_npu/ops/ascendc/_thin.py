@@ -522,6 +522,12 @@ def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, initial_state=None, cu_s
     ext = _extension()
     layout = str(layout)
     if scale is None:
+        # Check the rank before touching shape[3]: a rank-3 TND/NTD spelling
+        # would otherwise raise IndexError instead of the reference's message.
+        if q.dim() != 4:
+            raise RuntimeError(
+                "npu_chunk_gated_delta_rule_fwd: q, k and v must be rank-4 "
+                "tensors.")
         scale = float(q.shape[3]) ** -0.5
     if cu_seqlens is not None and chunk_indices is None:
         chunk_indices = []

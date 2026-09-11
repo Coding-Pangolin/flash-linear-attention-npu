@@ -186,118 +186,6 @@ inline std::vector<int64_t> kda_fwd_h_sizes(const shim::Tensor& q, const shim::T
 }
 }  // namespace
 
-// ---- generated: npu_causal_conv1d ----
-using npu_causal_conv1d_GetWorkspaceFn = int (*)(
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclIntArray*,
-    const aclIntArray*,
-    const aclIntArray*,
-    const aclIntArray*,
-    int64_t,
-    int64_t,
-    int64_t,
-    int64_t,
-    aclTensor*,
-    uint64_t*, aclOpExecutor**);
-constexpr const char* kSchema_npu_causal_conv1d =
-    "npu_causal_conv1d(Tensor x, Tensor weight, Tensor? bias, Tensor? conv_states, Tensor? query_start_loc, Tensor? cache_indices, Tensor? initial_state_mode, Tensor? num_accepted_tokens, int activation_mode, int pad_slot_id, int run_mode, int head_num, int stream) -> Tensor";
-
-void boxed_npu_causal_conv1d(StableIValue* stack, uint64_t num_inputs,
-                 uint64_t num_outputs) {
-  (void)num_inputs;
-  (void)num_outputs;
-  const Tensor x_t = to<Tensor>(stack[0]);
-  const TensorMeta x_meta = meta_of(x_t);
-  const shim::Tensor x(x_t);
-  const Tensor weight_t = to<Tensor>(stack[1]);
-  const TensorMeta weight_meta = meta_of(weight_t);
-  const shim::Tensor weight(weight_t);
-  const auto bias_t = to<std::optional<Tensor>>(stack[2]);
-  const bool bias_present = bias_t.has_value();
-  const TensorMeta bias_meta = bias_present ? meta_of(*bias_t) : TensorMeta();
-  const std::optional<shim::Tensor> bias = bias_present ? std::optional<shim::Tensor>(shim::Tensor(*bias_t)) : std::nullopt;
-  const auto conv_states_t = to<std::optional<Tensor>>(stack[3]);
-  const bool conv_states_present = conv_states_t.has_value();
-  const TensorMeta conv_states_meta = conv_states_present ? meta_of(*conv_states_t) : TensorMeta();
-  const std::optional<shim::Tensor> conv_states = conv_states_present ? std::optional<shim::Tensor>(shim::Tensor(*conv_states_t)) : std::nullopt;
-  const auto query_start_loc_t = to<std::optional<Tensor>>(stack[4]);
-  const std::vector<int64_t> query_start_loc = query_start_loc_t.has_value() ? host_int_values(query_start_loc_t->get()) : std::vector<int64_t>();
-  AclIntArrayView query_start_loc_view(query_start_loc);
-  const auto cache_indices_t = to<std::optional<Tensor>>(stack[5]);
-  const std::vector<int64_t> cache_indices = cache_indices_t.has_value() ? host_int_values(cache_indices_t->get()) : std::vector<int64_t>();
-  AclIntArrayView cache_indices_view(cache_indices);
-  const auto initial_state_mode_t = to<std::optional<Tensor>>(stack[6]);
-  const std::vector<int64_t> initial_state_mode = initial_state_mode_t.has_value() ? host_int_values(initial_state_mode_t->get()) : std::vector<int64_t>();
-  AclIntArrayView initial_state_mode_view(initial_state_mode);
-  const auto num_accepted_tokens_t = to<std::optional<Tensor>>(stack[7]);
-  const std::vector<int64_t> num_accepted_tokens = num_accepted_tokens_t.has_value() ? host_int_values(num_accepted_tokens_t->get()) : std::vector<int64_t>();
-  AclIntArrayView num_accepted_tokens_view(num_accepted_tokens);
-  const int64_t activation_mode = to<int64_t>(stack[8]);
-  const int64_t pad_slot_id = to<int64_t>(stack[9]);
-  const int64_t run_mode = to<int64_t>(stack[10]);
-  const int64_t head_num = to<int64_t>(stack[11]);
-  const int64_t stream = to<int64_t>(stack[12]);
-
-  auto& rt = Runtime::instance();
-  auto get_ws = reinterpret_cast<npu_causal_conv1d_GetWorkspaceFn>(
-      rt.symbol("aclnnCausalConv1dGetWorkspaceSize"));
-  auto launch = reinterpret_cast<LaunchFn>(
-      rt.symbol("aclnnCausalConv1d"));
-  uint64_t workspace_size = 0;
-  aclOpExecutor* executor = nullptr;
-
-  std::vector<shim::Tensor> outputs;
-  outputs.push_back((run_mode == 0 && head_num > 0) ? ((x.dim() == 3) ? shim::empty({x.size(0), head_num, x.size(1), x.size(2) / head_num}, x.options()) : ((x.dim() == 2) ? shim::empty({head_num, x.size(0), x.size(1) / head_num}, x.options()) : shim::empty_like(x))) : shim::empty_like(x));
-
-  std::vector<std::unique_ptr<AclTensorView>> views;
-  views.push_back(std::make_unique<AclTensorView>(x_meta));
-  views.push_back(std::make_unique<AclTensorView>(weight_meta));
-  views.push_back(std::make_unique<AclTensorView>(bias_meta));
-  views.push_back(std::make_unique<AclTensorView>(conv_states_meta));
-  views.push_back(std::make_unique<AclTensorView>(outputs[0].defined() ? meta_of(outputs[0].tensor()) : TensorMeta()));
-
-  const int get_ret = get_ws(
-      views[0]->get(),
-      views[1]->get(),
-      views[2]->get(),
-      views[3]->get(),
-      query_start_loc_view.get(),
-      cache_indices_view.get(),
-      initial_state_mode_view.get(),
-      num_accepted_tokens_view.get(),
-      activation_mode,
-      pad_slot_id,
-      run_mode,
-      head_num,
-      views[4]->get(),
-      &workspace_size, &executor);
-  if (get_ret != 0) {
-    throw std::runtime_error(
-        "aclnnCausalConv1dGetWorkspaceSize failed: " +
-        std::to_string(get_ret));
-  }
-  Tensor workspace;
-  void* workspace_ptr = nullptr;
-  if (workspace_size != 0) {
-    workspace = allocate_bytes(static_cast<int64_t>(workspace_size),
-                                   x_meta);
-    TORCH_ERROR_CODE_CHECK(
-        aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
-  }
-  const int launch_ret = launch(workspace_ptr, workspace_size,
-                                executor,
-                                reinterpret_cast<void*>(stream));
-  if (launch_ret != 0) {
-    throw std::runtime_error(
-        "aclnnCausalConv1d failed: " +
-        std::to_string(launch_ret));
-  }
-  stack[0] = from(outputs[0].tensor());
-}
-
 // ---- generated: npu_causal_conv1d_bwd ----
 inline const char* npu_causal_conv1d_bwd_input_layout_name(int64_t code) {
   switch (code) {
@@ -1771,6 +1659,131 @@ void boxed_npu_chunk_gated_delta_rule_fwd_prepare(StableIValue* stack, uint64_t 
   stack[8] = outputs[8].defined() ? from(std::optional<Tensor>(outputs[8].tensor())) : from(std::nullopt);
 }
 
+// ---- generated: npu_chunk_gdn_bwd_intra ----
+using npu_chunk_gdn_bwd_intra_GetWorkspaceFn = int (*)(
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclIntArray*,
+    const aclIntArray*,
+    double,
+    int64_t,
+    bool,
+    aclTensor*,
+    aclTensor*,
+    aclTensor*,
+    uint64_t*, aclOpExecutor**);
+constexpr const char* kSchema_npu_chunk_gdn_bwd_intra =
+    "npu_chunk_gdn_bwd_intra(Tensor q, Tensor k, Tensor v, Tensor g, Tensor beta, Tensor A, Tensor d_o, Tensor? cu_seqlens, Tensor? chunk_indices, float scale, int chunk_size, bool use_exp2, int stream) -> (Tensor, Tensor, Tensor)";
+
+void boxed_npu_chunk_gdn_bwd_intra(StableIValue* stack, uint64_t num_inputs,
+                 uint64_t num_outputs) {
+  (void)num_inputs;
+  (void)num_outputs;
+  const Tensor q_t = to<Tensor>(stack[0]);
+  const TensorMeta q_meta = meta_of(q_t);
+  const shim::Tensor q(q_t);
+  const Tensor k_t = to<Tensor>(stack[1]);
+  const TensorMeta k_meta = meta_of(k_t);
+  const shim::Tensor k(k_t);
+  const Tensor v_t = to<Tensor>(stack[2]);
+  const TensorMeta v_meta = meta_of(v_t);
+  const shim::Tensor v(v_t);
+  const Tensor g_t = to<Tensor>(stack[3]);
+  const TensorMeta g_meta = meta_of(g_t);
+  const shim::Tensor g(g_t);
+  const Tensor beta_t = to<Tensor>(stack[4]);
+  const TensorMeta beta_meta = meta_of(beta_t);
+  const shim::Tensor beta(beta_t);
+  const Tensor A_t = to<Tensor>(stack[5]);
+  const TensorMeta A_meta = meta_of(A_t);
+  const shim::Tensor A(A_t);
+  const Tensor d_o_t = to<Tensor>(stack[6]);
+  const TensorMeta d_o_meta = meta_of(d_o_t);
+  const shim::Tensor d_o(d_o_t);
+  const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[7]);
+  const std::vector<int64_t> cu_seqlens = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
+  AclIntArrayView cu_seqlens_view(cu_seqlens);
+  const auto chunk_indices_t = to<std::optional<Tensor>>(stack[8]);
+  const std::vector<int64_t> chunk_indices = chunk_indices_t.has_value() ? host_int_values(chunk_indices_t->get()) : std::vector<int64_t>();
+  AclIntArrayView chunk_indices_view(chunk_indices);
+  const double scale = to<double>(stack[9]);
+  const int64_t chunk_size = to<int64_t>(stack[10]);
+  const bool use_exp2 = to<bool>(stack[11]);
+  const int64_t stream = to<int64_t>(stack[12]);
+
+  auto& rt = Runtime::instance();
+  auto get_ws = reinterpret_cast<npu_chunk_gdn_bwd_intra_GetWorkspaceFn>(
+      rt.symbol("aclnnChunkGdnBwdIntraGetWorkspaceSize"));
+  auto launch = reinterpret_cast<LaunchFn>(
+      rt.symbol("aclnnChunkGdnBwdIntra"));
+  uint64_t workspace_size = 0;
+  aclOpExecutor* executor = nullptr;
+
+  std::vector<shim::Tensor> outputs;
+  outputs.push_back(shim::empty({q.size(0), v.size(1), q.size(2), q.size(3)}, q.options()));
+  outputs.push_back(shim::empty_like(v));
+  outputs.push_back(shim::empty_like(v));
+
+  std::vector<std::unique_ptr<AclTensorView>> views;
+  views.push_back(std::make_unique<AclTensorView>(q_meta));
+  views.push_back(std::make_unique<AclTensorView>(k_meta));
+  views.push_back(std::make_unique<AclTensorView>(v_meta));
+  views.push_back(std::make_unique<AclTensorView>(g_meta));
+  views.push_back(std::make_unique<AclTensorView>(beta_meta));
+  views.push_back(std::make_unique<AclTensorView>(A_meta));
+  views.push_back(std::make_unique<AclTensorView>(d_o_meta));
+  views.push_back(std::make_unique<AclTensorView>(outputs[0].defined() ? meta_of(outputs[0].tensor()) : TensorMeta()));
+  views.push_back(std::make_unique<AclTensorView>(outputs[1].defined() ? meta_of(outputs[1].tensor()) : TensorMeta()));
+  views.push_back(std::make_unique<AclTensorView>(outputs[2].defined() ? meta_of(outputs[2].tensor()) : TensorMeta()));
+
+  const int get_ret = get_ws(
+      views[0]->get(),
+      views[1]->get(),
+      views[2]->get(),
+      views[3]->get(),
+      views[4]->get(),
+      views[5]->get(),
+      views[6]->get(),
+      cu_seqlens_view.get(),
+      chunk_indices_view.get(),
+      scale,
+      chunk_size,
+      use_exp2,
+      views[7]->get(),
+      views[8]->get(),
+      views[9]->get(),
+      &workspace_size, &executor);
+  if (get_ret != 0) {
+    throw std::runtime_error(
+        "aclnnChunkGdnBwdIntraGetWorkspaceSize failed: " +
+        std::to_string(get_ret));
+  }
+  Tensor workspace;
+  void* workspace_ptr = nullptr;
+  if (workspace_size != 0) {
+    workspace = allocate_bytes(static_cast<int64_t>(workspace_size),
+                                   q_meta);
+    TORCH_ERROR_CODE_CHECK(
+        aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
+  }
+  const int launch_ret = launch(workspace_ptr, workspace_size,
+                                executor,
+                                reinterpret_cast<void*>(stream));
+  if (launch_ret != 0) {
+    throw std::runtime_error(
+        "aclnnChunkGdnBwdIntra failed: " +
+        std::to_string(launch_ret));
+  }
+  stack[0] = from(outputs[0].tensor());
+  stack[1] = from(outputs[1].tensor());
+  stack[2] = from(outputs[2].tensor());
+}
+
 // ---- generated: npu_chunk_kda_bwd ----
 using npu_chunk_kda_bwd_GetWorkspaceFn = int (*)(
     const aclTensor*,
@@ -2162,6 +2175,154 @@ void boxed_npu_chunk_kda_bwd_intra(StableIValue* stack, uint64_t num_inputs,
   stack[1] = from(outputs[1]);
   stack[2] = from(outputs[2]);
   stack[3] = from(outputs[3]);
+}
+
+// ---- generated: npu_chunk_kda_bwd_recompute ----
+using npu_chunk_kda_bwd_recompute_GetWorkspaceFn = int (*)(
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclIntArray*,
+    const aclIntArray*,
+    int64_t,
+    bool,
+    double,
+    aclTensor*,
+    aclTensor*,
+    aclTensor*,
+    aclTensor*,
+    aclTensor*,
+    uint64_t*, aclOpExecutor**);
+constexpr const char* kSchema_npu_chunk_kda_bwd_recompute =
+    "npu_chunk_kda_bwd_recompute(Tensor q, Tensor k, Tensor v, Tensor g, Tensor beta, Tensor a, Tensor? A_log, Tensor? dt_bias, Tensor? cu_seqlens, Tensor? chunk_indices, int chunk_size, bool use_exp2, float lower_bound, bool use_gate_in_kernel, int stream) -> (Tensor, Tensor, Tensor, Tensor, Tensor?)";
+
+void boxed_npu_chunk_kda_bwd_recompute(StableIValue* stack, uint64_t num_inputs,
+                 uint64_t num_outputs) {
+  (void)num_inputs;
+  (void)num_outputs;
+  const bool use_gate_in_kernel = to<bool>(stack[13]);
+  const Tensor q_t = to<Tensor>(stack[0]);
+  const TensorMeta q_meta = meta_of(q_t);
+  const shim::Tensor q(q_t);
+  const Tensor k_t = to<Tensor>(stack[1]);
+  const TensorMeta k_meta = meta_of(k_t);
+  const shim::Tensor k(k_t);
+  const Tensor v_t = to<Tensor>(stack[2]);
+  const TensorMeta v_meta = meta_of(v_t);
+  const shim::Tensor v(v_t);
+  const Tensor g_t = to<Tensor>(stack[3]);
+  const TensorMeta g_meta = meta_of(g_t);
+  const shim::Tensor g(g_t);
+  const Tensor beta_t = to<Tensor>(stack[4]);
+  const TensorMeta beta_meta = meta_of(beta_t);
+  const shim::Tensor beta(beta_t);
+  const Tensor a_t = to<Tensor>(stack[5]);
+  const TensorMeta a_meta = meta_of(a_t);
+  const shim::Tensor a(a_t);
+  const auto A_log_t = to<std::optional<Tensor>>(stack[6]);
+  const bool A_log_present = A_log_t.has_value();
+  const TensorMeta A_log_meta = A_log_present ? meta_of(*A_log_t) : TensorMeta();
+  const std::optional<shim::Tensor> A_log = A_log_present ? std::optional<shim::Tensor>(shim::Tensor(*A_log_t)) : std::nullopt;
+  const auto dt_bias_t = to<std::optional<Tensor>>(stack[7]);
+  const bool dt_bias_present = dt_bias_t.has_value();
+  const TensorMeta dt_bias_meta = dt_bias_present ? meta_of(*dt_bias_t) : TensorMeta();
+  const std::optional<shim::Tensor> dt_bias = dt_bias_present ? std::optional<shim::Tensor>(shim::Tensor(*dt_bias_t)) : std::nullopt;
+  const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[8]);
+  const std::vector<int64_t> cu_seqlens = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
+  AclIntArrayView cu_seqlens_view(cu_seqlens);
+  const auto chunk_indices_t = to<std::optional<Tensor>>(stack[9]);
+  const std::vector<int64_t> chunk_indices = chunk_indices_t.has_value() ? host_int_values(chunk_indices_t->get()) : std::vector<int64_t>();
+  AclIntArrayView chunk_indices_view(chunk_indices);
+  const int64_t chunk_size = to<int64_t>(stack[10]);
+  const bool use_exp2 = to<bool>(stack[11]);
+  const double lower_bound = to<double>(stack[12]);
+  const int64_t stream = to<int64_t>(stack[14]);
+
+  auto& rt = Runtime::instance();
+  auto get_ws = reinterpret_cast<npu_chunk_kda_bwd_recompute_GetWorkspaceFn>(
+      rt.symbol("aclnnChunkKdaBwdRecomputeGetWorkspaceSize"));
+  auto launch = reinterpret_cast<LaunchFn>(
+      rt.symbol("aclnnChunkKdaBwdRecompute"));
+  uint64_t workspace_size = 0;
+  aclOpExecutor* executor = nullptr;
+
+  std::vector<shim::Tensor> outputs;
+  outputs.push_back(shim::empty({v.size(0), g.size(1), v.size(2), 128}, v.options()));
+  outputs.push_back(shim::empty({v.size(0), g.size(1), v.size(2), 128}, v.options()));
+  outputs.push_back(shim::empty({g.size(0), g.size(1), g.size(2), 128}, g.options()));
+  outputs.push_back(shim::empty({g.size(0), g.size(1), g.size(2), 128}, g.options()));
+  if (use_gate_in_kernel) {
+    outputs.push_back(shim::empty({g.size(0), g.size(1), g.size(2), 128}, g.options().dtype(shim::kFloat)));
+  } else {
+    outputs.push_back(shim::Tensor());
+  }
+
+  std::vector<std::unique_ptr<AclTensorView>> views;
+  views.push_back(std::make_unique<AclTensorView>(q_meta));
+  views.push_back(std::make_unique<AclTensorView>(k_meta));
+  views.push_back(std::make_unique<AclTensorView>(v_meta));
+  views.push_back(std::make_unique<AclTensorView>(g_meta));
+  views.push_back(std::make_unique<AclTensorView>(beta_meta));
+  views.push_back(std::make_unique<AclTensorView>(a_meta));
+  views.push_back(std::make_unique<AclTensorView>(A_log_meta));
+  views.push_back(std::make_unique<AclTensorView>(dt_bias_meta));
+  views.push_back(std::make_unique<AclTensorView>(outputs[0].defined() ? meta_of(outputs[0].tensor()) : TensorMeta()));
+  views.push_back(std::make_unique<AclTensorView>(outputs[1].defined() ? meta_of(outputs[1].tensor()) : TensorMeta()));
+  views.push_back(std::make_unique<AclTensorView>(outputs[2].defined() ? meta_of(outputs[2].tensor()) : TensorMeta()));
+  views.push_back(std::make_unique<AclTensorView>(outputs[3].defined() ? meta_of(outputs[3].tensor()) : TensorMeta()));
+  views.push_back(std::make_unique<AclTensorView>(outputs[4].defined() ? meta_of(outputs[4].tensor()) : TensorMeta()));
+
+  const int get_ret = get_ws(
+      views[0]->get(),
+      views[1]->get(),
+      views[2]->get(),
+      views[3]->get(),
+      views[4]->get(),
+      views[5]->get(),
+      views[6]->get(),
+      views[7]->get(),
+      cu_seqlens_view.get(),
+      chunk_indices_view.get(),
+      chunk_size,
+      use_exp2,
+      lower_bound,
+      views[8]->get(),
+      views[9]->get(),
+      views[10]->get(),
+      views[11]->get(),
+      views[12]->get(),
+      &workspace_size, &executor);
+  if (get_ret != 0) {
+    throw std::runtime_error(
+        "aclnnChunkKdaBwdRecomputeGetWorkspaceSize failed: " +
+        std::to_string(get_ret));
+  }
+  Tensor workspace;
+  void* workspace_ptr = nullptr;
+  if (workspace_size != 0) {
+    workspace = allocate_bytes(static_cast<int64_t>(workspace_size),
+                                   q_meta);
+    TORCH_ERROR_CODE_CHECK(
+        aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
+  }
+  const int launch_ret = launch(workspace_ptr, workspace_size,
+                                executor,
+                                reinterpret_cast<void*>(stream));
+  if (launch_ret != 0) {
+    throw std::runtime_error(
+        "aclnnChunkKdaBwdRecompute failed: " +
+        std::to_string(launch_ret));
+  }
+  stack[0] = from(outputs[0].tensor());
+  stack[1] = from(outputs[1].tensor());
+  stack[2] = from(outputs[2].tensor());
+  stack[3] = from(outputs[3].tensor());
+  stack[4] = outputs[4].defined() ? from(std::optional<Tensor>(outputs[4].tensor())) : from(std::nullopt);
 }
 
 // ---- generated: npu_chunk_kda_fwd ----
@@ -3338,13 +3499,169 @@ void boxed_npu_solve_tri(StableIValue* stack, uint64_t num_inputs,
   stack[0] = from(outputs[0]);
 }
 
+// ---- generated: _causal_conv1d_launch ----
+inline const char* _causal_conv1d_launch_activation_name(int64_t code) {
+  switch (code) {
+    case 0: return "none";
+    case 1: return "silu";
+    case 2: return "swish";
+    default:
+      throw std::runtime_error(
+          "_causal_conv1d_launch: bad activation code " + std::to_string(code));
+  }
+}
+using _causal_conv1d_launch_GetWorkspaceFn = int (*)(
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclTensor*,
+    const aclIntArray*,
+    const aclIntArray*,
+    const aclIntArray*,
+    const aclIntArray*,
+    const char*,
+    int64_t,
+    int64_t,
+    int64_t,
+    int64_t,
+    int64_t,
+    aclTensor*,
+    uint64_t*, aclOpExecutor**);
+constexpr const char* kSchema__causal_conv1d_launch =
+    "_causal_conv1d_launch(Tensor x, Tensor weight, Tensor? bias, Tensor? conv_states, Tensor? query_start_loc, Tensor? cache_indices, Tensor? has_initial_state, Tensor? num_accepted_tokens, Tensor? query_start_loc_cpu, Tensor? cache_indices_cpu, Tensor? has_initial_state_cpu, Tensor? num_accepted_tokens_cpu, int activation, int pad_slot_id, int null_block_id, int run_mode, int head_num, int max_query_len, int stream) -> Tensor";
+
+void boxed__causal_conv1d_launch(StableIValue* stack, uint64_t num_inputs,
+                 uint64_t num_outputs) {
+  (void)num_inputs;
+  (void)num_outputs;
+  const Tensor x_t = to<Tensor>(stack[0]);
+  const TensorMeta x_meta = meta_of(x_t);
+  const shim::Tensor x(x_t);
+  const Tensor weight_t = to<Tensor>(stack[1]);
+  const TensorMeta weight_meta = meta_of(weight_t);
+  const shim::Tensor weight(weight_t);
+  const auto bias_t = to<std::optional<Tensor>>(stack[2]);
+  const bool bias_present = bias_t.has_value();
+  const TensorMeta bias_meta = bias_present ? meta_of(*bias_t) : TensorMeta();
+  const std::optional<shim::Tensor> bias = bias_present ? std::optional<shim::Tensor>(shim::Tensor(*bias_t)) : std::nullopt;
+  const auto conv_states_t = to<std::optional<Tensor>>(stack[3]);
+  const bool conv_states_present = conv_states_t.has_value();
+  const TensorMeta conv_states_meta = conv_states_present ? meta_of(*conv_states_t) : TensorMeta();
+  const std::optional<shim::Tensor> conv_states = conv_states_present ? std::optional<shim::Tensor>(shim::Tensor(*conv_states_t)) : std::nullopt;
+  const auto query_start_loc_t = to<std::optional<Tensor>>(stack[4]);
+  const bool query_start_loc_present = query_start_loc_t.has_value();
+  const TensorMeta query_start_loc_meta = query_start_loc_present ? meta_of(*query_start_loc_t) : TensorMeta();
+  const std::optional<shim::Tensor> query_start_loc = query_start_loc_present ? std::optional<shim::Tensor>(shim::Tensor(*query_start_loc_t)) : std::nullopt;
+  const auto cache_indices_t = to<std::optional<Tensor>>(stack[5]);
+  const bool cache_indices_present = cache_indices_t.has_value();
+  const TensorMeta cache_indices_meta = cache_indices_present ? meta_of(*cache_indices_t) : TensorMeta();
+  const std::optional<shim::Tensor> cache_indices = cache_indices_present ? std::optional<shim::Tensor>(shim::Tensor(*cache_indices_t)) : std::nullopt;
+  const auto has_initial_state_t = to<std::optional<Tensor>>(stack[6]);
+  const bool has_initial_state_present = has_initial_state_t.has_value();
+  const TensorMeta has_initial_state_meta = has_initial_state_present ? meta_of(*has_initial_state_t) : TensorMeta();
+  const std::optional<shim::Tensor> has_initial_state = has_initial_state_present ? std::optional<shim::Tensor>(shim::Tensor(*has_initial_state_t)) : std::nullopt;
+  const auto num_accepted_tokens_t = to<std::optional<Tensor>>(stack[7]);
+  const bool num_accepted_tokens_present = num_accepted_tokens_t.has_value();
+  const TensorMeta num_accepted_tokens_meta = num_accepted_tokens_present ? meta_of(*num_accepted_tokens_t) : TensorMeta();
+  const std::optional<shim::Tensor> num_accepted_tokens = num_accepted_tokens_present ? std::optional<shim::Tensor>(shim::Tensor(*num_accepted_tokens_t)) : std::nullopt;
+  const auto query_start_loc_cpu_t = to<std::optional<Tensor>>(stack[8]);
+  const std::vector<int64_t> query_start_loc_cpu = query_start_loc_cpu_t.has_value() ? host_int_values(query_start_loc_cpu_t->get()) : std::vector<int64_t>();
+  AclIntArrayView query_start_loc_cpu_view(query_start_loc_cpu);
+  const auto cache_indices_cpu_t = to<std::optional<Tensor>>(stack[9]);
+  const std::vector<int64_t> cache_indices_cpu = cache_indices_cpu_t.has_value() ? host_int_values(cache_indices_cpu_t->get()) : std::vector<int64_t>();
+  AclIntArrayView cache_indices_cpu_view(cache_indices_cpu);
+  const auto has_initial_state_cpu_t = to<std::optional<Tensor>>(stack[10]);
+  const std::vector<int64_t> has_initial_state_cpu = has_initial_state_cpu_t.has_value() ? host_int_values(has_initial_state_cpu_t->get()) : std::vector<int64_t>();
+  AclIntArrayView has_initial_state_cpu_view(has_initial_state_cpu);
+  const auto num_accepted_tokens_cpu_t = to<std::optional<Tensor>>(stack[11]);
+  const std::vector<int64_t> num_accepted_tokens_cpu = num_accepted_tokens_cpu_t.has_value() ? host_int_values(num_accepted_tokens_cpu_t->get()) : std::vector<int64_t>();
+  AclIntArrayView num_accepted_tokens_cpu_view(num_accepted_tokens_cpu);
+  const int64_t activation_code = to<int64_t>(stack[12]);
+  const std::string activation = _causal_conv1d_launch_activation_name(activation_code);
+  const int64_t pad_slot_id = to<int64_t>(stack[13]);
+  const int64_t null_block_id = to<int64_t>(stack[14]);
+  const int64_t run_mode = to<int64_t>(stack[15]);
+  const int64_t head_num = to<int64_t>(stack[16]);
+  const int64_t max_query_len = to<int64_t>(stack[17]);
+  const int64_t stream = to<int64_t>(stack[18]);
+
+  auto& rt = Runtime::instance();
+  auto get_ws = reinterpret_cast<_causal_conv1d_launch_GetWorkspaceFn>(
+      rt.symbol("aclnnCausalConv1dGetWorkspaceSize"));
+  auto launch = reinterpret_cast<LaunchFn>(
+      rt.symbol("aclnnCausalConv1d"));
+  uint64_t workspace_size = 0;
+  aclOpExecutor* executor = nullptr;
+
+  std::vector<shim::Tensor> outputs;
+  outputs.push_back((run_mode == 0 && head_num > 0) ? ((x.dim() == 3) ? shim::empty({x.size(0), head_num, x.size(1), x.size(2) / head_num}, x.options()) : ((x.dim() == 2) ? shim::empty({head_num, x.size(0), x.size(1) / head_num}, x.options()) : shim::empty_like(x))) : shim::empty_like(x));
+
+  std::vector<std::unique_ptr<AclTensorView>> views;
+  views.push_back(std::make_unique<AclTensorView>(x_meta));
+  views.push_back(std::make_unique<AclTensorView>(weight_meta));
+  views.push_back(std::make_unique<AclTensorView>(bias_meta));
+  views.push_back(std::make_unique<AclTensorView>(conv_states_meta));
+  views.push_back(std::make_unique<AclTensorView>(query_start_loc_meta));
+  views.push_back(std::make_unique<AclTensorView>(cache_indices_meta));
+  views.push_back(std::make_unique<AclTensorView>(has_initial_state_meta));
+  views.push_back(std::make_unique<AclTensorView>(num_accepted_tokens_meta));
+  views.push_back(std::make_unique<AclTensorView>(outputs[0].defined() ? meta_of(outputs[0].tensor()) : TensorMeta()));
+
+  const int get_ret = get_ws(
+      views[0]->get(),
+      views[1]->get(),
+      views[2]->get(),
+      views[3]->get(),
+      views[4]->get(),
+      views[5]->get(),
+      views[6]->get(),
+      views[7]->get(),
+      query_start_loc_cpu_view.get(),
+      cache_indices_cpu_view.get(),
+      has_initial_state_cpu_view.get(),
+      num_accepted_tokens_cpu_view.get(),
+      activation.c_str(),
+      pad_slot_id,
+      null_block_id,
+      run_mode,
+      head_num,
+      max_query_len,
+      views[8]->get(),
+      &workspace_size, &executor);
+  if (get_ret != 0) {
+    throw std::runtime_error(
+        "aclnnCausalConv1dGetWorkspaceSize failed: " +
+        std::to_string(get_ret));
+  }
+  Tensor workspace;
+  void* workspace_ptr = nullptr;
+  if (workspace_size != 0) {
+    workspace = allocate_bytes(static_cast<int64_t>(workspace_size),
+                                   x_meta);
+    TORCH_ERROR_CODE_CHECK(
+        aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
+  }
+  const int launch_ret = launch(workspace_ptr, workspace_size,
+                                executor,
+                                reinterpret_cast<void*>(stream));
+  if (launch_ret != 0) {
+    throw std::runtime_error(
+        "aclnnCausalConv1d failed: " +
+        std::to_string(launch_ret));
+  }
+  stack[0] = from(outputs[0].tensor());
+}
+
 
 namespace {
 // Registration hooks called from stable_ops.cpp's single def/impl blocks.
 template <typename Library>
 void register_generated_defs(Library& m) {
 
-  m.def(kSchema_npu_causal_conv1d);
   m.def(kSchema_npu_causal_conv1d_bwd);
   m.def(kSchema_npu_chunk_bwd_dqkwg);
   m.def(kSchema_npu_chunk_bwd_dv_local);
@@ -3355,8 +3672,10 @@ void register_generated_defs(Library& m) {
   m.def(kSchema_npu_chunk_gated_delta_rule_fwd);
   m.def(kSchema_npu_chunk_gated_delta_rule_fwd_h);
   m.def(kSchema_npu_chunk_gated_delta_rule_fwd_prepare);
+  m.def(kSchema_npu_chunk_gdn_bwd_intra);
   m.def(kSchema_npu_chunk_kda_bwd);
   m.def(kSchema_npu_chunk_kda_bwd_intra);
+  m.def(kSchema_npu_chunk_kda_bwd_recompute);
   m.def(kSchema_npu_chunk_kda_fwd);
   m.def(kSchema_npu_chunk_local_cumsum);
   m.def(kSchema_npu_chunk_scaled_dot_kkt);
@@ -3368,11 +3687,11 @@ void register_generated_defs(Library& m) {
   m.def(kSchema_npu_prepare_wy_repr_bwd_full);
   m.def(kSchema_npu_recompute_w_u_fwd);
   m.def(kSchema_npu_solve_tri);
+  m.def(kSchema__causal_conv1d_launch);
 }
 
 template <typename Library>
 void register_generated_impls(Library& m) {
-  m.impl("npu_causal_conv1d", &boxed_npu_causal_conv1d);
   m.impl("npu_causal_conv1d_bwd", &boxed_npu_causal_conv1d_bwd);
   m.impl("npu_chunk_bwd_dqkwg", &boxed_npu_chunk_bwd_dqkwg);
   m.impl("npu_chunk_bwd_dv_local", &boxed_npu_chunk_bwd_dv_local);
@@ -3383,8 +3702,10 @@ void register_generated_impls(Library& m) {
   m.impl("npu_chunk_gated_delta_rule_fwd", &boxed_npu_chunk_gated_delta_rule_fwd);
   m.impl("npu_chunk_gated_delta_rule_fwd_h", &boxed_npu_chunk_gated_delta_rule_fwd_h);
   m.impl("npu_chunk_gated_delta_rule_fwd_prepare", &boxed_npu_chunk_gated_delta_rule_fwd_prepare);
+  m.impl("npu_chunk_gdn_bwd_intra", &boxed_npu_chunk_gdn_bwd_intra);
   m.impl("npu_chunk_kda_bwd", &boxed_npu_chunk_kda_bwd);
   m.impl("npu_chunk_kda_bwd_intra", &boxed_npu_chunk_kda_bwd_intra);
+  m.impl("npu_chunk_kda_bwd_recompute", &boxed_npu_chunk_kda_bwd_recompute);
   m.impl("npu_chunk_kda_fwd", &boxed_npu_chunk_kda_fwd);
   m.impl("npu_chunk_local_cumsum", &boxed_npu_chunk_local_cumsum);
   m.impl("npu_chunk_scaled_dot_kkt", &boxed_npu_chunk_scaled_dot_kkt);
@@ -3396,5 +3717,6 @@ void register_generated_impls(Library& m) {
   m.impl("npu_prepare_wy_repr_bwd_full", &boxed_npu_prepare_wy_repr_bwd_full);
   m.impl("npu_recompute_w_u_fwd", &boxed_npu_recompute_w_u_fwd);
   m.impl("npu_solve_tri", &boxed_npu_solve_tri);
+  m.impl("_causal_conv1d_launch", &boxed__causal_conv1d_launch);
 }
 }  // namespace

@@ -14,9 +14,19 @@ face the same (idle-pipeline) condition -- which is what makes the ratio
 comparable even though the absolute numbers are lower than in a back-to-back
 decode loop.
 
+``--baseline`` chooses what the Stable-ABI path is compared against:
+
+* ``ctypes`` (default) -- the shipped-before reference implementation, i.e.
+  "how much did the host path improve over what we used to ship";
+* ``pybind`` -- the other thin launcher (`_C_thin`, FLA_NPU_THIN_ABI=pybind),
+  i.e. "how does the ABI-free backend compare with the ABI-pinned one".  That
+  run needs a wheel built with FLA_NPU_BUILD_THIN=1.
+
 Usage (device host, package importable)::
 
     PYTHONPATH=<env> python tests/bench_stable_host.py [--rounds 5] [--json out.json]
+    PYTHONPATH=<pybind env> FLA_NPU_STABLE_LIB=<so> \
+        python tests/bench_stable_host.py --baseline pybind
 """
 from __future__ import annotations
 
@@ -67,6 +77,8 @@ def main() -> int:
     parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--json", default="")
+    parser.add_argument("--baseline", choices=("ctypes", "pybind"),
+                        default="ctypes")
     args = parser.parse_args()
 
     if not suite._thin.__class__.__name__ == "StableShim":
@@ -110,10 +122,23 @@ def main() -> int:
         scenario()
     torch.npu.synchronize()
 
-    ctypes_ops = [name for name in dir(ct)
-                  if name.startswith("npu_") and callable(getattr(ct, name))]
-    _wrap(ct, "ctypes", ctypes_ops)
-    _wrap(shim, "stable", ctypes_ops)
+    if args.baseline == "pybind":
+        # The scenarios call `ct.<op>` for the reference and `_thin.<op>` for the
+        # backend under test; pointing `ct` at the pybind wrapper turns the same
+        # comparison into pybind-vs-stable on identical inputs.
+        from fla_npu.ops.ascendc import _thin as pybind
+
+        pybind._extension()  # fail loudly if this environment has no _C_thin
+        suite.ct = pybind
+        suite.BASELINE_GAP_TOLERANT = True
+        baseline_label = "pybind"
+    else:
+        baseline_label = "ctypes"
+    baseline_ns = suite.ct
+    ops = [name for name in dir(baseline_ns)
+           if name.startswith("npu_") and callable(getattr(baseline_ns, name))]
+    _wrap(baseline_ns, baseline_label, ops)
+    _wrap(shim, "stable", ops)
 
     for index in range(args.rounds):
         for scenario in scenarios:
@@ -140,7 +165,7 @@ def main() -> int:
         })
 
     rows.sort(key=lambda row: row["stable_over_ctypes"], reverse=True)
-    print(f"\n{'operator':<44}{'ctypes':>10}{'stable':>10}{'ratio':>8}")
+    print(f"\n{'operator':<44}{baseline_label:>10}{'stable':>10}{'ratio':>8}")
     for row in rows:
         print(f"{row['op']:<44}{row['ctypes_ms']:>10.4f}"
               f"{row['stable_ms']:>10.4f}{row['stable_over_ctypes']:>8.2f}")

@@ -1,0 +1,33 @@
+{
+  "aclnn_name": "aclnnCausalConv1d",
+  "python_name": "_causal_conv1d_launch",
+  "internal": true,
+  "impl": "_launch_causal_conv1d",
+  "nd_only": true,
+  "mutated": [],
+  "output": {
+    "arg": "out",
+    "alloc": "(run_mode == 0 && head_num > 0) ? ((x.dim() == 3) ? at::empty({x.size(0), head_num, x.size(1), x.size(2) / head_num}, x.options()) : ((x.dim() == 2) ? at::empty({head_num, x.size(0), x.size(1) / head_num}, x.options()) : at::empty_like(x))) : at::empty_like(x)"
+  },
+  "args": [
+    {"name": "x", "kind": "tensor"},
+    {"name": "weight", "kind": "tensor"},
+    {"name": "bias", "kind": "optional_tensor"},
+    {"name": "conv_states", "kind": "optional_tensor"},
+    {"name": "query_start_loc", "kind": "optional_tensor"},
+    {"name": "cache_indices", "kind": "optional_tensor"},
+    {"name": "has_initial_state", "kind": "optional_tensor"},
+    {"name": "num_accepted_tokens", "kind": "optional_tensor"},
+    {"name": "query_start_loc_cpu", "kind": "int_array"},
+    {"name": "cache_indices_cpu", "kind": "int_array"},
+    {"name": "has_initial_state_cpu", "kind": "int_array"},
+    {"name": "num_accepted_tokens_cpu", "kind": "int_array"},
+    {"name": "activation", "kind": "char_ptr", "enum": ["none", "silu", "swish"]},
+    {"name": "pad_slot_id", "kind": "int64"},
+    {"name": "null_block_id", "kind": "int64"},
+    {"name": "run_mode", "kind": "int64"},
+    {"name": "head_num", "kind": "int64"},
+    {"name": "max_query_len", "kind": "int64"},
+    {"name": "out", "kind": "out_tensor"}
+  ]
+}

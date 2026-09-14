@@ -7,7 +7,7 @@ from ._stable import (  # noqa: F401
     _op,
 )
 
-_GENERATED_HASH = "690e6ee869ba8f30e93517dd936598d6"
+_GENERATED_HASH = "d94b534c097868589baba5a096ee8d1e"
 
 _SIG = {
     "npu_causal_conv1d_bwd": [("x", "tensor"), ("y", "optional_tensor"), ("weight", "tensor"), ("dy", "tensor"), ("initial_state", "optional_tensor"), ("dht", "optional_tensor"), ("query_start_loc", "int_array"), ("activation", "int64"), ("input_layout", "char_ptr")],
@@ -74,20 +74,6 @@ _RET = {
     "_causal_conv1d_launch": [(0, None)],
 }
 
-def npu_causal_conv1d_bwd(x, y, weight, dy, initial_state=None, dht=None, *, query_start_loc=None, activation=0, input_layout="BSND"):
-    return _op("npu_causal_conv1d_bwd")(
-        x,
-        y,
-        weight,
-        dy,
-        initial_state,
-        dht,
-        _host_ints(query_start_loc),
-        activation,
-        _char_code("npu_causal_conv1d_bwd", "input_layout", input_layout),
-        _current_stream_ptr(),
-    )
-
 
 def npu_chunk_fwd_h(k, w, u, *, g=None, gk=None, initial_state=None, output_final_state=False, chunk_size=64, save_new_value=True, cu_seqlens=None, chunk_indices=None, use_exp2=False, state_v_first=False):
     if cu_seqlens and not chunk_indices:
@@ -113,22 +99,6 @@ def npu_chunk_fwd_h(k, w, u, *, g=None, gk=None, initial_state=None, output_fina
         _current_stream_ptr(),
     )
 
-def npu_chunk_fwd_o(q, k, v, h, scale, *, g=None, cu_seqlens=None, chunk_indices=None, chunk_size=None, use_exp2=False, transpose_state_layout=False, output_layout="BNSD", g_gamma=None):
-    return _op("npu_chunk_fwd_o")(
-        q,
-        k,
-        v,
-        h,
-        g,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        scale,
-        chunk_size,
-        use_exp2,
-        transpose_state_layout,
-        _char_code("npu_chunk_fwd_o", "output_layout", output_layout),
-        _current_stream_ptr(),
-    )
 
 def npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, d_o, dv, scale, chunk_size, *, g=None, gK=None, h0=None, dht=None, cu_seqlens=None, chunk_indices=None, use_exp2=False, transpose_state_layout=False):
     return _op("npu_chunk_gated_delta_rule_bwd_dhu")(
@@ -290,22 +260,6 @@ def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size=64, *, a
         return (result[4], result[5], result[6], result[7], beta.to(dtype=torch.float32), result[0], result[1], result[2], result[3])
     return (result[4], result[5], result[6], result[7], result[8], result[0], result[1], result[2], result[3])
 
-def npu_chunk_gdn_bwd_intra(q, k, v, g, beta, A, d_o, scale, chunk_size, *, cu_seqlens=None, chunk_indices=None, use_exp2=True):
-    return _op("npu_chunk_gdn_bwd_intra")(
-        q,
-        k,
-        v,
-        g,
-        beta,
-        A,
-        d_o,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        scale,
-        chunk_size,
-        use_exp2,
-        _current_stream_ptr(),
-    )
 
 def npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o, scale, *, raw_g=None, A_log=None, dt_bias=None, initial_state=None, dht=None, cu_seqlens=None, chunk_indices=None, chunk_size=64, safe_gate=True, use_gate_in_kernel=False, lower_bound=-5.0, disable_recompute=True, use_exp2=True, state_v_first=False):
     if not (cu_seqlens is None and chunk_indices is None and int(chunk_size) == 64 and bool(safe_gate) and not bool(use_gate_in_kernel) and bool(disable_recompute) and bool(use_exp2) and not bool(state_v_first) and raw_g is None and A_log is None and dt_bias is None and initial_state is None and dht is None and q.dim() == 4 and q.shape[1] % 2 == 0 and q.shape[2] % 64 == 0 and all(x is not None for x in (w, qg, kg, v_new, h))):
@@ -470,15 +424,12 @@ def _causal_conv1d_launch(*, x=None, weight=None, bias=None, conv_states=None, q
     )
 
 __all__ = [
-    "npu_causal_conv1d_bwd",
     "npu_chunk_fwd_h",
-    "npu_chunk_fwd_o",
     "npu_chunk_gated_delta_rule_bwd_dhu",
     "npu_chunk_gated_delta_rule_bwd_finalize",
     "npu_chunk_gated_delta_rule_fwd",
     "npu_chunk_gated_delta_rule_fwd_h",
     "npu_chunk_gated_delta_rule_fwd_prepare",
-    "npu_chunk_gdn_bwd_intra",
     "npu_chunk_kda_bwd",
     "npu_chunk_kda_bwd_recompute",
     "npu_chunk_kda_fwd",

@@ -188,7 +188,7 @@ def host_p50(fn, n=200):
     return pct(ts, 0.5)
 
 
-def assert_parity(name, oc, ot, *, finite_only=False):
+def assert_parity(name, oc, ot, *, finite_only=False, defined=None):
     """Bit-exact comparison, recorded in SCENARIOS under *name*.
 
     ``finite_only`` compares only the positions that are finite on *both*
@@ -198,6 +198,13 @@ def assert_parity(name, oc, ot, *, finite_only=False):
     contract.  The comparison is still recorded -- a case that only prints
     "PASS" is invisible to the scenario-set check, which is how a dropped
     case would otherwise slip through.
+
+    ``defined`` restricts the comparison further, to the cells the operator
+    actually computes.  It is needed where the unwritten region is *finite*
+    garbage rather than NaN: on Ascend950 the fused forward's ``A`` came back
+    with 7e29 and 3.4e38 in the rows it does not write, so ``finite_only``
+    cannot exclude them.  The mask is derived from the inputs (cu_seqlens),
+    never from a tolerance.
     """
 
     if not isinstance(oc, tuple):
@@ -210,8 +217,11 @@ def assert_parity(name, oc, ot, *, finite_only=False):
             continue
         assert tuple(a.shape) == tuple(b.shape), f"{name}[{i}]: shape"
         left, right = a.float(), b.float()
-        if finite_only:
+        if finite_only or defined is not None:
             mask = torch.isfinite(left) & torch.isfinite(right)
+            if (defined is not None and left.dim() == 4
+                    and tuple(left.shape[-2:]) == tuple(defined.shape)):
+                mask = mask & defined[None, None, :, :]
             if not mask.any():
                 continue
             diff = float((left - right).abs()[mask].max().item())
@@ -1573,12 +1583,21 @@ def scenario_chunk_gated_delta_rule_fwd():
 
     # A's tail-padding rows are uninitialised on both paths, so only the region
     # defined on both sides is compared -- but the case is still recorded, so
-    # the baseline notices if it is ever dropped.
+    # the baseline notices if it is ever dropped.  `A` itself is a chunk-local
+    # lower triangle: the columns past the token's offset inside its chunk keep
+    # whatever the allocator had, which is NaN on 910B but finite garbage on
+    # Ascend950, so the mask below narrows the comparison to the triangle the
+    # operator actually computes.
+    offsets = torch.zeros(T, dtype=torch.long)
+    for begin, end in zip(cu, cu[1:]):
+        offsets[begin:end] = torch.arange(end - begin) % cs
+    triangle = (torch.arange(cs)[None, :] <= offsets[:, None]).npu()
     assert_parity(
         "chunk_gated_delta_rule_fwd(varlen_B1_T128_c64)",
         ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
         _thin.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
-        finite_only=True)
+        finite_only=True,
+        defined=triangle)
 
     # The operator's other declared layouts.  Measured on A2: BSND is rejected
     # by the kernel (161002), and the rank-3 TND/NTD spellings are refused by the

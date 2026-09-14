@@ -72,11 +72,12 @@ inline void pack(const Tensor& value, StableIValue* stack, uint64_t* index) {
 
 inline void pack(const std::optional<Tensor>& value, StableIValue* stack,
                  uint64_t* index) {
-  if (value.has_value()) {
-    stack[(*index)++] = from(*value);
-  } else {
-    stack[(*index)++] = from(std::nullopt);
-  }
+  // A `Tensor?` return slot is filled with the *boxed* optional form, not with
+  // a bare tensor handle: the dispatcher reads that slot as a pointer to the
+  // box, so packing the handle directly crashes it as soon as the call returns.
+  // `from(std::optional<Tensor>)` produces the boxed form for both a present
+  // and an absent value.
+  stack[(*index)++] = from(value);
 }
 
 template <class... Rs>

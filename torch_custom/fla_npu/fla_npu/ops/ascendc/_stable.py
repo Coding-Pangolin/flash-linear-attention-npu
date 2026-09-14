@@ -797,3 +797,72 @@ def npu_causal_conv1d(x, weight, bias=None, conv_states=None, *,
     if restore is not None:
         restore.copy_(state_arg)
     return result
+
+
+# ---------------------------------------------------------------------------
+# chunked forward-h and backward-dhu
+# ---------------------------------------------------------------------------
+
+
+def _canonical_chunk_indices(cu_seqlens, chunk_size):
+    """Fill in the chunk_indices a varlen caller left out.
+
+    The operator takes both forms; deriving the canonical sequence-major list
+    here keeps the call shape the reference accepts without the caller having to
+    build it.
+    """
+
+    indices = []
+    for seq in range(len(cu_seqlens) - 1):
+        length = cu_seqlens[seq + 1] - cu_seqlens[seq]
+        for local in range((length + chunk_size - 1) // chunk_size):
+            indices.extend((seq, local))
+    return indices
+
+
+def npu_chunk_fwd_h(k, w, u, *, g=None, gk=None, initial_state=None,
+                    output_final_state=False, chunk_size=64,
+                    save_new_value=True, cu_seqlens=None, chunk_indices=None,
+                    use_exp2=False, state_v_first=False):
+    """Chunk-local states h, the recomputed v, and optionally the final state."""
+
+    if cu_seqlens and not chunk_indices:
+        chunk_indices = _canonical_chunk_indices(cu_seqlens, chunk_size)
+    return _op("npu_chunk_fwd_h")(
+        k, w, u, g, gk, initial_state,
+        output_final_state, chunk_size, save_new_value,
+        _host_ints(cu_seqlens), _host_ints(chunk_indices),
+        use_exp2, state_v_first, _current_stream_ptr(),
+    )
+
+
+def npu_chunk_gated_delta_rule_fwd_h(k, w, u, g=None, *, gk=None,
+                                     initial_state=None,
+                                     output_final_state=False, chunk_size=None,
+                                     cu_seqlens=None, chunk_indices=None,
+                                     state_v_first=False):
+    """chunk_fwd_h without the GDN recompute flags."""
+
+    chunk_size = 64 if chunk_size is None else chunk_size
+    if cu_seqlens and not chunk_indices:
+        chunk_indices = _canonical_chunk_indices(cu_seqlens, chunk_size)
+    return _op("npu_chunk_gated_delta_rule_fwd_h")(
+        k, w, u, g, gk, initial_state,
+        output_final_state, chunk_size,
+        _host_ints(cu_seqlens), _host_ints(chunk_indices),
+        state_v_first, _current_stream_ptr(),
+    )
+
+
+def npu_chunk_gated_delta_rule_bwd_dhu(
+        q, k, w, d_o, dv, scale, chunk_size, *, g=None, gK=None, h0=None,
+        dht=None, cu_seqlens=None, chunk_indices=None, use_exp2=False,
+        transpose_state_layout=False):
+    """dh / dh0 / dv, where dh0 is only produced when h0 was supplied."""
+
+    return _op("npu_chunk_gated_delta_rule_bwd_dhu")(
+        q, k, w, d_o, dv, g, gK, h0, dht,
+        _host_ints(cu_seqlens), _host_ints(chunk_indices),
+        scale, chunk_size, use_exp2, transpose_state_layout,
+        _current_stream_ptr(),
+    )

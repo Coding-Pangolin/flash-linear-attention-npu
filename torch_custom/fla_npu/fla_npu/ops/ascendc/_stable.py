@@ -515,3 +515,111 @@ def npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg, *,
         _char_code("npu_chunk_kda_bwd_intra", "layout", layout),
         _current_stream_ptr(),
     )
+
+
+def npu_chunk_bwd_dv_local(q, k, d_o, g, scale, chunk_size, *, g_gamma=None,
+                           A=None, cu_seqlens=None, chunk_indices=None):
+    """Local dv contribution of the chunked GDN backward."""
+
+    return _op("npu_chunk_bwd_dv_local")(
+        q, k, d_o, g, g_gamma, A,
+        _host_ints(cu_seqlens), _host_ints(chunk_indices),
+        scale, chunk_size, _current_stream_ptr(),
+    )
+
+
+def npu_chunk_local_cumsum(g, chunk_size, *, cu_seqlens=None,
+                           chunk_indices_out=None, reverse=False, scale=1.0,
+                           head_first=True, output_dtype="float32"):
+    """Per-chunk cumulative sum of ``g``."""
+
+    return _op("npu_chunk_local_cumsum")(
+        g,
+        _host_ints(cu_seqlens),
+        _host_ints(chunk_indices_out),
+        chunk_size,
+        reverse,
+        scale,
+        head_first,
+        _char_code("npu_chunk_local_cumsum", "output_dtype", output_dtype),
+        _current_stream_ptr(),
+    )
+
+
+def npu_chunk_scaled_dot_kkt(k, g, beta, *, cu_seqlens=None,
+                             chunk_indices=None, chunk_size=64):
+    """Chunked scaled dot product used to build the WY representation."""
+
+    return _op("npu_chunk_scaled_dot_kkt")(
+        k, g, beta,
+        _host_ints(cu_seqlens), _host_ints(chunk_indices),
+        chunk_size, _current_stream_ptr(),
+    )
+
+
+def npu_chunk_bwd_dqkwg(q, k, v, g, h, dox, dh, dv, chunk_size, *,
+                        cu_seqlens=None, chunk_indices=None, w=None,
+                        g_gamma=None, scale=None, use_exp2=None,
+                        transpose_state_layout=None):
+    """dq / dk / dw / dg of one chunk.
+
+    The three trailing flags are optional in the published signature; the
+    ctypes reference supplies ``scale=1.0`` and ``False`` for the booleans, so
+    do the same here rather than passing None into a scalar slot.
+    """
+
+    return _op("npu_chunk_bwd_dqkwg")(
+        q, k, v, g, h, dox, dh, dv,
+        _host_ints(cu_seqlens), _host_ints(chunk_indices),
+        w, g_gamma,
+        1.0 if scale is None else float(scale),
+        chunk_size,
+        False if use_exp2 is None else bool(use_exp2),
+        False if transpose_state_layout is None
+        else bool(transpose_state_layout),
+        _current_stream_ptr(),
+    )
+
+
+def npu_prepare_wy_repr_bwd_da(k, v, beta, A, dw, du, g, *, chunk_size,
+                               cu_seqlens=None, chunk_indices=None):
+    """dA only, for backends that already have the other gradients."""
+
+    return _op("npu_prepare_wy_repr_bwd_da")(
+        k, v, beta, A, dw, du, g,
+        _host_ints(cu_seqlens), _host_ints(chunk_indices),
+        chunk_size, _current_stream_ptr(),
+    )
+
+
+def npu_prepare_wy_repr_bwd_full(k, v, beta, A, dA, dw, du, g, chunk_size, *,
+                                 cu_seqlens=None, chunk_indices=None):
+    """dk / dv / dbeta / dg, taking dA as an input."""
+
+    return _op("npu_prepare_wy_repr_bwd_full")(
+        k, v, beta, A, dA, dw, du, g,
+        _host_ints(cu_seqlens), _host_ints(chunk_indices),
+        chunk_size, _current_stream_ptr(),
+    )
+
+
+def npu_prepare_wy_repr_bwd(k, v, beta, A, dw, du, g, chunk_size, *,
+                            cu_seqlens=None, chunk_indices=None):
+    """dk / dv / dbeta / dg; produces dA internally."""
+
+    return _op("npu_prepare_wy_repr_bwd")(
+        k, v, beta, A, dw, du, g,
+        _host_ints(cu_seqlens), _host_ints(chunk_indices),
+        chunk_size, _current_stream_ptr(),
+    )
+
+
+def npu_recompute_w_u_fwd(k, v, beta, A, chunk_size, *, g=None, gk=None,
+                          cu_seqlens=None, chunk_indices=None):
+    """Recompute w and u for the backward pass."""
+
+    return _op("npu_recompute_w_u_fwd")(
+        k, v, beta, A, g, gk,
+        _host_ints(cu_seqlens), _host_ints(chunk_indices),
+        chunk_size, _current_stream_ptr(),
+    )

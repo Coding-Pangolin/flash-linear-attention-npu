@@ -1541,22 +1541,28 @@ def scenario_chunk_gated_delta_rule_fwd():
               chunk_indices=ci)
 
     def _finite_parity(name, oc, ot):
-        # A's tail-padding rows are uninitialised on both paths; compare the
-        # finite region only (see thin-migration-inventory.md).
+        # `A` is a chunk-local lower triangle: only the columns up to the
+        # token's offset inside its chunk are written, and the rest keeps
+        # whatever the allocator had.  On 910B both paths left NaN there; on
+        # Ascend950 they leave *finite* garbage (measured 7e29 and 3.4e38) that
+        # differs between the two allocations, which is what made this case fail
+        # there.  The mask below compares the part the operator actually
+        # computes -- it is derived from cu_seqlens, not from a tolerance.
         assert len(oc) == len(ot)
+        offsets = torch.zeros(T, dtype=torch.long)
+        for begin, end in zip(cu, cu[1:]):
+            offsets[begin:end] = torch.arange(end - begin) % cs
+        columns = torch.arange(cs)
+        triangle = (columns[None, :] <= offsets[:, None]).npu()
         for i, (a, b) in enumerate(zip(oc, ot)):
             if a is None or b is None:
                 assert a is None and b is None, f"{name}[{i}]: None mismatch"
                 continue
             assert tuple(a.shape) == tuple(b.shape), f"{name}[{i}]: shape"
-            # Ascend950 leaves finite garbage (measured at 7e29 and 3.4e38) in
-            # rows it does not write, so "differs" here can mean "unwritten"
-            # rather than "wrong" -- see the open item in
-            # docs/architecture/stable-abi-a5-status.md.  Values are compared
-            # as they are; a magnitude filter was tried and rejected because it
-            # only moves the boundary.
             af, bf = a.float(), b.float()
             finite = torch.isfinite(af) & torch.isfinite(bf)
+            if a.dim() == 4 and a.shape[-1] == cs:
+                finite = finite & triangle[None, None, :, :]
             if finite.any():
                 diff = float((af - bf).abs()[finite].max().item())
                 assert diff == 0.0, f"{name}[{i}]: diff={diff}"

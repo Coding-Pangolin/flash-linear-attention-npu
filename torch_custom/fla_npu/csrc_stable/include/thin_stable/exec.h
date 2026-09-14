@@ -90,6 +90,11 @@ inline TensorArg tensor(const torch::stable::Tensor& value) {
 inline TensorArg optional_tensor(std::optional<TensorMeta> meta) {
   return TensorArg(meta.value_or(TensorMeta()));
 }
+// `std::nullopt` converts to both optional types, so the plain spelling is
+// ambiguous; the adapters mean "no descriptor" when they pass it.
+inline TensorArg optional_tensor(std::nullopt_t) {
+  return TensorArg(TensorMeta());
+}
 inline TensorArg optional_tensor(
     const std::optional<torch::stable::Tensor>& value) {
   if (!value.has_value()) {

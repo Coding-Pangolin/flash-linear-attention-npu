@@ -44,9 +44,11 @@ _ENUM = {
     "npu_causal_conv1d_bwd": {"input_layout": _LAYOUT_CODES},
     "npu_chunk_fwd_o": {"output_layout": _LAYOUT_CODES},
     "npu_chunk_gated_delta_rule_fwd": {"layout": _LAYOUT_CODES},
-    "npu_chunk_kda_bwd_intra": {"layout": {"BSND": 0, "BNSD": 1}},
+    "npu_chunk_kda_bwd_intra": {"layout": {"BSND": 0, "BNSD": 1, "TND": 2}},
     "npu_chunk_kda_fwd": {"layout": _LAYOUT_CODES},
-    "npu_chunk_kda_bwd": {"layout": {"BSND": 0, "BNSD": 1}},
+    # The recurrent KDA kernel only implements the two spellings the reference
+    # accepts, so this op's table is the (BSND, TND) subset.
+    "npu_recurrent_kda": {"layout": {"BSND": 0, "TND": 1}},
     "npu_chunk_gated_delta_rule_bwd": {"layout": _LAYOUT_CODES},
     "npu_chunk_local_cumsum": {"output_dtype": {"float32": 0,
                                                 "bfloat16": 1}},
@@ -276,9 +278,7 @@ def npu_recurrent_kda(
     import torch
     import torch_npu
 
-    layout_code = _LAYOUT_CODES.get(str(layout))
-    if layout_code is None:
-        raise RuntimeError(f"npu_recurrent_kda: unknown layout {layout!r}")
+    layout_code = _char_code("npu_recurrent_kda", "layout", layout)
 
     if not inplace_final_state:
         # ctypes drives the same kernel with a scratch state and returns it,
@@ -380,7 +380,14 @@ def _char_code(op_name: str, argument: str, value):
     table = _ENUM[op_name][argument]
     if value is None:
         return 0
-    return table[value] if isinstance(value, str) else value
+    if not isinstance(value, str):
+        return value
+    try:
+        return table[value]
+    except KeyError:
+        raise RuntimeError(
+            f"{op_name}: {argument} must be one of "
+            f"{sorted(table)}, got {value!r}") from None
 
 
 
@@ -453,6 +460,12 @@ def npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg, *,
     Python-side message matters.
     """
 
+    # `safe_gate=False` is reserved but not implemented, and the adapter passes
+    # the value straight through, so it has to be refused here as well.
+    if not safe_gate:
+        raise RuntimeError(
+            "npu_chunk_kda_bwd_intra: safe_gate=False is reserved but not "
+            "supported in v1.")
     return _op("npu_chunk_kda_bwd_intra")(
         q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg,
         _host_ints(cu_seqlens),
@@ -985,6 +998,20 @@ def npu_chunk_gated_delta_rule_fwd_prepare(
     same conversion happens here.
     """
 
+    # The kernel implements exactly these spellings; the reference refuses the
+    # others, and the allocations below assume them.
+    if not use_qk_l2norm_in_kernel:
+        raise RuntimeError(
+            "npu_chunk_gated_delta_rule_fwd_prepare: "
+            "use_qk_l2norm_in_kernel currently only supports True.")
+    if use_gate_in_kernel:
+        raise RuntimeError(
+            "npu_chunk_gated_delta_rule_fwd_prepare: use_gate_in_kernel "
+            "currently only supports False.")
+    if not use_exp2:
+        raise RuntimeError(
+            "npu_chunk_gated_delta_rule_fwd_prepare: use_exp2 currently only "
+            "supports True.")
     if cu_seqlens and not chunk_indices:
         chunk_indices = _canonical_chunk_indices(cu_seqlens, chunk_size)
     (q_hat, k_hat, q_rstd, k_rstd, beta_out, g_cumsum, w, u, a) = _op(
@@ -1027,6 +1054,14 @@ def npu_chunk_gated_delta_rule_bwd_finalize(
         raise RuntimeError(
             "npu_chunk_gated_delta_rule_bwd_finalize only supports Ascend "
             f"950, got {device_name}.")
+    if use_gate_in_kernel:
+        raise RuntimeError(
+            "npu_chunk_gated_delta_rule_bwd_finalize: use_gate_in_kernel only "
+            "supports False.")
+    if not use_exp2:
+        raise RuntimeError(
+            "npu_chunk_gated_delta_rule_bwd_finalize: use_exp2 only supports "
+            "True.")
     if scale is None:
         scale = 1.0 / (128.0 ** 0.5)
     return _op("npu_chunk_gated_delta_rule_bwd_finalize")(
@@ -1055,6 +1090,15 @@ def npu_chunk_gated_delta_rule_bwd(
     ABI compatibility and has no effect, again like the reference.
     """
 
+    # The composite backward implements neither of these, and it receives the
+    # values, so the reference's refusal has to be repeated here.
+    if not use_exp2:
+        raise RuntimeError(
+            "npu_chunk_gated_delta_rule_bwd: use_exp2=False is not supported.")
+    if use_gate_in_kernel:
+        raise RuntimeError(
+            "npu_chunk_gated_delta_rule_bwd: use_gate_in_kernel=True is not "
+            "supported.")
     if cu_seqlens and not chunk_indices:
         chunk_indices = _canonical_chunk_indices(cu_seqlens, chunk_size)
     return _op("npu_chunk_gated_delta_rule_bwd")(
@@ -1114,6 +1158,28 @@ def npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o,
     import torch
 
     chunk_size = int(chunk_size)
+    # The flags below are *reserved but not implemented* by this operator.  The
+    # reference refuses them in Python, and the adapter hard-codes the supported
+    # values, so accepting them here would silently ignore the caller's request
+    # instead of reporting it.
+    if not disable_recompute:
+        raise RuntimeError(
+            "npu_chunk_kda_bwd: disable_recompute=false is reserved but not "
+            "supported.")
+    if not use_exp2:
+        raise RuntimeError(
+            "npu_chunk_kda_bwd: use_exp2=false is reserved but not supported.")
+    if state_v_first:
+        raise RuntimeError(
+            "npu_chunk_kda_bwd: state_v_first=true is reserved but not "
+            "supported.")
+    if initial_state is not None or dht is not None:
+        raise RuntimeError(
+            "npu_chunk_kda_bwd: initial_state and dht are not supported by the "
+            "current fused backward.")
+    if not safe_gate:
+        raise RuntimeError(
+            "npu_chunk_kda_bwd: safe_gate=False is reserved but not supported.")
     cu = None if cu_seqlens is None else tuple(int(x) for x in cu_seqlens)
     is_varlen = cu is not None
     if is_varlen:

@@ -1063,6 +1063,64 @@ def scenario_chunk_kda_bwd_recompute():
                 **extra))
 
 
+def scenario_chunk_gated_delta_rule_bwd():
+    """The composite GDN backward added by main (#532).
+
+    One aclnn call for the whole backward graph, so the parity check is the
+    interesting part: the operator's public tuple has eight slots, two of which
+    (`d_a_log`, `d_dt_bias`) the implementation reserves and never fills, and
+    `dh0` only exists when an initial state was passed.
+
+    The reference requires `use_exp2=True`, `use_gate_in_kernel=False` and
+    K=V=128 with `chunk_size=64`; the gates are exercised here so that the thin
+    path's matching refusals are recorded rather than discovered later.
+    """
+
+    B, HK, HV, T, K, V, cs = 2, 2, 4, 256, 128, 128, 64
+    dt = torch.bfloat16
+
+    def make(*, with_state):
+        q = torch.randn(B, HK, T, K, dtype=dt, device="npu") * 5e-2
+        k = torch.randn(B, HK, T, K, dtype=dt, device="npu") * 5e-2
+        v = torch.randn(B, HV, T, V, dtype=dt, device="npu") * 5e-2
+        # BNSD: g/beta are head-major here, while A stays [B, HV, T, chunk].
+        g = torch.randn(B, HV, T, dtype=torch.float32, device="npu")
+        beta = torch.randn(B, HV, T, dtype=dt, device="npu")
+        a = torch.randn(B, HV, T, cs, dtype=dt, device="npu") * 5e-2
+        d_o = torch.randn(B, HV, T, V, dtype=dt, device="npu") * 5e-2
+        kw = dict(layout="BNSD", scale=K ** -0.5, chunk_size=cs,
+                  use_exp2=True, use_gate_in_kernel=False)
+        if with_state:
+            state = torch.randn(B, HV, K, V, dtype=dt, device="npu") * 5e-2
+            kw["initial_state"] = state
+            kw["dht"] = torch.randn_like(state) * 5e-2
+        torch.npu.synchronize()
+        return (q, k, v, g, beta, a, d_o), kw
+
+    args, kw = make(with_state=False)
+    assert_parity(
+        "chunk_gated_delta_rule_bwd(dense BNSD)",
+        ct.npu_chunk_gated_delta_rule_bwd(*args, **kw),
+        _thin.npu_chunk_gated_delta_rule_bwd(*args, **kw))
+    # With an initial state the first output slot stops being None, which is the
+    # branch the mask in the wrapper has to get right.
+    args_state, kw_state = make(with_state=True)
+    assert_parity(
+        "chunk_gated_delta_rule_bwd(initial state)",
+        ct.npu_chunk_gated_delta_rule_bwd(*args_state, **kw_state),
+        _thin.npu_chunk_gated_delta_rule_bwd(*args_state, **kw_state))
+    # The two flags the composite does not implement must be refused on both
+    # paths; the helper records that instead of comparing anything.
+    for label, extra in (("use_exp2", dict(use_exp2=False)),
+                         ("use_gate_in_kernel", dict(use_gate_in_kernel=True))):
+        parity_or_domain_skip(
+            f"chunk_gated_delta_rule_bwd({label}=unsupported)",
+            lambda extra=extra: ct.npu_chunk_gated_delta_rule_bwd(
+                *args, **dict(kw, **extra)),
+            lambda extra=extra: _thin.npu_chunk_gated_delta_rule_bwd(
+                *args, **dict(kw, **extra)))
+
+
 def scenario_dqkwg():
     B, HK, HV, T, K, V, cs = 1, 4, 4, 1024, 128, 128, 64
     NT = T // cs
@@ -1448,6 +1506,7 @@ def main():
         scenario_solve_tri_dense,
         scenario_kda_gate_cumsum,
         scenario_chunk_gated_delta_rule_fwd,
+        scenario_chunk_gated_delta_rule_bwd,
         scenario_conv1d_prefill,
         scenario_conv1d_varlen_initial_state,
         scenario_conv1d_update,

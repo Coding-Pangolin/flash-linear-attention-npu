@@ -189,6 +189,7 @@ def main() -> int:
         suite.scenario_solve_tri_guards,
         suite.scenario_kda_gate_cumsum,
         suite.scenario_chunk_gated_delta_rule_fwd,
+        suite.scenario_chunk_gated_delta_rule_bwd,
     ]
     for scenario in scenarios:
         print(f"--- entering {scenario.__name__}", flush=True)

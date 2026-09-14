@@ -4,8 +4,7 @@
 // `Tensor::scalar_type()`), so including the stable headers from more than one
 // TU fails at link time with "multiple definition of
 // torch::stable::Tensor::scalar_type() const".  All adapters therefore live in
-// this one file -- the same aggregation the pybind codegen already does with
-// ops_generated.cpp.
+// this one file, one `stable_<family>.cpp` per group of operators.
 #include "stable_recurrent_gdr.cpp"
 #include "stable_recurrent_kda.cpp"
 #include "stable_fast_gelu.cpp"
@@ -14,13 +13,13 @@
 #include "stable_gdn.cpp"
 #include "stable_conv1d.cpp"
 #include "stable_fwd_h.cpp"
-#include "../generated/ops_stable_generated.inc"
 
-// Build stamp: the md5 of the generated adapters this library was compiled
-// from, injected by csrc_stable/build_stable.py.  fla_npu/ops/ascendc/_stable.py
+// Build stamp: the md5 of the adapter sources this library was compiled from,
+// injected by csrc_stable/build_stable.py.  fla_npu/ops/ascendc/_stable.py
 // reads it (through ctypes, no torch needed) and refuses to run against a
-// library that does not match the Python glue it was imported with, so a stale
-// .so cannot silently drive kernels with old schemas or old stack indices.
+// library built from different sources than the glue it was imported with, so
+// a stale .so cannot silently drive kernels with old schemas or old stack
+// indices.
 #ifndef FLA_STABLE_SOURCE_HASH
 #define FLA_STABLE_SOURCE_HASH "unknown"
 #endif
@@ -43,6 +42,8 @@ STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
   m.def(kSchema_npu_fast_gelu_custom_backward);
   m.def(kSchema_kda_gate_cumsum);
   m.def(kSchema_chunk_kda_bwd_intra);
+  m.def(kSchema_chunk_kda_bwd_recompute);
+  m.def(kSchema_chunk_kda_fwd);
   m.def(kSchema_chunk_bwd_dv_local);
   m.def(kSchema_chunk_local_cumsum);
   m.def(kSchema_chunk_scaled_dot_kkt);
@@ -60,10 +61,15 @@ STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
   m.def(kSchema_chunk_fwd_h);
   m.def(kSchema_chunk_gated_delta_rule_fwd_h);
   m.def(kSchema_chunk_gated_delta_rule_bwd_dhu);
+  m.def(kSchema_chunk_gated_delta_rule_fwd);
+  m.def(kSchema_solve_tri);
+  m.def(kSchema_chunk_gated_delta_rule_fwd_prepare);
+  m.def(kSchema_chunk_gated_delta_rule_bwd_finalize);
+  m.def(kSchema_chunk_kda_bwd);
+  m.def(kSchema_chunk_gated_delta_rule_bwd);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.def("_stream_probe(int device_index) -> (int, int)");
 #endif
-  register_generated_defs(m);
 }
 
 STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
@@ -78,6 +84,11 @@ STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
          &fla_npu_thin::stable::boxed_adapter<run_npu_kda_gate_cumsum>);
   m.impl("npu_chunk_kda_bwd_intra",
          &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_kda_bwd_intra>);
+  m.impl("npu_chunk_kda_bwd_recompute",
+         &fla_npu_thin::stable::boxed_adapter<
+             run_npu_chunk_kda_bwd_recompute>);
+  m.impl("npu_chunk_kda_fwd",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_kda_fwd>);
   m.impl("npu_chunk_bwd_dv_local",
          &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_bwd_dv_local>);
   m.impl("npu_chunk_local_cumsum",
@@ -117,8 +128,27 @@ STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
       "npu_chunk_gated_delta_rule_bwd_dhu",
       &fla_npu_thin::stable::boxed_adapter<
           run_npu_chunk_gated_delta_rule_bwd_dhu>);
+  m.impl(
+      "npu_chunk_gated_delta_rule_fwd",
+      &fla_npu_thin::stable::boxed_adapter<
+          run_npu_chunk_gated_delta_rule_fwd>);
+  m.impl("npu_solve_tri",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_solve_tri>);
+  m.impl(
+      "npu_chunk_gated_delta_rule_fwd_prepare",
+      &fla_npu_thin::stable::boxed_adapter<
+          run_npu_chunk_gated_delta_rule_fwd_prepare>);
+  m.impl(
+      "npu_chunk_gated_delta_rule_bwd_finalize",
+      &fla_npu_thin::stable::boxed_adapter<
+          run_npu_chunk_gated_delta_rule_bwd_finalize>);
+  m.impl("npu_chunk_kda_bwd",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_kda_bwd>);
+  m.impl(
+      "npu_chunk_gated_delta_rule_bwd",
+      &fla_npu_thin::stable::boxed_adapter<
+          run_npu_chunk_gated_delta_rule_bwd>);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.impl("_stream_probe", &boxed_stream_probe);
 #endif
-  register_generated_impls(m);
 }

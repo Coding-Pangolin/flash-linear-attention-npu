@@ -96,14 +96,11 @@ class StableShim:
         try:
             target = getattr(stable_mod, name)
         except AttributeError:
-            from fla_npu.ops.ascendc import _stable_generated as generated
-
-            target = getattr(generated, name, None)
-            if target is None:
-                self.missing.append(name)
-                raise AttributeError(
-                    f"stable backend has no adapter for {name!r} "
-                    f"(coverage gap)")
+            # No second backend to fall back to: a missing name is a coverage
+            # gap, and a gap is a failure here rather than a quiet skip.
+            self.missing.append(name)
+            raise AttributeError(
+                f"stable backend has no adapter for {name!r} (coverage gap)")
 
         def counted(*args, **kwargs):
             self.calls[name] = self.calls.get(name, 0) + 1
@@ -184,6 +181,7 @@ def main() -> int:
         suite.scenario_chunk_kda_fwd_variants,
         suite.scenario_chunk_kda_bwd_intra,
         suite.scenario_chunk_kda_bwd,
+        suite.scenario_chunk_kda_bwd_recompute,
         suite.scenario_dqkwg,
         suite.scenario_chunk_local_cumsum,
         suite.scenario_scaled_dot_kkt,

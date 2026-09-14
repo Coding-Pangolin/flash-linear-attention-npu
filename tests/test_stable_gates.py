@@ -2,21 +2,15 @@
 
 A gate that quietly stops working is worse than no gate: it still prints OK
 while nothing is checked.  These tests are offline (no torch, no NPU) and cover
-both directions -- the gates pass on the tree as it stands, and they fail on an
+both directions -- each gate passes on the tree as it stands, and it fails on an
 input that is deliberately wrong.
 
 Usage:  python -m unittest tests.test_stable_gates
 """
 from __future__ import annotations
 
-import ast
-import ctypes
-import hashlib
 import importlib.util
-import json
 import re
-import shutil
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -27,312 +21,195 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SETUP_DIR = REPO_ROOT / "torch_custom" / "fla_npu"
 OPS_DIR = SETUP_DIR / "fla_npu" / "ops" / "ascendc"
-GENERATED_INC = SETUP_DIR / "csrc_stable" / "generated" / "ops_stable_generated.inc"
-GENERATED_PY = OPS_DIR / "_stable_generated.py"
-SPEC_DIR = SETUP_DIR / "op_specs"
+SRC_DIR = SETUP_DIR / "csrc_stable" / "src"
 
 
-def _load_tool(name: str) -> dict:
+def _load_tool(name: str):
     path = SETUP_DIR / "tools" / name
     spec = importlib.util.spec_from_file_location(path.stem, path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules[path.stem] = module
     spec.loader.exec_module(module)
     return module
 
 
-class GeneratedArtifactTest(unittest.TestCase):
-    """The .inc and the Python glue come from one codegen run or from none."""
-
-    def test_glue_hash_matches_the_checked_in_adapters(self) -> None:
-        glue = GENERATED_PY.read_text(encoding="utf-8")
-        match = re.search(r'^_GENERATED_HASH = "([0-9a-f]{32})"$', glue,
-                          re.MULTILINE)
-        self.assertIsNotNone(match, "glue carries no _GENERATED_HASH")
-        # Newline-normalised: the file is CRLF in a Windows checkout and LF
-        # elsewhere, and the stamp must not depend on that.
-        expected = hashlib.md5(
-            GENERATED_INC.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
-        self.assertEqual(
-            match.group(1), expected,
-            "ops_stable_generated.inc and _stable_generated.py are out of sync; "
-            "re-run python tools/op_stable_codegen.py --all")
-
-    def test_every_spec_has_a_stable_adapter(self) -> None:
-        inc = GENERATED_INC.read_text(encoding="utf-8")
-        # Internal launcher ops are named with a leading underscore (the shared
-        # conv1d ABI), so the pattern is not restricted to npu_ prefixes.
-        generated = set(re.findall(r"kSchema_([a-z0-9_]+)\s*=", inc))
-        hand_written = {
-            name for name in re.findall(r"^def\s+(npu_[a-z0-9_]+)\s*\(",
-                                        (OPS_DIR / "_stable.py").read_text(
-                                            encoding="utf-8"),
-                                        re.MULTILINE)
-            if re.search(rf'^def {name}\(', inc, re.MULTILINE) is None
-        }
-        specs = {}
-        for path in sorted(SPEC_DIR.glob("*.json")):
-            spec = json.loads(path.read_text(encoding="utf-8"))
-            specs[spec["python_name"]] = path.name
-        internal = {name for name, path in specs.items()
-                    if json.loads((SPEC_DIR / path).read_text(
-                        encoding="utf-8")).get("internal")}
-        missing = sorted(set(specs) - generated - hand_written)
-        self.assertEqual(missing, [], f"specs without an adapter: {missing}")
-        orphan = sorted(generated - set(specs))
-        self.assertEqual(orphan, [], f"adapters without a spec: {orphan}")
-        self.assertTrue(internal, "the conv1d internal spec is missing")
-
-    def test_codegen_rejects_mismatched_stack_indices(self) -> None:
-        """The check that would have caught the A5 segfault, exercised."""
-
-        codegen = _load_tool("op_stable_codegen.py")
-        lines = [f"  const bool flag{i} = to<bool>(stack[{i}]);"
-                 for i in range(15)]
-        # stream read from the slot before the end: compiles, then launches on a
-        # garbage stream.
-        bad = lines + ["  const int64_t stream = to<int64_t>(stack[14]);"]
-        bad.append("  stack[0] = from(outputs[0]);")
-        with self.assertRaises(ValueError) as caught:
-            codegen._check_stack_indices("demo", bad, 15, 1)
-        self.assertIn("0..15", str(caught.exception))
-
-        good = lines + ["  const int64_t stream = to<int64_t>(stack[15]);"]
-        good.append("  stack[0] = from(outputs[0]);")
-        codegen._check_stack_indices("demo", good, 15, 1)
-
-    def test_generated_wrappers_call_the_schema_positionally(self) -> None:
-        """Every wrapper must hand the dispatcher one value per schema slot.
-
-        This is the check that operator-level tests cannot always provide: two
-        of the operators have no kernel in any available OPP, so the only thing
-        that can be verified about them is that their wrapper builds the call
-        the schema describes.  It is also exactly the bug that shipped once --
-        hidden ABI slots were skipped instead of passed as None, shifting every
-        argument after them ("unable to cast 1 to Tensor").
-        """
-
-        tree = ast.parse(GENERATED_PY.read_text(encoding="utf-8"))
-        schema_sizes: dict[str, int] = {}
-        call_sizes: dict[str, int] = {}
-        for node in ast.walk(tree):
-            if (isinstance(node, ast.Assign)
-                    and getattr(node.targets[0], "id", "") == "_SIG"
-                    and isinstance(node.value, ast.Dict)):
-                for key, value in zip(node.value.keys, node.value.values):
-                    schema_sizes[key.value] = len(value.elts)
-            # _op("<name>")(<args...>)
-            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Call)
-                    and getattr(node.func.func, "id", "") == "_op"
-                    and isinstance(node.func.args[0], ast.Constant)):
-                call_sizes[node.func.args[0].value] = len(node.args)
-        self.assertTrue(schema_sizes and call_sizes)
-        self.assertEqual(sorted(schema_sizes), sorted(call_sizes))
-        for name, size in call_sizes.items():
-            # The schema is the inputs; the wrapper appends the stream.
-            self.assertEqual(size, schema_sizes[name] + 1, name)
-
-
-class GateCommandTest(unittest.TestCase):
-    """The command-line gates pass on the current tree."""
-
-    def _run(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [sys.executable, *args],
-            cwd=str(SETUP_DIR), capture_output=True, text=True, check=False)
-
-    def test_coverage_gate_is_green(self) -> None:
-        result = self._run("tools/stable_coverage.py", "--strict")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("ALL COVERED", result.stdout)
-
-    def test_api_parity_gate_is_green(self) -> None:
-        result = self._run("tools/op_api_parity.py")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("SIGNATURES MATCH", result.stdout)
-
-    def test_abi_parity_gate_is_green(self) -> None:
-        result = self._run("tools/op_abi_parity.py")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("ABI MATCH", result.stdout)
-
-    def test_abi_parity_gate_flags_a_changed_aclnn_signature(self) -> None:
-        """The check that would have caught upstream #390, exercised.
-
-        #390 turned four aclIntArray metadata slots into aclTensors and swapped
-        an activationMode int for a const char*; nothing in the tree noticed
-        until a kernel call died.  Here the implementation is edited the same
-        way and the gate has to report it.
-        """
-
-        module = _load_tool("op_abi_parity.py")
-        source = (OPS_DIR.parent.parent.parent / "fla_npu" / "ops" / "ascendc"
-                  / "_aclnn_ctypes.py").read_text(encoding="utf-8")
-        self.assertIn("ctx.int_array(cu_seqlens)", source)
-        edited = source.replace("ctx.int_array(cu_seqlens)",
-                                "ctx.tensor(cu_seqlens, 'cu')", 1)
-        with tempfile.TemporaryDirectory() as temp_dir:
-            reference = Path(temp_dir) / "_aclnn_ctypes.py"
-            reference.write_text(edited, encoding="utf-8")
-            saved = module.REFERENCE
-            module.REFERENCE = reference
-            try:
-                report = module.evaluate()
-            finally:
-                module.REFERENCE = saved
-        flagged = {row["op"] for row in report["rows"] if row["problems"]}
-        self.assertTrue(flagged, "a changed aclnn signature was not reported")
-        detail = " ".join(problem for row in report["rows"]
-                          for problem in row["problems"])
-        self.assertIn("aclnn arguments differ", detail)
-
-    def test_spec_python_blocks_are_synced(self) -> None:
-        result = self._run("tools/sync_spec_python.py", "--check")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("specs with drift: 0", result.stdout)
-
-    def test_coverage_gate_fails_when_a_scenario_axis_is_impossible(self) -> None:
-        """A declaration the spec cannot represent must not pass."""
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            spec_path = Path(temp_dir) / "aclnn_solve_tri.json"
-            source = json.loads((SPEC_DIR / "aclnn_solve_tri.json").read_text(
-                encoding="utf-8"))
-            source["scenarios"] = {"layout": ["not-a-layout"]}
-            spec_path.write_text(json.dumps(source), encoding="utf-8")
-            module = _load_tool("stable_coverage.py")
-            original = module.SPEC_DIR
-            module.SPEC_DIR = Path(temp_dir)
-            try:
-                report = module.evaluate()
-            finally:
-                module.SPEC_DIR = original
-        problems = [p for row in report["rows"] for p in row["problems"]]
-        self.assertTrue(
-            any("not-a-layout" in p for p in problems),
-            f"an impossible scenario value was accepted: {problems}")
-
-    def test_coverage_gate_accepts_the_conv1d_passthrough(self) -> None:
-        """The conv1d family has no per-operator spec, by design.
-
-        Three public APIs share one Python layer and one aclnn ABI, so the
-        stable backend for them is the *launch* (an internal op) rather than
-        three adapters.  The gate must accept that without reporting them as
-        missing adapters, and it must still demand that the internal op is
-        registered -- which is what makes the shared launcher able to do
-        anything at all.
-        """
-
-        module = _load_tool("stable_coverage.py")
-        report = module.evaluate()
-        for name in module.passthrough_ops():
-            row = next(entry for entry in report["rows"]
-                       if entry["op"] == name)
-            self.assertEqual(row["problems"], [], name)
-            self.assertIsNone(row["spec"], name)
-        self.assertTrue(module.internal_specs(module.load_specs()))
-
-
 class BuildStampTest(unittest.TestCase):
-    """The launcher and the glue must come from the same codegen run."""
+    """The library stamp and the Python side must be produced together."""
 
-    def _load_stable_module(self, root: Path) -> dict:
-        """Import a throwaway copy of the package so the real one stays out.
+    def test_build_stamp_covers_every_adapter_source(self) -> None:
+        import importlib.util as util
 
-        ``_stable`` imports torch lazily, so a private copy is importable
-        without torch and without an NPU -- which is the point: the stamp check
-        runs before any of that.
-        """
+        path = SETUP_DIR / "csrc_stable" / "build_stable.py"
+        spec = util.spec_from_file_location("build_stable", path)
+        module = util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
 
-        package = root / "fla_npu" / "ops" / "ascendc"
-        package.mkdir(parents=True, exist_ok=True)
-        for parent in (root / "fla_npu", root / "fla_npu" / "ops", package):
-            (parent / "__init__.py").write_text("", encoding="utf-8")
-        for name in ("_stable.py", "_stable_generated.py"):
-            shutil.copy2(OPS_DIR / name, package / name)
-        # _stable re-exports the conv1d family from the reference module, so the
-        # private copy needs that one too (and whatever it imports).
-        for extra in ("_aclnn_ctypes.py", "_runtime.py", "_kda_policy.py"):
-            source = OPS_DIR / extra
-            if source.exists():
-                shutil.copy2(source, package / extra)
-        saved = {name: module_ for name, module_ in sys.modules.items()
-                 if name.startswith("fla_npu")}
-        for name in list(saved):
-            del sys.modules[name]
-        sys.path.insert(0, str(root))
-        try:
-            module = importlib.import_module("fla_npu.ops.ascendc._stable")
-        except Exception:
-            sys.path.remove(str(root))
-            sys.modules.update(saved)
-            raise
+        first = module.source_hash()
+        sources = sorted((SETUP_DIR / "csrc_stable" / "src").glob("*.cpp"))
+        self.assertTrue(sources, "no adapter sources found")
+        with tempfile.TemporaryDirectory() as tmp:
+            target = sources[0]
+            original = target.read_text(encoding="utf-8")
+            try:
+                target.write_text(original + "\n// changed\n", encoding="utf-8")
+                self.assertNotEqual(
+                    module.source_hash(), first,
+                    "editing one adapter must change the stamp")
+            finally:
+                target.write_text(original, encoding="utf-8")
+        self.assertEqual(module.source_hash(), first)
 
-        def restore() -> None:
-            # The copy has to stay importable while the test runs: the code
-            # under test does `from . import _stable_generated`, and tearing the
-            # package down early would make it import the real one (or fail on
-            # a host without torch) and silently skip the check.
-            sys.path.remove(str(root))
-            for name in list(sys.modules):
-                if name.startswith("fla_npu"):
-                    del sys.modules[name]
-            sys.modules.update(saved)
+    def test_checked_in_hash_module_matches_the_sources(self) -> None:
+        """A stale _stable_hash.py would reject a freshly built library."""
 
-        self.addCleanup(restore)
-        return module
+        import importlib.util as util
 
-    def test_mismatched_library_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            module = self._load_stable_module(Path(temp_dir))
+        path = SETUP_DIR / "csrc_stable" / "build_stable.py"
+        spec = util.spec_from_file_location("build_stable2", path)
+        module = util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
 
-            class FakeLib:
-                @staticmethod
-                def fla_npu_thin_source_hash() -> bytes:
-                    return b"00000000000000000000000000000000"
+        hash_module = OPS_DIR / "_stable_hash.py"
+        if not hash_module.is_file():
+            self.skipTest("no _stable_hash.py in this tree (never built here)")
+        match = re.search(r'SOURCE_HASH = "([0-9a-f]{32})"',
+                          hash_module.read_text(encoding="utf-8"))
+        self.assertIsNotNone(match, "_stable_hash.py carries no SOURCE_HASH")
+        self.assertEqual(match.group(1), module.source_hash(),
+                         "the checked-in stamp does not match the adapters; "
+                         "rebuild with python csrc_stable/build_stable.py")
 
-            with mock.patch.object(ctypes, "CDLL", return_value=FakeLib()):
-                with self.assertRaises(RuntimeError) as caught:
-                    module._check_build_stamp("/tmp/libfla_npu_thin.so")
-            message = str(caught.exception)
-            self.assertIn("different generated adapters", message)
-            self.assertIn("build_stable.py", message)
 
-    def test_matching_library_is_accepted(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            module = self._load_stable_module(Path(temp_dir))
-            expected = module._stable_generated._GENERATED_HASH
-            calls = []
+class CoverageGateTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tool = _load_tool("stable_coverage.py")
 
-            class FakeLib:
-                @staticmethod
-                def fla_npu_thin_source_hash() -> bytes:
-                    calls.append(1)
-                    return expected.encode()
+    def test_current_tree_has_no_unexplained_gap(self) -> None:
+        report = self.tool.evaluate()
+        self.assertEqual(report["blockers"], [])
+        self.assertGreater(report["adapter_count"], 25)
 
-            with mock.patch.object(ctypes, "CDLL", return_value=FakeLib()) as cdll:
-                module._check_build_stamp("/tmp/libfla_npu_thin.so")
-            # Without this the test would pass even if the check bailed out
-            # before ever reading the library.
-            self.assertTrue(cdll.called, "the stamp check never opened the library")
-            self.assertEqual(len(calls), 1, "the stamp was not read exactly once")
+    def test_missing_wrapper_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ops = Path(tmp) / "ops"
+            ops.mkdir()
+            original = (OPS_DIR / "_stable.py").read_text(encoding="utf-8")
+            # Drop one wrapper: the operator must then be reported, not skipped.
+            stripped = re.sub(
+                r"^def npu_chunk_fwd_o\(.*?(?=^def )", "", original,
+                flags=re.S | re.M)
+            self.assertNotEqual(stripped, original)
+            (ops / "_stable.py").write_text(stripped, encoding="utf-8")
+            (ops / "__init__.py").write_text(
+                (OPS_DIR / "__init__.py").read_text(encoding="utf-8"),
+                encoding="utf-8")
+            (ops / "_aclnn_ctypes.py").write_text(
+                (OPS_DIR / "_aclnn_ctypes.py").read_text(encoding="utf-8"),
+                encoding="utf-8")
+            with mock.patch.object(self.tool, "OPS_DIR", ops):
+                report = self.tool.evaluate()
+            self.assertTrue(any("npu_chunk_fwd_o: no wrapper" in item
+                                for item in report["blockers"]),
+                            report["blockers"])
 
-    def test_library_without_the_stamp_is_accepted(self) -> None:
-        """Artifacts built before the stamp existed must keep working."""
+    def test_enum_table_order_drift_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src"
+            src.mkdir()
+            for path in SRC_DIR.glob("stable_*.cpp"):
+                (src / path.name).write_text(path.read_text(encoding="utf-8"),
+                                             encoding="utf-8")
+            target = src / "stable_gdn.cpp"
+            text = target.read_text(encoding="utf-8")
+            # Swap two layout names in the C++ table only: the Python table no
+            # longer agrees, which is exactly the silent-layout-change bug.
+            changed = text.replace(
+                'kGdnFwdLayoutNames[] = {"BSND", "BNSD", "TND", "NTD"}',
+                'kGdnFwdLayoutNames[] = {"BNSD", "BSND", "TND", "NTD"}')
+            self.assertNotEqual(changed, text)
+            target.write_text(changed, encoding="utf-8")
+            with mock.patch.object(self.tool, "SRC_DIR", src):
+                report = self.tool.evaluate()
+            self.assertTrue(any("kGdnFwdLayoutNames order" in item
+                                for item in report["blockers"]),
+                            report["blockers"])
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            module = self._load_stable_module(Path(temp_dir))
-            calls = []
 
-            class FakeLib:
-                @staticmethod
-                def fla_npu_thin_source_hash() -> bytes:
-                    calls.append(1)
-                    return b"unknown"
+class AbiParityGateTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tool = _load_tool("op_abi_parity.py")
 
-            with mock.patch.object(ctypes, "CDLL", return_value=FakeLib()):
-                module._check_build_stamp("/tmp/libfla_npu_thin.so")
-            self.assertEqual(len(calls), 1)
+    def test_current_tree_matches(self) -> None:
+        report = self.tool.evaluate()
+        self.assertEqual(report["problems"], [])
+        self.assertGreater(report["checked"], 25)
+
+    def test_parameter_reorder_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src"
+            src.mkdir()
+            for path in SRC_DIR.glob("stable_*.cpp"):
+                (src / path.name).write_text(path.read_text(encoding="utf-8"),
+                                             encoding="utf-8")
+            target = src / "stable_kda.cpp"
+            text = target.read_text(encoding="utf-8")
+            changed = text.replace(
+                "run_npu_kda_gate_cumsum(Tensor g, std::optional<Tensor> A_log,\n"
+                "                               std::optional<Tensor> dt_bias,\n"
+                "                               std::optional<Tensor> cu_seqlens,\n"
+                "                               int64_t chunk_size,",
+                "run_npu_kda_gate_cumsum(Tensor g, std::optional<Tensor> A_log,\n"
+                "                               std::optional<Tensor> dt_bias,\n"
+                "                               std::optional<Tensor> cu_seqlens,\n"
+                "                               bool chunk_size,")
+            self.assertNotEqual(changed, text, "test setup did not apply")
+            target.write_text(changed, encoding="utf-8")
+            with mock.patch.object(self.tool, "SRC_DIR", src):
+                report = self.tool.evaluate()
+            self.assertTrue(any("chunk_size" in item for item in report["problems"]),
+                            report["problems"])
+
+
+class FallbackGateTest(unittest.TestCase):
+    def test_no_adapter_reaches_the_ctypes_reference(self) -> None:
+        tool = _load_tool("stable_ctypes_fallbacks.py")
+        text = (OPS_DIR / "_stable.py").read_text(encoding="utf-8")
+        self.assertEqual(tool.delegating_ops(text), [],
+                         "an adapter delegates to ctypes again")
+
+    def test_delegation_is_detected(self) -> None:
+        tool = _load_tool("stable_ctypes_fallbacks.py")
+        sample = ("def npu_x(a):\n"
+                  "    from . import _aclnn_ctypes as ct\n"
+                  "    return ct.npu_x(a)\n")
+        self.assertEqual(tool.delegating_ops(sample), ["npu_x"])
+
+
+class CtypesTableGateTest(unittest.TestCase):
+    """The ctypes argument table is what the OPP headers are compared against."""
+
+    def test_every_entry_ends_with_workspace_and_executor(self) -> None:
+        tool = _load_tool("op_abi_validate.py")
+        table = tool.parse_ctypes_table(OPS_DIR / "_aclnn_ctypes.py")
+        self.assertGreaterEqual(len(table), 20)
+        for symbol, kinds in table.items():
+            with self.subTest(symbol=symbol):
+                # The trailing pair is dropped by the parser, so what is left
+                # must not contain a pointer-to-out-parameter.
+                self.assertNotIn("_pointer", kinds)
+                self.assertTrue(kinds, f"{symbol} parsed to nothing")
+
+    def test_header_kinds_are_recognised(self) -> None:
+        tool = _load_tool("op_abi_validate.py")
+        self.assertEqual(tool.header_kind("const aclTensor *q"), tool.WILDCARD)
+        self.assertEqual(tool.header_kind("const aclIntArray *cu"), tool.WILDCARD)
+        self.assertEqual(tool.header_kind("int64_t chunkSize"), "int64")
+        self.assertEqual(tool.header_kind("bool useExp2"), "bool")
+        self.assertEqual(tool.header_kind("double scale"), "double")
+        self.assertEqual(tool.header_kind("const char *layout"), "char_ptr")
 
 
 if __name__ == "__main__":

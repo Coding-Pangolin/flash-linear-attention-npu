@@ -188,6 +188,15 @@ def parse_ctypes_table(path: Path) -> dict[str, list[str]]:
 
 _EXEC_CALL = re.compile(r"FLA_STABLE_EXEC\(\s*\"(\w+)\"\s*,(.*?)\)\s*;", re.S)
 
+# The two oldest adapters predate the macro: they call the entry point
+# themselves (`get_ws(...)` on a `Runtime::symbol(...)` pointer) and build their
+# argument list from local `AclTensorView`s.  Their call sites are checked the
+# same way, or aclnn signature drift would go unnoticed exactly where the code
+# is oldest.
+_HAND_WRITTEN_CALL = re.compile(
+    r"get_ws\s*\((.*?)\)\s*;\s*\n", re.S)
+_SYMBOL_RE = re.compile(r'rt\.symbol\("(\w+)GetWorkspaceSize"\)')
+
 
 def _enclosing_params(text: str, position: int) -> dict[str, str]:
     """{parameter: declared type} of the definition around *position*.
@@ -298,6 +307,38 @@ def adapter_calls(src_dir: Path) -> dict[str, tuple[Path, list[str]]]:
     return calls
 
 
+def hand_written_calls(src_dir: Path) -> dict[str, tuple[Path, list[str]]]:
+    """symbol -> (file, argument kinds) for the pre-macro adapters.
+
+    Their list is spelled `<view>.get()` for descriptors, a parameter name for
+    scalars, and the trailing `&workspace_size, &executor` pair.
+    """
+
+    calls: dict[str, tuple[Path, list[str]]] = {}
+    for source in sorted(src_dir.glob("stable_*.cpp")):
+        text = source.read_text(encoding="utf-8")
+        if "FLA_STABLE_EXEC" in text:
+            continue
+        symbol = _SYMBOL_RE.search(text)
+        call = _HAND_WRITTEN_CALL.search(text)
+        if symbol is None or call is None:
+            continue
+        owner = _enclosing_params(text, call.start())
+        args = split_params(call.group(1))
+        while args and re.match(r"&(workspace_size|executor)$", args[-1]):
+            args.pop()
+        kinds: list[str] = []
+        for argument in args:
+            argument = argument.strip()
+            if argument.endswith(".get()"):
+                # A descriptor: tensor and int[] are both pointers here.
+                kinds.append(WILDCARD)
+            else:
+                kinds.append(_scalar_kind(argument, owner))
+        calls[symbol.group(1)] = (source, kinds)
+    return calls
+
+
 def compare(expected: list[str], actual: list[str]) -> list[str]:
     problems: list[str] = []
     if len(expected) != len(actual):
@@ -323,6 +364,7 @@ def main() -> int:
 
     table = parse_ctypes_table(Path(args.ctypes_path))
     adapters = adapter_calls(Path(args.src_dir))
+    adapters.update(hand_written_calls(Path(args.src_dir)))
     wanted = set(table) | set(adapters)
 
     headers: dict[str, list[str]] = {}
@@ -367,8 +409,26 @@ def main() -> int:
         if symbol not in table and symbol not in adapters:
             report[f"unused:{symbol}"] = {"status": "not-called"}
 
+    # The two call sites are also compared with each other: the ctypes table is
+    # what the header is checked against, so agreement between the adapter and
+    # the table catches order/type drift without needing an OPP at all.
+    cross = 0
+    for symbol in sorted(set(table) & set(adapters)):
+        source, kinds = adapters[symbol]
+        problems = compare(table[symbol], kinds)
+        report[f"cross:{symbol}"] = {"source": source.name, "problems": problems,
+                                     "ctypes": table[symbol],
+                                     "call_site": kinds}
+        if problems:
+            cross += 1
+            print(f"adapter {symbol} ({source.name}) disagrees with the ctypes "
+                  f"table: {'; '.join(problems)}")
+            print(f"    ctypes    : {table[symbol]}")
+            print(f"    call site : {kinds}")
+    failures += cross
+
     gaps = [key for key, value in report.items()
-            if value["status"] == "known-gap"]
+            if value.get("status") == "known-gap"]
     if gaps:
         print(f"{len(gaps)} call site(s) known to have no public header:")
         for key in gaps:

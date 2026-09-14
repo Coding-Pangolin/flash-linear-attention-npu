@@ -90,9 +90,11 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "scenario_solve_tri_dense",
         "scenario_solve_tri_guards",
         "scenario_chunk_gated_delta_rule_fwd",
-        "scenario_chunk_gated_delta_rule_bwd",
     ),
     "smoke": ("scenario_fast_gelu",),
+    # Ascend950-only: the fused backward composes the 950-only finalize kernel,
+    # so it runs with the A5 driver rather than in the A2 matrix.
+    "a5": ("scenario_chunk_gated_delta_rule_bwd",),
 }
 
 
@@ -1649,7 +1651,6 @@ def _scenarios():
         scenario_solve_tri_dense,
         scenario_kda_gate_cumsum,
         scenario_chunk_gated_delta_rule_fwd,
-        scenario_chunk_gated_delta_rule_bwd,
         scenario_conv1d_prefill,
         scenario_conv1d_varlen_initial_state,
         scenario_conv1d_update,

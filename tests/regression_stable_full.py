@@ -26,9 +26,12 @@ from fla_npu.ops.ascendc import _stable  # noqa: E402
 
 STABLE_LIB = os.environ.get("FLA_NPU_STABLE_LIB", "")
 BASELINE = Path(__file__).resolve().parent / "stable_scenarios.json"
-# One baseline entry covering the three Ascend950-only scenarios: on a non-950
-# host they are a recorded skip, on Ascend950 they are recorded passes.
-A5_SCENARIOS = "Ascend950-only: fwd_prepare / bwd_finalize / fwd(a5)"
+# One baseline entry covering the Ascend950-only operators: on a non-950 host
+# they are a recorded skip, on Ascend950 they are recorded passes.  The fused
+# backward belongs here too -- it composes the 950-only finalize kernel, so A2
+# refuses it with a parameter error (aclnn 161002) rather than computing it.
+A5_SCENARIOS = ("Ascend950-only: fwd_prepare / bwd_finalize / fwd(a5) / "
+                "chunk_gated_delta_rule_bwd")
 BASELINE_WRITE = os.environ.get("FLA_NPU_BASELINE_WRITE", "").strip().lower() in {
     "1", "true", "yes", "on"}
 
@@ -197,7 +200,6 @@ def main() -> int:
         suite.scenario_solve_tri_guards,
         suite.scenario_kda_gate_cumsum,
         suite.scenario_chunk_gated_delta_rule_fwd,
-        suite.scenario_chunk_gated_delta_rule_bwd,
     ]
     names = [scenario.__name__ for scenario in scenarios]
     suite.missing_from_groups(names)
@@ -231,15 +233,15 @@ def main() -> int:
 
         a5._thin = shim
         for scenario in (a5.scenario_fwd_prepare, a5.scenario_bwd_finalize,
-                         a5.scenario_chunk_gated_delta_rule_fwd_a5):
+                         a5.scenario_chunk_gated_delta_rule_fwd_a5,
+                         suite.scenario_chunk_gated_delta_rule_bwd):
             print(f"--- entering {scenario.__name__} (Ascend950)",
                   flush=True)
             scenario()
     else:
         reason = (f"requires Ascend950, this host reports {device!r}")
         suite.SKIPPED[A5_SCENARIOS] = reason
-        print(f"SKIP chunk_gated_delta_rule_fwd_prepare / _bwd_finalize / "
-              f"fwd(a5): {reason}")
+        print(f"SKIP {A5_SCENARIOS}: {reason}")
     if "950" in device:
         # The A5 driver keeps its own recorder; fold it into this run's record
         # so one baseline covers whatever the host can actually execute.

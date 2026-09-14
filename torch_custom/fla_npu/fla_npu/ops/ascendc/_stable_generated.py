@@ -7,7 +7,7 @@ from ._stable import (  # noqa: F401
     _op,
 )
 
-_GENERATED_HASH = "d94b534c097868589baba5a096ee8d1e"
+_GENERATED_HASH = "1e1b630658911830ed36f6e9a9cf68ed"
 
 _SIG = {
     "npu_causal_conv1d_bwd": [("x", "tensor"), ("y", "optional_tensor"), ("weight", "tensor"), ("dy", "tensor"), ("initial_state", "optional_tensor"), ("dht", "optional_tensor"), ("query_start_loc", "int_array"), ("activation", "int64"), ("input_layout", "char_ptr")],
@@ -33,7 +33,6 @@ _SIG = {
     "npu_prepare_wy_repr_bwd_full": [("k", "tensor"), ("v", "tensor"), ("beta", "tensor"), ("A", "tensor"), ("dA", "tensor"), ("dw", "tensor"), ("du", "tensor"), ("g", "tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("chunk_size", "int64")],
     "npu_recompute_w_u_fwd": [("k", "tensor"), ("v", "tensor"), ("beta", "tensor"), ("A", "tensor"), ("g", "optional_tensor"), ("gk", "optional_tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("chunk_size", "int64")],
     "npu_solve_tri": [("x", "tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("layout", "char_ptr")],
-    "_causal_conv1d_launch": [("x", "tensor"), ("weight", "tensor"), ("bias", "optional_tensor"), ("conv_states", "optional_tensor"), ("query_start_loc", "optional_tensor"), ("cache_indices", "optional_tensor"), ("has_initial_state", "optional_tensor"), ("num_accepted_tokens", "optional_tensor"), ("query_start_loc_cpu", "int_array"), ("cache_indices_cpu", "int_array"), ("has_initial_state_cpu", "int_array"), ("num_accepted_tokens_cpu", "int_array"), ("activation", "char_ptr"), ("pad_slot_id", "int64"), ("null_block_id", "int64"), ("run_mode", "int64"), ("head_num", "int64"), ("max_query_len", "int64")],
 }
 
 _ENUM = {
@@ -44,7 +43,6 @@ _ENUM = {
     "npu_chunk_kda_fwd": {"layout": {'BSND': 0, 'BNSD': 1, 'TND': 2, 'NTD': 3}},
     "npu_chunk_local_cumsum": {"output_dtype": {'float32': 0, 'bfloat16': 1}},
     "npu_solve_tri": {"layout": {'bsnd': 0, 'bnsd': 1, 'tnd': 2, 'ntd': 3}},
-    "_causal_conv1d_launch": {"activation": {'none': 0, 'silu': 1, 'swish': 2}},
 }
 
 _RET = {
@@ -71,7 +69,6 @@ _RET = {
     "npu_prepare_wy_repr_bwd_full": [(0, None), (1, None), (2, None), (3, None)],
     "npu_recompute_w_u_fwd": [(0, None), (1, None)],
     "npu_solve_tri": [(0, None)],
-    "_causal_conv1d_launch": [(0, None)],
 }
 
 
@@ -400,28 +397,6 @@ def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
         _current_stream_ptr(),
     )
 
-def _causal_conv1d_launch(*, x=None, weight=None, bias=None, conv_states=None, query_start_loc=None, cache_indices=None, has_initial_state=None, num_accepted_tokens=None, query_start_loc_cpu=None, cache_indices_cpu=None, has_initial_state_cpu=None, num_accepted_tokens_cpu=None, activation=None, pad_slot_id=None, null_block_id=None, run_mode=None, head_num=None, max_query_len=None):
-    return _op("_causal_conv1d_launch")(
-        x,
-        weight,
-        bias,
-        conv_states,
-        query_start_loc,
-        cache_indices,
-        has_initial_state,
-        num_accepted_tokens,
-        _host_ints(query_start_loc_cpu),
-        _host_ints(cache_indices_cpu),
-        _host_ints(has_initial_state_cpu),
-        _host_ints(num_accepted_tokens_cpu),
-        _char_code("_causal_conv1d_launch", "activation", activation),
-        pad_slot_id,
-        null_block_id,
-        run_mode,
-        head_num,
-        max_query_len,
-        _current_stream_ptr(),
-    )
 
 __all__ = [
     "npu_chunk_fwd_h",
@@ -434,5 +409,4 @@ __all__ = [
     "npu_chunk_kda_bwd_recompute",
     "npu_chunk_kda_fwd",
     "npu_solve_tri",
-    "_causal_conv1d_launch",
 ]

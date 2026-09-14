@@ -1868,162 +1868,7 @@ void boxed_npu_solve_tri(StableIValue* stack, uint64_t num_inputs,
   stack[0] = from(outputs[0]);
 }
 
-// ---- generated: _causal_conv1d_launch ----
-inline const char* _causal_conv1d_launch_activation_name(int64_t code) {
-  switch (code) {
-    case 0: return "none";
-    case 1: return "silu";
-    case 2: return "swish";
-    default:
-      throw std::runtime_error(
-          "_causal_conv1d_launch: bad activation code " + std::to_string(code));
-  }
-}
-using _causal_conv1d_launch_GetWorkspaceFn = int (*)(
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclIntArray*,
-    const aclIntArray*,
-    const aclIntArray*,
-    const aclIntArray*,
-    const char*,
-    int64_t,
-    int64_t,
-    int64_t,
-    int64_t,
-    int64_t,
-    aclTensor*,
-    uint64_t*, aclOpExecutor**);
-constexpr const char* kSchema__causal_conv1d_launch =
-    "_causal_conv1d_launch(Tensor x, Tensor weight, Tensor? bias, Tensor? conv_states, Tensor? query_start_loc, Tensor? cache_indices, Tensor? has_initial_state, Tensor? num_accepted_tokens, Tensor? query_start_loc_cpu, Tensor? cache_indices_cpu, Tensor? has_initial_state_cpu, Tensor? num_accepted_tokens_cpu, int activation, int pad_slot_id, int null_block_id, int run_mode, int head_num, int max_query_len, int stream) -> Tensor";
 
-void boxed__causal_conv1d_launch(StableIValue* stack, uint64_t num_inputs,
-                 uint64_t num_outputs) {
-  (void)num_inputs;
-  (void)num_outputs;
-  const Tensor x_t = to<Tensor>(stack[0]);
-  const TensorMeta x_meta = meta_of(x_t);
-  const shim::Tensor x(x_t);
-  const Tensor weight_t = to<Tensor>(stack[1]);
-  const TensorMeta weight_meta = meta_of(weight_t);
-  const shim::Tensor weight(weight_t);
-  const auto bias_t = to<std::optional<Tensor>>(stack[2]);
-  const bool bias_present = bias_t.has_value();
-  const TensorMeta bias_meta = bias_present ? meta_of(*bias_t) : TensorMeta();
-  const std::optional<shim::Tensor> bias = bias_present ? std::optional<shim::Tensor>(shim::Tensor(*bias_t)) : std::nullopt;
-  const auto conv_states_t = to<std::optional<Tensor>>(stack[3]);
-  const bool conv_states_present = conv_states_t.has_value();
-  const TensorMeta conv_states_meta = conv_states_present ? meta_of(*conv_states_t) : TensorMeta();
-  const std::optional<shim::Tensor> conv_states = conv_states_present ? std::optional<shim::Tensor>(shim::Tensor(*conv_states_t)) : std::nullopt;
-  const auto query_start_loc_t = to<std::optional<Tensor>>(stack[4]);
-  const bool query_start_loc_present = query_start_loc_t.has_value();
-  const TensorMeta query_start_loc_meta = query_start_loc_present ? meta_of(*query_start_loc_t) : TensorMeta();
-  const std::optional<shim::Tensor> query_start_loc = query_start_loc_present ? std::optional<shim::Tensor>(shim::Tensor(*query_start_loc_t)) : std::nullopt;
-  const auto cache_indices_t = to<std::optional<Tensor>>(stack[5]);
-  const bool cache_indices_present = cache_indices_t.has_value();
-  const TensorMeta cache_indices_meta = cache_indices_present ? meta_of(*cache_indices_t) : TensorMeta();
-  const std::optional<shim::Tensor> cache_indices = cache_indices_present ? std::optional<shim::Tensor>(shim::Tensor(*cache_indices_t)) : std::nullopt;
-  const auto has_initial_state_t = to<std::optional<Tensor>>(stack[6]);
-  const bool has_initial_state_present = has_initial_state_t.has_value();
-  const TensorMeta has_initial_state_meta = has_initial_state_present ? meta_of(*has_initial_state_t) : TensorMeta();
-  const std::optional<shim::Tensor> has_initial_state = has_initial_state_present ? std::optional<shim::Tensor>(shim::Tensor(*has_initial_state_t)) : std::nullopt;
-  const auto num_accepted_tokens_t = to<std::optional<Tensor>>(stack[7]);
-  const bool num_accepted_tokens_present = num_accepted_tokens_t.has_value();
-  const TensorMeta num_accepted_tokens_meta = num_accepted_tokens_present ? meta_of(*num_accepted_tokens_t) : TensorMeta();
-  const std::optional<shim::Tensor> num_accepted_tokens = num_accepted_tokens_present ? std::optional<shim::Tensor>(shim::Tensor(*num_accepted_tokens_t)) : std::nullopt;
-  const auto query_start_loc_cpu_t = to<std::optional<Tensor>>(stack[8]);
-  const std::vector<int64_t> query_start_loc_cpu = query_start_loc_cpu_t.has_value() ? host_int_values(query_start_loc_cpu_t->get()) : std::vector<int64_t>();
-  AclIntArrayView query_start_loc_cpu_view(query_start_loc_cpu);
-  const auto cache_indices_cpu_t = to<std::optional<Tensor>>(stack[9]);
-  const std::vector<int64_t> cache_indices_cpu = cache_indices_cpu_t.has_value() ? host_int_values(cache_indices_cpu_t->get()) : std::vector<int64_t>();
-  AclIntArrayView cache_indices_cpu_view(cache_indices_cpu);
-  const auto has_initial_state_cpu_t = to<std::optional<Tensor>>(stack[10]);
-  const std::vector<int64_t> has_initial_state_cpu = has_initial_state_cpu_t.has_value() ? host_int_values(has_initial_state_cpu_t->get()) : std::vector<int64_t>();
-  AclIntArrayView has_initial_state_cpu_view(has_initial_state_cpu);
-  const auto num_accepted_tokens_cpu_t = to<std::optional<Tensor>>(stack[11]);
-  const std::vector<int64_t> num_accepted_tokens_cpu = num_accepted_tokens_cpu_t.has_value() ? host_int_values(num_accepted_tokens_cpu_t->get()) : std::vector<int64_t>();
-  AclIntArrayView num_accepted_tokens_cpu_view(num_accepted_tokens_cpu);
-  const int64_t activation_code = to<int64_t>(stack[12]);
-  const std::string activation = _causal_conv1d_launch_activation_name(activation_code);
-  const int64_t pad_slot_id = to<int64_t>(stack[13]);
-  const int64_t null_block_id = to<int64_t>(stack[14]);
-  const int64_t run_mode = to<int64_t>(stack[15]);
-  const int64_t head_num = to<int64_t>(stack[16]);
-  const int64_t max_query_len = to<int64_t>(stack[17]);
-  const int64_t stream = to<int64_t>(stack[18]);
-
-  auto& rt = Runtime::instance();
-  auto get_ws = reinterpret_cast<_causal_conv1d_launch_GetWorkspaceFn>(
-      rt.symbol("aclnnCausalConv1dGetWorkspaceSize"));
-  auto launch = reinterpret_cast<LaunchFn>(
-      rt.symbol("aclnnCausalConv1d"));
-  uint64_t workspace_size = 0;
-  aclOpExecutor* executor = nullptr;
-
-  std::vector<shim::Tensor> outputs;
-  outputs.push_back((run_mode == 0 && head_num > 0) ? ((x.dim() == 3) ? shim::empty({x.size(0), head_num, x.size(1), x.size(2) / head_num}, x.options()) : ((x.dim() == 2) ? shim::empty({head_num, x.size(0), x.size(1) / head_num}, x.options()) : shim::empty_like(x))) : shim::empty_like(x));
-
-  std::vector<std::unique_ptr<AclTensorView>> views;
-  views.push_back(std::make_unique<AclTensorView>(x_meta));
-  views.push_back(std::make_unique<AclTensorView>(weight_meta));
-  views.push_back(std::make_unique<AclTensorView>(bias_meta));
-  views.push_back(std::make_unique<AclTensorView>(conv_states_meta));
-  views.push_back(std::make_unique<AclTensorView>(query_start_loc_meta));
-  views.push_back(std::make_unique<AclTensorView>(cache_indices_meta));
-  views.push_back(std::make_unique<AclTensorView>(has_initial_state_meta));
-  views.push_back(std::make_unique<AclTensorView>(num_accepted_tokens_meta));
-  views.push_back(std::make_unique<AclTensorView>(outputs[0].defined() ? meta_of(outputs[0].tensor()) : TensorMeta()));
-
-  const int get_ret = get_ws(
-      views[0]->get(),
-      views[1]->get(),
-      views[2]->get(),
-      views[3]->get(),
-      views[4]->get(),
-      views[5]->get(),
-      views[6]->get(),
-      views[7]->get(),
-      query_start_loc_cpu_view.get(),
-      cache_indices_cpu_view.get(),
-      has_initial_state_cpu_view.get(),
-      num_accepted_tokens_cpu_view.get(),
-      activation.c_str(),
-      pad_slot_id,
-      null_block_id,
-      run_mode,
-      head_num,
-      max_query_len,
-      views[8]->get(),
-      &workspace_size, &executor);
-  if (get_ret != 0) {
-    throw std::runtime_error(
-        "aclnnCausalConv1dGetWorkspaceSize failed: " +
-        std::to_string(get_ret));
-  }
-  Tensor workspace;
-  void* workspace_ptr = nullptr;
-  if (workspace_size != 0) {
-    workspace = allocate_bytes(static_cast<int64_t>(workspace_size),
-                                   x_meta);
-    TORCH_ERROR_CODE_CHECK(
-        aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
-  }
-  const int launch_ret = launch(workspace_ptr, workspace_size,
-                                executor,
-                                reinterpret_cast<void*>(stream));
-  if (launch_ret != 0) {
-    throw std::runtime_error(
-        "aclnnCausalConv1d failed: " +
-        std::to_string(launch_ret));
-  }
-  stack[0] = from(outputs[0].tensor());
-}
 
 
 namespace {
@@ -2041,7 +1886,6 @@ void register_generated_defs(Library& m) {
   m.def(kSchema_npu_chunk_kda_bwd_recompute);
   m.def(kSchema_npu_chunk_kda_fwd);
   m.def(kSchema_npu_solve_tri);
-  m.def(kSchema__causal_conv1d_launch);
 }
 
 template <typename Library>
@@ -2056,6 +1900,5 @@ void register_generated_impls(Library& m) {
   m.impl("npu_chunk_kda_bwd_recompute", &boxed_npu_chunk_kda_bwd_recompute);
   m.impl("npu_chunk_kda_fwd", &boxed_npu_chunk_kda_fwd);
   m.impl("npu_solve_tri", &boxed_npu_solve_tri);
-  m.impl("_causal_conv1d_launch", &boxed__causal_conv1d_launch);
 }
 }  // namespace

@@ -429,3 +429,34 @@ try:  # generated wrappers (optional: present when the codegen step has run)
     from . import _stable_generated
 except Exception:  # pragma: no cover - generated module is optional
     _stable_generated = None
+
+
+# ---------------------------------------------------------------------------
+# Hand-written wrappers
+# ---------------------------------------------------------------------------
+#
+# Operators whose adapter lives in csrc_stable/src/stable_<op>.cpp get their
+# wrapper here rather than in _stable_generated.py: the wrapper carries a real
+# signature (so a positional call does no argument binding at run time), maps
+# the public argument shape onto the schema's, and nothing else.  Validation
+# stays with the operator: an illegal input either reaches aclnn and comes back
+# as a status, or is caught by the C++ adapter.  FLA_NPU_THIN_VALIDATE=1 routes
+# such a call through the ctypes reference instead, which validates in Python
+# and reports a precise message.
+#
+# These wrappers are appended after the generated import so a hand-written one
+# always wins, which is what makes migrating an operator a one-file change on
+# each side.
+
+
+def npu_fast_gelu_custom(self):
+    """GELU with the operator's own approximation; mirrors the ctypes shape."""
+
+    return _op("npu_fast_gelu_custom")(self, _current_stream_ptr())
+
+
+def npu_fast_gelu_custom_backward(grad, self):
+    """Backward of :func:`npu_fast_gelu_custom`."""
+
+    return _op("npu_fast_gelu_custom_backward")(
+        grad, self, _current_stream_ptr())

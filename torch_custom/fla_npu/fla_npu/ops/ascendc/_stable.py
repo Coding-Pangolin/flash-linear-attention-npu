@@ -162,35 +162,10 @@ def available() -> bool:
         return False
 
 
-def causal_conv1d_launcher():
-    """The internal aclnnCausalConv1d launch op, or None when it is absent."""
-
-    if not available():
-        return None
-    try:
-        from . import _stable_generated as generated
-
-        return getattr(generated, "_causal_conv1d_launch", None)
-    except Exception:
-        return None
-
-
-# The conv1d family is three public APIs over one aclnn ABI, so its "stable
-# backend" is the *launch* rather than a separate wrapper: the shared
-# implementation is re-exported here (same function object, so the Python
-# surface cannot drift), and the launch inside it goes through the internal op
-# above whenever the launcher is loaded.  See
-# docs/architecture/stable-abi-migration.md.
-PASSTHROUGH_OPS = ("npu_causal_conv1d", "npu_causal_conv1d_fn",
-                   "npu_causal_conv1d_update")
-
-from ._aclnn_ctypes import (  # noqa: E402  (documented above)
-    npu_causal_conv1d,
-    npu_causal_conv1d_fn,
-    npu_causal_conv1d_update,
-)
-
-
+# The conv1d family used to be re-exported from the ctypes module with only its
+# launch handed to an internal op, which meant every call kept paying for the
+# reference marshalling.  It now has three real adapters (see the hand-written
+# wrappers at the end of this module and csrc_stable/src/stable_conv1d.cpp).
 def _op(name: str):
     """Cached torch.ops handle: the attribute chain is not free per call."""
 
@@ -671,3 +646,154 @@ def npu_chunk_gdn_bwd_intra(q, k, v, g, beta, A, d_o, scale, chunk_size, *,
         _host_ints(cu_seqlens), _host_ints(chunk_indices),
         scale, chunk_size, use_exp2, _current_stream_ptr(),
     )
+
+
+# ---------------------------------------------------------------------------
+# conv1d family
+# ---------------------------------------------------------------------------
+#
+# One aclnn entry point, three published entry points; the run mode is baked
+# into which adapter is called rather than travelling as an argument.  What
+# stays here is the part the adapter cannot express: refusing the scheduling
+# parameters the operator does not implement, translating the activation name,
+# and staging a non-dense conv_state (the kernel reads it with the dense
+# strides, so a paged view would be read and written in the wrong place).
+
+_PAD_SLOT_ID = -1
+_NULL_BLOCK_ID = 0
+_CONV1D_ACTIVATION_CODES = {"none": 0, "silu": 1, "swish": 2}
+
+
+def _conv1d_activation_code(activation):
+    code = _CONV1D_ACTIVATION_CODES.get(
+        "none" if activation is None else str(activation))
+    if code is None:
+        raise ValueError(
+            f"activation must be None, 'silu', or 'swish', got {activation!r}")
+    return code
+
+
+def _reject_conv1d_scheduling(**values):
+    """The operator implements neither block-cache nor APC scheduling."""
+
+    enabled = [name for name, value in values.items() if value is not None]
+    if enabled:
+        raise NotImplementedError(
+            "CausalConv1d APC/block-cache scheduling is not supported by the "
+            "Ascend operator: " + ", ".join(enabled))
+
+
+def _dense_conv_state(conv_state):
+    """(argument to pass, tensor to copy back into) for a paged conv_state."""
+
+    if conv_state.is_contiguous() and conv_state.storage_offset() == 0:
+        return conv_state, None
+    return conv_state.contiguous(), conv_state
+
+
+def npu_causal_conv1d_fn(x, weight, bias, conv_states=None,
+                         query_start_loc=None, cache_indices=None,
+                         has_initial_state=None, activation="silu",
+                         pad_slot_id=_PAD_SLOT_ID,
+                         null_block_id=_NULL_BLOCK_ID,
+                         block_idx_first_scheduled_token=None,
+                         block_idx_last_scheduled_token=None,
+                         initial_state_idx=None, num_computed_tokens=None,
+                         block_size_to_align=0, metadata=None,
+                         validate_data=False, *, query_start_loc_cpu=None,
+                         cache_indices_cpu=None, has_initial_state_cpu=None,
+                         head_num=0):
+    """Prefill: convolve ``x`` and roll its tail into ``conv_states``."""
+
+    _reject_conv1d_scheduling(
+        block_idx_first_scheduled_token=block_idx_first_scheduled_token,
+        block_idx_last_scheduled_token=block_idx_last_scheduled_token,
+        initial_state_idx=initial_state_idx,
+        num_computed_tokens=num_computed_tokens, metadata=metadata)
+    if block_size_to_align not in (0, None):
+        raise NotImplementedError(
+            "CausalConv1d block_size_to_align is not supported by the Ascend "
+            "operator")
+    state_arg, restore = (None, None) if conv_states is None else (
+        _dense_conv_state(conv_states))
+    result = _op("npu_causal_conv1d_fn")(
+        x, weight, bias, state_arg,
+        query_start_loc, cache_indices, has_initial_state,
+        _host_ints(query_start_loc_cpu), _host_ints(cache_indices_cpu),
+        _host_ints(has_initial_state_cpu),
+        _conv1d_activation_code(activation),
+        _PAD_SLOT_ID if pad_slot_id is None else pad_slot_id,
+        _NULL_BLOCK_ID if null_block_id is None else null_block_id,
+        head_num, _current_stream_ptr(),
+    )
+    if restore is not None:
+        restore.copy_(state_arg)
+    return result
+
+
+def npu_causal_conv1d_update(x, conv_state, weight, bias=None, activation=None,
+                             conv_state_indices=None,
+                             num_accepted_tokens=None, query_start_loc=None,
+                             max_query_len=-1,
+                             null_block_id=_NULL_BLOCK_ID,
+                             block_idx_last_scheduled_token=None,
+                             initial_state_idx=None, validate_data=False,
+                             out=None, *, conv_state_indices_cpu=None,
+                             num_accepted_tokens_cpu=None,
+                             query_start_loc_cpu=None):
+    """Decode: one token per sequence, mutating ``conv_state`` in place."""
+
+    _reject_conv1d_scheduling(
+        block_idx_last_scheduled_token=block_idx_last_scheduled_token,
+        initial_state_idx=initial_state_idx)
+    state_arg, restore = _dense_conv_state(conv_state)
+    result = _op("npu_causal_conv1d_update")(
+        x, state_arg, weight, bias, _conv1d_activation_code(activation),
+        conv_state_indices, num_accepted_tokens, query_start_loc,
+        max_query_len,
+        _NULL_BLOCK_ID if null_block_id is None else null_block_id,
+        _host_ints(conv_state_indices_cpu),
+        _host_ints(num_accepted_tokens_cpu),
+        _host_ints(query_start_loc_cpu), _current_stream_ptr(),
+    )
+    if restore is not None:
+        restore.copy_(state_arg)
+    if out is not None:
+        out.copy_(result)
+        return out
+    x.copy_(result)
+    return x
+
+
+def npu_causal_conv1d(x, weight, bias=None, conv_states=None, *,
+                      query_start_loc=None, cache_indices=None,
+                      initial_state_mode=None, num_accepted_tokens=None,
+                      activation_mode=0, pad_slot_id=-1, run_mode=0,
+                      head_num=0):
+    """Deprecated host-metadata compatibility interface."""
+
+    import warnings
+
+    warnings.warn(
+        "fla_npu.ops.ascendc.npu_causal_conv1d is a deprecated compatibility "
+        "API and will be removed in 2027/02. Use causal_conv1d_fn or "
+        "causal_conv1d_update instead.",
+        FutureWarning,
+        stacklevel=4,
+    )
+    activation_mode = int(activation_mode)
+    if activation_mode not in (0, 1):
+        raise ValueError(
+            f"activation_mode only supports 0/1, got {activation_mode}")
+    state_arg, restore = (None, None) if conv_states is None else (
+        _dense_conv_state(conv_states))
+    result = _op("npu_causal_conv1d")(
+        x, weight, bias, state_arg,
+        _host_ints(query_start_loc), _host_ints(cache_indices),
+        _host_ints(initial_state_mode), _host_ints(num_accepted_tokens),
+        _CONV1D_ACTIVATION_CODES["silu" if activation_mode == 1 else "none"],
+        pad_slot_id, run_mode, head_num, _current_stream_ptr(),
+    )
+    if restore is not None:
+        restore.copy_(state_arg)
+    return result

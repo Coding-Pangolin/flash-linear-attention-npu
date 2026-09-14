@@ -36,9 +36,11 @@ storage**（`(numel,)`），4-D 的 format 是 **0（NCHW）**、3-D 是 **2（N
 - A5 专用组（`--group a5`）：**12 PASS / 4 记录限制**（fwd_prepare 6、bwd_finalize 1、
   fused fwd BSND×3+TND+BNSD 5；融合反向 2 条"两边都拒绝"+2 条 flag 拒绝）。
 - 950 跑**完整矩阵**：**276 PASS / 16 SKIP**，停在一个未决用例：
-  `chunk_gated_delta_rule_fwd(varlen_B1_T128_c64)` 的 **output[3]** 与参考不一致
-  （diff 3.4e38，即未写入区域当有效值比较）。这是 BNSD varlen 拼法在 950 上的
-  行为差异，需要下一步定位（A2 上该用例是逐位一致的）。
+  `chunk_gated_delta_rule_fwd(varlen_B1_T128_c64)` 的 **output[3]** 与参考不一致，
+  且不一致的数值随运行变化（两次分别 3.4e38、7.2e29），即**未写入区域被当有效值比较**。
+  该用例在 A2 上逐位一致；在 950 上那些行是有限垃圾。试过用"幅值上界"过滤，被否决：
+  只是把边界往后挪（垃圾可以是任意有限值）。正解是让算子说明**哪些行保证写入**，
+  或按 cu_seqlens 只比较真实 token 覆盖的行；在那之前该用例在 950 上是未决项。
 - **kernel 缺陷（记录，供 OPP 侧修）**：`aclnnChunkKdaBwdRecompute` 在
   `use_gate_in_kernel=False` 时抛 **AI Core exception（错误码 271）** 并把设备带进错误
   状态；`chunk_kda_bwd_recompute(no gate)` 因此改为记录而不执行。

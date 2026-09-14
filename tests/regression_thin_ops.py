@@ -1549,10 +1549,16 @@ def scenario_chunk_gated_delta_rule_fwd():
                 assert a is None and b is None, f"{name}[{i}]: None mismatch"
                 continue
             assert tuple(a.shape) == tuple(b.shape), f"{name}[{i}]: shape"
-            finite = torch.isfinite(a.float()) & torch.isfinite(b.float())
+            # Ascend950 leaves finite garbage (measured at 7e29 and 3.4e38) in
+            # rows it does not write, so "differs" here can mean "unwritten"
+            # rather than "wrong" -- see the open item in
+            # docs/architecture/stable-abi-a5-status.md.  Values are compared
+            # as they are; a magnitude filter was tried and rejected because it
+            # only moves the boundary.
+            af, bf = a.float(), b.float()
+            finite = torch.isfinite(af) & torch.isfinite(bf)
             if finite.any():
-                diff = float(
-                    (a.float() - b.float()).abs()[finite].max().item())
+                diff = float((af - bf).abs()[finite].max().item())
                 assert diff == 0.0, f"{name}[{i}]: diff={diff}"
         print(f"PASS {name}")
 

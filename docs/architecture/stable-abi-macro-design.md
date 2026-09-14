@@ -61,12 +61,31 @@
 | `tools/op_api_parity.py` | `_stable`/`_thin` 对 ctypes 的公开签名（参数名、顺序、默认值） | 调用方换后端会 TypeError |
 | `tools/stable_ctypes_fallbacks.py` | 没有适配层回退到 ctypes | 回退会带上描述符森林的开销 |
 | `tools/op_abi_validate.py` | ctypes 参数表与每个 `FLA_STABLE_EXEC` 对 **OPP 头文件** | aclnn 形参变了（例如 `stateVFirst`）而调用点没跟 |
+| `tools/op_abi_validate.py`（同一次运行） | 调用点与 ctypes 表**互相对拍**（不需要 OPP） | 两条实现路径的参数顺序/类型漂移 |
 | `tools/op_abi_validate.py --json` | 同上，产出报告 | — |
 
 需要 NPU 的验证：`tests/regression_stable_full.py`（逐算子 ctypes↔launcher 逐位对比 + 场景集基线）、`tests/regression_stable_abi_ops.py`（单算子窄跑）、`tests/regression_stable_a5.py`（950 侧）、benchmark `tests/bench_stable_host.py`。
 
 ## 6. 已知边界（记录，不隐藏）
 
+- **recurrent 家族仍是 pre-macro 写法**：`npu_recurrent_gated_delta_rule` 与
+  `npu_recurrent_kda`（`csrc_stable/src/stable_recurrent_gdr.cpp` /
+  `stable_recurrent_kda.cpp`）不经过 `FLA_STABLE_EXEC` + `boxed_adapter`，而是自己
+  调 `get_ws`/`launch`、自己拆栈。原因是宏的拆栈会**夺走参数 handle 的所有权**：
+  torch 的 `torch::stable::Tensor(AtenTensorHandle)` 把 handle 包进带删除器的
+  `shared_ptr`（`tensor_struct.h:80-83`），`to<Tensor>` 明确写明
+  "steals ownership of the input's underlying AtenTensorHandle"
+  （`stableivalue_conversions.h:622-624`）。recurrent 的 `state`/`initial_state` 正是
+  `Tensor(a!)` 这种被调用方别名的参数，所以这两个适配器保留了 handle 形式。
+  代价与现状：
+  * 它们自己复制了 workspace/launch 那一段（各约 50 行）；
+  * `op_abi_parity.py` 需要知道 `AtenTensorHandle` 与 `Tensor` 等价，并允许
+    适配函数末尾带 `Tensor*`/`bool*` 这类内部输出参数；
+  * `op_abi_validate.py` 原先只看 `FLA_STABLE_EXEC`，看不到它们的 aclnn 参数表——
+    现已补上（`hand_written_calls`），并额外做适配↔ctypes 表的一对一对拍。
+  收敛方向（待设备验证）：让 `boxed.h` 支持"以借用的 `AtenTensorHandle` 拆栈"的
+  第二种拆栈方式，或在设备上证明类型化拆栈对 `Tensor(a!)` 安全后整体转换。
+  两个方案都必须先过 parity + vLLM 单请求（现任实现是唯一在真实服务里验证过的）。
 - **`solve_tri` 的 `tnd`**：该 OPP 上 kernel 直接杀进程（ctypes/launcher 都一样），薄层包装里显式拒绝，避免把非法输入变成崩溃。
 - **conv1d FN + `has_initial_state`**：初态序列的输出行在 kernel 里不可复现（同一 ctypes 调用两次结果差 260，第三次是 0），回归里按 kernel 级记录并只对 `has_initial_state=False` 的区间断言 parity。
 - **`int[]` 只能是 host int32/int64 tensor**：device tensor 会被 `int_values` 拒绝（否则按 host 指针读 device 内存）。

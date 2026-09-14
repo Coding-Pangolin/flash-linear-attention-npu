@@ -81,6 +81,10 @@ def main() -> int:
                 gaps += len(missing)
                 print(f"  {row['op']:<44} no scenario for: "
                       f"{', '.join(missing)}")
+            if row.get("flags"):
+                # Boolean axes are named in the schema, not in scenario labels,
+                # so they are listed for a human rather than counted as gaps.
+                flags.extend(row["flags"])
             if flags:
                 print(f"  {row['op']:<44} boolean axes (check the scenario, "
                       f"not the name): {', '.join(sorted(set(flags)))}")

@@ -10,6 +10,7 @@
 //
 // Included by stable_ops.cpp (single TU); registration lives there.
 
+#include "thin_stable/at_facade.h"
 #include "thin_stable/boxed.h"
 #include "thin_stable/exec.h"
 
@@ -22,6 +23,8 @@ namespace {
 
 using torch::stable::Tensor;
 using fla_npu_thin::stable::TensorMeta;
+using fla_npu_thin::stable::at_shim::kBFloat16;
+using fla_npu_thin::stable::at_shim::kFloat;
 using fla_npu_thin::stable::allocate_like;
 using fla_npu_thin::stable::allocate_sizes;
 using fla_npu_thin::stable::cstr;
@@ -32,8 +35,6 @@ using fla_npu_thin::stable::out_tensor;
 using fla_npu_thin::stable::scalar;
 using fla_npu_thin::stable::tensor;
 
-// dtype id used by allocate_sizes (same table the ctypes layer uses).
-constexpr int32_t kFloat32 = 6;
 
 // ---------------------------------------------------------------------------
 // npu_kda_gate_cumsum
@@ -52,7 +53,7 @@ Tensor run_npu_kda_gate_cumsum(Tensor g, std::optional<Tensor> A_log,
                                int64_t stream) {
   const TensorMeta g_meta = meta_of(g);
   // The kernel accumulates in fp32 regardless of `g`'s dtype.
-  Tensor out = allocate_sizes(g_meta.sizes, kFloat32, g_meta);
+  Tensor out = allocate_sizes(g_meta.sizes, kFloat, g_meta);
   FLA_STABLE_EXEC("aclnnKdaGateCumsum", g_meta, stream, tensor(g_meta),
                   optional_tensor(A_log), optional_tensor(dt_bias),
                   int_array(cu_seqlens), scalar(chunk_size),

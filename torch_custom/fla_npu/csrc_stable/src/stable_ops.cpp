@@ -10,6 +10,7 @@
 #include "stable_recurrent_kda.cpp"
 #include "stable_fast_gelu.cpp"
 #include "stable_kda.cpp"
+#include "stable_chunk.cpp"
 #include "../generated/ops_stable_generated.inc"
 
 // Build stamp: the md5 of the generated adapters this library was compiled
@@ -39,6 +40,14 @@ STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
   m.def(kSchema_npu_fast_gelu_custom_backward);
   m.def(kSchema_kda_gate_cumsum);
   m.def(kSchema_chunk_kda_bwd_intra);
+  m.def(kSchema_chunk_bwd_dv_local);
+  m.def(kSchema_chunk_local_cumsum);
+  m.def(kSchema_chunk_scaled_dot_kkt);
+  m.def(kSchema_chunk_bwd_dqkwg);
+  m.def(kSchema_prepare_wy_repr_bwd_da);
+  m.def(kSchema_prepare_wy_repr_bwd_full);
+  m.def(kSchema_prepare_wy_repr_bwd);
+  m.def(kSchema_recompute_w_u_fwd);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.def("_stream_probe(int device_index) -> (int, int)");
 #endif
@@ -57,6 +66,23 @@ STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
          &fla_npu_thin::stable::boxed_adapter<run_npu_kda_gate_cumsum>);
   m.impl("npu_chunk_kda_bwd_intra",
          &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_kda_bwd_intra>);
+  m.impl("npu_chunk_bwd_dv_local",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_bwd_dv_local>);
+  m.impl("npu_chunk_local_cumsum",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_local_cumsum>);
+  m.impl("npu_chunk_scaled_dot_kkt",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_scaled_dot_kkt>);
+  m.impl("npu_chunk_bwd_dqkwg",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_bwd_dqkwg>);
+  m.impl("npu_prepare_wy_repr_bwd_da",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_prepare_wy_repr_bwd_da>);
+  m.impl(
+      "npu_prepare_wy_repr_bwd_full",
+      &fla_npu_thin::stable::boxed_adapter<run_npu_prepare_wy_repr_bwd_full>);
+  m.impl("npu_prepare_wy_repr_bwd",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_prepare_wy_repr_bwd>);
+  m.impl("npu_recompute_w_u_fwd",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_recompute_w_u_fwd>);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.impl("_stream_probe", &boxed_stream_probe);
 #endif

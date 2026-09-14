@@ -79,6 +79,12 @@ def main() -> int:
     parser.add_argument("--json", default="")
     parser.add_argument("--baseline", choices=("ctypes", "pybind"),
                         default="ctypes")
+    parser.add_argument(
+        "--only", default="",
+        help=("comma-separated substrings; keep only the scenarios whose name "
+              "contains one.  Lets a batch be measured on its own, which also "
+              "keeps a scenario the local OPP cannot serve (e.g. a conv1d "
+              "variant) from stopping the run."))
     args = parser.parse_args()
 
     if not suite._thin.__class__.__name__ == "StableShim":
@@ -115,6 +121,14 @@ def main() -> int:
         suite.scenario_kda_gate_cumsum,
         suite.scenario_chunk_gated_delta_rule_fwd,
     ]
+    selected = [part for part in args.only.split(",") if part.strip()]
+    if selected:
+        scenarios = [
+            scenario for scenario in scenarios
+            if any(part in scenario.__name__ for part in selected)
+        ]
+        print("benchmarking %d scenario(s): %s"
+              % (len(scenarios), ", ".join(s.__name__ for s in scenarios)))
 
     # Warm up once with timing off so the first (compile/alloc-heavy) pass does
     # not land in the samples.

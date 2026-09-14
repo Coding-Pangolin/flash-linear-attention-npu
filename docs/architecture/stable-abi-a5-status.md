@@ -15,24 +15,33 @@ OPP 为本分支 main 现编的 A5 wheel（`flash_linear_attention_npu-26.7.0.de
 | `chunk_gated_delta_rule_bwd_finalize`（950-only） | PASS |
 | `chunk_gated_delta_rule_fwd` BSND（含 state_v_first / h 输出） | 3/3 PASS |
 | `chunk_gated_delta_rule_bwd`（新融合反向，A5-only） | 由 `--group a5` 覆盖（本次会话新增场景） |
-| `chunk_gated_delta_rule_fwd` **TND**（varlen 与 dense 拼法） | **未通过，未决** |
+| `chunk_gated_delta_rule_fwd` TND | PASS（见下"TND 修复"） |
+| `chunk_gated_delta_rule_bwd`（融合反向） | 记录为限制：该 OPP 上参考实现自己也拒绝（161002），8 种配置全试过 |
 
-## 未决：fused forward 的 TND 拼法
+## TND 修复：rank-4 拼法读成了 rank-3
 
-- 触发条件：`layout="TND"`（BSND 同一组输入通过；TND 的 dense/varlen 都失败）。
-- 现象：ctypes 参考成功，本 launcher 返回 `aclnnChunkGatedDeltaRuleFwdGetWorkspaceSize failed: 161002`。
-- 内核内的日志显示 A5 上该拼法会**内部转调 `ChunkGatedDeltaRuleFwdPrepare`**
-  （`[ChunkGatedDeltaRuleFwdPrepare][Tiling] use_qk_l2norm currently must be true`）。
-- 已排除：输出 shape/dtype（与参考逐一致）、format（4-D→NCHW、3-D→ND 已对齐）、
-  storage shape（参考全部为 flat，已改为默认 flat）、标量参数（layout/scale/chunk_size/
-  use_exp2/use_qk_l2norm/allow_neg_eigval/state_v_first 逐项一致）。
-  参考的 9 个 descriptor 实测为：q/k/v `(1,128,4,128) format=0 storage=(65536,)`；
-  g/beta `(1,128,4) format=2 storage=(512,)`；o `(1,128,4,128) format=0`；
-  final_state `(2,4,128,128) format=0`；g_cumsum `(1,128,4) format=2`；
-  A `(1,4,128,64) format=0`。
-- 下一步方向：在 launcher 侧加一次性调试打印（或把 descriptor 序列化出来）逐个对拍，
-  定位 161002 到底由哪个参数触发；也可以先按"A5 走 prepare+fwd_h+fwd_o 组合路径"实现，
-  与参考在 A5 的实际行为对齐。
+`layout="TND"` 在 A5 上返回 161002 的根因是**适配层的 shape 计算**：这个算子接受
+TND/NTD 这两个名字，但**始终按 rank-4 读**（TND 的 token 轴是 dim 1，head 是 dim 2，和
+BSND 一样）。我们用了 packed（rank-3）helper，于是四个输出全部算错——
+用 `FLA_STABLE_DEBUG_DESC=1` 打出来是 A `[1,128,1,64]`、final_state `[2,128,4,4]`，
+而参考是 A `[1,4,128,64]`、final_state `[2,4,128,128]`。改成 rank-4 helper
+（`tokens4`/`value_heads4` + `size_of(q,3)`/`size_of(v,3)`）后 TND 通过。
+
+顺带确认了 descriptor 约定（两种实现现在逐字段一致）：contiguous 张量默认 **flat
+storage**（`(numel,)`），4-D 的 format 是 **0（NCHW）**、3-D 是 **2（ND）**；
+`nd_tensor`/`logical_tensor` 只用于参考确实覆盖的那 9 处调用点。
+
+## 950 上跑全量矩阵的结果
+
+- A5 专用组（`--group a5`）：**12 PASS / 4 记录限制**（fwd_prepare 6、bwd_finalize 1、
+  fused fwd BSND×3+TND+BNSD 5；融合反向 2 条"两边都拒绝"+2 条 flag 拒绝）。
+- 950 跑**完整矩阵**：**276 PASS / 16 SKIP**，停在一个未决用例：
+  `chunk_gated_delta_rule_fwd(varlen_B1_T128_c64)` 的 **output[3]** 与参考不一致
+  （diff 3.4e38，即未写入区域当有效值比较）。这是 BNSD varlen 拼法在 950 上的
+  行为差异，需要下一步定位（A2 上该用例是逐位一致的）。
+- **kernel 缺陷（记录，供 OPP 侧修）**：`aclnnChunkKdaBwdRecompute` 在
+  `use_gate_in_kernel=False` 时抛 **AI Core exception（错误码 271）** 并把设备带进错误
+  状态；`chunk_kda_bwd_recompute(no gate)` 因此改为记录而不执行。
 
 ## 环境备忘
 

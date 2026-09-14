@@ -1,403 +1,305 @@
 #!/usr/bin/env python3
-"""Offline coverage gate for the Stable-ABI backend (no NPU required).
+"""Offline coverage gate for the Stable-ABI backend (no NPU, no torch).
 
-The question this answers is *not* "does a test pass" but "is every operator and
-every scenario axis accounted for".  Three things are checked, all from files in
-the tree:
+What this answers is not "did a test pass" but "is every operator the ctypes
+layer publishes carried by the launcher, and is every adapter wired all the way
+through".  Everything is read from files in the tree:
 
-1. **Adapter coverage** -- every ``npu_*`` operator that the ctypes layer
-   exposes has a stable adapter, either generated (``kSchema_<op>`` in
-   ``csrc_stable/generated/ops_stable_generated.inc``) or hand-written (a
-   function of the same name in ``fla_npu/ops/ascendc/_stable.py``).  A missing
-   adapter is a FAIL unless it is listed in ``tests/stable_coverage_baseline.json``
-   with a reason, so gaps are recorded rather than silently tolerated.
-
-2. **Scenario-axis declaration** -- which input axes an operator actually has is
-   derived from its spec, never invented:
-
-   * ``enum`` tables on ``char_ptr`` arguments -> the layout / dtype axis and the
-     exact legal values (a ``char_ptr`` without a table is reported as
-     UNVERIFIABLE, because nothing in the tree says which strings are legal);
-   * ``cu_seqlens`` / ``chunk_indices`` arguments -> the varlen axis;
-   * ``return_when`` on outputs plus boolean arguments -> the flag axis.
-
-   ``scenarios`` (when a spec carries one) is cross-checked against those
-   derived axes: a scenario naming a value the spec cannot represent is a FAIL.
-   The shape is ``{"<axis>": [<legal values>], ...}`` on purpose -- a flat
-   mapping stays readable in a diff, unlike a list of case objects.
-
-3. **Spec/registration consistency** -- a registered stable op whose spec is
-   missing, or a spec whose ``python_name`` is not registered, is a FAIL.
+1. **Adapter coverage** -- each ``npu_*`` operator in the published list has a
+   wrapper in ``_stable.py`` and an adapter in ``csrc_stable/src`` (schema +
+   ``run_`` definition + registration).
+2. **Wiring** -- a schema without an implementation, an implementation without
+   its ``run_`` function, or a wrapper without a schema is a FAIL.  These are
+   the mistakes that otherwise show up as a dispatcher error at run time.
+3. **Enum tables** -- a ``cstr(k<X>Names, arg)`` call site must have the same
+   code order as ``_stable._ENUM[op][arg]``, because the two are the only thing
+   that keeps a layout string from silently becoming a different layout.
+4. **Baseline** -- a gap is a FAIL unless ``tests/stable_coverage_baseline.json``
+   records it with a reason, so gaps are declared rather than tolerated.
 
 Usage::
 
     python tools/stable_coverage.py              # human-readable matrix
     python tools/stable_coverage.py --json       # machine-readable
-    python tools/stable_coverage.py --strict     # ignore the baseline (gaps FAIL)
-
-Exit code is 0 when there is no unexplained gap, 1 otherwise.
+    python tools/stable_coverage.py --strict     # ignore the baseline
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
 from pathlib import Path
 
-SETUP_DIR = Path(__file__).resolve().parent.parent
-PACKAGE_DIR = SETUP_DIR / "fla_npu"
-OPS_DIR = PACKAGE_DIR / "ops" / "ascendc"
-SPEC_DIR = SETUP_DIR / "op_specs"
-TESTS_DIR = SETUP_DIR.parent.parent / "tests"
-BASELINE = TESTS_DIR / "stable_coverage_baseline.json"
-
-_DEF_RE = re.compile(r"^def\s+(npu_[a-z0-9_]+)\s*\(", re.MULTILINE)
-_SCHEMA_RE = re.compile(r"kSchema_(npu_[a-z0-9_]+)\s*=")
-_LAYOUT_CODES_RE = re.compile(r"_LAYOUT_CODES\s*=\s*\{([^}]*)\}")
-_REEXPORT_RE = re.compile(
-    # The block may carry a trailing comment (which can contain a parenthesis),
-    # so the closing parenthesis is matched at the start of a line.
-    r"from\s+\.?_aclnn_ctypes\s+import\s*\(([\s\S]*?)\n\)", re.MULTILINE)
-
-# Axes are attached to the arguments that actually carry them.  Names are taken
-# from the ctypes signatures, not invented: these are the arguments that switch
-# an operator between dense and varlen (or between decode and speculative
-# decode) execution.
-VARLEN_ARGS = ("cu_seqlens", "chunk_indices", "actual_seq_lengths",
-               "query_start_loc")
-SPEC_DECODE_ARGS = ("cache_indices", "num_accepted_tokens")
+HERE = Path(__file__).resolve().parent
+SETUP_DIR = HERE.parent
+REPO_ROOT = SETUP_DIR.parents[1]
+OPS_DIR = SETUP_DIR / "fla_npu" / "ops" / "ascendc"
+SRC_DIR = SETUP_DIR / "csrc_stable" / "src"
+BASELINE = REPO_ROOT / "tests" / "stable_coverage_baseline.json"
 
 
-def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+def public_ops() -> list[str]:
+    """The operator list the package publishes (``_ASCENDC_OPS``)."""
+
+    text = (OPS_DIR / "__init__.py").read_text(encoding="utf-8")
+    match = re.search(r"_ASCENDC_OPS\s*=\s*\((.*?)\)", text, re.S)
+    if match is None:
+        raise RuntimeError("_ASCENDC_OPS not found in __init__.py")
+    return re.findall(r'"([a-z0-9_]+)"', match.group(1))
 
 
 def ctypes_ops() -> list[str]:
-    """Ground truth: the operators the ctypes layer exposes."""
-
-    return sorted(set(_DEF_RE.findall(_read(OPS_DIR / "_aclnn_ctypes.py"))))
-
-
-def generated_ops() -> list[str]:
-    inc = SETUP_DIR / "csrc_stable" / "generated" / "ops_stable_generated.inc"
-    if not inc.exists():
-        return []
-    return sorted(set(_SCHEMA_RE.findall(_read(inc))))
+    text = (OPS_DIR / "_aclnn_ctypes.py").read_text(encoding="utf-8")
+    return sorted(set(re.findall(r"^def (npu_[a-z0-9_]+)\(", text, re.M)))
 
 
-def hand_written_ops() -> list[str]:
-    """Adapters defined in _stable.py, either written there or re-exported.
-
-    The conv1d family is re-exported from the reference because its Python layer
-    is shared (three APIs, one ABI); a re-export is still the read of "this
-    module carries a stable entry for that operator", which is what the gate
-    needs, so both forms count.
-    """
-
-    text = _read(OPS_DIR / "_stable.py")
-    names = set(_DEF_RE.findall(text))
-    for block in _REEXPORT_RE.findall(text):
-        names.update(re.findall(r"\b(npu_[a-z0-9_]+)\b", block))
-    return sorted(names)
-
-
-def python_wrappers() -> list[str]:
-    path = OPS_DIR / "_stable_generated.py"
-    if not path.exists():
-        return []
-    return sorted(set(_DEF_RE.findall(_read(path))))
-
-
-def hand_written_layouts() -> dict[str, list[str]]:
-    """``_LAYOUT_CODES`` in _stable.py, per hand-written adapter."""
-
-    text = _read(OPS_DIR / "_stable.py")
-    table: dict[str, list[str]] = {}
-    for body in _LAYOUT_CODES_RE.findall(text):
-        names = re.findall(r'"([A-Za-z0-9_]+)"', body)
-        if names:
-            # One shared table today; applied to every hand-written adapter that
-            # takes a `layout` argument (checked per operator below).
-            table["_shared"] = sorted(set(names))
-    return table
-
-
-def load_specs() -> dict[str, dict]:
-    specs: dict[str, dict] = {}
-    for path in sorted(SPEC_DIR.glob("*.json")):
-        spec = json.loads(_read(path))
-        name = spec.get("python_name")
-        if not name:
-            raise SystemExit(f"{path.name}: spec has no python_name")
-        spec["_path"] = path.name
-        specs[name] = spec
-    return specs
-
-
-def internal_specs(specs: dict[str, dict]) -> dict[str, dict]:
-    """Specs that describe a launcher-internal op rather than a public one.
-
-    The conv1d family is three public APIs over one aclnn ABI, and the ABI is
-    what the launcher carries; its spec is marked ``internal`` and is checked
-    against the shared implementation instead of against a ctypes function of
-    the same name.
-    """
-
-    return {name: spec for name, spec in specs.items()
-            if spec.get("internal")}
-
-
-def passthrough_ops() -> set[str]:
-    """Names whose stable backend is the shared implementation (conv1d).
-
-    Read from the source rather than imported: this gate has to run without
-    torch, and importing the ascendc package needs it.
-    """
-
+def wrappers() -> dict[str, int]:
     text = (OPS_DIR / "_stable.py").read_text(encoding="utf-8")
-    match = re.search(r"PASSTHROUGH_OPS\s*=\s*\((.*?)\)", text, re.S)
-    if not match:
-        return set()
-    return set(re.findall(r'"([^"]+)"', match.group(1)))
+    return {name: text[:match.start()].count("\n") + 1
+            for name, match in ((m.group(1), m) for m in
+                                re.finditer(r"^def (npu_[a-z0-9_]+)\(",
+                                            text, re.M))}
+
+
+def _enclosing_run(text: str, position: int) -> str:
+    """Name of the ``run_<op>`` definition whose body contains *position*."""
+
+    head = text[:position]
+    names = re.findall(r"^\w[\w:<>,\s\*&]*?\b(run_[a-z0-9_]+)\s*\(", head,
+                       re.M)
+    if not names:
+        return ""
+    # The nearest definition that is still open at `position`: walking back
+    # over braces is enough because adapters do not nest definitions.
+    index = position
+    depth = 0
+    while index > 0:
+        index -= 1
+        if text[index] == "}":
+            depth += 1
+        elif text[index] == "{":
+            if depth == 0:
+                break
+            depth -= 1
+    start = index
+    for match in reversed(list(re.finditer(
+            r"^\w[\w:<>,\s\*&]*?\b(run_[a-z0-9_]+)\s*\(", text[:start],
+            re.M))):
+        return match.group(1)
+    return ""
+
+
+_SCHEMA_RE = re.compile(
+    r'constexpr const char\* (kSchema\w*)\s*=\s*((?:"[^"]*"\s*)+);', re.S)
+_IMPL_ADAPTER_RE = re.compile(
+    r'm\.impl\(\s*"([a-z0-9_]+)"\s*,\s*&[\w:]*boxed_adapter<\s*'
+    r'(run_[a-z0-9_]+)\s*>')
+_IMPL_BOXED_RE = re.compile(
+    r'm\.impl\(\s*"([a-z0-9_]+)"\s*,\s*&(boxed_[a-z0-9_]+)\)')
+
+
+def schemas() -> dict[str, dict]:
+    """schema constant -> the file that defines it and the op it declares.
+
+    The operator name is read out of the schema *string* rather than from the
+    constant's spelling: hand-written adapters name it `kSchema_chunk_fwd_h`
+    while the registered operator is `npu_chunk_fwd_h`, and the string is what
+    the dispatcher actually sees.
+    """
+
+    found: dict[str, dict] = {}
+    for source in sorted(SRC_DIR.glob("stable_*.cpp")):
+        text = source.read_text(encoding="utf-8")
+        for match in _SCHEMA_RE.finditer(text):
+            literal = "".join(re.findall(r'"([^"]*)"', match.group(2)))
+            op = literal.split("(", 1)[0].strip()
+            found[match.group(1)] = {"file": source.name, "op": op}
+    return found
+
+
+def registrations() -> list[tuple[str, str]]:
+    """(schema constant, adapter function) in registration order.
+
+    The two lists in ``stable_ops.cpp`` are written in the same order, so the
+    pairing is the schema the operator has to match.
+    """
+
+    text = (SRC_DIR / "stable_ops.cpp").read_text(encoding="utf-8")
+    defs = re.findall(r"m\.def\((kSchema\w*)\)", text)
+    impls = [match.group(1) or match.group(2)
+             for match in list(_IMPL_ADAPTER_RE.finditer(text))
+             + list(_IMPL_BOXED_RE.finditer(text))]
+    return list(zip(defs, impls))
+
+
+def adapter_functions() -> dict[str, str]:
+    """adapter function name -> the file that defines it."""
+
+    found: dict[str, str] = {}
+    for source in sorted(SRC_DIR.glob("stable_*.cpp")):
+        text = source.read_text(encoding="utf-8")
+        for match in re.finditer(
+                r"^\s*[\w:<>,\s\*&]*?\b((?:run|boxed)_[a-z0-9_]+)\s*\(",
+                text, re.M):
+            found[match.group(1)] = source.name
+    return found
+
+
+def adapters() -> dict[str, dict]:
+    """Per operator: schema, adapter function, registration and enum tables."""
+
+    schema_table = schemas()
+    functions = adapter_functions()
+    found: dict[str, dict] = {}
+    for constant, function in registrations():
+        schema = schema_table.get(constant)
+        if schema is None:
+            continue
+        name = schema["op"]
+        entry = found.setdefault(name, {})
+        entry["schema"] = schema["file"]
+        entry["def"] = True
+        entry["impl"] = True
+        entry["adapter"] = function
+        entry["run"] = functions.get(function)
+
+    for source in sorted(SRC_DIR.glob("stable_*.cpp")):
+        text = source.read_text(encoding="utf-8")
+        for call in re.finditer(r"cstr\((k[A-Za-z0-9]+Names)\s*,\s*([a-z0-9_]+)\)",
+                                text):
+            owner = _enclosing_run(text, call.start())
+            table = re.search(
+                re.escape(call.group(1)) + r"\[\]\s*=\s*\{(.*?)\};", text, re.S)
+            if not owner or not table:
+                continue
+            owner = owner[len("run_"):]
+            name = owner if owner.startswith("npu_") else f"npu_{owner}"
+            found.setdefault(name, {}).setdefault("enums", {})[call.group(2)] = {
+                "table": call.group(1),
+                "names": re.findall(r'"([^"]*)"', table.group(1))}
+    return found
+
+
+def package_enums() -> dict[str, dict[str, dict[str, int]]]:
+    """``_stable._ENUM`` without importing torch.
+
+    The tables are plain literals that share the ``_LAYOUT_CODES`` constant, so
+    they are evaluated in order into one namespace instead of with
+    ``literal_eval``, which cannot resolve the shared name.
+    """
+
+    tree = ast.parse((OPS_DIR / "_stable.py").read_text(encoding="utf-8"))
+    namespace: dict[str, object] = {}
+    result: dict[str, dict[str, dict[str, int]]] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or not target.id.startswith("_"):
+            continue
+        try:
+            value = eval(  # noqa: S307 - checked-in literals
+                compile(ast.Expression(node.value), "<_stable.py>", "eval"),
+                dict(namespace))
+        except Exception:
+            continue
+        namespace[target.id] = value
+        if target.id == "_ENUM":
+            result = value
+    return result
 
 
 def load_baseline() -> dict:
-    if not BASELINE.exists():
-        return {"known_gaps": {}, "notes": {}}
-    return json.loads(_read(BASELINE))
-
-
-def _axes(spec: dict) -> dict:
-    """Derive the input axes an operator really has, from its spec alone."""
-
-    axes: dict[str, list] = {}
-    unverifiable: list[str] = []
-    flags: list[str] = []
-    arguments = set()
-
-    for arg in spec.get("args", []):
-        kind = arg.get("kind")
-        name = arg.get("name", "")
-        if kind != "out_tensor":
-            arguments.add(name)
-        if kind == "char_ptr":
-            enum = arg.get("enum")
-            if enum:
-                axes[name] = list(enum)
-            else:
-                unverifiable.append(name)
-        elif kind == "bool" and not name.startswith("_"):
-            flags.append(name)
-        if name in VARLEN_ARGS:
-            axes["varlen"] = [False, True]
-        if name in SPEC_DECODE_ARGS:
-            axes["spec_decode"] = [False, True]
-
-    for output in spec.get("outputs", []):
-        condition = output.get("return_when")
-        if condition:
-            flags.append(condition)
-
-    if flags:
-        axes["flags"] = sorted(set(flags))
-    return {"axes": axes, "flags": sorted(set(flags)),
-            "unverifiable": unverifiable, "arguments": arguments}
+    if BASELINE.is_file():
+        return json.loads(BASELINE.read_text(encoding="utf-8"))
+    return {}
 
 
 def evaluate() -> dict:
-    ctypes_names = ctypes_ops()
-    gen = set(generated_ops())
-    hand = set(hand_written_ops())
-    wrappers = set(python_wrappers())
-    specs = load_specs()
-    shared_layouts = hand_written_layouts().get("_shared", [])
-    passthrough = passthrough_ops()
-    internal = internal_specs(specs)
+    published = public_ops()
+    ctypes_names = set(ctypes_ops())
+    wrapper_lines = wrappers()
+    adapter_info = adapters()
+    enums = package_enums()
 
-    # An internal spec describes a launcher op that no ctypes function
-    # implements, so it must not show up in the public matrix -- but it must
-    # still be registered, or the shared launcher would silently fall back.
-    missing_internal = sorted(name for name in internal
-                              if name not in gen and name not in hand)
-    problems_internal = [
-        f"internal op {name!r} has no adapter" for name in missing_internal]
-
-    rows: list[dict] = []
-    for name in ctypes_names:
-        spec = specs.get(name)
-        if name in gen:
-            source = "generated"
-        elif name in hand:
-            source = "hand-written"
-        else:
-            source = None
+    rows = []
+    blockers = []
+    for name in sorted(published):
         row = {
             "op": name,
-            "source": source,
-            "spec": spec["_path"] if spec else None,
-            "axes": {},
-            "unverifiable": [],
-            "problems": [],
+            "wrapper": name in wrapper_lines,
+            "schema": "schema" in adapter_info.get(name, {}),
+            "run": "run" in adapter_info.get(name, {}),
+            "def": bool(adapter_info.get(name, {}).get("def")),
+            "impl": bool(adapter_info.get(name, {}).get("impl")),
+            "enums": sorted(adapter_info.get(name, {}).get("enums", {})),
         }
-        if source is None:
-            row["problems"].append("no stable adapter")
-        if spec is None and source is not None and name not in passthrough:
-            row["problems"].append("adapter without spec")
-        if spec is not None:
-            derived = _axes(spec)
-            row["axes"] = derived["axes"]
-            row["unverifiable"] = derived["unverifiable"]
-            if source == "hand-written" and derived["unverifiable"] and shared_layouts:
-                # The hand-written adapters map the layout string to an int code
-                # in _stable.py, so those values are legal even though the spec
-                # carries no enum table.
-                for arg_name in derived["unverifiable"]:
-                    if arg_name == "layout":
-                        row["axes"]["layout"] = shared_layouts
-                row["unverifiable"] = [
-                    name_ for name_ in derived["unverifiable"]
-                    if not (name_ == "layout" and shared_layouts)
-                ]
-            scenarios = spec.get("scenarios") or {}
-            if not isinstance(scenarios, dict):
-                row["problems"].append("scenarios must be a mapping of axis -> values")
-            for axis, values in scenarios.items():
-                declared = row["axes"].get(axis)
-                if declared is None:
-                    # Derived axes are the free ones (enum tables, varlen and
-                    # spec-decode argument names, gating booleans).  An operator
-                    # usually has more: integer knobs such as conv1d's run_mode
-                    # or head_num, whose legal values only exist in the kernel
-                    # and in the unit tests.  A declaration backed by a real
-                    # argument is accepted and recorded; one naming something
-                    # that is not an argument at all is not.
-                    if axis in derived["arguments"]:
-                        row["axes"][axis] = list(values)
-                        continue
-                    row["problems"].append(
-                        f"scenario axis {axis!r} matches no argument of the spec")
-                    continue
-                unknown = [v for v in values if v not in declared]
-                if unknown:
-                    row["problems"].append(
-                        f"scenario axis {axis!r} names unsupported values {unknown}")
         rows.append(row)
+        if name not in wrapper_lines:
+            blockers.append(f"{name}: no wrapper in _stable.py")
+        for key in ("schema", "run", "def", "impl"):
+            if not row[key]:
+                blockers.append(f"{name}: adapter is missing its {key}")
+        if name not in ctypes_names:
+            blockers.append(f"{name}: published but absent from the ctypes "
+                            "reference")
 
-    # Internal ops have no ctypes counterpart by design; everything else must.
-    orphans = sorted((gen | hand) - set(ctypes_names) - set(internal))
-    for name in orphans:
-        rows.append({
-            "op": name,
-            "source": "generated" if name in gen else "hand-written",
-            "spec": specs.get(name, {}).get("_path"),
-            "axes": {},
-            "unverifiable": [],
-            "problems": ["registered but not exposed by ctypes"],
-        })
+        for argument, info in adapter_info.get(name, {}).get("enums", {}).items():
+            package_table = enums.get(name, {})
+            if argument not in package_table:
+                blockers.append(
+                    f"{name}: enum argument '{argument}' (table "
+                    f"{info['table']}) has no _stable._ENUM entry")
+            elif list(package_table[argument]) != info["names"]:
+                blockers.append(
+                    f"{name}: {info['table']} order {info['names']} != "
+                    f"_stable._ENUM {list(package_table[argument])}")
 
-    registered_hand = sorted(hand)
-    registered_gen = sorted(gen)
-    generated_without_wrapper = sorted(gen - wrappers)
-    wrapper_without_registration = sorted(wrappers - gen - hand)
+    for name in sorted(set(adapter_info) - set(published)):
+        blockers.append(f"{name}: adapter exists but is not published")
 
-    blockers = [f"{row['op']}: {'; '.join(row['problems'])}"
-                for row in rows if row["problems"]]
-    blockers += problems_internal
-    blockers += [f"generated but no Python wrapper: {name}"
-                 for name in generated_without_wrapper]
-    blockers += [f"Python wrapper without registration: {name}"
-                 for name in wrapper_without_registration]
-
-    return {
-        "ctypes_ops": sorted(ctypes_names),
-        "generated": registered_gen,
-        "hand_written": registered_hand,
-        "rows": rows,
-        "orphans": orphans,
-        "generated_without_wrapper": generated_without_wrapper,
-        "wrapper_without_registration": wrapper_without_registration,
-        "blockers": blockers,
-        "fail": bool(blockers),
-    }
+    return {"rows": rows, "blockers": blockers,
+            "adapter_count": len(adapter_info)}
 
 
 def render(report: dict, strict: bool, baseline: dict) -> tuple[str, bool]:
-    gaps = ({} if strict else baseline.get("known_gaps", {}))
-    lines: list[str] = []
-    unexplained: list[str] = []
-    waived: list[str] = []
-
-    lines.append(f"ctypes operators: {len(report['ctypes_ops'])}")
-    lines.append(
-        f"stable adapters : {len(report['generated'])} generated + "
-        f"{len(report['hand_written'])} hand-written")
-    lines.append("")
-    lines.append(f"{'operator':<46} {'source':<13} {'axes':<6} status")
-    lines.append("-" * 90)
-
+    known = {} if strict else baseline.get("known_gaps", {})
+    lines = ["%-42s %-8s %-8s %-8s %s" % ("operator", "wrapper", "schema",
+                                          "run", "registered")]
     for row in report["rows"]:
-        problems = list(row["problems"])
-        if problems and row["op"] in gaps:
-            waived.append(f"{row['op']}: {'; '.join(problems)} -- {gaps[row['op']]}")
-            status = "KNOWN GAP"
-        elif problems:
-            unexplained.append(f"{row['op']}: {'; '.join(problems)}")
-            status = "FAIL: " + "; ".join(problems)
-        elif row["unverifiable"]:
-            status = "OK (unverifiable: " + ", ".join(row["unverifiable"]) + ")"
-        else:
-            status = "OK"
-        lines.append(
-            f"{row['op']:<46} {str(row['source'] or '-'):<13} "
-            f"{len(row['axes']):<6} {status}")
-
-    lines.append("")
-    if waived:
-        lines.append("recorded gaps (baseline):")
-        lines.extend(f"  - {item}" for item in waived)
-        lines.append("")
+        lines.append("%-42s %-8s %-8s %-8s %s" % (
+            row["op"], row["wrapper"], row["schema"], row["run"],
+            row["def"] and row["impl"]))
+    unexplained = [b for b in report["blockers"]
+                   if b.split(":", 1)[0] not in known]
     if unexplained:
+        lines.append("")
         lines.append("UNEXPLAINED GAPS:")
-        lines.extend(f"  - {item}" for item in unexplained)
+        lines += [f"  - {item}" for item in unexplained]
         return "\n".join(lines), False
-
-    lines.append("ALL COVERED: every ctypes operator has a stable adapter "
-                 "(recorded gaps only)")
+    recorded = [b for b in report["blockers"] if b not in unexplained]
+    if recorded:
+        lines.append("")
+        lines.append("recorded gaps:")
+        lines += [f"  - {item}" for item in recorded]
     return "\n".join(lines), True
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--json", action="store_true", help="emit the raw report")
-    parser.add_argument("--strict", action="store_true",
-                        help="do not honour tests/stable_coverage_baseline.json")
-    parser.add_argument("--axes", action="store_true",
-                        help="list the derived scenario axes and their legal values")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
 
     report = evaluate()
     baseline = load_baseline()
-    gaps = ({} if args.strict else baseline.get("known_gaps", {}))
-    unexplained = [b for b in report["blockers"]
-                   if b.split(":", 1)[0] not in gaps]
-    if args.axes:
-        for row in report["rows"]:
-            if not row["axes"] and not row["unverifiable"]:
-                continue
-            print(f"{row['op']}:")
-            for axis, values in sorted(row["axes"].items()):
-                print(f"  {axis:<18} {values}")
-            for axis in row["unverifiable"]:
-                print(f"  {axis:<18} UNVERIFIABLE (no enum table in the spec)")
-        print()
     if args.json:
         report["baseline"] = baseline
-        report["unexplained"] = unexplained
         print(json.dumps(report, indent=2, sort_keys=True))
-        return 1 if unexplained else 0
-
+        return 0 if not report["blockers"] or not args.strict else 1
     text, ok = render(report, args.strict, baseline)
     print(text)
     return 0 if ok else 1

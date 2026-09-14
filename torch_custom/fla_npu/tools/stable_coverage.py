@@ -116,8 +116,34 @@ def schemas() -> dict[str, dict]:
         for match in _SCHEMA_RE.finditer(text):
             literal = "".join(re.findall(r'"([^"]*)"', match.group(2)))
             op = literal.split("(", 1)[0].strip()
-            found[match.group(1)] = {"file": source.name, "op": op}
+            found[match.group(1)] = {"file": source.name, "op": op,
+                                     "params": _schema_params(literal)}
     return found
+
+
+def _schema_params(literal: str) -> list[tuple[str, str]]:
+    """(name, type) of every schema parameter, for the declared-domain axes."""
+
+    open_paren = literal.find("(")
+    if open_paren < 0:
+        return []
+    depth = 0
+    for index in range(open_paren, len(literal)):
+        if literal[index] == "(":
+            depth += 1
+        elif literal[index] == ")":
+            depth -= 1
+            if depth == 0:
+                body = literal[open_paren + 1:index]
+                break
+    else:
+        return []
+    params = []
+    for param in body.split(","):
+        pieces = param.strip().rsplit(" ", 1)
+        if len(pieces) == 2:
+            params.append((pieces[1].strip(), pieces[0].strip()))
+    return params
 
 
 def registrations() -> list[tuple[str, str]]:
@@ -165,6 +191,18 @@ def adapters() -> dict[str, dict]:
         entry["impl"] = True
         entry["adapter"] = function
         entry["run"] = functions.get(function)
+        # The declared domain of this operator, as far as the tree can tell:
+        # enum tables give the string-valued axes, the parameter list gives the
+        # varlen axis and the boolean flags.  coverage_gap_report.py compares
+        # these against the scenario names that actually ran.
+        axes: dict[str, list] = {}
+        params = schema.get("params", [])
+        # Only string-valued axes are put in `axes`: the report matches them
+        # against scenario *names*, so a literal like "varlen" would be reported
+        # as a gap for every operator whose scenario label does not spell it.
+        entry["axes"] = axes
+        entry["flags"] = [name for name, declared in params
+                          if declared == "bool"]
 
     for source in sorted(SRC_DIR.glob("stable_*.cpp")):
         text = source.read_text(encoding="utf-8")
@@ -177,9 +215,12 @@ def adapters() -> dict[str, dict]:
                 continue
             owner = owner[len("run_"):]
             name = owner if owner.startswith("npu_") else f"npu_{owner}"
-            found.setdefault(name, {}).setdefault("enums", {})[call.group(2)] = {
+            entry = found.setdefault(name, {})
+            entry.setdefault("enums", {})[call.group(2)] = {
                 "table": call.group(1),
                 "names": re.findall(r'"([^"]*)"', table.group(1))}
+            entry.setdefault("axes", {})[call.group(2)] = re.findall(
+                r'"([^"]*)"', table.group(1))
     return found
 
 
@@ -236,6 +277,8 @@ def evaluate() -> dict:
             "def": bool(adapter_info.get(name, {}).get("def")),
             "impl": bool(adapter_info.get(name, {}).get("impl")),
             "enums": sorted(adapter_info.get(name, {}).get("enums", {})),
+            "axes": adapter_info.get(name, {}).get("axes", {}),
+            "flags": adapter_info.get(name, {}).get("flags", []),
         }
         rows.append(row)
         if name not in wrapper_lines:

@@ -13,6 +13,7 @@
 #include "stable_chunk.cpp"
 #include "stable_gdn.cpp"
 #include "stable_conv1d.cpp"
+#include "stable_fwd_h.cpp"
 #include "../generated/ops_stable_generated.inc"
 
 // Build stamp: the md5 of the generated adapters this library was compiled
@@ -56,6 +57,9 @@ STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
   m.def(kSchema_causal_conv1d);
   m.def(kSchema_causal_conv1d_fn);
   m.def(kSchema_causal_conv1d_update);
+  m.def(kSchema_chunk_fwd_h);
+  m.def(kSchema_chunk_gated_delta_rule_fwd_h);
+  m.def(kSchema_chunk_gated_delta_rule_bwd_dhu);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.def("_stream_probe(int device_index) -> (int, int)");
 #endif
@@ -103,6 +107,16 @@ STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
          &fla_npu_thin::stable::boxed_adapter<run_npu_causal_conv1d_update>);
   m.impl("npu_causal_conv1d",
          &fla_npu_thin::stable::boxed_adapter<run_npu_causal_conv1d>);
+  m.impl("npu_chunk_fwd_h",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_fwd_h>);
+  m.impl(
+      "npu_chunk_gated_delta_rule_fwd_h",
+      &fla_npu_thin::stable::boxed_adapter<
+          run_npu_chunk_gated_delta_rule_fwd_h>);
+  m.impl(
+      "npu_chunk_gated_delta_rule_bwd_dhu",
+      &fla_npu_thin::stable::boxed_adapter<
+          run_npu_chunk_gated_delta_rule_bwd_dhu>);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.impl("_stream_probe", &boxed_stream_probe);
 #endif

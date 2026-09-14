@@ -7,7 +7,7 @@ from ._stable import (  # noqa: F401
     _op,
 )
 
-_GENERATED_HASH = "1e1b630658911830ed36f6e9a9cf68ed"
+_GENERATED_HASH = "4032e60db92ca216d58283ed57bae866"
 
 _SIG = {
     "npu_causal_conv1d_bwd": [("x", "tensor"), ("y", "optional_tensor"), ("weight", "tensor"), ("dy", "tensor"), ("initial_state", "optional_tensor"), ("dht", "optional_tensor"), ("query_start_loc", "int_array"), ("activation", "int64"), ("input_layout", "char_ptr")],
@@ -72,50 +72,7 @@ _RET = {
 }
 
 
-def npu_chunk_fwd_h(k, w, u, *, g=None, gk=None, initial_state=None, output_final_state=False, chunk_size=64, save_new_value=True, cu_seqlens=None, chunk_indices=None, use_exp2=False, state_v_first=False):
-    if cu_seqlens and not chunk_indices:
-        chunk_indices = []
-        for _seq in range(len(cu_seqlens) - 1):
-            _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]
-            for _c in range((_len + chunk_size - 1) // chunk_size):
-                chunk_indices.extend((_seq, _c))
-    return _op("npu_chunk_fwd_h")(
-        k,
-        w,
-        u,
-        g,
-        gk,
-        initial_state,
-        output_final_state,
-        chunk_size,
-        save_new_value,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        use_exp2,
-        state_v_first,
-        _current_stream_ptr(),
-    )
 
-
-def npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, d_o, dv, scale, chunk_size, *, g=None, gK=None, h0=None, dht=None, cu_seqlens=None, chunk_indices=None, use_exp2=False, transpose_state_layout=False):
-    return _op("npu_chunk_gated_delta_rule_bwd_dhu")(
-        q,
-        k,
-        w,
-        d_o,
-        dv,
-        g,
-        gK,
-        h0,
-        dht,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        scale,
-        chunk_size,
-        use_exp2,
-        transpose_state_layout,
-        _current_stream_ptr(),
-    )
 
 def npu_chunk_gated_delta_rule_bwd_finalize(q, k, v, v_new, do, du, g, beta, h, dh, a, *, q_rstd=None, k_rstd=None, beta_raw=None, cu_seqlens=None, chunk_indices=None, scale=None, chunk_size=64, use_qk_l2_norm_in_kernel=False, use_beta_sigmoid_in_kernel=False, use_gate_in_kernel=False, state_v_first=False, use_exp2=True):
     scale = (128.0 ** -0.5) if scale is None else float(scale)
@@ -202,27 +159,6 @@ def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, initial_state=None, cu_s
         out.append(result[9])
     return tuple(out)
 
-def npu_chunk_gated_delta_rule_fwd_h(k, w, u, g=None, *, gk=None, initial_state=None, output_final_state=False, chunk_size=None, cu_seqlens=None, chunk_indices=None, state_v_first=False):
-    if cu_seqlens and not chunk_indices:
-        chunk_indices = []
-        for _seq in range(len(cu_seqlens) - 1):
-            _len = cu_seqlens[_seq + 1] - cu_seqlens[_seq]
-            for _c in range((_len + chunk_size - 1) // chunk_size):
-                chunk_indices.extend((_seq, _c))
-    return _op("npu_chunk_gated_delta_rule_fwd_h")(
-        k,
-        w,
-        u,
-        g,
-        gk,
-        initial_state,
-        output_final_state,
-        chunk_size,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        state_v_first,
-        _current_stream_ptr(),
-    )
 
 def npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, chunk_size=64, *, a_log=None, dt_bias=None, cu_seqlens=None, chunk_indices=None, allow_neg_eigval=False, use_exp2=False, output_a=True, use_beta_sigmoid_in_kernel=False, use_gate_in_kernel=False, use_qk_l2norm_in_kernel=False):
     import torch
@@ -399,11 +335,8 @@ def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
 
 
 __all__ = [
-    "npu_chunk_fwd_h",
-    "npu_chunk_gated_delta_rule_bwd_dhu",
     "npu_chunk_gated_delta_rule_bwd_finalize",
     "npu_chunk_gated_delta_rule_fwd",
-    "npu_chunk_gated_delta_rule_fwd_h",
     "npu_chunk_gated_delta_rule_fwd_prepare",
     "npu_chunk_kda_bwd",
     "npu_chunk_kda_bwd_recompute",

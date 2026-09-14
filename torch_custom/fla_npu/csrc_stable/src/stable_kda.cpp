@@ -32,6 +32,9 @@ using fla_npu_thin::stable::cstr;
 using fla_npu_thin::stable::int_array;
 using fla_npu_thin::stable::int_values;
 using fla_npu_thin::stable::meta_of;
+using fla_npu_thin::stable::nd_optional_tensor;
+using fla_npu_thin::stable::nd_out_tensor;
+using fla_npu_thin::stable::nd_tensor;
 using fla_npu_thin::stable::optional_tensor;
 using fla_npu_thin::stable::out_tensor;
 using fla_npu_thin::stable::scalar;
@@ -101,15 +104,17 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> run_npu_chunk_kda_bwd_intra(
   Tensor out_db = allocate_like(meta_of(db));
   Tensor out_dg = allocate_like(meta_of(dg));
   FLA_STABLE_EXEC(
+      // ND descriptors, like this operator's reference (it passes
+      // `acl_format_override=ACL_FORMAT_ND` for every argument).
       "aclnnChunkKdaBwdIntra", q_meta, stream,
-      tensor(meta_of(q)), tensor(meta_of(k)), tensor(meta_of(gk)),
-      tensor(meta_of(beta)), tensor(meta_of(dAqk)), tensor(meta_of(dAkk)),
-      tensor(meta_of(dq)), tensor(meta_of(dk)), tensor(meta_of(db)),
-      tensor(meta_of(dg)), int_array(cu_seqlens), int_array(chunk_indices),
-      scalar(chunk_size), scalar(safe_gate),
-      cstr(kChunkKdaBwdIntraLayoutNames, layout), out_tensor(meta_of(out_dq)),
-      out_tensor(meta_of(out_dk)), out_tensor(meta_of(out_db)),
-      out_tensor(meta_of(out_dg)));
+      nd_tensor(meta_of(q)), nd_tensor(meta_of(k)), nd_tensor(meta_of(gk)),
+      nd_tensor(meta_of(beta)), nd_tensor(meta_of(dAqk)),
+      nd_tensor(meta_of(dAkk)), nd_tensor(meta_of(dq)), nd_tensor(meta_of(dk)),
+      nd_tensor(meta_of(db)), nd_tensor(meta_of(dg)),
+      int_array(cu_seqlens), int_array(chunk_indices), scalar(chunk_size),
+      scalar(safe_gate), cstr(kChunkKdaBwdIntraLayoutNames, layout),
+      nd_out_tensor(meta_of(out_dq)), nd_out_tensor(meta_of(out_dk)),
+      nd_out_tensor(meta_of(out_db)), nd_out_tensor(meta_of(out_dg)));
   return std::make_tuple(out_dq, out_dk, out_db, out_dg);
 }
 
@@ -334,24 +339,29 @@ run_npu_chunk_kda_bwd(
   }
 
   FLA_STABLE_EXEC(
-      "aclnnChunkKdaBwd", q_meta, stream, tensor(q_meta), tensor(k_meta),
-      tensor(v_meta), tensor(meta_of(beta)), tensor(gk_meta),
-      tensor(meta_of(Aqk)), tensor(meta_of(Akk)), optional_tensor(w),
-      optional_tensor(qg), optional_tensor(kg), optional_tensor(v_new),
-      optional_tensor(h), tensor(meta_of(d_o)), optional_tensor(raw_g),
-      optional_tensor(A_log), optional_tensor(dt_bias),
-      /*initial_state=*/optional_tensor(std::nullopt),
-      /*dht=*/optional_tensor(std::nullopt), int_array(cu_seqlens),
+      // ND descriptors: the reference's `nd_tensor` helper overrides the format
+      // for every argument of this call ("consume the canonical dense
+      // BNSD/varlen NTD tensors as ND").
+      "aclnnChunkKdaBwd", q_meta, stream, nd_tensor(q_meta),
+      nd_tensor(k_meta), nd_tensor(v_meta), nd_tensor(meta_of(beta)),
+      nd_tensor(gk_meta), nd_tensor(meta_of(Aqk)), nd_tensor(meta_of(Akk)),
+      nd_optional_tensor(w), nd_optional_tensor(qg), nd_optional_tensor(kg),
+      nd_optional_tensor(v_new), nd_optional_tensor(h),
+      nd_tensor(meta_of(d_o)), nd_optional_tensor(raw_g),
+      nd_optional_tensor(A_log), nd_optional_tensor(dt_bias),
+      /*initial_state=*/nd_optional_tensor(std::nullopt),
+      /*dht=*/nd_optional_tensor(std::nullopt), int_array(cu_seqlens),
       int_array(chunk_indices), scalar(scale), scalar(chunk_size),
       scalar(safe_gate), scalar(use_gate_in_kernel), scalar(lower_bound),
       scalar(disable_recompute), scalar(use_exp2), scalar(state_v_first),
-      out_tensor(meta_of(out_dq)), out_tensor(meta_of(out_dk)),
-      out_tensor(meta_of(out_dv)), out_tensor(meta_of(out_db)),
-      out_tensor(meta_of(out_dg)), /*dh0=*/out_tensor(TensorMeta()),
-      out_tensor(out_d_a_log.has_value() ? meta_of(*out_d_a_log)
-                                         : TensorMeta()),
-      out_tensor(out_d_dt_bias.has_value() ? meta_of(*out_d_dt_bias)
-                                           : TensorMeta()));
+      nd_out_tensor(meta_of(out_dq)), nd_out_tensor(meta_of(out_dk)),
+      nd_out_tensor(meta_of(out_dv)), nd_out_tensor(meta_of(out_db)),
+      nd_out_tensor(meta_of(out_dg)),
+      /*dh0=*/nd_out_tensor(TensorMeta()),
+      nd_out_tensor(out_d_a_log.has_value() ? meta_of(*out_d_a_log)
+                                            : TensorMeta()),
+      nd_out_tensor(out_d_dt_bias.has_value() ? meta_of(*out_d_dt_bias)
+                                              : TensorMeta()));
   return std::make_tuple(out_dq, out_dk, out_dv, out_db, out_dg,
                          std::nullopt, out_d_a_log, out_d_dt_bias);
 }

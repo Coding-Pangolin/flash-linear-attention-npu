@@ -26,6 +26,7 @@ using fla_npu_thin::stable::enum_name;
 using fla_npu_thin::stable::meta_of;
 using fla_npu_thin::stable::meta_of_handle;
 using fla_npu_thin::stable::meta_optional_handle;
+using fla_npu_thin::stable::kAclFormatNd;
 
 using fla_npu_thin::stable::aclOpExecutor;
 using fla_npu_thin::stable::aclTensor;
@@ -95,19 +96,19 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
     state_handle = state_holder.get();
   }
 
-  AclTensorView v_q(meta_of_handle(q));
-  AclTensorView v_k(meta_of_handle(k));
-  AclTensorView v_v(v_meta);
-  AclTensorView v_g(meta_of_handle(g));
-  AclTensorView v_beta(meta_of_handle(beta));
-  AclTensorView v_state(meta_of_handle(state_handle));
-  AclTensorView v_cu(meta_optional_handle(cu_seqlens));
-  AclTensorView v_idx(meta_optional_handle(ssm_state_indices));
-  AclTensorView v_alog(meta_optional_handle(A_log));
-  AclTensorView v_dtb(meta_optional_handle(dt_bias));
-  AclTensorView v_accepted(meta_optional_handle(num_accepted_tokens));
-  AclTensorView v_out(meta_of(*out));
-  AclTensorView v_final(meta_of_handle(state_handle));
+  AclTensorView v_q(meta_of_handle(q), kAclFormatNd);
+  AclTensorView v_k(meta_of_handle(k), kAclFormatNd);
+  AclTensorView v_v(v_meta, kAclFormatNd);
+  AclTensorView v_g(meta_of_handle(g), kAclFormatNd);
+  AclTensorView v_beta(meta_of_handle(beta), kAclFormatNd);
+  AclTensorView v_state(meta_of_handle(state_handle), kAclFormatNd);
+  AclTensorView v_cu(meta_optional_handle(cu_seqlens), kAclFormatNd);
+  AclTensorView v_idx(meta_optional_handle(ssm_state_indices), kAclFormatNd);
+  AclTensorView v_alog(meta_optional_handle(A_log), kAclFormatNd);
+  AclTensorView v_dtb(meta_optional_handle(dt_bias), kAclFormatNd);
+  AclTensorView v_accepted(meta_optional_handle(num_accepted_tokens), kAclFormatNd);
+  AclTensorView v_out(meta_of(*out), kAclFormatNd);
+  AclTensorView v_final(meta_of_handle(state_handle), kAclFormatNd);
 
   uint64_t workspace_size = 0;
   aclOpExecutor* executor = nullptr;

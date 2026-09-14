@@ -31,6 +31,12 @@ using fla_npu_thin::stable::allocate_sizes;
 using fla_npu_thin::stable::int_array;
 using fla_npu_thin::stable::int_values;
 using fla_npu_thin::stable::meta_of;
+using fla_npu_thin::stable::logical_optional_tensor;
+using fla_npu_thin::stable::logical_out_tensor;
+using fla_npu_thin::stable::logical_tensor;
+using fla_npu_thin::stable::nd_optional_tensor;
+using fla_npu_thin::stable::nd_out_tensor;
+using fla_npu_thin::stable::nd_tensor;
 using fla_npu_thin::stable::optional_tensor;
 using fla_npu_thin::stable::out_tensor;
 using fla_npu_thin::stable::scalar;
@@ -143,14 +149,20 @@ std::tuple<Tensor, Tensor, std::optional<Tensor>> run_npu_chunk_fwd_h(
                                          output_final_state, state_v_first,
                                          initial_state);
 
-  FLA_STABLE_EXEC("aclnnChunkFwdH", k_meta, stream, tensor(k_meta),
-                  tensor(meta_of(w)), tensor(u_meta), optional_tensor(g),
-                  optional_tensor(gk), optional_tensor(initial_state),
+  // ND descriptors: `npu_chunk_fwd_h`'s reference passes
+  // `storage_shape_override=_shape(tensor)` together with an ND format, while
+  // the GDN spelling below keeps the rank-inferred format like its own
+  // reference does.
+  FLA_STABLE_EXEC("aclnnChunkFwdH", k_meta, stream, nd_tensor(k_meta),
+                  nd_tensor(meta_of(w)), nd_tensor(u_meta), nd_optional_tensor(g),
+                  nd_optional_tensor(gk),
+                  nd_optional_tensor(initial_state),
                   scalar(output_final_state), scalar(chunk_size),
                   scalar(save_new_value), int_array(cu), int_array(ci),
                   scalar(use_exp2), scalar(state_v_first),
-                  out_tensor(meta_of(out.h)), out_tensor(meta_of(out.v_new)),
-                  out_tensor(meta_or_undefined(out.final_state)));
+                  nd_out_tensor(meta_of(out.h)),
+                  nd_out_tensor(meta_of(out.v_new)),
+                  nd_out_tensor(meta_or_undefined(out.final_state)));
   return std::make_tuple(out.h, out.v_new, out.final_state);
 }
 
@@ -238,15 +250,18 @@ run_npu_chunk_gated_delta_rule_bwd_dhu(
   Tensor out_dv = allocate_like(dv_meta);
 
   FLA_STABLE_EXEC("aclnnChunkGatedDeltaRuleBwdDhu", q_meta, stream,
-                  tensor(q_meta), tensor(meta_of(k)), tensor(meta_of(w)),
-                  tensor(meta_of(d_o)), tensor(dv_meta), optional_tensor(g),
-                  optional_tensor(gK), optional_tensor(h0), optional_tensor(dht),
-                  int_array(cu), int_array(ci), scalar(scale),
-                  scalar(chunk_size), scalar(use_exp2),
+                  // Logical storage shape, format left to the tensor -- this
+                  // operator's reference spells it `logical_tensor`.
+                  logical_tensor(q_meta), logical_tensor(meta_of(k)),
+                  logical_tensor(meta_of(w)), logical_tensor(meta_of(d_o)),
+                  logical_tensor(dv_meta), logical_optional_tensor(g),
+                  logical_optional_tensor(gK), logical_optional_tensor(h0),
+                  logical_optional_tensor(dht), int_array(cu), int_array(ci),
+                  scalar(scale), scalar(chunk_size), scalar(use_exp2),
                   scalar(transpose_state_layout),
-                  out_tensor(meta_of(out_dh)),
-                  out_tensor(meta_or_undefined(out_dh0)),
-                  out_tensor(meta_of(out_dv)));
+                  logical_out_tensor(meta_of(out_dh)),
+                  logical_out_tensor(meta_or_undefined(out_dh0)),
+                  logical_out_tensor(meta_of(out_dv)));
   return std::make_tuple(out_dh, out_dh0, out_dv);
 }
 

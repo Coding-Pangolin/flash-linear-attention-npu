@@ -1,7 +1,7 @@
 // Stable-ABI adapter: npu_recurrent_gated_delta_rule.
 //
 // Included by stable_ops.cpp (single TU).  Only torch/csrc/stable/* plus the
-// shared acl_meta helper: no ATen/c10, no pybind11.
+// shared acl_meta helper: no ATen/c10, no libtorch C++ ABI.
 #include <torch/csrc/stable/library.h>
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
 #include <torch/csrc/stable/accelerator.h>

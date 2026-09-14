@@ -115,24 +115,18 @@ def main():
     print("PASS T2 kda mutation contract (inplace +1, non-inplace +0)")
 
     # --- T5 host A/B ---------------------------------------------------------
-    from fla_npu.ops.ascendc import _thin as pybind
-
     state_ct = make_state()
-    state_pb = make_state()
     state_st = make_state()
     with torch.no_grad():
         a = bench(lambda: ct.npu_recurrent_kda(q, k, v, g, beta, state_ct,
                                                output_final_state=True, **kw))
-        b = bench(lambda: pybind.npu_recurrent_kda(
-            q, k, v, g, beta, state_pb, output_final_state=True, **kw))
         c = bench(lambda: call_stable(q, k, v, g, beta, state_st, kw))
         d = bench(lambda: state_op(q, k, v, g, beta, state_st,
                                    output_final_state=True, **kw))
     print("T5 host P50 (ms):")
     print(f"  1 ctypes                     {a:.4f}")
-    print(f"  2 pybind                {b:.4f}")
-    print(f"  3 stable                     {c:.4f}")
-    print(f"  4 stable + mutation contract {d:.4f}")
+    print(f"  2 stable                     {c:.4f}")
+    print(f"  3 stable + mutation contract {d:.4f}")
     print("ALL PASS: stable-abi kda")
 
 

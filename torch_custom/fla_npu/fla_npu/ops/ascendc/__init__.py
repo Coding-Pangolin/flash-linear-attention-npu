@@ -209,8 +209,6 @@ def _prepare_direct_runtime(*, raise_on_error: bool = True) -> None:
     if _DIRECT_RUNTIME_READY:
         return
 
-    _check_build_compat()
-
     try:
         import fla_npu
 
@@ -226,45 +224,6 @@ def _prepare_direct_runtime(*, raise_on_error: bool = True) -> None:
     else:
         _DIRECT_RUNTIME_ERROR = None
         _DIRECT_RUNTIME_READY = True
-
-
-def _check_build_compat() -> None:
-    """Refuse to run a compiled launcher next to a different torch build.
-
-    ``_C_thin`` is a C++ extension linked against one libtorch; a torch upgrade
-    or a different torch_npu packaging changes the C++ ABI underneath it.  The
-    failure mode without this check is an undefined symbol at import, or (worse)
-    a silently mismatched call.  The stable-ABI launcher (``libfla_npu_stable.so``)
-    does not need this check: it only touches ``aoti_torch_*`` symbols.
-    """
-
-    if os.environ.get("FLA_NPU_SKIP_ABI_CHECK"):
-        return
-    try:
-        from fla_npu import _build_info as build_info
-    except Exception:
-        return  # pure-Python install (no compiled launcher): nothing to verify
-    if not getattr(build_info, "THIN_BUILT", False):
-        return
-
-    import torch
-
-    expected = getattr(build_info, "TORCH_VERSION", None)
-    actual = torch.__version__
-    if expected and actual != expected:
-        raise RuntimeError(
-            f"fla_npu._C_thin was built against torch {expected} but torch "
-            f"{actual} is imported. The compiled stable launcher is ABI-matched "
-            "to its build torch; install a matching fla_npu wheel, or set "
-            "FLA_NPU_SKIP_ABI_CHECK=1 to bypass this check.")
-    expected_git = getattr(build_info, "TORCH_GIT_VERSION", None)
-    actual_git = getattr(torch.version, "git_version", None)
-    if expected_git and actual_git and expected_git != actual_git:
-        raise RuntimeError(
-            f"fla_npu._C_thin was built against torch git {expected_git} but "
-            f"torch {actual} reports git {actual_git}: same version string, "
-            "different build. Install a matching fla_npu wheel, or set "
-            "FLA_NPU_SKIP_ABI_CHECK=1 to bypass this check.")
 
 
 def _torch_npu_namespace():
@@ -302,16 +261,6 @@ def _get_direct_op(name: str):
     if stable_op is not None:
         _note_backend(name, "stable")
         return _wrap_mutable_direct_op(name, stable_op)
-    # The pybind launcher is *not* part of the default chain: it is the only
-    # backend that pins the CPython ABI and the libtorch C++ ABI, so falling
-    # back to it silently would hand a caller a different dependency footprint
-    # than the one they installed.  It stays reachable for A/B work with
-    # FLA_NPU_STABLE_ABI=pybind (see _get_thin_op).
-    if _pybind_requested():
-        thin_op = _get_thin_op(name)
-        if thin_op is not None:
-            _note_backend(name, "pybind")
-            return _wrap_mutable_direct_op(name, thin_op)
     try:
         op = ASCENDC_CTYPES_OPS[name]
     except KeyError as exc:
@@ -374,29 +323,21 @@ def _validate_requested() -> bool:
     return value is not None and value.upper() in {"1", "TRUE", "YES", "ON"}
 
 
-def _pybind_requested() -> bool:
-    """Whether the pybind launcher was asked for explicitly."""
-
-    return _abi_mode() == "pybind"
-
-
 def _stable_backend_selected() -> bool:
     """Whether the ABI-free backend should be tried first.
 
     Default order is stable -> ctypes: the stable launcher carries neither the
     CPython ABI nor the libtorch C++ ABI, so it is the only backend that keeps a
-    wheel usable across Python and torch versions.  ``FLA_NPU_STABLE_ABI=pybind``
-    switches to the compiled ``_C_thin`` (A/B comparisons), and ``=ctypes``
+    wheel usable across Python and torch versions.  ``FLA_NPU_STABLE_ABI=ctypes``
     forces the reference path.
     """
 
-    # `ctypes` has to mean ctypes: the mode used to be honoured only for the
-    # pybind launcher, so FLA_NPU_STABLE_ABI=ctypes still picked the stable
-    # backend and the documented "force the reference path" escape hatch did
-    # nothing.
+    # `ctypes` has to mean ctypes: the flag used to be ignored for the shipped
+    # backend, so FLA_NPU_STABLE_ABI=ctypes still picked stable and the
+    # documented "force the reference path" escape hatch did nothing.
     if _validate_requested():
         return False
-    return _abi_mode() not in ("pybind", "ctypes")
+    return _abi_mode() != "ctypes"
 
 
 def _get_stable_op(name: str):
@@ -404,8 +345,7 @@ def _get_stable_op(name: str):
 
     ``FLA_NPU_STABLE_ABI`` selects the backend: unset / ``stable`` uses
     ``libfla_npu_stable.so`` via torch.ops (falling back to ctypes for anything it
-    does not carry), ``pybind`` uses ``_C_thin``, and ``ctypes`` forces the
-    Python reference path.
+    does not carry), and ``ctypes`` forces the Python reference path.
     """
 
     if not _stable_backend_selected():
@@ -417,28 +357,6 @@ def _get_stable_op(name: str):
     if not _stable.available():
         return None
     return getattr(_stable, name, None)
-
-
-def _get_thin_op(name: str):
-    """Return the pybind launcher entry for *name*, else None."""
-
-    if _abi_mode() == "ctypes":
-        return None
-    flag = os.environ.get("FLA_NPU_THIN_LAUNCHER")
-    if flag is not None and flag.upper() in {"0", "FALSE", "NO", "OFF"}:
-        return None
-    canonical = name if name.startswith("npu_") else f"npu_{name}"
-    try:
-        from . import _thin
-
-        # _thin.py imports the compiled extension lazily, so its mere presence
-        # does not mean the pybind backend exists.  Probe the extension here,
-        # otherwise a wheel built without _C_thin would pick the pybind wrapper
-        # and fail at call time instead of falling back to ctypes.
-        _thin._extension()
-    except Exception:
-        return None
-    return getattr(_thin, canonical, None)
 
 
 def _wrap_mutable_direct_op(name: str, op: Callable) -> Callable:

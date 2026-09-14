@@ -106,8 +106,7 @@ def main() -> int:
         # One TU by construction: the stable headers may not be included twice
         # (non-inline definitions in tensor_inl.h -> duplicate symbols).
         str(CSRC_STABLE / "stable_ops.cpp"),
-        # The runtime (dlopen + symbol cache) ships with the launcher now; the
-        # pybind build includes the same header from csrc_stable/include.
+        # The runtime (dlopen + symbol cache) ships with the launcher.
         str(CSRC_STABLE / "runtime.cpp"),
         "-L", torch_lib,
         "-Wl,--no-as-needed", "-ltorch_cpu", "-lc10", "-ltorch",

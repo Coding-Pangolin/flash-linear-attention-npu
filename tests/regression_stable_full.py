@@ -1,5 +1,5 @@
 """全量算子 stable parity：复用 regression_ops 的每个场景，但把
-`_launcher`（默认 pybind）整体改道到 stable 后端，逐个与 ctypes 参考对比。
+`_launcher` 整体改道到 stable 后端，逐个与 ctypes 参考对比。
 
 用法（221/241，wheel 已装入环境）：
     FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \

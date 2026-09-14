@@ -603,20 +603,6 @@ def _stage_offline_bundle(build_lib: Path) -> None:
     print(f"[fla-npu build] Offline third-party bundle staged at {third_party_dst}", flush=True)
 
 
-def _thin_build_enabled() -> bool:
-    """Whether to compile the pybind launcher (``_C_thin``).
-
-    Off by default.  ``_C_thin`` is the only piece that pins the CPython ABI and
-    the libtorch C++ ABI, so it is now an opt-in A/B build
-    (``FLA_NPU_BUILD_THIN=1``); the default wheel carries the Stable-ABI
-    ``libfla_npu_stable.so`` instead, which is plain package data and keeps the
-    wheel ``py3-none-any``.
-    """
-
-    value = os.getenv("FLA_NPU_BUILD_THIN", "FALSE")
-    return value.upper() in {"1", "TRUE", "YES", "ON"}
-
-
 def _stable_build_enabled() -> bool:
     """Whether to build the ABI-free Stable-ABI launcher.
 
@@ -628,35 +614,11 @@ def _stable_build_enabled() -> bool:
     return value.upper() not in {"0", "FALSE", "NO", "OFF"}
 
 
-def _build_thin_inplace():
-    """Compile the stable launcher into the source package before wheel staging.
-
-    Mirrors the legacy extension flow: torch.utils.cpp_extension builds the
-    .so in-place inside torch_custom/fla_npu/fla_npu, then FlaNpuBuildPy copies
-    it into the wheel's build_lib. Avoids PEP 517 absolute-source validation.
-    """
-
-    if not _thin_build_enabled():
-        return
-    for so_file in FLA_NPU_PACKAGE_DIR.glob("_C_thin*.so"):
-        so_file.unlink()
-    _run(
-        [sys.executable, "setup.py", "build_ext", "--force", "--inplace"],
-        TORCH_EXTENSION_DIR,
-    )
-    so_files = sorted(FLA_NPU_PACKAGE_DIR.glob("_C_thin*.so"))
-    if not so_files:
-        raise RuntimeError(
-            "_C_thin*.so was not produced under " f"{FLA_NPU_PACKAGE_DIR}"
-        )
-
-
 def _build_stable_inplace():
     """Compile libfla_npu_stable.so into the source package before staging.
 
-    Same in-place flow as the pybind launcher, but the artifact is a plain
-    shared library (no CPython module init), so it ships as package data and the
-    wheel stays ``py3-none-any``.
+    The artifact is a plain shared library (no CPython module init), so it ships
+    as package data and the wheel stays ``py3-none-any``.
     """
 
     if not _stable_build_enabled():
@@ -676,7 +638,10 @@ def _build_stable_inplace():
         raise RuntimeError(f"libfla_npu_stable.so was not produced under {FLA_NPU_PACKAGE_DIR}")
 
 
-_THIN_BUILD_ENABLED = _thin_build_enabled()
+# Nothing in the default build pins the CPython or the libtorch C++ ABI: the
+# launcher ships as an ordinary data file.  Only the legacy torch extension
+# puts a compiled module in the wheel.
+_LEGACY_BUILD_ENABLED = _env_flag("FLA_NPU_BUILD_LEGACY_EXTENSION")
 _STABLE_BUILD_ENABLED = _stable_build_enabled()
 
 
@@ -687,7 +652,6 @@ class FlaNpuBuildPy(_build_py):
             _check_build_environment()
             _RUN_PACKAGE = _build_run_package()
             _build_torch_extension_inplace()
-            _build_thin_inplace()
             _build_stable_inplace()
             _EXTERNAL_BUILD_DONE = True
 
@@ -703,11 +667,6 @@ class FlaNpuBuildPy(_build_py):
             src = opp_env_src / name
             if src.exists():
                 shutil.copyfile(str(src), str(Path(self.build_lib) / name))
-        for so_file in FLA_NPU_PACKAGE_DIR.glob("_C_thin*.so"):
-            shutil.copy2(
-                str(so_file),
-                str(Path(self.build_lib) / "fla_npu" / so_file.name),
-            )
         stable_so = FLA_NPU_PACKAGE_DIR / "libfla_npu_stable.so"
         if _STABLE_BUILD_ENABLED and stable_so.exists():
             shutil.copy2(
@@ -717,11 +676,13 @@ class FlaNpuBuildPy(_build_py):
 
 
 class BinaryDistribution(Distribution):
+    """The wheel pins an ABI only when the legacy torch extension is built."""
+
     def is_pure(self):
-        return not _THIN_BUILD_ENABLED
+        return not _LEGACY_BUILD_ENABLED
 
     def has_ext_modules(self):
-        return _THIN_BUILD_ENABLED
+        return _LEGACY_BUILD_ENABLED
 
 
 CMDCLASS = {"build_py": FlaNpuBuildPy}
@@ -731,7 +692,7 @@ if _bdist_wheel is not None:
     class FlaNpuBdistWheel(_bdist_wheel):
         def finalize_options(self):
             super().finalize_options()
-            self.root_is_pure = not _THIN_BUILD_ENABLED
+            self.root_is_pure = not _LEGACY_BUILD_ENABLED
             build_tag = get_wheel_build_tag(REPO_ROOT)
             if build_tag:
                 self.build_number = build_tag

@@ -34,7 +34,7 @@ constexpr int32_t kAclFormatNcl = 47;
 // ctypes reference does when torch_npu does not report one.
 constexpr int32_t kAclFormatAuto = -1;
 
-// torch ScalarType -> ACL data type (mirrors csrc_thin/src/tensor_desc.cpp).
+// torch ScalarType -> ACL data type (same mapping the ctypes reference uses).
 inline int32_t acl_dtype(int32_t scalar_type) {
   switch (scalar_type) {
     case 6:
@@ -186,8 +186,8 @@ inline TensorMeta meta_optional_handle(std::optional<AtenTensorHandle> handle) {
 }
 
 // RAII wrapper around aclCreateTensor / aclDestroyTensor.  Same semantics as the
-// ctypes and pybind paths: contiguous tensors describe storage with the logical
-// shape, non-contiguous ones fall back to a flat storage extent.
+// ctypes path: contiguous tensors describe storage with the logical shape,
+// non-contiguous ones fall back to a flat storage extent.
 // The aclnn tiling reads the descriptor's format, so it has to be the one the
 // reference would pass.  Measured on Ascend950: `torch_npu.get_npu_format`
 // reports NCHW for a 4-D tensor, and handing aclnnChunkGatedDeltaRuleFwd an ND

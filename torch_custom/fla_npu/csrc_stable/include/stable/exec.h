@@ -1,5 +1,4 @@
-// Stable-ABI launch helper: the ABI-free equivalent of the pybind launcher's
-// EXEC_NPU_CMD.
+// Stable-ABI launch helper: the ABI-free counterpart of vLLM's EXEC_NPU_CMD.
 //
 // Every adapter is the same three steps -- build an acl descriptor per argument,
 // ask the operator for its workspace size, launch it on the caller's stream --
@@ -14,8 +13,7 @@
 //   * The GetWorkspaceSize pointer has an operator-specific signature, so it is
 //     reinterpret_cast to the type derived from the tuple's holder types.  A
 //     `const aclTensor*` parameter is spelled `aclTensor*` here; the pointer
-//     representation is identical, which is what makes the cast safe (the
-//     pybind launcher relies on the same equivalence).
+//     representation is identical, which is what makes the cast safe.
 //
 // `FLA_STABLE_EXEC` must be called with arguments in exactly the order the
 // aclnn entry point declares them; tools/op_abi_parity.py checks that order

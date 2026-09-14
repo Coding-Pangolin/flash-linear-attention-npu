@@ -1,8 +1,8 @@
 // Stable-ABI launcher: npu_recurrent_kda (two outputs, optional inputs).
 //
 // Only torch/csrc/stable/* plus the shared acl_meta helper: no ATen/c10, no
-// pybind11.  `layout` is an int code because the stable value conversions have
-// no std::string support (0 = BSND, 1 = TND); the Python side maps it.
+// libtorch C++ ABI.  `layout` is an int code because the stable value
+// conversions have no std::string support (0 = BSND, 1 = TND); Python maps it.
 #include <torch/csrc/stable/library.h>
 #include <torch/csrc/stable/stableivalue_conversions.h>
 #include <torch/csrc/stable/tensor.h>

@@ -3,6 +3,8 @@
 > 分支：`feat/stable-abi-macro`
 > 逐轮实测与排查过程见 [stable-abi-migration.md](./stable-abi-migration.md)
 > 本文是**执行版**：一个算子要改哪里、什么算达标、场景怎么记录、还差什么。
+> 状态补充：pybind 层（`csrc_thin/`、`_thin.py`、`_C_thin`）与 `FLA_NPU_BUILD_THIN`、
+> `FLA_NPU_CONV1D_ABI` 两个开关已从树上删除；T7 服务级验证尚未执行（见 R20）。
 
 ## 0. 与上一版方案的差异（2026-09-11 实测后刷新）
 

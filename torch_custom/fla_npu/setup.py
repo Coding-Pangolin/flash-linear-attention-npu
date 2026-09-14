@@ -9,12 +9,10 @@
 # -----------------------------------------------------------------------------------------------------------
 
 import os
-import re
 import shutil
 import subprocess
 import sys
 import sysconfig
-import json
 from pathlib import Path
 
 from setuptools import find_packages, setup
@@ -86,13 +84,6 @@ def _package_dir():
 
 def _setup_pure_python():
     stable_abi_data = _build_stable_abi_library()
-    # A stale copy of the pybind extension from an earlier in-place build must
-    # not be packaged as data: the wheel would then be tagged py3-none-any while
-    # actually holding a cpXXX .so.
-    stale = SETUP_DIR / "fla_npu"
-    for pattern in ("_C_thin*.so", "_C_thin*.pyd", "_C_thin*.dylib"):
-        for path in stale.glob(pattern):
-            path.unlink()
     setup(
         name=PACKAGE_NAME,
         version=_package_version(),
@@ -100,7 +91,6 @@ def _setup_pure_python():
         packages=_packages(),
         package_dir=_package_dir(),
         package_data={"fla_npu": OPP_PACKAGE_DATA + stable_abi_data},
-        exclude_package_data={"fla_npu": ["_C_thin*.so", "_C_thin*.pyd"]},
         include_package_data=True,
         zip_safe=False,
         cmdclass={"build_py": CleanBuildPy},
@@ -129,136 +119,6 @@ def _build_stable_abi_library() -> list[str]:
         check=True,
     )
     return ["libfla_npu_stable.so"]
-
-
-def _setup_thin_extension():
-    """Build the optional C++ stable launcher (fla_npu._C_thin).
-
-    Enable with FLA_NPU_BUILD_THIN=1. Only torch/CANN runtime symbols are used;
-    no torch_npu headers or libraries are required at build time.
-    """
-    from torch.utils.cpp_extension import BuildExtension, CppExtension
-
-    _run_thin_spec_codegen()
-    _write_build_info()
-    csrc_thin = SETUP_DIR / "csrc_thin"
-    # The acl runtime (dlopen + symbol cache) lives with the Stable-ABI
-    # launcher because that is the one that ships; the pybind build compiles the
-    # same file and includes the same header from there until it is removed.
-    sources = sorted(str(p) for p in (csrc_thin / "src").glob("*.cpp"))
-    sources.append(str(SETUP_DIR / "csrc_stable" / "src" / "runtime.cpp"))
-    include_dirs = [str(csrc_thin / "include"),
-                    str(SETUP_DIR / "csrc_stable" / "include")]
-    ext = CppExtension(
-        name="fla_npu._C_thin",
-        sources=sources,
-        include_dirs=include_dirs,
-        extra_compile_args=["-std=c++17"],
-    )
-    setup(
-        name=PACKAGE_NAME,
-        version=_package_version(),
-        description="FLA NPU Python runtime with optional C++ stable launcher",
-        packages=_packages(),
-        package_dir=_package_dir(),
-        ext_modules=[ext],
-        cmdclass={"build_ext": BuildExtension, "build_py": CleanBuildPy},
-        package_data={"fla_npu": OPP_PACKAGE_DATA},
-        include_package_data=True,
-        install_requires=_runtime_requirements(),
-        zip_safe=False,
-    )
-
-
-def _runtime_requirements() -> list[str]:
-    """Pin the torch/torch_npu pair the shipped extension was compiled against.
-
-    The wheel carries a compiled ``_C_thin`` (and, later, ``libfla_npu_stable.so``)
-    that is ABI-matched to one torch build.  Without these pins pip happily
-    installs it next to a different torch, and the failure shows up as a segfault
-    or an undefined symbol at import instead of a resolution error.
-    """
-
-    pins: list[str] = []
-    try:
-        import torch
-
-        pins.append(f"torch=={torch.__version__}")
-    except Exception:
-        pass
-    try:
-        import torch_npu
-
-        pins.append(f"torch_npu=={torch_npu.__version__}")
-    except Exception:
-        pass
-    return pins
-
-
-def _write_build_info() -> None:
-    """Record the build-time versions for the runtime compatibility check."""
-
-    import torch
-
-    torch_npu_version = None
-    try:
-        import torch_npu
-
-        torch_npu_version = torch_npu.__version__
-    except Exception:
-        pass
-    cxx11_abi = None
-    try:
-        cxx11_abi = bool(torch._C._GLIBCXX_USE_CXX11_ABI)
-    except Exception:
-        pass
-    target = SETUP_DIR / "fla_npu" / "_build_info.py"
-    target.write_text(
-        '"""Generated at build time -- do not edit."""\n'
-        "THIN_BUILT = True\n"
-        f"TORCH_VERSION = {torch.__version__!r}\n"
-        f"TORCH_GIT_VERSION = {torch.version.git_version!r}\n"
-        f"TORCH_NPU_VERSION = {torch_npu_version!r}\n"
-        f"TORCH_CXX11_ABI = {cxx11_abi!r}\n",
-        encoding="utf-8",
-    )
-
-
-def _run_thin_spec_codegen():
-    """Auto-generate stable adapters from op_specs/*.json (JSON-only workflow).
-
-    For every spec whose op is not registered yet, invoke op_codegen_apply.py so
-    a new operator only needs its spec JSON before the one-click build.
-    """
-
-    if not _thin_build_enabled():
-        return
-    spec_dir = SETUP_DIR / "op_specs"
-    tools_dir = SETUP_DIR / "tools"
-    pybind_path = SETUP_DIR / "csrc_thin" / "src" / "pybind.cpp"
-    if not spec_dir.is_dir() or not pybind_path.exists():
-        return
-    fn_def_re = re.compile(
-        r"(?m)^(?:at::Tensor|std::vector<at::Tensor>)\s+(\w+)\s*\(")
-    pybind_text = pybind_path.read_text(encoding="utf-8")
-    for spec_path in sorted(spec_dir.glob("*.json")):
-        try:
-            spec = json.loads(spec_path.read_text(encoding="utf-8"))
-            name = spec["python_name"]
-        except Exception:
-            continue
-        if not spec.get("enabled", True):
-            continue
-        if any(m.group(1) == name for m in fn_def_re.finditer(pybind_text)):
-            continue
-        codegen = tools_dir / "op_codegen_apply.py"
-        if not codegen.exists():
-            continue
-        subprocess.check_call(
-            [sys.executable, str(codegen), "--spec", str(spec_path)],
-            cwd=str(SETUP_DIR),
-        )
-        pybind_text = pybind_path.read_text(encoding="utf-8")
 
 
 def _setup_legacy_extension():
@@ -383,21 +243,7 @@ def _setup_legacy_extension():
     )
 
 
-def _thin_build_enabled() -> bool:
-    """Whether to compile the pybind launcher (``_C_thin``).
-
-    Off by default: ``_C_thin`` is the only piece that pins the CPython ABI and
-    the libtorch C++ ABI, so it is now an opt-in A/B build
-    (``FLA_NPU_BUILD_THIN=1``).  The default wheel is pure Python plus the
-    Stable-ABI ``libfla_npu_stable.so`` and therefore stays ``py3-none-any``.
-    """
-
-    return _env_flag("FLA_NPU_BUILD_THIN")
-
-
-if _thin_build_enabled():
-    _setup_thin_extension()
-elif _env_flag("FLA_NPU_BUILD_LEGACY_EXTENSION"):
+if _env_flag("FLA_NPU_BUILD_LEGACY_EXTENSION"):
     _setup_legacy_extension()
 else:
     _setup_pure_python()

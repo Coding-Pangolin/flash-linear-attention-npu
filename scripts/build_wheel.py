@@ -38,49 +38,19 @@ def _install_command(wheel_path: Path) -> str:
     )
 
 
-def _runtime_pins() -> list[str]:
-    """torch / torch_npu pins derived from the build environment."""
-
-    pins: list[str] = []
-    try:
-        import torch
-
-        pins.append(f"torch=={torch.__version__}")
-    except Exception:
-        pass
-    try:
-        import torch_npu
-
-        pins.append(f"torch_npu=={torch_npu.__version__}")
-    except Exception:
-        pass
-    return pins
-
-
 def _prepare_abi_free_launcher() -> None:
-    """Stage the ABI-free launcher and drop stale pybind leftovers.
+    """Stage the ABI-free launcher the wheel will carry.
 
     ``pip wheel`` builds in a temporary copy of the project, so preparing the
     package directory here (before the wheel is built) is what actually decides
-    what ships: without it a stale ``_C_thin*.so`` from an earlier in-place build
-    gets packaged as data and the wheel claims ``py3-none-any`` while holding a
-    cpXXX binary.
-
-    The default build is the ABI-free one: pure Python plus
-    ``libfla_npu_stable.so``, no CPython ABI, no libtorch C++ ABI.  The pybind
-    extension is opt-in (``FLA_NPU_BUILD_THIN=1``) for A/B comparisons, and a
-    pure-ctypes wheel is ``FLA_NPU_BUILD_STABLE_ABI=0``.
+    what ships: pure Python plus ``libfla_npu_stable.so``, with no CPython ABI
+    and no libtorch C++ ABI.  A pure-ctypes wheel is
+    ``FLA_NPU_BUILD_STABLE_ABI=0``.
     """
 
     package_dir = REPO_ROOT / "torch_custom" / "fla_npu" / "fla_npu"
     if not package_dir.is_dir():
         return
-    if os.getenv("FLA_NPU_BUILD_THIN", "FALSE").upper() not in {"1", "TRUE",
-                                                              "YES", "ON"}:
-        for pattern in ("_C_thin*.so", "_C_thin*.pyd"):
-            for stale in package_dir.glob(pattern):
-                stale.unlink()
-                print(f"[fla-npu build] dropped stale {stale.name}", flush=True)
     if os.getenv("FLA_NPU_BUILD_STABLE_ABI", "TRUE").upper() in {
             "0", "FALSE", "NO", "OFF"}:
         return
@@ -99,25 +69,17 @@ def _inject_runtime_pins(wheel_path: Path) -> None:
     pyproject.toml owns ``[project]`` metadata, so ``install_requires`` in
     setup.py is ignored; the pins have to be injected into the produced wheel.
 
-    Two different contracts, two spellings:
-
-    * the pybind wheel (``_C_thin``) is ABI-matched, so it pins the exact torch
-      and torch_npu it was built against -- installing it next to a different
-      one is a hard error, not a warning;
-    * the Stable-ABI wheel (``libfla_npu_stable.so``) only needs the ``aoti_torch_*``
-      runtime symbols, which exist from 2.7.1 on, so it declares a *lower bound*.
-      One wheel then serves every torch/torch_npu above it.
+    The Stable-ABI wheel (``libfla_npu_stable.so``) only needs the
+    ``aoti_torch_*`` runtime symbols, which exist from 2.7.1 on, so it declares a
+    *lower bound*: one wheel then serves every torch/torch_npu above it.
     """
 
     with zipfile.ZipFile(wheel_path) as archive:
         infos = archive.infolist()
         blobs = {info.filename: archive.read(info.filename) for info in infos}
 
-    has_pybind = any(name.endswith(".so") and "_C_thin" in name for name in blobs)
     has_stable = any(name.endswith("libfla_npu_stable.so") for name in blobs)
-    if has_pybind:
-        pins = _runtime_pins()
-    elif has_stable:
+    if has_stable:
         pins = [f"torch>={STABLE_ABI_MIN_TORCH}",
                 f"torch_npu>={STABLE_ABI_MIN_TORCH}"]
     else:

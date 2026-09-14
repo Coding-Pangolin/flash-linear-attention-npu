@@ -2,8 +2,8 @@
 
 Loads ``libfla_npu_stable.so`` (a plain shared object registered through
 ``STABLE_TORCH_LIBRARY``) and exposes the same Python call shape as the ctypes
-and pybind backends.  This module contains no ABI-sensitive code: the only
-tensor objects crossing the boundary are handled by torch's own dispatcher.
+reference.  This module contains no ABI-sensitive code: the only tensor objects
+crossing the boundary are handled by torch's own dispatcher.
 
 The mutation contract (version bump / requires_grad rejection) is *not*
 provided by the dispatcher for these ops -- measured in Phase 1 -- so the
@@ -70,7 +70,7 @@ def _lib_path() -> str:
 
 
 def _current_stream_ptr() -> int:
-    """Raw NPU stream of the calling thread (same guarded accessor as _thin)."""
+    """Raw NPU stream of the calling thread (no cached stream pointer)."""
 
     global _raw_stream_fn
     torch = _modules()[0]

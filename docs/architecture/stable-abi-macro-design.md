@@ -58,7 +58,7 @@
 | --- | --- | --- |
 | `tools/stable_coverage.py` | 每个公开 `npu_*` 都有 wrapper / schema / `run_` / 注册；C++ 枚举名表与 `_stable._ENUM` 一致 | 有算子没接上，或枚举顺序漂移 |
 | `tools/op_abi_parity.py` | schema 形参 vs 适配函数形参（名字与类型） | 位置型拆栈会静默错位 |
-| `tools/op_api_parity.py` | `_stable`/`_thin` 对 ctypes 的公开签名（参数名、顺序、默认值） | 调用方换后端会 TypeError |
+| `tools/op_api_parity.py` | `_stable` 对 ctypes 的公开签名（参数名、顺序、默认值） | 调用方换后端会 TypeError |
 | `tools/stable_ctypes_fallbacks.py` | 没有适配层回退到 ctypes | 回退会带上描述符森林的开销 |
 | `tools/op_abi_validate.py` | ctypes 参数表与每个 `FLA_STABLE_EXEC` 对 **OPP 头文件** | aclnn 形参变了（例如 `stateVFirst`）而调用点没跟 |
 | `tools/op_abi_validate.py`（同一次运行） | 调用点与 ctypes 表**互相对拍**（不需要 OPP） | 两条实现路径的参数顺序/类型漂移 |
@@ -90,4 +90,4 @@
 - **conv1d FN + `has_initial_state`**：初态序列的输出行在 kernel 里不可复现（同一 ctypes 调用两次结果差 260，第三次是 0），回归里按 kernel 级记录并只对 `has_initial_state=False` 的区间断言 parity。
 - **`int[]` 只能是 host int32/int64 tensor**：device tensor 会被 `int_values` 拒绝（否则按 host 指针读 device 内存）。
 - **`char*` 只能取表内取值**：非法字符串在 Python 侧报错、非法 code 在 C++ 侧报错，与 ctypes"把任意字符串交给 kernel"不同型。
-- **pybind 后端**（`_thin.py` + `_C_thin`）仍在树上，仅用于 A/B；删除前置条件是 launcher 通过真实 vLLM 服务验证（见 plan 的 R20）。
+- **pybind 后端已删除**（`csrc_thin/`、`_thin.py`、`_C_thin` 及其测试、打包开关）。原计划的删除前置条件是 launcher 通过真实 vLLM 服务验证（plan 的 R20）；本次按要求先跳过该验证直接移除，vLLM 服务级回归需在删除后补跑。

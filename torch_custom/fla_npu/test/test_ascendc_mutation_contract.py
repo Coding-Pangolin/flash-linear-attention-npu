@@ -104,15 +104,10 @@ def load_ascendc_module(raw_calls):
         "npu_recurrent_kda": npu_recurrent_kda,
         "npu_recurrent_gated_delta_rule": npu_recurrent_gated_delta_rule,
     }
-    # Hermetic stub: importing the real `_thin` module would pull in the built
-    # extension, so make `_get_thin_op` resolve to nothing and keep these tests
-    # focused on the mutation wrapper.
-    fake_thin = types.ModuleType("fla_npu.ops.ascendc._thin")
     modules = {
         "fla_npu": fake_fla_npu,
         "fla_npu.ops": fake_ops,
         "fla_npu.ops.ascendc._aclnn_ctypes": ctypes_module,
-        "fla_npu.ops.ascendc._thin": fake_thin,
     }
 
     spec = importlib.util.spec_from_file_location(

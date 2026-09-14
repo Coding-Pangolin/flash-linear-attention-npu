@@ -7,7 +7,7 @@ part of the published API.  A stable backend that changes any of those turns a
 working call into a ``TypeError`` -- and because the stable path is selected
 transparently by ``_get_direct_op``, the caller never asked for that change.
 
-This tool parses the three modules with :mod:`ast` (no import, so no torch and
+This tool parses the modules with :mod:`ast` (no import, so no torch and
 no NPU are needed) and reports, per operator:
 
 * parameters missing from the backend, or present only in the backend;
@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -36,22 +35,12 @@ OPS_DIR = SETUP_DIR / "fla_npu" / "ops" / "ascendc"
 REFERENCE = OPS_DIR / "_aclnn_ctypes.py"
 BACKENDS = {
     "stable": OPS_DIR / "_stable.py",
-    # Still selectable with FLA_NPU_STABLE_ABI=pybind, so its Python surface is
-    # part of the published API too -- a caller who switches backends must not
-    # discover that a keyword was renamed.
-    "pybind": OPS_DIR / "_thin.py",
 }
 
-# Drift that is known and accepted, keyed by (backend, operator, parameter).
-# The pybind launcher is the backend being retired: its wrapper predates the
-# `disable_recompute` fix in the reference, and it is deleted as soon as the
-# service-level validation of the launcher passes (see R20 in the migration
-# plan), so its surface is recorded rather than patched.
-KNOWN_DRIFT = {
-    ("pybind", "npu_chunk_gated_delta_rule_fwd", "disable_recompute"):
-        "the pybind launcher is being retired; its wrapper predates the "
-        "reference default flip to disable_recompute=True",
-}
+# Every signature is expected to match the reference exactly: a drift here
+# is a rename or a changed default that a caller switching backends never
+# asked for.
+
 
 def _defaults(node: ast.arguments) -> dict[str, str]:
     """Map every parameter with a default to its unparsed default text."""
@@ -167,13 +156,6 @@ def _compare(name: str, reference: dict, backend: dict) -> list[str]:
     return problems
 
 
-def _problem_parameter(problem: str) -> str:
-    """The parameter a drift message is about, for the KNOWN_DRIFT lookup."""
-
-    match = re.search(r"(?:on|parameter) '([A-Za-z0-9_]+)'", problem)
-    return match.group(1) if match else ""
-
-
 def evaluate() -> dict:
     reference = signatures(REFERENCE)
     backends = {label: signatures(path) for label, path in BACKENDS.items()}
@@ -188,9 +170,8 @@ def evaluate() -> dict:
                 rows.append({"op": name, "backend": label, "problems": []})
                 continue
             # Every backend that exposes the operator is compared, not just the
-            # one that happens to answer first: FLA_NPU_STABLE_ABI switches
-            # between them, so a caller must not hit a renamed keyword by
-            # changing a flag.
+            # one that happens to answer first, so a caller cannot change the
+            # backend flag and land on a renamed keyword.
             rows.append({
                 "op": name,
                 "backend": label,
@@ -209,17 +190,6 @@ def main() -> int:
 
     report = evaluate()
     rows = report["rows"]
-    recorded: list[tuple[dict, str, str]] = []
-    for row in rows:
-        remaining = []
-        for problem in row["problems"]:
-            key = (row["backend"], row["op"], _problem_parameter(problem))
-            reason = KNOWN_DRIFT.get(key)
-            if reason is None:
-                remaining.append(problem)
-            else:
-                recorded.append((row, problem, reason))
-        row["problems"] = remaining
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
@@ -233,12 +203,6 @@ def main() -> int:
             print(f"{row['op']}  [{row['backend']}]")
             for problem in row["problems"]:
                 print(f"    - {problem}")
-        if recorded:
-            print()
-            print("recorded drift (accepted, with a reason):")
-            for row, problem, reason in recorded:
-                print(f"  - {row['op']} [{row['backend']}]: {problem}")
-                print(f"      {reason}")
         if not drifted:
             print("SIGNATURES MATCH: every backend exposes the ctypes call shape")
     return 1 if any(row["problems"] for row in rows) else 0

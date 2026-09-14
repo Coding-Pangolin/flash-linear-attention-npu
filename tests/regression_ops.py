@@ -22,7 +22,7 @@ torch.npu.config.allow_internal_format = False
 torch.npu.set_compile_mode(jit_compile=False)
 
 from fla_npu.ops.ascendc import _aclnn_ctypes as ct  # noqa: E402
-from fla_npu.ops.ascendc import _thin as _launcher  # noqa: E402
+from fla_npu.ops.ascendc import _stable as _launcher  # noqa: E402
 
 
 # name -> max |diff| observed for that scenario (0.0 when it matched).  The
@@ -146,25 +146,6 @@ def print_groups(names: list[str]) -> None:
         present = [name for name in names if name in members]
         print(f"{group:<12} {len(present):>9}  {', '.join(present)}")
     print(f"{'total':<12} {len(names):>9}")
-
-
-# Set by the pybind driver (FLA_NPU_STABLE_ABI=pybind): the launcher being
-# superseded must not block the A/B run, so a case the reference accepts but
-# that backend cannot run is recorded as a gap instead of failing.  The
-# Stable-ABI driver leaves this None, so for the shipped backend the same
-# situation stays a hard failure.
-GAP_TOLERANT_BACKEND: str | None = None
-# The host benchmark uses the same scenarios with the roles swapped (pybind as
-# the baseline, stable as the candidate), so a case the *baseline* cannot run is
-# equally uncomparable and gets recorded rather than failing the run.
-BASELINE_GAP_TOLERANT = False
-# Which aclnnCausalConv1d ABI the OPP in this environment carries.  Upstream
-# #390 changed that ABI (metadata became device tensors, activation became a
-# string, nullBlockId/maxQueryLen were added), so the merged code speaks the new
-# one and calling the old kernel through it is ABI-undefined -- measured: the
-# process dies.  FLA_NPU_CONV1D_ABI=old makes those scenarios a recorded skip
-# instead of a crash.
-CONV1D_ABI = (os.environ.get("FLA_NPU_CONV1D_ABI") or "new").strip().lower()
 
 
 def pct(vals, q):
@@ -508,11 +489,11 @@ def _clone_args(kwargs):
 
 
 def _backend_carries(name: str) -> bool:
-    """Whether the selected stable backend exposes *name* at all.
+    """Whether the selected backend exposes *name* at all.
 
-    The pybind launcher covers 25 of the 26 operators (it predates
-    npu_causal_conv1d), so a run against it records a skip rather than failing
-    on an attribute that was never part of that backend.
+    The OPP in a given environment does not carry every kernel, so an
+    operator the backend cannot expose is recorded as a skip rather than
+    counted as covered.
     """
 
     return callable(getattr(_launcher, name, None))
@@ -577,24 +558,10 @@ def parity_or_domain_skip(name, call_ct, call_launcher):
                 SKIPPED[name] = f"both backends rejected the inputs: {status}"
             print(f"SKIP {name} ({SKIPPED[name]})")
             return
-        if BASELINE_GAP_TOLERANT:
-            SKIPPED[name] = ("the baseline backend rejects what the candidate "
-                             f"accepts: {_aclnn_status(exc)}")
-            print(f"SKIP {name} ({SKIPPED[name]})")
-            return
         raise AssertionError(
             f"{name}: ctypes rejected the inputs ({status}) but the stable "
             f"backend accepted them") from None
-    try:
-        launcher_result = call_launcher()
-    except (RuntimeError, ValueError) as exc:
-        if GAP_TOLERANT_BACKEND is None:
-            raise
-        status = _aclnn_status(exc)
-        SKIPPED[name] = (f"{GAP_TOLERANT_BACKEND} backend rejects what the "
-                         f"reference accepts: {status}")
-        print(f"SKIP {name} ({SKIPPED[name]})")
-        return
+    launcher_result = call_launcher()
     assert_parity(name, reference, launcher_result)
 
 
@@ -626,12 +593,6 @@ def _conv1d_parity(name, kwargs, mutated=("conv_states",), defined_rows=None,
     must come back untouched (same pad story, on ``conv_states``).
     """
 
-    if CONV1D_ABI != "new":
-        reason = ("the OPP in this environment carries the pre-#390 "
-                  "aclnnCausalConv1d ABI; the merged code speaks the new one")
-        SKIPPED[name] = reason
-        print(f"SKIP {name} ({reason})")
-        return
     if not _backend_carries("npu_causal_conv1d"):
         reason = "the selected backend does not carry npu_causal_conv1d"
         SKIPPED[name] = reason
@@ -798,17 +759,7 @@ def scenario_conv1d_new_apis():
     the same launch path with different marshalling above it.
     """
 
-    if CONV1D_ABI != "new":
-        reason = ("the OPP in this environment carries the pre-#390 "
-                  "aclnnCausalConv1d ABI; the merged code speaks the new one")
-        for name in ("causal_conv1d_fn(dense)", "causal_conv1d_fn(varlen)",
-                     "causal_conv1d_update(dense)"):
-            SKIPPED[name] = reason
-            print(f"SKIP {name} ({reason})")
-        return
     if not _backend_carries("npu_causal_conv1d_fn"):
-        # The pybind launcher predates these two entry points (it covers 25 of
-        # the 26 operators), so the A/B run records the gap instead of failing.
         reason = "the selected backend does not carry causal_conv1d_fn/_update"
         for name in ("causal_conv1d_fn(dense)", "causal_conv1d_fn(varlen)",
                      "causal_conv1d_update(dense)"):
@@ -1381,7 +1332,7 @@ def scenario_scaled_dot_kkt():
 
 def scenario_solve_tri_dense():
     # Dense bsnd/bnsd is native stable; varlen (tnd/ntd) intentionally
-    # delegates to ctypes inside the pybind wrapper, so only dense is covered.
+    # delegates to ctypes inside the wrapper, so only dense is covered.
     B, H, T = 2, 4, 128
     for dt, suffix in ((torch.float16, "fp16"), (torch.bfloat16, "bf16")):
         for bt in (16, 64, 128):
@@ -1643,26 +1594,16 @@ def main():
 
     if args.list_groups:
         # The listing needs no backend at all, so it answers even on a machine
-        # without the pybind build.
+        # that has no launcher built.
         print_groups([fn.__name__ for fn in _scenarios()])
         return
 
-    # This driver *is* the pybind comparison: it calls the compiled ``_C_thin``
-    # through _launcher.  The default wheel no longer ships that extension, so say
-    # so instead of dying inside an import -- regression_stable_full.py is the
-    # driver for the default wheel, and it reroutes the same scenarios.
-    try:
-        _launcher._extension()
-    except Exception as exc:
+    # This driver runs the shipped backend directly; regression_stable_full.py
+    # is the same run plus the checked-in baseline, so this is the quick form.
+    if not _launcher.available():
         raise SystemExit(
-            "regression_ops needs the pybind build (FLA_NPU_BUILD_THIN=1) "
-            "with FLA_NPU_STABLE_ABI=pybind; the default ABI-free wheel carries "
-            "no _C_thin. Run regression_stable_full.py for that one. "
-            f"Original error: {exc}")
-    # This driver always runs the pybind launcher, so a case it cannot run is a
-    # recorded gap rather than a failure (see GAP_TOLERANT_BACKEND).
-    global GAP_TOLERANT_BACKEND
-    GAP_TOLERANT_BACKEND = "pybind"
+            "no Stable-ABI launcher: set FLA_NPU_STABLE_LIB to a built "
+            "libfla_npu_stable.so, or install a wheel that bundles one")
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
     scenarios = _scenarios()

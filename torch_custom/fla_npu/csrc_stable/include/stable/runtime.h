@@ -1,9 +1,8 @@
-// Runtime symbol resolution shared by both launchers (no torch_npu headers).
+// Runtime symbol resolution for the launcher (no torch_npu headers).
 //
 // `dlopen`s the FLA custom `op_api` library and CANN's libopapi, and resolves
 // `aclnn*` entry points with a per-name cache.  It lives with the Stable-ABI
-// launcher because that is the one that ships; the pybind launcher includes it
-// from here too until it is removed.
+// launcher because that is the one that ships.
 #pragma once
 
 #include <cstdint>

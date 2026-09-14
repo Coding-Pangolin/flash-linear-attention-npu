@@ -188,7 +188,18 @@ def host_p50(fn, n=200):
     return pct(ts, 0.5)
 
 
-def assert_parity(name, oc, ot):
+def assert_parity(name, oc, ot, *, finite_only=False):
+    """Bit-exact comparison, recorded in SCENARIOS under *name*.
+
+    ``finite_only`` compares only the positions that are finite on *both*
+    sides.  That is for the operators that leave a tail-padding region
+    unwritten (both backends: the same kernel writes the same rows), where the
+    values read back there come from the allocator and are not part of the
+    contract.  The comparison is still recorded -- a case that only prints
+    "PASS" is invisible to the scenario-set check, which is how a dropped
+    case would otherwise slip through.
+    """
+
     if not isinstance(oc, tuple):
         oc = (oc,)
         ot = (ot,)
@@ -198,8 +209,31 @@ def assert_parity(name, oc, ot):
             assert a is None and b is None, f"{name}[{i}]: None mismatch"
             continue
         assert tuple(a.shape) == tuple(b.shape), f"{name}[{i}]: shape"
-        diff = float((a.float() - b.float()).abs().max().item())
+        left, right = a.float(), b.float()
+        if finite_only:
+            mask = torch.isfinite(left) & torch.isfinite(right)
+            if not mask.any():
+                continue
+            diff = float((left - right).abs()[mask].max().item())
+        else:
+            diff = float((left - right).abs().max().item())
         assert diff == 0.0, f"{name}[{i}]: diff={diff}"
+    SCENARIOS[name] = 0.0
+    print(f"PASS {name}")
+
+
+def record_extra(name, left, right):
+    """Record an *additional* comparison under *name*.
+
+    Some scenarios check more than the operator's outputs -- an in-place state
+    that must match, a pad slot that must come back untouched.  Printing "PASS"
+    for those leaves them outside the scenario set, so deleting the check would
+    not be noticed; going through here puts them in the baseline with the same
+    convention as `assert_parity`.
+    """
+
+    diff = float((left.float() - right.float()).abs().max().item())
+    assert diff == 0.0, f"{name}: diff={diff}"
     SCENARIOS[name] = 0.0
     print(f"PASS {name}")
 
@@ -262,8 +296,7 @@ def scenario_recurrent_gated_delta_rule():
                                                  **kw)
     torch.npu.synchronize()
     assert_parity("recurrent_gated_delta_rule", out_c, out_t)
-    assert float((state_c.float() - state_t.float()).abs().max().item()) == 0.0
-    print("PASS recurrent_gated_delta_rule(state)")
+    record_extra("recurrent_gated_delta_rule(state)", state_c, state_t)
 
 
 def scenario_recompute():
@@ -637,19 +670,15 @@ def _conv1d_parity(name, kwargs, mutated=("conv_states",), defined_rows=None,
             keep = [index for index in range(args_ct[flag].shape[0])
                     if index not in frozen_state_slots]
             left, right = args_ct[flag][keep], args_th[flag][keep]
-        diff = float((left.float() - right.float()).abs().max().item())
-        assert diff == 0.0, f"{name}: {flag} diff={diff}"
-        print(f"PASS {name}({flag})")
+        record_extra(f"{name}({flag})", left, right)
         if frozen_state_slots is not None:
             # Untouched is the contract for a pad slot, not merely "equal on
             # both paths": compare against the value handed in.
             original = kwargs[flag]
             frozen = [index for index in range(original.shape[0])
                       if index in frozen_state_slots]
-            drift = float((args_ct[flag][frozen].float()
-                           - original[frozen].float()).abs().max().item())
-            assert drift == 0.0, f"{name}: pad state slot changed by {drift}"
-            print(f"PASS {name}(pad state slots untouched)")
+            record_extra(f"{name}(pad state slots untouched)",
+                         args_ct[flag][frozen], original[frozen])
 
 
 def _seq(n, start):
@@ -1385,7 +1414,13 @@ def scenario_solve_tri_guards():
             backend(a, layout="tnd")
         except RuntimeError as exc:
             assert "tnd" in str(exc), f"{label}: unexpected message {exc}"
-            print(f"PASS solve_tri(tnd refused by {label})")
+            # A refusal is coverage too: recorded with its reason so the
+            # scenario set shrinks visibly if the guard is ever dropped.
+            SKIPPED[f"solve_tri(tnd refused by {label})"] = (
+                "layout='tnd' is refused because the operator crashes the "
+                "process for that spelling")
+            print(f"SKIP solve_tri(tnd refused by {label}) "
+                  f"({SKIPPED[f'solve_tri(tnd refused by {label})']})")
         else:
             raise AssertionError(f"{label} accepted the crashing tnd spelling")
 
@@ -1441,9 +1476,7 @@ def scenario_recurrent_kda():
     ot = _thin.npu_recurrent_kda(q, k, v, g, beta, st_t, **kw)
     torch.npu.synchronize()
     assert_parity("recurrent_kda(dense BSND)", oc, ot)
-    diff = float((st_c.float() - st_t.float()).abs().max().item())
-    assert diff == 0.0, f"recurrent_kda: state diff={diff}"
-    print("PASS recurrent_kda(state)")
+    record_extra("recurrent_kda(state)", st_c, st_t)
     # TND: the same operator in the varlen spelling (T is the token axis).
     T_tnd = T * B
     q_t = q.reshape(T_tnd, H, K)
@@ -1460,9 +1493,7 @@ def scenario_recurrent_kda():
     ot_t = _thin.npu_recurrent_kda(q_t, k_t, v_t, g_t, beta_t, st_tt, **kw_t)
     torch.npu.synchronize()
     assert_parity("recurrent_kda(dense TND)", oc_t, ot_t)
-    diff = float((st_ct.float() - st_tt.float()).abs().max().item())
-    assert diff == 0.0, f"recurrent_kda(TND): state diff={diff}"
-    print("PASS recurrent_kda(TND state)")
+    record_extra("recurrent_kda(TND state)", st_ct, st_tt)
 
 
 def scenario_chunk_gated_delta_rule_fwd():
@@ -1521,26 +1552,14 @@ def scenario_chunk_gated_delta_rule_fwd():
     kw = dict(chunk_size=cs, output_final_state=True, cu_seqlens=cu,
               chunk_indices=ci)
 
-    def _finite_parity(name, oc, ot):
-        # A's tail-padding rows are uninitialised on both paths; compare the
-        # finite region only (see thin-migration-inventory.md).
-        assert len(oc) == len(ot)
-        for i, (a, b) in enumerate(zip(oc, ot)):
-            if a is None or b is None:
-                assert a is None and b is None, f"{name}[{i}]: None mismatch"
-                continue
-            assert tuple(a.shape) == tuple(b.shape), f"{name}[{i}]: shape"
-            finite = torch.isfinite(a.float()) & torch.isfinite(b.float())
-            if finite.any():
-                diff = float(
-                    (a.float() - b.float()).abs()[finite].max().item())
-                assert diff == 0.0, f"{name}[{i}]: diff={diff}"
-        print(f"PASS {name}")
-
-    _finite_parity(
+    # A's tail-padding rows are uninitialised on both paths, so only the region
+    # defined on both sides is compared -- but the case is still recorded, so
+    # the baseline notices if it is ever dropped.
+    assert_parity(
         "chunk_gated_delta_rule_fwd(varlen_B1_T128_c64)",
         ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
-        _thin.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
+        _thin.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
+        finite_only=True)
 
     # The operator's other declared layouts.  Measured on A2: BSND is rejected
     # by the kernel (161002), and the rank-3 TND/NTD spellings are refused by the

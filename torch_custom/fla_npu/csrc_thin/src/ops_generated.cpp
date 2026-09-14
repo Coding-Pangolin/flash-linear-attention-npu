@@ -6,7 +6,7 @@
 #include <memory>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -113,7 +113,7 @@ at::Tensor npu_recurrent_gated_delta_rule(
 #include <memory>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -199,7 +199,7 @@ at::Tensor npu_kda_gate_cumsum(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -285,7 +285,7 @@ at::Tensor npu_chunk_local_cumsum(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -368,7 +368,7 @@ at::Tensor npu_chunk_scaled_dot_kkt(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -468,7 +468,7 @@ std::vector<at::Tensor> npu_recompute_w_u_fwd(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -584,7 +584,7 @@ std::vector<at::Tensor> npu_prepare_wy_repr_bwd_full(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -696,7 +696,7 @@ std::vector<at::Tensor> npu_prepare_wy_repr_bwd(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -794,7 +794,7 @@ at::Tensor npu_chunk_bwd_dv_local(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -893,7 +893,7 @@ at::Tensor npu_prepare_wy_repr_bwd_da(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -957,7 +957,7 @@ at::Tensor npu_fast_gelu_custom(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -1027,7 +1027,7 @@ at::Tensor npu_fast_gelu_custom_backward(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -1160,7 +1160,7 @@ std::vector<at::Tensor> npu_chunk_bwd_dqkwg(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -1289,7 +1289,7 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd_h(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -1424,7 +1424,7 @@ std::vector<at::Tensor> npu_chunk_fwd_h(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -1527,7 +1527,7 @@ at::Tensor npu_chunk_fwd_o(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -1660,7 +1660,7 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_bwd_dhu(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -1802,7 +1802,7 @@ std::vector<at::Tensor> npu_recurrent_kda(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -1910,7 +1910,7 @@ std::vector<at::Tensor> npu_causal_conv1d_bwd(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -2040,7 +2040,7 @@ std::vector<at::Tensor> npu_chunk_kda_bwd_intra(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -2234,7 +2234,7 @@ std::vector<at::Tensor> npu_chunk_kda_bwd(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -2443,7 +2443,7 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -2605,7 +2605,7 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_bwd_finalize(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -2680,7 +2680,7 @@ at::Tensor npu_solve_tri(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {
@@ -2963,7 +2963,7 @@ std::vector<at::Tensor> npu_chunk_kda_fwd(
 #include <string>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {

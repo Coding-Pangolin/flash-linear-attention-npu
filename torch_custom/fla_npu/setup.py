@@ -142,8 +142,13 @@ def _setup_thin_extension():
     _run_thin_spec_codegen()
     _write_build_info()
     csrc_thin = SETUP_DIR / "csrc_thin"
+    # The acl runtime (dlopen + symbol cache) lives with the Stable-ABI
+    # launcher because that is the one that ships; the pybind build compiles the
+    # same file and includes the same header from there until it is removed.
     sources = sorted(str(p) for p in (csrc_thin / "src").glob("*.cpp"))
-    include_dirs = [str(csrc_thin / "include")]
+    sources.append(str(SETUP_DIR / "csrc_stable" / "src" / "runtime.cpp"))
+    include_dirs = [str(csrc_thin / "include"),
+                    str(SETUP_DIR / "csrc_stable" / "include")]
     ext = CppExtension(
         name="fla_npu._C_thin",
         sources=sources,

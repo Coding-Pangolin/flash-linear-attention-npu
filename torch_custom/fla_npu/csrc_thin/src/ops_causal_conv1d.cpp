@@ -11,7 +11,7 @@
 #include <memory>
 #include <vector>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
 namespace fla_npu_thin {

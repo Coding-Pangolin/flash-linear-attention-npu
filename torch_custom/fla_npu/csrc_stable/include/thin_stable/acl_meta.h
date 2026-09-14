@@ -9,7 +9,7 @@
 #include <torch/csrc/stable/stableivalue_conversions.h>
 #include <torch/csrc/stable/tensor.h>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 
 #include <cstdint>
 #include <cstdio>

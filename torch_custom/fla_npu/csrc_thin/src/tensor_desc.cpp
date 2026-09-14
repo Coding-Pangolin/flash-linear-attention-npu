@@ -1,6 +1,6 @@
 #include "thin_launcher/tensor_desc.h"
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 
 #include <ATen/ATen.h>
 

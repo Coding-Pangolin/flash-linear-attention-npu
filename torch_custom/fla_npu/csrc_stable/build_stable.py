@@ -27,7 +27,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]          # torch_custom/fla_npu
 CSRC_STABLE = ROOT / "csrc_stable" / "src"
-CSRC_THIN = ROOT / "csrc_thin"
 CSRC_STABLE_INCLUDE = ROOT / "csrc_stable" / "include"
 HASH_MODULE = ROOT / "fla_npu" / "ops" / "ascendc" / "_stable_hash.py"
 
@@ -102,13 +101,14 @@ def main() -> int:
         "-fvisibility=hidden",
         *(["-DFLA_STABLE_NO_DEBUG_PROBE"] if args.no_debug_probe else []),
         f'-DFLA_STABLE_SOURCE_HASH="{stamp}"',
-        "-I", str(CSRC_THIN / "include"),
         "-I", str(CSRC_STABLE_INCLUDE),
         *[f"-I{path}" for path in includes],
         # One TU by construction: the stable headers may not be included twice
         # (non-inline definitions in tensor_inl.h -> duplicate symbols).
         str(CSRC_STABLE / "stable_ops.cpp"),
-        str(CSRC_THIN / "src" / "runtime.cpp"),
+        # The runtime (dlopen + symbol cache) ships with the launcher now; the
+        # pybind build includes the same header from csrc_stable/include.
+        str(CSRC_STABLE / "runtime.cpp"),
         "-L", torch_lib,
         "-Wl,--no-as-needed", "-ltorch_cpu", "-lc10", "-ltorch",
         "-ldl",

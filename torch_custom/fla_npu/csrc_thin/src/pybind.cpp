@@ -1,7 +1,7 @@
 #include <vector>
 #include <torch/extension.h>
 
-#include "thin_launcher/runtime.h"
+#include "thin_stable/runtime.h"
 
 namespace fla_npu_thin {
 

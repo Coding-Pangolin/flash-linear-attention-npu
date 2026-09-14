@@ -7,7 +7,7 @@ from ._stable import (  # noqa: F401
     _op,
 )
 
-_GENERATED_HASH = "b3033a8085aca22326c08847679a59fa"
+_GENERATED_HASH = "690e6ee869ba8f30e93517dd936598d6"
 
 _SIG = {
     "npu_causal_conv1d_bwd": [("x", "tensor"), ("y", "optional_tensor"), ("weight", "tensor"), ("dy", "tensor"), ("initial_state", "optional_tensor"), ("dht", "optional_tensor"), ("query_start_loc", "int_array"), ("activation", "int64"), ("input_layout", "char_ptr")],
@@ -88,41 +88,6 @@ def npu_causal_conv1d_bwd(x, y, weight, dy, initial_state=None, dht=None, *, que
         _current_stream_ptr(),
     )
 
-def npu_chunk_bwd_dqkwg(q, k, v, g, h, dox, dh, dv, chunk_size, *, cu_seqlens=None, chunk_indices=None, w=None, g_gamma=None, scale=None, use_exp2=None, transpose_state_layout=None):
-    return _op("npu_chunk_bwd_dqkwg")(
-        q,
-        k,
-        v,
-        g,
-        h,
-        dox,
-        dh,
-        dv,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        w,
-        g_gamma,
-        scale,
-        chunk_size,
-        use_exp2,
-        transpose_state_layout,
-        _current_stream_ptr(),
-    )
-
-def npu_chunk_bwd_dv_local(q, k, d_o, g, scale, chunk_size, *, g_gamma=None, A=None, cu_seqlens=None, chunk_indices=None):
-    return _op("npu_chunk_bwd_dv_local")(
-        q,
-        k,
-        d_o,
-        g,
-        g_gamma,
-        A,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        scale,
-        chunk_size,
-        _current_stream_ptr(),
-    )
 
 def npu_chunk_fwd_h(k, w, u, *, g=None, gk=None, initial_state=None, output_final_state=False, chunk_size=64, save_new_value=True, cu_seqlens=None, chunk_indices=None, use_exp2=False, state_v_first=False):
     if cu_seqlens and not chunk_indices:
@@ -454,92 +419,9 @@ def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size=64, *, A_log=None, dt_
     out.append(initial_state)
     return tuple(out)
 
-def npu_chunk_local_cumsum(g, chunk_size, *, cu_seqlens=None, chunk_indices_out=None, reverse=False, scale=1.0, head_first=True, output_dtype="float32"):
-    return _op("npu_chunk_local_cumsum")(
-        g,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices_out),
-        chunk_size,
-        reverse,
-        scale,
-        head_first,
-        _char_code("npu_chunk_local_cumsum", "output_dtype", output_dtype),
-        _current_stream_ptr(),
-    )
-
-def npu_chunk_scaled_dot_kkt(k, g, beta, *, cu_seqlens=None, chunk_indices=None, chunk_size=64):
-    return _op("npu_chunk_scaled_dot_kkt")(
-        k,
-        g,
-        beta,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        chunk_size,
-        _current_stream_ptr(),
-    )
 
 
 
-
-def npu_prepare_wy_repr_bwd(k, v, beta, A, dw, du, g, chunk_size, *, cu_seqlens=None, chunk_indices=None):
-    return _op("npu_prepare_wy_repr_bwd")(
-        k,
-        v,
-        beta,
-        A,
-        dw,
-        du,
-        g,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        chunk_size,
-        _current_stream_ptr(),
-    )
-
-def npu_prepare_wy_repr_bwd_da(k, v, beta, A, dw, du, g, *, cu_seqlens=None, chunk_indices=None, chunk_size):
-    return _op("npu_prepare_wy_repr_bwd_da")(
-        k,
-        v,
-        beta,
-        A,
-        dw,
-        du,
-        g,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        chunk_size,
-        _current_stream_ptr(),
-    )
-
-def npu_prepare_wy_repr_bwd_full(k, v, beta, A, dA, dw, du, g, chunk_size, *, cu_seqlens=None, chunk_indices=None):
-    return _op("npu_prepare_wy_repr_bwd_full")(
-        k,
-        v,
-        beta,
-        A,
-        dA,
-        dw,
-        du,
-        g,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        chunk_size,
-        _current_stream_ptr(),
-    )
-
-def npu_recompute_w_u_fwd(k, v, beta, A, chunk_size, *, g=None, gk=None, cu_seqlens=None, chunk_indices=None):
-    return _op("npu_recompute_w_u_fwd")(
-        k,
-        v,
-        beta,
-        A,
-        g,
-        gk,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        chunk_size,
-        _current_stream_ptr(),
-    )
 
 def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
     layout = str(layout)
@@ -589,8 +471,6 @@ def _causal_conv1d_launch(*, x=None, weight=None, bias=None, conv_states=None, q
 
 __all__ = [
     "npu_causal_conv1d_bwd",
-    "npu_chunk_bwd_dqkwg",
-    "npu_chunk_bwd_dv_local",
     "npu_chunk_fwd_h",
     "npu_chunk_fwd_o",
     "npu_chunk_gated_delta_rule_bwd_dhu",
@@ -602,12 +482,6 @@ __all__ = [
     "npu_chunk_kda_bwd",
     "npu_chunk_kda_bwd_recompute",
     "npu_chunk_kda_fwd",
-    "npu_chunk_local_cumsum",
-    "npu_chunk_scaled_dot_kkt",
-    "npu_prepare_wy_repr_bwd",
-    "npu_prepare_wy_repr_bwd_da",
-    "npu_prepare_wy_repr_bwd_full",
-    "npu_recompute_w_u_fwd",
     "npu_solve_tri",
     "_causal_conv1d_launch",
 ]

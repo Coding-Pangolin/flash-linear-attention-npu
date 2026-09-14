@@ -186,137 +186,6 @@ inline std::vector<int64_t> kda_fwd_h_sizes(const shim::Tensor& q, const shim::T
 }
 }  // namespace
 
-// ---- generated: npu_causal_conv1d_bwd ----
-inline const char* npu_causal_conv1d_bwd_input_layout_name(int64_t code) {
-  switch (code) {
-    case 0: return "BSND";
-    case 1: return "BNSD";
-    case 2: return "NTD";
-    case 3: return "TND";
-    default:
-      throw std::runtime_error(
-          "npu_causal_conv1d_bwd: bad input_layout code " + std::to_string(code));
-  }
-}
-using npu_causal_conv1d_bwd_GetWorkspaceFn = int (*)(
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclIntArray*,
-    int64_t,
-    const char*,
-    aclTensor*,
-    aclTensor*,
-    aclTensor*,
-    aclTensor*,
-    uint64_t*, aclOpExecutor**);
-constexpr const char* kSchema_npu_causal_conv1d_bwd =
-    "npu_causal_conv1d_bwd(Tensor x, Tensor? y, Tensor weight, Tensor dy, Tensor? initial_state, Tensor? dht, Tensor? query_start_loc, int activation, int input_layout, int stream) -> (Tensor, Tensor, Tensor, Tensor)";
-
-void boxed_npu_causal_conv1d_bwd(StableIValue* stack, uint64_t num_inputs,
-                 uint64_t num_outputs) {
-  (void)num_inputs;
-  (void)num_outputs;
-  const Tensor x_t = to<Tensor>(stack[0]);
-  const TensorMeta x_meta = meta_of(x_t);
-  const shim::Tensor x(x_t);
-  const auto y_t = to<std::optional<Tensor>>(stack[1]);
-  const bool y_present = y_t.has_value();
-  const TensorMeta y_meta = y_present ? meta_of(*y_t) : TensorMeta();
-  const std::optional<shim::Tensor> y = y_present ? std::optional<shim::Tensor>(shim::Tensor(*y_t)) : std::nullopt;
-  const Tensor weight_t = to<Tensor>(stack[2]);
-  const TensorMeta weight_meta = meta_of(weight_t);
-  const shim::Tensor weight(weight_t);
-  const Tensor dy_t = to<Tensor>(stack[3]);
-  const TensorMeta dy_meta = meta_of(dy_t);
-  const shim::Tensor dy(dy_t);
-  const auto initial_state_t = to<std::optional<Tensor>>(stack[4]);
-  const bool initial_state_present = initial_state_t.has_value();
-  const TensorMeta initial_state_meta = initial_state_present ? meta_of(*initial_state_t) : TensorMeta();
-  const std::optional<shim::Tensor> initial_state = initial_state_present ? std::optional<shim::Tensor>(shim::Tensor(*initial_state_t)) : std::nullopt;
-  const auto dht_t = to<std::optional<Tensor>>(stack[5]);
-  const bool dht_present = dht_t.has_value();
-  const TensorMeta dht_meta = dht_present ? meta_of(*dht_t) : TensorMeta();
-  const std::optional<shim::Tensor> dht = dht_present ? std::optional<shim::Tensor>(shim::Tensor(*dht_t)) : std::nullopt;
-  const auto query_start_loc_t = to<std::optional<Tensor>>(stack[6]);
-  const std::vector<int64_t> query_start_loc = query_start_loc_t.has_value() ? host_int_values(query_start_loc_t->get()) : std::vector<int64_t>();
-  AclIntArrayView query_start_loc_view(query_start_loc);
-  const int64_t activation = to<int64_t>(stack[7]);
-  const int64_t input_layout_code = to<int64_t>(stack[8]);
-  const std::string input_layout = npu_causal_conv1d_bwd_input_layout_name(input_layout_code);
-  const int64_t stream = to<int64_t>(stack[9]);
-
-  auto& rt = Runtime::instance();
-  auto get_ws = reinterpret_cast<npu_causal_conv1d_bwd_GetWorkspaceFn>(
-      rt.symbol("aclnnCausalConv1dBwdGetWorkspaceSize"));
-  auto launch = reinterpret_cast<LaunchFn>(
-      rt.symbol("aclnnCausalConv1dBwd"));
-  uint64_t workspace_size = 0;
-  aclOpExecutor* executor = nullptr;
-
-  std::vector<shim::Tensor> outputs;
-  outputs.push_back(shim::empty_like(x));
-  outputs.push_back(shim::empty({weight.size(0), weight.size(1)}, weight.options()));
-  outputs.push_back(shim::empty({weight.size(1)}, weight.options()));
-  outputs.push_back(shim::empty({(input_layout == "TND" || input_layout == "NTD") ? (query_start_loc.empty() ? int64_t{0} : static_cast<int64_t>(query_start_loc.size() - 1)) : x.size(0), weight.size(0), weight.size(1)}, x.options()));
-
-  std::vector<std::unique_ptr<AclTensorView>> views;
-  views.push_back(std::make_unique<AclTensorView>(x_meta));
-  views.push_back(std::make_unique<AclTensorView>(y_meta));
-  views.push_back(std::make_unique<AclTensorView>(weight_meta));
-  views.push_back(std::make_unique<AclTensorView>(dy_meta));
-  views.push_back(std::make_unique<AclTensorView>(initial_state_meta));
-  views.push_back(std::make_unique<AclTensorView>(dht_meta));
-  views.push_back(std::make_unique<AclTensorView>(outputs[0].defined() ? meta_of(outputs[0].tensor()) : TensorMeta()));
-  views.push_back(std::make_unique<AclTensorView>(outputs[1].defined() ? meta_of(outputs[1].tensor()) : TensorMeta()));
-  views.push_back(std::make_unique<AclTensorView>(outputs[2].defined() ? meta_of(outputs[2].tensor()) : TensorMeta()));
-  views.push_back(std::make_unique<AclTensorView>(outputs[3].defined() ? meta_of(outputs[3].tensor()) : TensorMeta()));
-
-  const int get_ret = get_ws(
-      views[0]->get(),
-      views[1]->get(),
-      views[2]->get(),
-      views[3]->get(),
-      views[4]->get(),
-      views[5]->get(),
-      query_start_loc_view.get(),
-      activation,
-      input_layout.c_str(),
-      views[6]->get(),
-      views[7]->get(),
-      views[8]->get(),
-      views[9]->get(),
-      &workspace_size, &executor);
-  if (get_ret != 0) {
-    throw std::runtime_error(
-        "aclnnCausalConv1dBwdGetWorkspaceSize failed: " +
-        std::to_string(get_ret));
-  }
-  Tensor workspace;
-  void* workspace_ptr = nullptr;
-  if (workspace_size != 0) {
-    workspace = allocate_bytes(static_cast<int64_t>(workspace_size),
-                                   x_meta);
-    TORCH_ERROR_CODE_CHECK(
-        aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
-  }
-  const int launch_ret = launch(workspace_ptr, workspace_size,
-                                executor,
-                                reinterpret_cast<void*>(stream));
-  if (launch_ret != 0) {
-    throw std::runtime_error(
-        "aclnnCausalConv1dBwd failed: " +
-        std::to_string(launch_ret));
-  }
-  stack[0] = from(outputs[0].tensor());
-  stack[1] = from(outputs[1].tensor());
-  stack[2] = from(outputs[2].tensor());
-  stack[3] = from(outputs[3].tensor());
-}
-
 
 // ---- generated: npu_chunk_fwd_h ----
 using npu_chunk_fwd_h_GetWorkspaceFn = int (*)(
@@ -450,127 +319,6 @@ void boxed_npu_chunk_fwd_h(StableIValue* stack, uint64_t num_inputs,
   stack[2] = outputs[2].defined() ? from(std::optional<Tensor>(outputs[2].tensor())) : from(std::nullopt);
 }
 
-// ---- generated: npu_chunk_fwd_o ----
-inline const char* npu_chunk_fwd_o_output_layout_name(int64_t code) {
-  switch (code) {
-    case 0: return "BNSD";
-    case 1: return "BSND";
-    case 2: return "TND";
-    case 3: return "NTD";
-    default:
-      throw std::runtime_error(
-          "npu_chunk_fwd_o: bad output_layout code " + std::to_string(code));
-  }
-}
-using npu_chunk_fwd_o_GetWorkspaceFn = int (*)(
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclIntArray*,
-    const aclIntArray*,
-    double,
-    int64_t,
-    bool,
-    bool,
-    const char*,
-    aclTensor*,
-    uint64_t*, aclOpExecutor**);
-constexpr const char* kSchema_npu_chunk_fwd_o =
-    "npu_chunk_fwd_o(Tensor q, Tensor k, Tensor v, Tensor h, Tensor? g, Tensor? cu_seqlens, Tensor? chunk_indices, float scale, int chunk_size, bool use_exp2, bool transpose_state_layout, int output_layout, int stream) -> Tensor";
-
-void boxed_npu_chunk_fwd_o(StableIValue* stack, uint64_t num_inputs,
-                 uint64_t num_outputs) {
-  (void)num_inputs;
-  (void)num_outputs;
-  const Tensor q_t = to<Tensor>(stack[0]);
-  const TensorMeta q_meta = meta_of(q_t);
-  const shim::Tensor q(q_t);
-  const Tensor k_t = to<Tensor>(stack[1]);
-  const TensorMeta k_meta = meta_of(k_t);
-  const shim::Tensor k(k_t);
-  const Tensor v_t = to<Tensor>(stack[2]);
-  const TensorMeta v_meta = meta_of(v_t);
-  const shim::Tensor v(v_t);
-  const Tensor h_t = to<Tensor>(stack[3]);
-  const TensorMeta h_meta = meta_of(h_t);
-  const shim::Tensor h(h_t);
-  const auto g_t = to<std::optional<Tensor>>(stack[4]);
-  const bool g_present = g_t.has_value();
-  const TensorMeta g_meta = g_present ? meta_of(*g_t) : TensorMeta();
-  const std::optional<shim::Tensor> g = g_present ? std::optional<shim::Tensor>(shim::Tensor(*g_t)) : std::nullopt;
-  const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[5]);
-  const std::vector<int64_t> cu_seqlens = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
-  AclIntArrayView cu_seqlens_view(cu_seqlens);
-  const auto chunk_indices_t = to<std::optional<Tensor>>(stack[6]);
-  const std::vector<int64_t> chunk_indices = chunk_indices_t.has_value() ? host_int_values(chunk_indices_t->get()) : std::vector<int64_t>();
-  AclIntArrayView chunk_indices_view(chunk_indices);
-  const double scale = to<double>(stack[7]);
-  const int64_t chunk_size = to<int64_t>(stack[8]);
-  const bool use_exp2 = to<bool>(stack[9]);
-  const bool transpose_state_layout = to<bool>(stack[10]);
-  const int64_t output_layout_code = to<int64_t>(stack[11]);
-  const std::string output_layout = npu_chunk_fwd_o_output_layout_name(output_layout_code);
-  const int64_t stream = to<int64_t>(stack[12]);
-
-  auto& rt = Runtime::instance();
-  auto get_ws = reinterpret_cast<npu_chunk_fwd_o_GetWorkspaceFn>(
-      rt.symbol("aclnnChunkFwdOGetWorkspaceSize"));
-  auto launch = reinterpret_cast<LaunchFn>(
-      rt.symbol("aclnnChunkFwdO"));
-  uint64_t workspace_size = 0;
-  aclOpExecutor* executor = nullptr;
-
-  std::vector<shim::Tensor> outputs;
-  outputs.push_back((output_layout == "BNSD") ? shim::empty({v.size(0), v.size(1), v.size(2), v.size(3)}, v.options()) : (output_layout == "BSND") ? shim::empty({v.size(0), v.size(2), v.size(1), v.size(3)}, v.options()) : (output_layout == "TND") ? shim::empty({v.size(2), v.size(1), v.size(3)}, v.options()) : shim::empty({v.size(1), v.size(2), v.size(3)}, v.options()));
-
-  std::vector<std::unique_ptr<AclTensorView>> views;
-  views.push_back(std::make_unique<AclTensorView>(q_meta));
-  views.push_back(std::make_unique<AclTensorView>(k_meta));
-  views.push_back(std::make_unique<AclTensorView>(v_meta));
-  views.push_back(std::make_unique<AclTensorView>(h_meta));
-  views.push_back(std::make_unique<AclTensorView>(g_meta));
-  views.push_back(std::make_unique<AclTensorView>(outputs[0].defined() ? meta_of(outputs[0].tensor()) : TensorMeta()));
-
-  const int get_ret = get_ws(
-      views[0]->get(),
-      views[1]->get(),
-      views[2]->get(),
-      views[3]->get(),
-      views[4]->get(),
-      cu_seqlens_view.get(),
-      chunk_indices_view.get(),
-      scale,
-      chunk_size,
-      use_exp2,
-      transpose_state_layout,
-      output_layout.c_str(),
-      views[5]->get(),
-      &workspace_size, &executor);
-  if (get_ret != 0) {
-    throw std::runtime_error(
-        "aclnnChunkFwdOGetWorkspaceSize failed: " +
-        std::to_string(get_ret));
-  }
-  Tensor workspace;
-  void* workspace_ptr = nullptr;
-  if (workspace_size != 0) {
-    workspace = allocate_bytes(static_cast<int64_t>(workspace_size),
-                                   q_meta);
-    TORCH_ERROR_CODE_CHECK(
-        aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
-  }
-  const int launch_ret = launch(workspace_ptr, workspace_size,
-                                executor,
-                                reinterpret_cast<void*>(stream));
-  if (launch_ret != 0) {
-    throw std::runtime_error(
-        "aclnnChunkFwdO failed: " +
-        std::to_string(launch_ret));
-  }
-  stack[0] = from(outputs[0].tensor());
-}
 
 // ---- generated: npu_chunk_gated_delta_rule_bwd_dhu ----
 using npu_chunk_gated_delta_rule_bwd_dhu_GetWorkspaceFn = int (*)(
@@ -1408,130 +1156,6 @@ void boxed_npu_chunk_gated_delta_rule_fwd_prepare(StableIValue* stack, uint64_t 
   stack[8] = outputs[8].defined() ? from(std::optional<Tensor>(outputs[8].tensor())) : from(std::nullopt);
 }
 
-// ---- generated: npu_chunk_gdn_bwd_intra ----
-using npu_chunk_gdn_bwd_intra_GetWorkspaceFn = int (*)(
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclTensor*,
-    const aclIntArray*,
-    const aclIntArray*,
-    double,
-    int64_t,
-    bool,
-    aclTensor*,
-    aclTensor*,
-    aclTensor*,
-    uint64_t*, aclOpExecutor**);
-constexpr const char* kSchema_npu_chunk_gdn_bwd_intra =
-    "npu_chunk_gdn_bwd_intra(Tensor q, Tensor k, Tensor v, Tensor g, Tensor beta, Tensor A, Tensor d_o, Tensor? cu_seqlens, Tensor? chunk_indices, float scale, int chunk_size, bool use_exp2, int stream) -> (Tensor, Tensor, Tensor)";
-
-void boxed_npu_chunk_gdn_bwd_intra(StableIValue* stack, uint64_t num_inputs,
-                 uint64_t num_outputs) {
-  (void)num_inputs;
-  (void)num_outputs;
-  const Tensor q_t = to<Tensor>(stack[0]);
-  const TensorMeta q_meta = meta_of(q_t);
-  const shim::Tensor q(q_t);
-  const Tensor k_t = to<Tensor>(stack[1]);
-  const TensorMeta k_meta = meta_of(k_t);
-  const shim::Tensor k(k_t);
-  const Tensor v_t = to<Tensor>(stack[2]);
-  const TensorMeta v_meta = meta_of(v_t);
-  const shim::Tensor v(v_t);
-  const Tensor g_t = to<Tensor>(stack[3]);
-  const TensorMeta g_meta = meta_of(g_t);
-  const shim::Tensor g(g_t);
-  const Tensor beta_t = to<Tensor>(stack[4]);
-  const TensorMeta beta_meta = meta_of(beta_t);
-  const shim::Tensor beta(beta_t);
-  const Tensor A_t = to<Tensor>(stack[5]);
-  const TensorMeta A_meta = meta_of(A_t);
-  const shim::Tensor A(A_t);
-  const Tensor d_o_t = to<Tensor>(stack[6]);
-  const TensorMeta d_o_meta = meta_of(d_o_t);
-  const shim::Tensor d_o(d_o_t);
-  const auto cu_seqlens_t = to<std::optional<Tensor>>(stack[7]);
-  const std::vector<int64_t> cu_seqlens = cu_seqlens_t.has_value() ? host_int_values(cu_seqlens_t->get()) : std::vector<int64_t>();
-  AclIntArrayView cu_seqlens_view(cu_seqlens);
-  const auto chunk_indices_t = to<std::optional<Tensor>>(stack[8]);
-  const std::vector<int64_t> chunk_indices = chunk_indices_t.has_value() ? host_int_values(chunk_indices_t->get()) : std::vector<int64_t>();
-  AclIntArrayView chunk_indices_view(chunk_indices);
-  const double scale = to<double>(stack[9]);
-  const int64_t chunk_size = to<int64_t>(stack[10]);
-  const bool use_exp2 = to<bool>(stack[11]);
-  const int64_t stream = to<int64_t>(stack[12]);
-
-  auto& rt = Runtime::instance();
-  auto get_ws = reinterpret_cast<npu_chunk_gdn_bwd_intra_GetWorkspaceFn>(
-      rt.symbol("aclnnChunkGdnBwdIntraGetWorkspaceSize"));
-  auto launch = reinterpret_cast<LaunchFn>(
-      rt.symbol("aclnnChunkGdnBwdIntra"));
-  uint64_t workspace_size = 0;
-  aclOpExecutor* executor = nullptr;
-
-  std::vector<shim::Tensor> outputs;
-  outputs.push_back(shim::empty({q.size(0), v.size(1), q.size(2), q.size(3)}, q.options()));
-  outputs.push_back(shim::empty_like(v));
-  outputs.push_back(shim::empty_like(v));
-
-  std::vector<std::unique_ptr<AclTensorView>> views;
-  views.push_back(std::make_unique<AclTensorView>(q_meta));
-  views.push_back(std::make_unique<AclTensorView>(k_meta));
-  views.push_back(std::make_unique<AclTensorView>(v_meta));
-  views.push_back(std::make_unique<AclTensorView>(g_meta));
-  views.push_back(std::make_unique<AclTensorView>(beta_meta));
-  views.push_back(std::make_unique<AclTensorView>(A_meta));
-  views.push_back(std::make_unique<AclTensorView>(d_o_meta));
-  views.push_back(std::make_unique<AclTensorView>(outputs[0].defined() ? meta_of(outputs[0].tensor()) : TensorMeta()));
-  views.push_back(std::make_unique<AclTensorView>(outputs[1].defined() ? meta_of(outputs[1].tensor()) : TensorMeta()));
-  views.push_back(std::make_unique<AclTensorView>(outputs[2].defined() ? meta_of(outputs[2].tensor()) : TensorMeta()));
-
-  const int get_ret = get_ws(
-      views[0]->get(),
-      views[1]->get(),
-      views[2]->get(),
-      views[3]->get(),
-      views[4]->get(),
-      views[5]->get(),
-      views[6]->get(),
-      cu_seqlens_view.get(),
-      chunk_indices_view.get(),
-      scale,
-      chunk_size,
-      use_exp2,
-      views[7]->get(),
-      views[8]->get(),
-      views[9]->get(),
-      &workspace_size, &executor);
-  if (get_ret != 0) {
-    throw std::runtime_error(
-        "aclnnChunkGdnBwdIntraGetWorkspaceSize failed: " +
-        std::to_string(get_ret));
-  }
-  Tensor workspace;
-  void* workspace_ptr = nullptr;
-  if (workspace_size != 0) {
-    workspace = allocate_bytes(static_cast<int64_t>(workspace_size),
-                                   q_meta);
-    TORCH_ERROR_CODE_CHECK(
-        aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
-  }
-  const int launch_ret = launch(workspace_ptr, workspace_size,
-                                executor,
-                                reinterpret_cast<void*>(stream));
-  if (launch_ret != 0) {
-    throw std::runtime_error(
-        "aclnnChunkGdnBwdIntra failed: " +
-        std::to_string(launch_ret));
-  }
-  stack[0] = from(outputs[0].tensor());
-  stack[1] = from(outputs[1].tensor());
-  stack[2] = from(outputs[2].tensor());
-}
 
 // ---- generated: npu_chunk_kda_bwd ----
 using npu_chunk_kda_bwd_GetWorkspaceFn = int (*)(
@@ -2407,15 +2031,12 @@ namespace {
 template <typename Library>
 void register_generated_defs(Library& m) {
 
-  m.def(kSchema_npu_causal_conv1d_bwd);
   m.def(kSchema_npu_chunk_fwd_h);
-  m.def(kSchema_npu_chunk_fwd_o);
   m.def(kSchema_npu_chunk_gated_delta_rule_bwd_dhu);
   m.def(kSchema_npu_chunk_gated_delta_rule_bwd_finalize);
   m.def(kSchema_npu_chunk_gated_delta_rule_fwd);
   m.def(kSchema_npu_chunk_gated_delta_rule_fwd_h);
   m.def(kSchema_npu_chunk_gated_delta_rule_fwd_prepare);
-  m.def(kSchema_npu_chunk_gdn_bwd_intra);
   m.def(kSchema_npu_chunk_kda_bwd);
   m.def(kSchema_npu_chunk_kda_bwd_recompute);
   m.def(kSchema_npu_chunk_kda_fwd);
@@ -2425,15 +2046,12 @@ void register_generated_defs(Library& m) {
 
 template <typename Library>
 void register_generated_impls(Library& m) {
-  m.impl("npu_causal_conv1d_bwd", &boxed_npu_causal_conv1d_bwd);
   m.impl("npu_chunk_fwd_h", &boxed_npu_chunk_fwd_h);
-  m.impl("npu_chunk_fwd_o", &boxed_npu_chunk_fwd_o);
   m.impl("npu_chunk_gated_delta_rule_bwd_dhu", &boxed_npu_chunk_gated_delta_rule_bwd_dhu);
   m.impl("npu_chunk_gated_delta_rule_bwd_finalize", &boxed_npu_chunk_gated_delta_rule_bwd_finalize);
   m.impl("npu_chunk_gated_delta_rule_fwd", &boxed_npu_chunk_gated_delta_rule_fwd);
   m.impl("npu_chunk_gated_delta_rule_fwd_h", &boxed_npu_chunk_gated_delta_rule_fwd_h);
   m.impl("npu_chunk_gated_delta_rule_fwd_prepare", &boxed_npu_chunk_gated_delta_rule_fwd_prepare);
-  m.impl("npu_chunk_gdn_bwd_intra", &boxed_npu_chunk_gdn_bwd_intra);
   m.impl("npu_chunk_kda_bwd", &boxed_npu_chunk_kda_bwd);
   m.impl("npu_chunk_kda_bwd_recompute", &boxed_npu_chunk_kda_bwd_recompute);
   m.impl("npu_chunk_kda_fwd", &boxed_npu_chunk_kda_fwd);

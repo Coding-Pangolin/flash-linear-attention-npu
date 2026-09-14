@@ -7,7 +7,7 @@ from ._stable import (  # noqa: F401
     _op,
 )
 
-_GENERATED_HASH = "02952a2309f4f9d96f2a016f0e5612d7"
+_GENERATED_HASH = "ae4833bbdc0dcb5743cc394c8365a4f0"
 
 _SIG = {
     "npu_causal_conv1d_bwd": [("x", "tensor"), ("y", "optional_tensor"), ("weight", "tensor"), ("dy", "tensor"), ("initial_state", "optional_tensor"), ("dht", "optional_tensor"), ("query_start_loc", "int_array"), ("activation", "int64"), ("input_layout", "char_ptr")],
@@ -27,8 +27,6 @@ _SIG = {
     "npu_chunk_kda_fwd": [("q", "tensor"), ("k", "tensor"), ("v", "tensor"), ("g", "tensor"), ("beta", "tensor"), ("A_log", "optional_tensor"), ("dt_bias", "optional_tensor"), ("initial_state", "optional_tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("layout", "char_ptr"), ("scale", "double"), ("chunk_size", "int64"), ("safe_gate", "bool"), ("lower_bound", "double"), ("use_gate_in_kernel", "bool"), ("state_v_first", "bool"), ("output_final_state", "bool"), ("disable_recompute", "bool"), ("return_intermediate_states", "bool")],
     "npu_chunk_local_cumsum": [("g", "tensor"), ("cu_seqlens", "int_array"), ("chunk_indices_out", "int_array"), ("chunk_size", "int64"), ("reverse", "bool"), ("scale", "double"), ("head_first", "bool"), ("output_dtype", "char_ptr")],
     "npu_chunk_scaled_dot_kkt": [("k", "tensor"), ("g", "tensor"), ("beta", "tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("chunk_size", "int64")],
-    "npu_fast_gelu_custom": [("self", "tensor")],
-    "npu_fast_gelu_custom_backward": [("grad", "tensor"), ("self", "tensor")],
     "npu_kda_gate_cumsum": [("g", "tensor"), ("A_log", "optional_tensor"), ("dt_bias", "optional_tensor"), ("cu_seqlens", "int_array"), ("chunk_size", "int64"), ("use_gate_in_kernel", "bool"), ("safe_gate", "bool"), ("lower_bound", "double")],
     "npu_prepare_wy_repr_bwd": [("k", "tensor"), ("v", "tensor"), ("beta", "tensor"), ("A", "tensor"), ("dw", "tensor"), ("du", "tensor"), ("g", "tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("chunk_size", "int64")],
     "npu_prepare_wy_repr_bwd_da": [("k", "tensor"), ("v", "tensor"), ("beta", "tensor"), ("A", "tensor"), ("dw", "tensor"), ("du", "tensor"), ("g", "tensor"), ("cu_seqlens", "int_array"), ("chunk_indices", "int_array"), ("chunk_size", "int64")],
@@ -67,8 +65,6 @@ _RET = {
     "npu_chunk_kda_fwd": [(0, None), (1, 'output_final_state'), (2, '!use_gate_in_kernel || disable_recompute'), (3, None), (4, None), (5, 'disable_recompute'), (6, 'disable_recompute'), (7, 'disable_recompute'), (8, 'disable_recompute'), (9, 'disable_recompute'), (10, 'disable_recompute || return_intermediate_states')],
     "npu_chunk_local_cumsum": [(0, None)],
     "npu_chunk_scaled_dot_kkt": [(0, None)],
-    "npu_fast_gelu_custom": [(0, None)],
-    "npu_fast_gelu_custom_backward": [(0, None)],
     "npu_kda_gate_cumsum": [(0, None)],
     "npu_prepare_wy_repr_bwd": [(0, None), (1, None), (2, None), (3, None)],
     "npu_prepare_wy_repr_bwd_da": [(0, None)],
@@ -505,18 +501,7 @@ def npu_chunk_scaled_dot_kkt(k, g, beta, *, cu_seqlens=None, chunk_indices=None,
         _current_stream_ptr(),
     )
 
-def npu_fast_gelu_custom(self):
-    return _op("npu_fast_gelu_custom")(
-        self,
-        _current_stream_ptr(),
-    )
 
-def npu_fast_gelu_custom_backward(grad, self):
-    return _op("npu_fast_gelu_custom_backward")(
-        grad,
-        self,
-        _current_stream_ptr(),
-    )
 
 def npu_kda_gate_cumsum(g, chunk_size, *, A_log=None, dt_bias=None, cu_seqlens=None, use_gate_in_kernel=False, safe_gate=False, lower_bound=None):
     return _op("npu_kda_gate_cumsum")(
@@ -655,8 +640,6 @@ __all__ = [
     "npu_chunk_kda_fwd",
     "npu_chunk_local_cumsum",
     "npu_chunk_scaled_dot_kkt",
-    "npu_fast_gelu_custom",
-    "npu_fast_gelu_custom_backward",
     "npu_kda_gate_cumsum",
     "npu_prepare_wy_repr_bwd",
     "npu_prepare_wy_repr_bwd_da",

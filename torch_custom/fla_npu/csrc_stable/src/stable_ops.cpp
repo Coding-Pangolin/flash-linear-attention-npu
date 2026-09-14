@@ -9,6 +9,7 @@
 #include "stable_recurrent_gdr.cpp"
 #include "stable_recurrent_kda.cpp"
 #include "stable_fast_gelu.cpp"
+#include "stable_kda.cpp"
 #include "../generated/ops_stable_generated.inc"
 
 // Build stamp: the md5 of the generated adapters this library was compiled
@@ -36,6 +37,8 @@ STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
   m.def(kSchemaRecurrentKda);
   m.def(kSchema_npu_fast_gelu_custom);
   m.def(kSchema_npu_fast_gelu_custom_backward);
+  m.def(kSchema_kda_gate_cumsum);
+  m.def(kSchema_chunk_kda_bwd_intra);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.def("_stream_probe(int device_index) -> (int, int)");
 #endif
@@ -50,6 +53,10 @@ STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
   m.impl("npu_fast_gelu_custom_backward",
          &fla_npu_thin::stable::boxed_adapter<
              run_npu_fast_gelu_custom_backward>);
+  m.impl("npu_kda_gate_cumsum",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_kda_gate_cumsum>);
+  m.impl("npu_chunk_kda_bwd_intra",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_kda_bwd_intra>);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.impl("_stream_probe", &boxed_stream_probe);
 #endif

@@ -7,7 +7,7 @@ from ._stable import (  # noqa: F401
     _op,
 )
 
-_GENERATED_HASH = "ae4833bbdc0dcb5743cc394c8365a4f0"
+_GENERATED_HASH = "b3033a8085aca22326c08847679a59fa"
 
 _SIG = {
     "npu_causal_conv1d_bwd": [("x", "tensor"), ("y", "optional_tensor"), ("weight", "tensor"), ("dy", "tensor"), ("initial_state", "optional_tensor"), ("dht", "optional_tensor"), ("query_start_loc", "int_array"), ("activation", "int64"), ("input_layout", "char_ptr")],
@@ -378,29 +378,6 @@ def npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o, sca
         _current_stream_ptr(),
     )
 
-def npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg, *, cu_seqlens=None, chunk_indices=None, chunk_size=64, safe_gate=True, layout="BSND"):
-    layout = str(layout)
-    if not (layout == "BNSD" and cu_seqlens is None and chunk_indices is None and int(chunk_size) == 64 and bool(safe_gate)):
-        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
-        return _ct.npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, chunk_size=chunk_size, safe_gate=safe_gate, layout=layout)
-    return _op("npu_chunk_kda_bwd_intra")(
-        q,
-        k,
-        gk,
-        beta,
-        dAqk,
-        dAkk,
-        dq,
-        dk,
-        db,
-        dg,
-        _host_ints(cu_seqlens),
-        _host_ints(chunk_indices),
-        chunk_size,
-        safe_gate,
-        _char_code("npu_chunk_kda_bwd_intra", "layout", layout),
-        _current_stream_ptr(),
-    )
 
 def npu_chunk_kda_bwd_recompute(q, k, v, g, beta, a, chunk_size, *, A_log=None, dt_bias=None, cu_seqlens=None, chunk_indices=None, use_exp2=True, lower_bound=-5.0, use_gate_in_kernel=True):
     result = _op("npu_chunk_kda_bwd_recompute")(
@@ -503,18 +480,6 @@ def npu_chunk_scaled_dot_kkt(k, g, beta, *, cu_seqlens=None, chunk_indices=None,
 
 
 
-def npu_kda_gate_cumsum(g, chunk_size, *, A_log=None, dt_bias=None, cu_seqlens=None, use_gate_in_kernel=False, safe_gate=False, lower_bound=None):
-    return _op("npu_kda_gate_cumsum")(
-        g,
-        A_log,
-        dt_bias,
-        _host_ints(cu_seqlens),
-        chunk_size,
-        use_gate_in_kernel,
-        safe_gate,
-        lower_bound,
-        _current_stream_ptr(),
-    )
 
 def npu_prepare_wy_repr_bwd(k, v, beta, A, dw, du, g, chunk_size, *, cu_seqlens=None, chunk_indices=None):
     return _op("npu_prepare_wy_repr_bwd")(
@@ -635,12 +600,10 @@ __all__ = [
     "npu_chunk_gated_delta_rule_fwd_prepare",
     "npu_chunk_gdn_bwd_intra",
     "npu_chunk_kda_bwd",
-    "npu_chunk_kda_bwd_intra",
     "npu_chunk_kda_bwd_recompute",
     "npu_chunk_kda_fwd",
     "npu_chunk_local_cumsum",
     "npu_chunk_scaled_dot_kkt",
-    "npu_kda_gate_cumsum",
     "npu_prepare_wy_repr_bwd",
     "npu_prepare_wy_repr_bwd_da",
     "npu_prepare_wy_repr_bwd_full",

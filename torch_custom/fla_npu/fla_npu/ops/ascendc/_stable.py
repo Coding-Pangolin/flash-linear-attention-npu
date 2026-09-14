@@ -460,3 +460,58 @@ def npu_fast_gelu_custom_backward(grad, self):
 
     return _op("npu_fast_gelu_custom_backward")(
         grad, self, _current_stream_ptr())
+
+
+def npu_kda_gate_cumsum(g, chunk_size, *, A_log=None, dt_bias=None,
+                        cu_seqlens=None, use_gate_in_kernel=False,
+                        safe_gate=False, lower_bound=None):
+    """KDA gate with the log-cumsum folded in.
+
+    The schema can only carry real values, so the optional-argument defaults the
+    ctypes reference applies are applied here too (`lower_bound` defaults to
+    -5.0 there, and passing None straight through is not representable).
+    """
+
+    return _op("npu_kda_gate_cumsum")(
+        g,
+        A_log,
+        dt_bias,
+        _host_ints(cu_seqlens),
+        chunk_size,
+        False if use_gate_in_kernel is None else bool(use_gate_in_kernel),
+        False if safe_gate is None else bool(safe_gate),
+        -5.0 if lower_bound is None else float(lower_bound),
+        _current_stream_ptr(),
+    )
+
+
+def npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg, *,
+                            cu_seqlens=None, chunk_indices=None, chunk_size=64,
+                            safe_gate=True, layout="BSND"):
+    """Safe-gate KDA intra-chunk backward.
+
+    BNSD is the native layout; every other combination (BSND, varlen,
+    non-default chunk size, safe_gate off) is handled by the ctypes reference,
+    which converts into the native form before calling the same kernel.  That
+    domain split is a property of this operator, not of the backend, so it lives
+    here rather than in the adapter.
+    """
+
+    layout = str(layout)
+    if not (layout == "BNSD" and cu_seqlens is None and chunk_indices is None
+            and int(chunk_size) == 64 and bool(safe_gate)):
+        from fla_npu.ops.ascendc import _aclnn_ctypes as _ct
+
+        return _ct.npu_chunk_kda_bwd_intra(
+            q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg,
+            cu_seqlens=cu_seqlens, chunk_indices=chunk_indices,
+            chunk_size=chunk_size, safe_gate=safe_gate, layout=layout)
+    return _op("npu_chunk_kda_bwd_intra")(
+        q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg,
+        _host_ints(cu_seqlens),
+        _host_ints(chunk_indices),
+        chunk_size,
+        safe_gate,
+        _char_code("npu_chunk_kda_bwd_intra", "layout", layout),
+        _current_stream_ptr(),
+    )

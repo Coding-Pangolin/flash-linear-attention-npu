@@ -25,6 +25,12 @@ typedef struct aclIntArray aclIntArray;
 typedef struct aclOpExecutor aclOpExecutor;
 
 constexpr int32_t kAclFormatNd = 2;
+constexpr int32_t kAclFormatNchw = 0;
+constexpr int32_t kAclFormatNcdhw = 30;
+constexpr int32_t kAclFormatNcl = 47;
+// "Not specified": the view infers the format from the rank, which is what the
+// ctypes reference does when torch_npu does not report one.
+constexpr int32_t kAclFormatAuto = -1;
 
 // torch ScalarType -> ACL data type (mirrors csrc_thin/src/tensor_desc.cpp).
 inline int32_t acl_dtype(int32_t scalar_type) {
@@ -180,20 +186,54 @@ inline TensorMeta meta_optional_handle(std::optional<AtenTensorHandle> handle) {
 // RAII wrapper around aclCreateTensor / aclDestroyTensor.  Same semantics as the
 // ctypes and pybind paths: contiguous tensors describe storage with the logical
 // shape, non-contiguous ones fall back to a flat storage extent.
+// The aclnn tiling reads the descriptor's format, so it has to be the one the
+// reference would pass.  Measured on Ascend950: `torch_npu.get_npu_format`
+// reports NCHW for a 4-D tensor, and handing aclnnChunkGatedDeltaRuleFwd an ND
+// descriptor for the same input made its tiling reject the call (161002) where
+// the reference's NCHW descriptor was accepted.  The rank-to-format fallback
+// below is the reference's own (`_runtime.acl_format`); the operators whose
+// reference asks for ND pass `kAclFormatNd` explicitly (see `nd_tensor` in
+// exec.h).
+inline int32_t inferred_format(const TensorMeta& meta) {
+  switch (meta.ndim) {
+    case 4:
+      return kAclFormatNchw;
+    case 5:
+      return kAclFormatNcdhw;
+    default:
+      // Measured on Ascend950: torch_npu reports ND for the 3-D gate/beta
+      // tensors and NCHW for the 4-D ones, so 3-D stays ND.  (The reference's
+      // NCL branch only applies when torch_npu is not loaded at all, which is
+      // not a configuration we run in.)
+      return kAclFormatNd;
+  }
+}
+
 class AclTensorView {
  public:
-  explicit AclTensorView(const TensorMeta& meta) {
+  // `logical_storage` picks between the reference's two storage spellings:
+  // plain `ctx.tensor(...)` describes a contiguous tensor with its *flat*
+  // extent, and `storage_shape_override=` with the logical shape.  The
+  // difference is invisible when the framework treats the input as a plain
+  // tensor, but the Ascend950 tiling of the fused GDN forward reads it (an ND
+  // descriptor for the 3-D gate made it reject the call), so each adapter uses
+  // whichever spelling its reference uses.
+  explicit AclTensorView(const TensorMeta& meta,
+                         int32_t format = kAclFormatAuto,
+                         bool logical_storage = false)
+      : format_(format < 0 ? inferred_format(meta) : format) {
     if (!meta.defined) {
       return;
     }
     const std::vector<int64_t> storage_dims =
-        meta.contiguous ? meta.sizes
-                        : std::vector<int64_t>{meta.storage_numel};
+        (logical_storage && meta.contiguous)
+            ? meta.sizes
+            : std::vector<int64_t>{meta.storage_numel};
     auto create = reinterpret_cast<AclCreateTensorFn>(
         Runtime::instance().symbol("aclCreateTensor"));
     ptr_ = create(meta.sizes.data(), static_cast<uint64_t>(meta.ndim),
                   acl_dtype(meta.scalar_type), meta.strides.data(),
-                  meta.storage_offset, kAclFormatNd, storage_dims.data(),
+                  meta.storage_offset, format_, storage_dims.data(),
                   static_cast<uint64_t>(storage_dims.size()), meta.data);
     if (ptr_ == nullptr) {
       throw std::runtime_error(
@@ -216,6 +256,7 @@ class AclTensorView {
 
  private:
   aclTensor* ptr_ = nullptr;
+  int32_t format_ = kAclFormatNd;
 };
 
 // Allocate a contiguous tensor of `meta`'s shape/dtype/device through the C

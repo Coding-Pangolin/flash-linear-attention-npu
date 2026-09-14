@@ -38,6 +38,12 @@ using fla_npu_thin::stable::enum_name;
 using fla_npu_thin::stable::int_array;
 using fla_npu_thin::stable::int_values;
 using fla_npu_thin::stable::meta_of;
+using fla_npu_thin::stable::logical_optional_tensor;
+using fla_npu_thin::stable::logical_out_tensor;
+using fla_npu_thin::stable::logical_tensor;
+using fla_npu_thin::stable::nd_optional_tensor;
+using fla_npu_thin::stable::nd_out_tensor;
+using fla_npu_thin::stable::nd_tensor;
 using fla_npu_thin::stable::optional_tensor;
 using fla_npu_thin::stable::out_tensor;
 using fla_npu_thin::stable::scalar;
@@ -175,13 +181,17 @@ std::tuple<Tensor, Tensor, Tensor> run_npu_chunk_gdn_bwd_intra(
   Tensor out_dk = allocate_like(v_meta);
   Tensor out_dv = allocate_like(v_meta);
 
-  FLA_STABLE_EXEC("aclnnChunkGdnBwdIntra", q_meta, stream, tensor(q_meta),
-                  tensor(meta_of(k)), tensor(v_meta), tensor(meta_of(g)),
-                  tensor(meta_of(beta)), tensor(meta_of(A)),
-                  tensor(meta_of(d_o)), int_array(cu_seqlens),
-                  int_array(chunk_indices), scalar(scale), scalar(chunk_size),
-                  scalar(use_exp2), out_tensor(meta_of(out_dq)),
-                  out_tensor(meta_of(out_dk)), out_tensor(meta_of(out_dv)));
+  // ND again: this reference passes `acl_format_override=ACL_FORMAT_ND` ("BNSD
+  // tensors are already contiguous; expose that physical shape to tiling").
+  FLA_STABLE_EXEC("aclnnChunkGdnBwdIntra", q_meta, stream, nd_tensor(q_meta),
+                  nd_tensor(meta_of(k)), nd_tensor(v_meta),
+                  nd_tensor(meta_of(g)), nd_tensor(meta_of(beta)),
+                  nd_tensor(meta_of(A)), nd_tensor(meta_of(d_o)),
+                  int_array(cu_seqlens), int_array(chunk_indices),
+                  scalar(scale), scalar(chunk_size), scalar(use_exp2),
+                  nd_out_tensor(meta_of(out_dq)),
+                  nd_out_tensor(meta_of(out_dk)),
+                  nd_out_tensor(meta_of(out_dv)));
   return std::make_tuple(out_dq, out_dk, out_dv);
 }
 
@@ -356,21 +366,27 @@ run_npu_chunk_gated_delta_rule_fwd_prepare(
                                 k_meta.scalar_type, k_meta);
 
   FLA_STABLE_EXEC(
-      "aclnnChunkGatedDeltaRuleFwdPrepare", q_meta, stream, tensor(q_meta),
-      tensor(k_meta), tensor(v_meta), tensor(meta_of(g)),
-      tensor(meta_of(beta)),
-      optional_tensor(use_gate_in_kernel ? a_log : std::nullopt),
-      optional_tensor(use_gate_in_kernel ? dt_bias : std::nullopt),
+      // ND descriptors: this operator's reference passes
+      // `acl_format_override=ACL_FORMAT_ND` for every argument.
+      "aclnnChunkGatedDeltaRuleFwdPrepare", q_meta, stream, nd_tensor(q_meta),
+      nd_tensor(k_meta), nd_tensor(v_meta), nd_tensor(meta_of(g)),
+      nd_tensor(meta_of(beta)),
+      nd_optional_tensor(use_gate_in_kernel ? a_log : std::nullopt),
+      nd_optional_tensor(use_gate_in_kernel ? dt_bias : std::nullopt),
       int_array(cu_seqlens), int_array(chunk_indices), scalar(chunk_size),
       scalar(allow_neg_eigval), scalar(use_exp2), scalar(output_a),
-      out_tensor(meta_of(out_g_cumsum)), out_tensor(meta_of(out_w)),
-      out_tensor(meta_of(out_u)), out_tensor(meta_of(out_a)),
-      out_tensor(use_qk_l2norm_in_kernel ? meta_of(out_q_hat) : TensorMeta()),
-      out_tensor(use_qk_l2norm_in_kernel ? meta_of(out_k_hat) : TensorMeta()),
-      out_tensor(out_q_rstd.has_value() ? meta_of(*out_q_rstd) : TensorMeta()),
-      out_tensor(out_k_rstd.has_value() ? meta_of(*out_k_rstd) : TensorMeta()),
-      out_tensor(out_beta_eff.has_value() ? meta_of(*out_beta_eff)
-                                          : TensorMeta()));
+      nd_out_tensor(meta_of(out_g_cumsum)), nd_out_tensor(meta_of(out_w)),
+      nd_out_tensor(meta_of(out_u)), nd_out_tensor(meta_of(out_a)),
+      nd_out_tensor(use_qk_l2norm_in_kernel ? meta_of(out_q_hat)
+                                            : TensorMeta()),
+      nd_out_tensor(use_qk_l2norm_in_kernel ? meta_of(out_k_hat)
+                                            : TensorMeta()),
+      nd_out_tensor(out_q_rstd.has_value() ? meta_of(*out_q_rstd)
+                                           : TensorMeta()),
+      nd_out_tensor(out_k_rstd.has_value() ? meta_of(*out_k_rstd)
+                                           : TensorMeta()),
+      nd_out_tensor(out_beta_eff.has_value() ? meta_of(*out_beta_eff)
+                                             : TensorMeta()));
   return std::make_tuple(out_q_hat, out_k_hat, out_q_rstd, out_k_rstd,
                          out_beta_eff, out_g_cumsum, out_w, out_u, out_a);
 }
@@ -413,18 +429,23 @@ run_npu_chunk_gated_delta_rule_bwd_finalize(
                                  meta_of(g));
 
   FLA_STABLE_EXEC(
-      "aclnnChunkGatedDeltaRuleBwdFinalize", q_meta, stream, tensor(q_meta),
-      tensor(meta_of(k)), tensor(meta_of(v)), tensor(meta_of(v_new)),
-      tensor(meta_of(d_o)), tensor(meta_of(du)), tensor(meta_of(g)),
-      tensor(meta_of(beta)), tensor(meta_of(h)), tensor(meta_of(dh)),
-      tensor(meta_of(a)), optional_tensor(q_rstd), optional_tensor(k_rstd),
-      optional_tensor(beta_raw), int_array(cu_seqlens),
+      // Logical storage shape (this reference's `logical_tensor`).
+      "aclnnChunkGatedDeltaRuleBwdFinalize", q_meta, stream,
+      logical_tensor(q_meta), logical_tensor(meta_of(k)),
+      logical_tensor(meta_of(v)), logical_tensor(meta_of(v_new)),
+      logical_tensor(meta_of(d_o)), logical_tensor(meta_of(du)),
+      logical_tensor(meta_of(g)), logical_tensor(meta_of(beta)),
+      logical_tensor(meta_of(h)), logical_tensor(meta_of(dh)),
+      logical_tensor(meta_of(a)), logical_optional_tensor(q_rstd),
+      logical_optional_tensor(k_rstd), logical_optional_tensor(beta_raw),
+      int_array(cu_seqlens),
       int_array(chunk_indices), scalar(scale), scalar(chunk_size),
       scalar(use_qk_l2norm_in_kernel), scalar(use_beta_sigmoid_in_kernel),
       scalar(use_gate_in_kernel), scalar(state_v_first), scalar(use_exp2),
-      out_tensor(meta_of(out_dq)), out_tensor(meta_of(out_dk)),
-      out_tensor(meta_of(out_dv)), out_tensor(meta_of(out_dbeta)),
-      out_tensor(meta_of(out_dg)));
+      logical_out_tensor(meta_of(out_dq)), logical_out_tensor(meta_of(out_dk)),
+      logical_out_tensor(meta_of(out_dv)),
+      logical_out_tensor(meta_of(out_dbeta)),
+      logical_out_tensor(meta_of(out_dg)));
   return std::make_tuple(out_dq, out_dk, out_dv, out_dbeta, out_dg);
 }
 
@@ -480,23 +501,27 @@ run_npu_chunk_gated_delta_rule_bwd(
   }
 
   FLA_STABLE_EXEC(
-      "aclnnChunkGatedDeltaRuleBwd", q_meta, stream, tensor(q_meta),
-      tensor(meta_of(k)), tensor(v_meta), tensor(meta_of(g)),
-      tensor(meta_of(beta)), tensor(meta_of(A)), tensor(meta_of(d_o)),
-      optional_tensor(initial_state), optional_tensor(dht),
-      optional_tensor(q_rstd), optional_tensor(k_rstd),
-      optional_tensor(beta_raw), optional_tensor(a_log),
-      optional_tensor(dt_bias), int_array(cu_seqlens),
+      // Logical storage shape (this reference's `logical_tensor`).
+      "aclnnChunkGatedDeltaRuleBwd", q_meta, stream, logical_tensor(q_meta),
+      logical_tensor(meta_of(k)), logical_tensor(v_meta),
+      logical_tensor(meta_of(g)), logical_tensor(meta_of(beta)),
+      logical_tensor(meta_of(A)), logical_tensor(meta_of(d_o)),
+      logical_optional_tensor(initial_state), logical_optional_tensor(dht),
+      logical_optional_tensor(q_rstd), logical_optional_tensor(k_rstd),
+      logical_optional_tensor(beta_raw), logical_optional_tensor(a_log),
+      logical_optional_tensor(dt_bias), int_array(cu_seqlens),
       int_array(chunk_indices), cstr(kGdnFwdLayoutNames, layout),
       scalar(scale), scalar(chunk_size), scalar(use_exp2),
       scalar(use_gate_in_kernel), scalar(use_qk_l2norm_in_kernel),
       scalar(use_beta_sigmoid_in_kernel), scalar(state_v_first),
-      out_tensor(meta_of(out_dq)), out_tensor(meta_of(out_dk)),
-      out_tensor(meta_of(out_dv)), out_tensor(meta_of(out_d_beta)),
-      out_tensor(meta_of(out_d_g)),
-      out_tensor(out_dh0.has_value() ? meta_of(*out_dh0) : TensorMeta()),
-      /*d_a_log=*/out_tensor(TensorMeta()),
-      /*d_dt_bias=*/out_tensor(TensorMeta()));
+      logical_out_tensor(meta_of(out_dq)), logical_out_tensor(meta_of(out_dk)),
+      logical_out_tensor(meta_of(out_dv)),
+      logical_out_tensor(meta_of(out_d_beta)),
+      logical_out_tensor(meta_of(out_d_g)),
+      logical_out_tensor(out_dh0.has_value() ? meta_of(*out_dh0)
+                                             : TensorMeta()),
+      /*d_a_log=*/logical_out_tensor(TensorMeta()),
+      /*d_dt_bias=*/logical_out_tensor(TensorMeta()));
   return std::make_tuple(out_dq, out_dk, out_dv, out_d_beta, out_d_g, out_dh0,
                          std::nullopt, std::nullopt);
 }

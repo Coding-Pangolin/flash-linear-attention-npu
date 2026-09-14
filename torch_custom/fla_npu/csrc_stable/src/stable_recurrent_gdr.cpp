@@ -27,6 +27,7 @@ using fla_npu_thin::stable::allocate_like;
 using fla_npu_thin::stable::meta_of;
 using fla_npu_thin::stable::meta_of_handle;
 using fla_npu_thin::stable::meta_optional_handle;
+using fla_npu_thin::stable::kAclFormatNd;
 
 // Prefixed per op: everything lives in one TU (see stable_ops.cpp), so shared
 // local names would collide.
@@ -65,17 +66,17 @@ Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
   const TensorMeta value_meta = meta_of_handle(value);
   Tensor out = allocate_like(value_meta);
 
-  AclTensorView v_query(meta_of_handle(query));
-  AclTensorView v_key(meta_of_handle(key));
-  AclTensorView v_value(value_meta);
-  AclTensorView v_beta(meta_of_handle(beta));
-  AclTensorView v_state(meta_of_handle(state));
-  AclTensorView v_seq(meta_of_handle(actual_seq_lengths));
-  AclTensorView v_idx(meta_of_handle(ssm_state_indices));
-  AclTensorView v_g(meta_optional_handle(g));
-  AclTensorView v_gk(meta_optional_handle(gk));
-  AclTensorView v_accepted(meta_optional_handle(num_accepted_tokens));
-  AclTensorView v_out(meta_of(out));
+  AclTensorView v_query(meta_of_handle(query), kAclFormatNd);
+  AclTensorView v_key(meta_of_handle(key), kAclFormatNd);
+  AclTensorView v_value(value_meta, kAclFormatNd);
+  AclTensorView v_beta(meta_of_handle(beta), kAclFormatNd);
+  AclTensorView v_state(meta_of_handle(state), kAclFormatNd);
+  AclTensorView v_seq(meta_of_handle(actual_seq_lengths), kAclFormatNd);
+  AclTensorView v_idx(meta_of_handle(ssm_state_indices), kAclFormatNd);
+  AclTensorView v_g(meta_optional_handle(g), kAclFormatNd);
+  AclTensorView v_gk(meta_optional_handle(gk), kAclFormatNd);
+  AclTensorView v_accepted(meta_optional_handle(num_accepted_tokens), kAclFormatNd);
+  AclTensorView v_out(meta_of(out), kAclFormatNd);
 
   uint64_t workspace_size = 0;
   aclOpExecutor* executor = nullptr;

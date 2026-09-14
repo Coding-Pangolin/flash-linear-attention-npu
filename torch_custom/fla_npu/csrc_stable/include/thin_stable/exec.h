@@ -40,7 +40,12 @@ namespace stable {
 
 class TensorArg {
  public:
-  explicit TensorArg(const TensorMeta& meta) : view_(meta) {}
+  // `format` defaults to the rank-inferred one; pass `kAclFormatNd` for the
+  // call sites whose reference asks for ND explicitly (see nd_tensor below).
+  explicit TensorArg(const TensorMeta& meta,
+                     int32_t format = kAclFormatAuto,
+                     bool logical_storage = false)
+      : view_(meta, format, logical_storage) {}
   aclTensor* get() const { return view_.get(); }
 
  private:
@@ -87,6 +92,66 @@ inline TensorArg tensor(const torch::stable::Tensor& value) {
   return TensorArg(meta_of(value));
 }
 
+// The same holders again, with the descriptor forced to ND.  A handful of
+// operators' references pass `acl_format_override=ACL_FORMAT_ND` (they say the
+// tensors are row-major and the format tag should not be read from the tensor):
+// `tools/op_abi_validate.py` cannot see this, so the list is kept explicit --
+// chunk_fwd_h, chunk_gated_delta_rule_fwd_prepare, chunk_gdn_bwd_intra,
+// chunk_kda_bwd, chunk_kda_bwd_intra and the two recurrent adapters.
+inline TensorArg nd_tensor(const TensorMeta& meta) {
+  return TensorArg(meta, kAclFormatNd, /*logical_storage=*/true);
+}
+inline TensorArg nd_tensor(const torch::stable::Tensor& value) {
+  return TensorArg(meta_of(value), kAclFormatNd, /*logical_storage=*/true);
+}
+inline TensorArg nd_optional_tensor(const std::optional<TensorMeta>& meta) {
+  return TensorArg(meta.value_or(TensorMeta()), kAclFormatNd,
+                   /*logical_storage=*/true);
+}
+inline TensorArg nd_optional_tensor(std::nullopt_t) {
+  return TensorArg(TensorMeta(), kAclFormatNd, /*logical_storage=*/true);
+}
+inline TensorArg nd_optional_tensor(
+    const std::optional<torch::stable::Tensor>& value) {
+  if (!value.has_value()) {
+    return TensorArg(TensorMeta(), kAclFormatNd, /*logical_storage=*/true);
+  }
+  const TensorMeta meta = meta_of(*value);
+  return TensorArg(meta.defined ? meta : TensorMeta(), kAclFormatNd,
+                   /*logical_storage=*/true);
+}
+
+// The reference's third spelling: `storage_shape_override=_shape(tensor)` with
+// the format left to the tensor.  Used by the operators that hand the tiling a
+// logical storage shape without forcing ND: chunk_gated_delta_rule_bwd,
+// chunk_gated_delta_rule_bwd_dhu and chunk_gated_delta_rule_bwd_finalize.
+inline TensorArg logical_tensor(const TensorMeta& meta) {
+  return TensorArg(meta, kAclFormatAuto, /*logical_storage=*/true);
+}
+inline TensorArg logical_tensor(const torch::stable::Tensor& value) {
+  return TensorArg(meta_of(value), kAclFormatAuto, /*logical_storage=*/true);
+}
+inline TensorArg logical_optional_tensor(
+    const std::optional<torch::stable::Tensor>& value) {
+  if (!value.has_value()) {
+    return TensorArg(TensorMeta(), kAclFormatAuto, /*logical_storage=*/true);
+  }
+  const TensorMeta meta = meta_of(*value);
+  return TensorArg(meta.defined ? meta : TensorMeta(), kAclFormatAuto,
+                   /*logical_storage=*/true);
+}
+inline TensorArg logical_optional_tensor(std::nullopt_t) {
+  return TensorArg(TensorMeta(), kAclFormatAuto, /*logical_storage=*/true);
+}
+inline TensorArg logical_optional_tensor(
+    const std::optional<TensorMeta>& meta) {
+  return TensorArg(meta.value_or(TensorMeta()), kAclFormatAuto,
+                   /*logical_storage=*/true);
+}
+inline OutTensorArg logical_out_tensor(const TensorMeta& meta) {
+  return OutTensorArg(meta, kAclFormatAuto, /*logical_storage=*/true);
+}
+
 inline TensorArg optional_tensor(std::optional<TensorMeta> meta) {
   return TensorArg(meta.value_or(TensorMeta()));
 }
@@ -106,6 +171,9 @@ inline TensorArg optional_tensor(
 
 inline OutTensorArg out_tensor(const TensorMeta& meta) {
   return OutTensorArg(meta);
+}
+inline OutTensorArg nd_out_tensor(const TensorMeta& meta) {
+  return OutTensorArg(meta, kAclFormatNd);
 }
 inline OutTensorArg out_tensor(const torch::stable::Tensor& value) {
   return OutTensorArg(meta_of(value));

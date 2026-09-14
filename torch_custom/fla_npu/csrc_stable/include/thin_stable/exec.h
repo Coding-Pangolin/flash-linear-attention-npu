@@ -158,37 +158,44 @@ inline ScalarArg<T> scalar(T value) {
 
 namespace detail {
 
-// The GetWorkspaceSize pointer type this argument list implies.
-template <class... Ts>
-struct GetWorkspaceSignature {
-  using Type = int (*)(decltype(std::declval<const Ts&>().get())...,
-                       uint64_t*, aclOpExecutor**);
-};
+// The GetWorkspaceSize pointer type this argument list implies.  Elements may
+// be references (the macro forwards a tuple of them), so every step strips the
+// reference before asking a holder for its C value.
+template <class Element>
+using ArgCType = decltype(
+    std::declval<const std::remove_reference_t<Element>&>().get());
 
-template <class Fn, class... Ts, size_t... I>
-inline int call_get_workspace(Fn fn, std::tuple<Ts...>& args,
+template <class Tuple, size_t... I>
+inline int call_get_workspace(void* address, Tuple& args,
                               std::index_sequence<I...>, uint64_t* workspace,
                               aclOpExecutor** executor) {
+  using GetWorkspaceFn = int (*)(ArgCType<std::tuple_element_t<I, Tuple>>...,
+                                 uint64_t*, aclOpExecutor**);
+  auto fn = reinterpret_cast<GetWorkspaceFn>(address);
   return fn(std::get<I>(args).get()..., workspace, executor);
 }
 
 }  // namespace detail
 
-template <class... Ts>
+// `Tuple` is whatever the macro's std::forward_as_tuple produced; the holders
+// inside it live until the end of the calling full-expression, which is what
+// keeps every descriptor alive across both aclnn calls.
+template <class Tuple>
 inline void exec(const char* api, const TensorMeta& workspace_meta,
-                 int64_t stream, std::tuple<Ts...>&& args) {
-  using GetWorkspaceFn = typename detail::GetWorkspaceSignature<Ts...>::Type;
+                 int64_t stream, Tuple&& args) {
+  using Elements = std::remove_reference_t<Tuple>;
   const std::string base(api);
   auto& runtime = Runtime::instance();
-  auto get_workspace = reinterpret_cast<GetWorkspaceFn>(
-      runtime.symbol(base + "GetWorkspaceSize"));
+  void* get_workspace = runtime.symbol(base + "GetWorkspaceSize");
   auto launch = reinterpret_cast<LaunchFn>(runtime.symbol(base));
 
   uint64_t workspace_size = 0;
   aclOpExecutor* executor = nullptr;
-  const int get_ret = detail::call_get_workspace(
-      get_workspace, args, std::index_sequence_for<Ts...>{}, &workspace_size,
-      &executor);
+  const int get_ret =
+      detail::call_get_workspace(get_workspace, args,
+                                 std::make_index_sequence<
+                                     std::tuple_size<Elements>::value>{},
+                                 &workspace_size, &executor);
   if (get_ret != 0) {
     throw std::runtime_error("fla_npu_thin(stable): " + base +
                              "GetWorkspaceSize failed: " +
@@ -219,6 +226,7 @@ inline void exec(const char* api, const TensorMeta& workspace_meta,
 
 // Arguments go in aclnn order; see the header comment for why that is checked
 // offline rather than at run time.
-#define FLA_STABLE_EXEC(api, workspace_meta, stream, ...)        \
-  ::fla_npu_thin::stable::exec((api), (workspace_meta), (stream), \
-                               std::make_tuple(__VA_ARGS__))
+#define FLA_STABLE_EXEC(api, workspace_meta, stream, ...)         \
+  ::fla_npu_thin::stable::exec(                                   \
+      (api), (workspace_meta), (stream),                          \
+      std::forward_as_tuple(__VA_ARGS__))

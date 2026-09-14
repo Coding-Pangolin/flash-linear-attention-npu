@@ -15,19 +15,19 @@
 // ctypes reference), so a slip here fails offline instead of silently handing a
 // kernel the wrong tensor.
 
-#include "thin_stable/boxed.h"
-#include "thin_stable/exec.h"
+#include "stable/boxed.h"
+#include "stable/exec.h"
 
 #include <cstdint>
 
 namespace {
 
 using torch::stable::Tensor;
-using fla_npu_thin::stable::TensorMeta;
-using fla_npu_thin::stable::allocate_like;
-using fla_npu_thin::stable::meta_of;
-using fla_npu_thin::stable::out_tensor;
-using fla_npu_thin::stable::tensor;
+using fla_npu_stable::stable::TensorMeta;
+using fla_npu_stable::stable::allocate_like;
+using fla_npu_stable::stable::meta_of;
+using fla_npu_stable::stable::out_tensor;
+using fla_npu_stable::stable::tensor;
 
 constexpr const char* kSchema_npu_fast_gelu_custom =
     "npu_fast_gelu_custom(Tensor self, int stream) -> Tensor";

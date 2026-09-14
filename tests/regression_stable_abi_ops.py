@@ -52,7 +52,7 @@ def diff_of(a, b):
 def case_fast_gelu():
     x = torch.randn(64, 128, dtype=torch.bfloat16, device="npu")
     ref = ct.npu_fast_gelu_custom(x)
-    got = torch.ops.fla_npu_thin.npu_fast_gelu_custom(x, stream())
+    got = torch.ops.fla_npu_stable.npu_fast_gelu_custom(x, stream())
     torch.npu.synchronize()
     return "fast_gelu", diff_of(ref, got)
 
@@ -65,7 +65,7 @@ def case_kda_gate_cumsum():
     ref = ct.npu_kda_gate_cumsum(g, 64, A_log=a_log, dt_bias=dt_bias,
                                  use_gate_in_kernel=True, safe_gate=True,
                                  lower_bound=-1.0)
-    got = torch.ops.fla_npu_thin.npu_kda_gate_cumsum(
+    got = torch.ops.fla_npu_stable.npu_kda_gate_cumsum(
         g, a_log, dt_bias, None, 64, True, True, -1.0, stream())
     torch.npu.synchronize()
     return "kda_gate_cumsum", diff_of(ref, got)
@@ -77,7 +77,7 @@ def case_scaled_dot_kkt():
     g = torch.randn(B, H, T, dtype=torch.float32, device="npu")
     beta = torch.rand(B, H, T, dtype=torch.float32, device="npu")
     ref = ct.npu_chunk_scaled_dot_kkt(k, g, beta, chunk_size=cs)
-    got = torch.ops.fla_npu_thin.npu_chunk_scaled_dot_kkt(
+    got = torch.ops.fla_npu_stable.npu_chunk_scaled_dot_kkt(
         k, g, beta, None, None, cs, stream())
     torch.npu.synchronize()
     return "chunk_scaled_dot_kkt", diff_of(ref, got)
@@ -90,7 +90,7 @@ def case_bwd_dv_local():
     d_o = torch.randn(B, H, T, K, dtype=torch.bfloat16, device="npu") * 0.05
     g = torch.randn(B, H, T, dtype=torch.float32, device="npu")
     ref = ct.npu_chunk_bwd_dv_local(q, k, d_o, g, K ** -0.5, cs)
-    got = torch.ops.fla_npu_thin.npu_chunk_bwd_dv_local(
+    got = torch.ops.fla_npu_stable.npu_chunk_bwd_dv_local(
         q, k, d_o, g, None, None, None, None, K ** -0.5, cs, stream())
     torch.npu.synchronize()
     return "chunk_bwd_dv_local", diff_of(ref, got)
@@ -103,7 +103,7 @@ def case_solve_tri():
     x = ((torch.randn(B, T, H, cs) * 0.1).to(torch.bfloat16).npu())
     ref = ct.npu_solve_tri(x, layout="bsnd")
     # layout travels as an int code (enum order in the spec: bsnd=0).
-    got = torch.ops.fla_npu_thin.npu_solve_tri(x, None, None, 0, stream())
+    got = torch.ops.fla_npu_stable.npu_solve_tri(x, None, None, 0, stream())
     torch.npu.synchronize()
     return "solve_tri", diff_of(ref, got)
 
@@ -113,7 +113,7 @@ def case_local_cumsum():
     g = torch.randn(B, H, T, dtype=torch.float32, device="npu")
     ref = ct.npu_chunk_local_cumsum(g, 64)
     # output_dtype enum order in the spec: float32=0.
-    got = torch.ops.fla_npu_thin.npu_chunk_local_cumsum(
+    got = torch.ops.fla_npu_stable.npu_chunk_local_cumsum(
         g, None, None, 64, False, 1.0, True, 0, stream())
     torch.npu.synchronize()
     return "chunk_local_cumsum", diff_of(ref, got)

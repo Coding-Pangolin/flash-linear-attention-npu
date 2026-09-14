@@ -2,7 +2,7 @@
 """Fail when a stable adapter delegates a call to the ctypes reference.
 
 The ctypes layer is the reference implementation, not a transport: reaching it
-from the thin path costs the descriptor forest the migration exists to remove
+from the stable path costs the descriptor forest the migration exists to remove
 (measured: conv1d update 0.72 ms per call against 0.22 ms through the launcher,
 and chunk_kda_bwd_intra 0.85 ms against 0.20 ms).  A guard that sends a legal
 call there is therefore a performance bug, and one that grows silently as more

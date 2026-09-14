@@ -10,7 +10,7 @@
 | 2 | `csrc_stable/src/stable_ops.cpp` | `m.def(kSchema_<op>);` + `m.impl("<op>", &boxed_adapter<run_<op>>);` | ✅ |
 | 3 | `fla_npu/ops/ascendc/_stable.py` | 一个真签名 wrapper（`_op("<op>")(...)`） | ✅ |
 | 4 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子原地写参数：`MUTATED_ARGUMENTS` 加一行（必要时 `MUTATION_FLAGS`） | 视情况 |
-| 5 | `tests/regression_thin_ops.py` | 一个 parity 场景（ctypes vs launcher 逐位）+ 在场景列表登记 | ✅ |
+| 5 | `tests/regression_ops.py` | 一个 parity 场景（ctypes vs launcher 逐位）+ 在场景列表登记 | ✅ |
 | 6 | `tests/stable_scenarios.json` | 场景基线（`FLA_NPU_BASELINE_WRITE=1` 跑一次写入） | ✅ |
 | 7 | `tools/stable_ctypes_fallbacks.py` | 若曾登记过该算子的回退：删除条目 | 视情况 |
 
@@ -87,7 +87,7 @@ cstr(kChunkKdaFwdLayoutNames, layout)     // int code → const char*
         _char_code("npu_chunk_kda_fwd", "layout", layout)   # str → int code（_stable._ENUM）
 ```
 
-顺序必须与 `_stable._ENUM` 一致；layout 统一用 `BSND, BNSD, TND, NTD`，并用 `thin_stable/layout_math.h` 算 token/head/dim/chunk。
+顺序必须与 `_stable._ENUM` 一致；layout 统一用 `BSND, BNSD, TND, NTD`，并用 `stable/layout_math.h` 算 token/head/dim/chunk。
 
 ### 2.4 需要本地策略的算子
 
@@ -112,8 +112,8 @@ python -m unittest tests.test_stable_gates                    # 门禁自测
 python torch_custom/fla_npu/tools/op_abi_validate.py \
     --opp-include <opp>/op_api/include/aclnnop <cann>/include/aclnnop
 # 4. 编 .so 并跑 parity
-python csrc_stable/build_stable.py --out /path/libfla_npu_thin.so --no-debug-probe
-FLA_NPU_STABLE_LIB=/path/libfla_npu_thin.so PYTHONPATH=<env> \
+python csrc_stable/build_stable.py --out /path/libfla_npu_stable.so --no-debug-probe
+FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
     python tests/regression_stable_full.py
 ```
 

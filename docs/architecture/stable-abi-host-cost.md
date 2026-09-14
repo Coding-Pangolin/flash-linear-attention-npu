@@ -1,6 +1,6 @@
 # 热路径 host 开销：本方案 vs vLLM-Ascend（2026-09-14，910B3）
 
-环境：221，`env_full`（OPP 由 main 现编），launcher `libfla_npu_thin_c5.so`，卡 4。
+环境：221，`env_full`（OPP 由 main 现编），launcher `libfla_npu_stable_c5.so`，卡 4。
 两侧跑同一个对比脚本（`bench_recurrent_variants.py` / `bench_conv1d_vllm.py`），
 形状与计时口径一致：host 时间是 Python 调用把活交给 aclnn 的墙钟时间（计时区间内
 不 synchronize），device 时间是 NPU event。

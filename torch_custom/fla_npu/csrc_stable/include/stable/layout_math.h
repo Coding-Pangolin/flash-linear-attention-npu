@@ -12,12 +12,12 @@
 // which is the part that is easy to get subtly wrong and worth having once.
 #pragma once
 
-#include "thin_stable/acl_meta.h"
+#include "stable/acl_meta.h"
 
 #include <cstdint>
 #include <vector>
 
-namespace fla_npu_thin {
+namespace fla_npu_stable {
 namespace stable {
 namespace layout_math {
 
@@ -106,4 +106,4 @@ inline int64_t chunks(const std::vector<int64_t>& cu_seqlens,
 
 }  // namespace layout_math
 }  // namespace stable
-}  // namespace fla_npu_thin
+}  // namespace fla_npu_stable

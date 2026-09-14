@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit a Stable-ABI thin launcher: sources and ELF must stay on the C shims.
+"""Audit a Stable-ABI launcher: sources and ELF must stay on the C shims.
 
 Two independent checks:
 
@@ -13,7 +13,7 @@ Two independent checks:
 
 Usage:
   python stable_abi_audit.py --source ../csrc_stable/src/*.cpp
-  python stable_abi_audit.py --lib ../libfla_npu_thin.so
+  python stable_abi_audit.py --lib ../libfla_npu_stable.so
   python stable_abi_audit.py --source <glob> --lib <path>
 """
 

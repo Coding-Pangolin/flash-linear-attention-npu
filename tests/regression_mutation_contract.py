@@ -142,7 +142,7 @@ def scenario_recurrent_kda():
 
 
 def scenario_values_still_match_ctypes():
-    """快路径不得改变数值：同一输入下 thin public 与 ctypes 逐位一致。"""
+    """快路径不得改变数值：同一输入下 stable public 与 ctypes 逐位一致。"""
     q, k, v, g, beta, state, kw = kda_inputs()
     ref = ct.npu_recurrent_kda(q, k, v, g, beta, state.clone(), **kw)
     got = kda_public(q, k, v, g, beta, state.clone(), **kw)
@@ -153,7 +153,7 @@ def scenario_values_still_match_ctypes():
             continue
         diff = float((a.float() - b.float()).abs().max().item())
         assert diff == 0.0, f"kda[{i}]: diff={diff}"
-    print("PASS recurrent_kda(ctypes vs thin public values)")
+    print("PASS recurrent_kda(ctypes vs stable public values)")
 
 
 def main():

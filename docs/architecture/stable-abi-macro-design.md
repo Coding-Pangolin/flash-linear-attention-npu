@@ -13,7 +13,7 @@
 ```
 调用方 (fla / vLLM)
   └─ fla_npu.ops.ascendc._stable.<op>()     真签名的 Python 包装：名字映射 + int[]/枚举转换
-       └─ torch.ops.fla_npu_thin.<op>(...)  STABLE_TORCH_LIBRARY 注册的算子（boxed）
+       └─ torch.ops.fla_npu_stable.<op>(...)  STABLE_TORCH_LIBRARY 注册的算子（boxed）
             └─ boxed_adapter<run_<op>>      按 schema 拆栈，调用适配函数，打包返回
                  └─ FLA_STABLE_EXEC(...)     RAII 持有 aclTensor/aclIntArray/字符串/标量
                       └─ aclnn<Op>GetWorkspaceSize → workspace → aclnn<Op>
@@ -26,11 +26,11 @@
 | `fla_npu/ops/ascendc/_stable.py` | 每算子一个包装；`_host_ints`（int[]）、`_char_code`/`_ENUM`（枚举）、`_current_stream_ptr` |
 | `csrc_stable/src/stable_ops.cpp` | 单 TU：包含各适配文件，`m.def`/`m.impl` 注册，构建戳符号 |
 | `csrc_stable/src/stable_<family>.cpp` | 适配实现：`kSchema_<op>` + `run_<op>` |
-| `csrc_stable/include/thin_stable/boxed.h` | `boxed_adapter`：按函数签名拆栈/打包 |
-| `csrc_stable/include/thin_stable/exec.h` | RAII 参数持有者 + `FLA_STABLE_EXEC` 宏 |
-| `csrc_stable/include/thin_stable/acl_meta.h` | `TensorMeta`、`AclTensorView`、`AclIntArrayView`、分配/元数据读取 |
-| `csrc_stable/include/thin_stable/at_facade.h` | 最小 ATen 形状门面（dtype 常量、`TensorOptions`） |
-| `csrc_stable/include/thin_stable/layout_math.h` | 各 layout 下的 token/head/dim/chunk 数 |
+| `csrc_stable/include/stable/boxed.h` | `boxed_adapter`：按函数签名拆栈/打包 |
+| `csrc_stable/include/stable/exec.h` | RAII 参数持有者 + `FLA_STABLE_EXEC` 宏 |
+| `csrc_stable/include/stable/acl_meta.h` | `TensorMeta`、`AclTensorView`、`AclIntArrayView`、分配/元数据读取 |
+| `csrc_stable/include/stable/at_facade.h` | 最小 ATen 形状门面（dtype 常量、`TensorOptions`） |
+| `csrc_stable/include/stable/layout_math.h` | 各 layout 下的 token/head/dim/chunk 数 |
 
 ## 3. 书写约定（门禁依赖这些）
 
@@ -45,7 +45,7 @@
 
 `csrc_stable/build_stable.py` 把 `csrc_stable/{src,include}`（含文件名、CRLF 归一化）哈希后：
 
-- 编入 `.so`：`-DFLA_STABLE_SOURCE_HASH=...`，导出 `fla_npu_thin_source_hash()`；
+- 编入 `.so`：`-DFLA_STABLE_SOURCE_HASH=...`，导出 `fla_npu_stable_source_hash()`；
 - 写入 `fla_npu/ops/ascendc/_stable_hash.py::SOURCE_HASH`。
 
 `_stable.load()` 比对两者，不一致直接报错并给出重编命令。这样"换了适配但没重编 .so"不会静默按旧 stack index 发 kernel。

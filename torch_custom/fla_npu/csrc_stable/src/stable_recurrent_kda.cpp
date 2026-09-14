@@ -1,4 +1,4 @@
-// Stable-ABI thin launcher: npu_recurrent_kda (two outputs, optional inputs).
+// Stable-ABI launcher: npu_recurrent_kda (two outputs, optional inputs).
 //
 // Only torch/csrc/stable/* plus the shared acl_meta helper: no ATen/c10, no
 // pybind11.  `layout` is an int code because the stable value conversions have
@@ -7,10 +7,10 @@
 #include <torch/csrc/stable/stableivalue_conversions.h>
 #include <torch/csrc/stable/tensor.h>
 
-#include "thin_stable/acl_meta.h"
+#include "stable/acl_meta.h"
 // Only for the enum-table helper: this adapter builds its argument list by
 // hand (see the boxed entry point below), so it does not use FLA_STABLE_EXEC.
-#include "thin_stable/exec.h"
+#include "stable/exec.h"
 
 #include <cstdint>
 #include <optional>
@@ -18,19 +18,19 @@
 namespace {
 
 using torch::stable::Tensor;
-using fla_npu_thin::stable::AclTensorView;
-using fla_npu_thin::stable::TensorMeta;
-using fla_npu_thin::stable::allocate_bytes;
-using fla_npu_thin::stable::allocate_like;
-using fla_npu_thin::stable::enum_name;
-using fla_npu_thin::stable::meta_of;
-using fla_npu_thin::stable::meta_of_handle;
-using fla_npu_thin::stable::meta_optional_handle;
-using fla_npu_thin::stable::kAclFormatNd;
+using fla_npu_stable::stable::AclTensorView;
+using fla_npu_stable::stable::TensorMeta;
+using fla_npu_stable::stable::allocate_bytes;
+using fla_npu_stable::stable::allocate_like;
+using fla_npu_stable::stable::enum_name;
+using fla_npu_stable::stable::meta_of;
+using fla_npu_stable::stable::meta_of_handle;
+using fla_npu_stable::stable::meta_optional_handle;
+using fla_npu_stable::stable::kAclFormatNd;
 
-using fla_npu_thin::stable::aclOpExecutor;
-using fla_npu_thin::stable::aclTensor;
-using LaunchFn = fla_npu_thin::stable::LaunchFn;
+using fla_npu_stable::stable::aclOpExecutor;
+using fla_npu_stable::stable::aclTensor;
+using LaunchFn = fla_npu_stable::stable::LaunchFn;
 
 using KdaGetWorkspaceFn = int (*)(const aclTensor*, const aclTensor*,
                                   const aclTensor*, const aclTensor*,
@@ -77,7 +77,7 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
                        bool safe_gate, double lower_bound,
                        bool state_v_first, int64_t stream, Tensor* out,
                        Tensor* final_state, bool* has_final_state) {
-  auto& rt = fla_npu_thin::Runtime::instance();
+  auto& rt = fla_npu_stable::Runtime::instance();
   auto get_ws = reinterpret_cast<KdaGetWorkspaceFn>(
       rt.symbol("aclnnRecurrentKdaGetWorkspaceSize"));
   auto launch = reinterpret_cast<LaunchFn>(rt.symbol("aclnnRecurrentKda"));
@@ -121,7 +121,7 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
       state_v_first, v_out.get(), v_final.get(), &workspace_size, &executor);
   if (get_ret != 0) {
     throw std::runtime_error(
-        "fla_npu_thin(stable): aclnnRecurrentKdaGetWorkspaceSize failed: " +
+        "fla_npu(stable): aclnnRecurrentKdaGetWorkspaceSize failed: " +
         std::to_string(get_ret));
   }
 
@@ -136,7 +136,7 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
                                 reinterpret_cast<void*>(stream));
   if (launch_ret != 0) {
     throw std::runtime_error(
-        "fla_npu_thin(stable): aclnnRecurrentKda failed: " +
+        "fla_npu(stable): aclnnRecurrentKda failed: " +
         std::to_string(launch_ret));
   }
   if (!output_final_state) {

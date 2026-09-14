@@ -234,7 +234,7 @@ def _check_build_compat() -> None:
     ``_C_thin`` is a C++ extension linked against one libtorch; a torch upgrade
     or a different torch_npu packaging changes the C++ ABI underneath it.  The
     failure mode without this check is an undefined symbol at import, or (worse)
-    a silently mismatched call.  The stable-ABI launcher (``libfla_npu_thin.so``)
+    a silently mismatched call.  The stable-ABI launcher (``libfla_npu_stable.so``)
     does not need this check: it only touches ``aoti_torch_*`` symbols.
     """
 
@@ -254,7 +254,7 @@ def _check_build_compat() -> None:
     if expected and actual != expected:
         raise RuntimeError(
             f"fla_npu._C_thin was built against torch {expected} but torch "
-            f"{actual} is imported. The compiled thin launcher is ABI-matched "
+            f"{actual} is imported. The compiled stable launcher is ABI-matched "
             "to its build torch; install a matching fla_npu wheel, or set "
             "FLA_NPU_SKIP_ABI_CHECK=1 to bypass this check.")
     expected_git = getattr(build_info, "TORCH_GIT_VERSION", None)
@@ -306,7 +306,7 @@ def _get_direct_op(name: str):
     # backend that pins the CPython ABI and the libtorch C++ ABI, so falling
     # back to it silently would hand a caller a different dependency footprint
     # than the one they installed.  It stays reachable for A/B work with
-    # FLA_NPU_THIN_ABI=pybind (see _get_thin_op).
+    # FLA_NPU_STABLE_ABI=pybind (see _get_thin_op).
     if _pybind_requested():
         thin_op = _get_thin_op(name)
         if thin_op is not None:
@@ -317,7 +317,7 @@ def _get_direct_op(name: str):
     except KeyError as exc:
         raise AttributeError(f"fla_npu.ops.ascendc has no ctypes Ascend C op {name}.") from exc
     if _validate_requested():
-        _note_backend(name, "ctypes", "FLA_NPU_THIN_VALIDATE=1")
+        _note_backend(name, "ctypes", "FLA_NPU_STABLE_VALIDATE=1")
     elif _stable_backend_selected():
         _note_backend(name, "ctypes", "not carried by the stable launcher")
     else:
@@ -326,7 +326,7 @@ def _get_direct_op(name: str):
 
 
 def _abi_mode() -> str:
-    return (os.environ.get("FLA_NPU_THIN_ABI") or "").strip().lower()
+    return (os.environ.get("FLA_NPU_STABLE_ABI") or "").strip().lower()
 
 
 # Which backend serves each operator, and why anything fell back.  Recorded at
@@ -337,14 +337,14 @@ FALLBACKS: dict[str, int] = {}
 
 
 def _trace_enabled() -> bool:
-    value = os.environ.get("FLA_NPU_THIN_TRACE")
+    value = os.environ.get("FLA_NPU_STABLE_TRACE")
     return value is not None and value.upper() in {"1", "TRUE", "YES", "ON"}
 
 
 def _note_backend(name: str, backend: str, reason: str | None = None) -> None:
     """Record (and optionally report) which backend answers *name*.
 
-    ``FLA_NPU_THIN_TRACE=1`` turns this into a per-operator line on stderr.  The
+    ``FLA_NPU_STABLE_TRACE=1`` turns this into a per-operator line on stderr.  The
     interesting case is a fallback: the launcher exists but does not carry the
     operator, so ctypes answers instead -- that changes the dependency
     footprint, and it must never happen silently.
@@ -363,14 +363,14 @@ def _validate_requested() -> bool:
 
     The launcher checks what is free (the dispatcher schema) and otherwise lets
     the operator report its own illegal-domain errors, which is what keeps the
-    hot path cheap.  FLA_NPU_THIN_VALIDATE=1 switches to the ctypes reference
+    hot path cheap.  FLA_NPU_STABLE_VALIDATE=1 switches to the ctypes reference
     for the whole call: it performs the full Python validation and drives the
     same kernel, so results stay bit-identical while illegal inputs produce a
     precise message instead of an aclnn status.  It is a diagnosis switch, not
     a performance mode.
     """
 
-    value = os.environ.get("FLA_NPU_THIN_VALIDATE")
+    value = os.environ.get("FLA_NPU_STABLE_VALIDATE")
     return value is not None and value.upper() in {"1", "TRUE", "YES", "ON"}
 
 
@@ -385,13 +385,13 @@ def _stable_backend_selected() -> bool:
 
     Default order is stable -> ctypes: the stable launcher carries neither the
     CPython ABI nor the libtorch C++ ABI, so it is the only backend that keeps a
-    wheel usable across Python and torch versions.  ``FLA_NPU_THIN_ABI=pybind``
+    wheel usable across Python and torch versions.  ``FLA_NPU_STABLE_ABI=pybind``
     switches to the compiled ``_C_thin`` (A/B comparisons), and ``=ctypes``
     forces the reference path.
     """
 
     # `ctypes` has to mean ctypes: the mode used to be honoured only for the
-    # pybind launcher, so FLA_NPU_THIN_ABI=ctypes still picked the stable
+    # pybind launcher, so FLA_NPU_STABLE_ABI=ctypes still picked the stable
     # backend and the documented "force the reference path" escape hatch did
     # nothing.
     if _validate_requested():
@@ -402,8 +402,8 @@ def _stable_backend_selected() -> bool:
 def _get_stable_op(name: str):
     """Return the Stable-ABI backend entry for *name*, else None.
 
-    ``FLA_NPU_THIN_ABI`` selects the backend: unset / ``stable`` uses
-    ``libfla_npu_thin.so`` via torch.ops (falling back to ctypes for anything it
+    ``FLA_NPU_STABLE_ABI`` selects the backend: unset / ``stable`` uses
+    ``libfla_npu_stable.so`` via torch.ops (falling back to ctypes for anything it
     does not carry), ``pybind`` uses ``_C_thin``, and ``ctypes`` forces the
     Python reference path.
     """

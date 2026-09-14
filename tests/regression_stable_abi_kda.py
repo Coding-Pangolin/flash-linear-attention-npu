@@ -72,9 +72,9 @@ def main():
     torch.npu.set_device(0)
     torch.manual_seed(20260911)
     if not STABLE_LIB:
-        raise SystemExit("set FLA_NPU_STABLE_LIB to the built libfla_npu_thin.so")
+        raise SystemExit("set FLA_NPU_STABLE_LIB to the built libfla_npu_stable.so")
     _stable.load()
-    if not hasattr(torch.ops.fla_npu_thin, "npu_recurrent_kda"):
+    if not hasattr(torch.ops.fla_npu_stable, "npu_recurrent_kda"):
         raise SystemExit("stable library has no npu_recurrent_kda registered")
     print(f"loaded {STABLE_LIB}")
     q, k, v, g, beta, make_state, kw = kda_inputs()
@@ -115,7 +115,7 @@ def main():
     print("PASS T2 kda mutation contract (inplace +1, non-inplace +0)")
 
     # --- T5 host A/B ---------------------------------------------------------
-    from fla_npu.ops.ascendc import _thin
+    from fla_npu.ops.ascendc import _thin as pybind
 
     state_ct = make_state()
     state_pb = make_state()
@@ -123,14 +123,14 @@ def main():
     with torch.no_grad():
         a = bench(lambda: ct.npu_recurrent_kda(q, k, v, g, beta, state_ct,
                                                output_final_state=True, **kw))
-        b = bench(lambda: _thin.npu_recurrent_kda(
+        b = bench(lambda: pybind.npu_recurrent_kda(
             q, k, v, g, beta, state_pb, output_final_state=True, **kw))
         c = bench(lambda: call_stable(q, k, v, g, beta, state_st, kw))
         d = bench(lambda: state_op(q, k, v, g, beta, state_st,
                                    output_final_state=True, **kw))
     print("T5 host P50 (ms):")
     print(f"  1 ctypes                     {a:.4f}")
-    print(f"  2 pybind thin                {b:.4f}")
+    print(f"  2 pybind                {b:.4f}")
     print(f"  3 stable                     {c:.4f}")
     print(f"  4 stable + mutation contract {d:.4f}")
     print("ALL PASS: stable-abi kda")

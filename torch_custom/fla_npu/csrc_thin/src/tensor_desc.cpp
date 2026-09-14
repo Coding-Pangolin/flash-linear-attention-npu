@@ -1,13 +1,13 @@
 #include "thin_launcher/tensor_desc.h"
 
-#include "thin_stable/runtime.h"
+#include "stable/runtime.h"
 
 #include <ATen/ATen.h>
 
 #include <cstring>
 #include <stdexcept>
 
-namespace fla_npu_thin {
+namespace fla_npu_stable {
 
 namespace {
 
@@ -131,4 +131,4 @@ AclIntArrayView::~AclIntArrayView() {
   }
 }
 
-}  // namespace fla_npu_thin
+}  // namespace fla_npu_stable

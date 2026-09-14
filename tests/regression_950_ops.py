@@ -1,4 +1,4 @@
-"""Ascend950-only 算子安装态数值回归（ctypes vs thin parity）。
+"""Ascend950-only 算子安装态数值回归（ctypes vs stable parity）。
 
 用法（950 主机，wheel 已 pip install --target envXXX）:
     PYTHONPATH=/path/envXXX python regression_950_ops.py
@@ -16,7 +16,7 @@ torch.npu.config.allow_internal_format = False
 torch.npu.set_compile_mode(jit_compile=False)
 
 from fla_npu.ops.ascendc import _aclnn_ctypes as ct  # noqa: E402
-from fla_npu.ops.ascendc import _thin  # noqa: E402
+from fla_npu.ops.ascendc import _stable as _launcher  # noqa: E402
 
 
 # name -> max |diff| observed (0.0 when it matched); merged into the shared
@@ -78,11 +78,11 @@ def scenario_fwd_prepare():
     assert_parity("fwd_prepare(case0)",
                   ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta,
                                                             **kw),
-                  _thin.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g,
+                  _launcher.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g,
                                                                beta, **kw))
     # aLogOptional/dtBiasOptional: aclnn rejects a non-null aLog while in-kernel
     # gating is unsupported, and the ctypes reference drops it in that case, so
-    # the thin launcher must drop it too (spec args[].when = use_gate_in_kernel).
+    # the stable launcher must drop it too (spec args[].when = use_gate_in_kernel).
     a_log = torch.randn(HV, dtype=torch.float32, device="npu") * 0.1
     dt_bias = torch.randn(HV, dtype=torch.float32, device="npu") * 0.1
     for label, extra in (("a_log+dt_bias", dict(a_log=a_log, dt_bias=dt_bias)),
@@ -93,10 +93,10 @@ def scenario_fwd_prepare():
         assert_parity(
             f"fwd_prepare({label})",
             ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, **case),
-            _thin.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta,
+            _launcher.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta,
                                                          **case))
     # output_a=False and use_beta_sigmoid_in_kernel=False are part of the
-    # widened (ctypes) domain and must stay on the thin path.
+    # widened (ctypes) domain and must stay on the stable path.
     for label, extra in (("output_a=False", dict(output_a=False)),
                          ("sigmoid=False", dict(use_beta_sigmoid_in_kernel=False))):
         case = dict(kw, **extra)
@@ -104,7 +104,7 @@ def scenario_fwd_prepare():
         assert_parity(
             f"fwd_prepare({label})",
             ct.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta, **case),
-            _thin.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta,
+            _launcher.npu_chunk_gated_delta_rule_fwd_prepare(q, k, v, g, beta,
                                                          **case))
 
 
@@ -133,7 +133,7 @@ def scenario_bwd_finalize():
     assert_parity("bwd_finalize(dense)",
                   ct.npu_chunk_gated_delta_rule_bwd_finalize(
                       q, k, v, v_new, do, du, g, beta, h, dh, a, **kw),
-                  _thin.npu_chunk_gated_delta_rule_bwd_finalize(
+                  _launcher.npu_chunk_gated_delta_rule_bwd_finalize(
                       q, k, v, v_new, do, du, g, beta, h, dh, a, **kw))
 
 
@@ -153,7 +153,7 @@ def _cgdr_fwd_case(layout, B, Hk, Hv, T, K, V, cs, **kwargs):
     assert_finite_parity(
         f"chunk_gated_delta_rule_fwd({layout}_B{B}_Hk{Hk}_Hv{Hv}_T{T}_V{V})",
         ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
-        _thin.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
+        _launcher.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
 
 
 def scenario_chunk_gated_delta_rule_fwd_a5():
@@ -190,7 +190,7 @@ def scenario_chunk_gated_delta_rule_fwd_a5():
     assert_finite_parity(
         "chunk_gated_delta_rule_fwd(TND_varlen_exp2_l2norm)",
         ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
-        _thin.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
+        _launcher.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
     # legacy BNSD path on A5 as a cross-check
     _cgdr_fwd_case("BNSD", 2, 2, 4, 128, 128, 128, 64)
 
@@ -210,7 +210,7 @@ def scenario_recurrent_kda():
     kw = dict(cu_seqlens=cu, scale=K ** -0.5, layout="BSND",
               state_v_first=True)
     oc = ct.npu_recurrent_kda(q, k, v, g, beta, st_c, **kw)
-    ot = _thin.npu_recurrent_kda(q, k, v, g, beta, st_t, **kw)
+    ot = _launcher.npu_recurrent_kda(q, k, v, g, beta, st_t, **kw)
     torch.npu.synchronize()
     assert_parity("recurrent_kda(dense BSND)", oc, ot)
     assert float((st_c.float() - st_t.float()).abs().max().item()) == 0.0

@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace fla_npu_thin {
+namespace fla_npu_stable {
 
 // Opaque CANN types used by the opapi ABI. Forward-declared on purpose so this
 // translation unit only needs <acl/acl_base.h>-free declarations.
@@ -47,4 +47,4 @@ class AclIntArrayView {
   aclIntArray* ptr_ = nullptr;
 };
 
-}  // namespace fla_npu_thin
+}  // namespace fla_npu_stable

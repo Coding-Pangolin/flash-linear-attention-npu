@@ -108,7 +108,7 @@ def _setup_pure_python():
 
 
 def _build_stable_abi_library() -> list[str]:
-    """Bundle ``libfla_npu_thin.so`` (the default launcher).
+    """Bundle ``libfla_npu_stable.so`` (the default launcher).
 
     This is the ABI-free launcher: a plain shared object with no CPython and no
     libtorch C++ dependency, so a wheel that ships only this (and pure Python)
@@ -123,16 +123,16 @@ def _build_stable_abi_library() -> list[str]:
     import subprocess
 
     builder = SETUP_DIR / "csrc_stable" / "build_stable.py"
-    out = SETUP_DIR / "fla_npu" / "libfla_npu_thin.so"
+    out = SETUP_DIR / "fla_npu" / "libfla_npu_stable.so"
     subprocess.run(
         [sys.executable, str(builder), "--no-debug-probe", "--out", str(out)],
         check=True,
     )
-    return ["libfla_npu_thin.so"]
+    return ["libfla_npu_stable.so"]
 
 
 def _setup_thin_extension():
-    """Build the optional C++ thin launcher (fla_npu._C_thin).
+    """Build the optional C++ stable launcher (fla_npu._C_thin).
 
     Enable with FLA_NPU_BUILD_THIN=1. Only torch/CANN runtime symbols are used;
     no torch_npu headers or libraries are required at build time.
@@ -158,7 +158,7 @@ def _setup_thin_extension():
     setup(
         name=PACKAGE_NAME,
         version=_package_version(),
-        description="FLA NPU Python runtime with optional C++ thin launcher",
+        description="FLA NPU Python runtime with optional C++ stable launcher",
         packages=_packages(),
         package_dir=_package_dir(),
         ext_modules=[ext],
@@ -173,7 +173,7 @@ def _setup_thin_extension():
 def _runtime_requirements() -> list[str]:
     """Pin the torch/torch_npu pair the shipped extension was compiled against.
 
-    The wheel carries a compiled ``_C_thin`` (and, later, ``libfla_npu_thin.so``)
+    The wheel carries a compiled ``_C_thin`` (and, later, ``libfla_npu_stable.so``)
     that is ABI-matched to one torch build.  Without these pins pip happily
     installs it next to a different torch, and the failure shows up as a segfault
     or an undefined symbol at import instead of a resolution error.
@@ -225,7 +225,7 @@ def _write_build_info() -> None:
 
 
 def _run_thin_spec_codegen():
-    """Auto-generate thin adapters from op_specs/*.json (JSON-only workflow).
+    """Auto-generate stable adapters from op_specs/*.json (JSON-only workflow).
 
     For every spec whose op is not registered yet, invoke op_codegen_apply.py so
     a new operator only needs its spec JSON before the one-click build.
@@ -389,7 +389,7 @@ def _thin_build_enabled() -> bool:
     Off by default: ``_C_thin`` is the only piece that pins the CPython ABI and
     the libtorch C++ ABI, so it is now an opt-in A/B build
     (``FLA_NPU_BUILD_THIN=1``).  The default wheel is pure Python plus the
-    Stable-ABI ``libfla_npu_thin.so`` and therefore stays ``py3-none-any``.
+    Stable-ABI ``libfla_npu_stable.so`` and therefore stays ``py3-none-any``.
     """
 
     return _env_flag("FLA_NPU_BUILD_THIN")

@@ -1,6 +1,6 @@
 # Stable ABI 全量适配方案（唯一后端 · 对齐 vllm-ascend 性能 · 全场景覆盖）
 
-> 分支：`feat/stable-abi-thin`
+> 分支：`feat/stable-abi-macro`
 > 逐轮实测与排查过程见 [stable-abi-migration.md](./stable-abi-migration.md)
 > 本文是**执行版**：一个算子要改哪里、什么算达标、场景怎么记录、还差什么。
 
@@ -23,15 +23,15 @@
 | 需求 | 含义 | 门禁（可自动判定） |
 | --- | --- | --- |
 | "性能对齐 vllm-ascend 量级" | 我们的 host 时间与 vllm-ascend 自研 custom op 同量级 | **stable 直连 host P50 ≤ 0.073 ms**（vllm custom 实测值） |
-| "不能回退 thin" | ① 不靠回退到 pybind/ctypes 才跑得起来；② 相对 thin 不引入性能倒退 | ① 合法域内**零回退**（`stable_coverage.py`）；② `stable_public ≤ 1.15 × pybind_public` |
-| "全部场景都记录覆盖走到 stable" | 每个算子的合法输入域逐轴声明，逐场景有 parity 记录，diff/回退能报警 | spec `scenarios` + `tests/stable_scenarios.json` 基线 + `FLA_NPU_THIN_TRACE=1` 回退计数 |
+| "不能回退 pybind" | ① 不靠回退到 pybind/ctypes 才跑得起来；② 相对 pybind 不引入性能倒退 | ① 合法域内**零回退**（`stable_coverage.py`）；② `stable_public ≤ 1.15 × pybind_public` |
+| "全部场景都记录覆盖走到 stable" | 每个算子的合法输入域逐轴声明，逐场景有 parity 记录，diff/回退能报警 | spec `scenarios` + `tests/stable_scenarios.json` 基线 + `FLA_NPU_STABLE_TRACE=1` 回退计数 |
 
 补充两条不变量：
 
 - **正确性**：每场景 ctypes vs stable 逐输出 `diff == 0.0`（含 None 掩码与返回顺序），inplace / version 契约一致。
-- **依赖**：wheel `py3-none-any`，包内只有 `libfla_npu_thin.so`；`nm -D` 里 0 个 `_ZN2at/_ZN3c10`；同一产物在 torch 2.7.1 与 2.9 上都能加载并通过 parity。
+- **依赖**：wheel `py3-none-any`，包内只有 `libfla_npu_stable.so`；`nm -D` 里 0 个 `_ZN2at/_ZN3c10`；同一产物在 torch 2.7.1 与 2.9 上都能加载并通过 parity。
 - **失败语义**：合法输入逐位一致；非法输入保证**报错、不崩**，报错类型不保证同型（与 vllm-ascend 一致）。
-  需要精确消息时用 `FLA_NPU_THIN_VALIDATE=1`（整条调用改走 ctypes 参考实现，全量 Python 校验 +
+  需要精确消息时用 `FLA_NPU_STABLE_VALIDATE=1`（整条调用改走 ctypes 参考实现，全量 Python 校验 +
   同一个 kernel，合法输入结果不变）：
 
   ```
@@ -42,7 +42,7 @@
 当前证据（221 / 910B3，本轮复跑）：
 
 ```
-libfla_npu_thin.so  245 736 B
+libfla_npu_stable.so  245 736 B
 undefined  _ZN2at/_ZN3c10 = 0     aoti_torch_* = 38     导出构建戳符号 = 1
 regression_stable_full.py (910B3):  272 PASS / 0 FAIL   "ALL PASS: full stable parity"
 regression_stable_a5.py   (950PR):   38 场景 + 6 SKIP        "ALL PASS: Ascend950 stable parity"
@@ -100,8 +100,8 @@ op_api_parity.py: 26 个算子比对，0 漂移        stable_coverage.py --stri
 2) python tools/op_stable_codegen.py --all
      -> csrc_stable/generated/ops_stable_generated.inc      (C++ 适配 + STABLE_TORCH_LIBRARY 注册)
      -> fla_npu/ops/ascendc/_stable_generated.py            (Python 包装，签名与 ctypes 逐参数对齐)
-3) python csrc_stable/build_stable.py --no-debug-probe --out libfla_npu_thin.so
-4) tests/regression_thin_ops.py 里加一个场景（同一份场景同时跑 ctypes 与 stable）
+3) python csrc_stable/build_stable.py --no-debug-probe --out libfla_npu_stable.so
+4) tests/regression_ops.py 里加一个场景（同一份场景同时跑 ctypes 与 stable）
 ```
 
 改动计数：
@@ -171,10 +171,10 @@ ctypes_host ≈ 0.24–0.63 ms   ← 其中 91% 是 Python 里建销 descriptor 
 | B1b | `load()` 只解析一次库路径（原来每次调用都要 `os.environ.get` + 文件 stat）；`_current_stream_ptr()` 缓存**访问器函数**（不缓存 stream 值） | **已完成** | GDR 公共路径 0.1188 → 0.0885 ms；stream 仍逐调用读取，避免多线程串流 |
 | B2 | `int[]` 按 `tuple(values)` 缓存 host int64 张量（只缓存 list/tuple；tensor 直接透传） | **已完成** | `chunk_scaled_dot_kkt` varlen 公共路径 0.1602 → 0.0976 ms（−39%），实测复用同一张量三次逐位一致 |
 | B3 | stream：每调用 raw accessor（~1.2 µs），**不做进程级缓存** | 已完成（含 vLLM 崩溃教训） | 正确性优先 |
-| B4 | ✅ 校验分层：schema 免费 + 算子自身合法域；`FLA_NPU_THIN_VALIDATE=1` 时整条调用走 ctypes 参考实现（全量 Python 校验 + 同一个 kernel，结果逐位一致），用于报错定位与"launcher vs kernel"二分 | 已完成 | 默认不付校验成本；非法输入在 VALIDATE 下给出精确消息 |
+| B4 | ✅ 校验分层：schema 免费 + 算子自身合法域；`FLA_NPU_STABLE_VALIDATE=1` 时整条调用走 ctypes 参考实现（全量 Python 校验 + 同一个 kernel，结果逐位一致），用于报错定位与"launcher vs kernel"二分 | 已完成 | 默认不付校验成本；非法输入在 VALIDATE 下给出精确消息 |
 | B5 | 每算子交替采样 A/B（两轮，P50+P90） | 待做（当前只有 3 个算子） | 出 26 行验收表 |
 
-**"不能回退 thin" 的落点**就是 B2/B4：GDR 现在 1.26×，必须压回 ≤1.15×；
+**"不能回退 pybind" 的落点**就是 B2/B4：GDR 现在 1.26×，必须压回 ≤1.15×；
 压不下去就把"已定位到 dispatcher 逐参数成本"的书面结论记进去，而不是悄悄换回 pybind。
 
 更新（2026-09-11 晚，交替采样，pybind 0.0699 / stable 0.0879）：
@@ -191,7 +191,7 @@ ctypes_host ≈ 0.24–0.63 ms   ← 其中 91% 是 Python 里建销 descriptor 
 
 ### 4.4 逐算子 host A/B（B5，2026-09-11 实测）
 
-`tests/bench_stable_host.py` 复用 `regression_thin_ops` 的场景输入（即已被证明逐位
+`tests/bench_stable_host.py` 复用 `regression_ops` 的场景输入（即已被证明逐位
 一致的那些输入），只把两个后端的调用挂上计时器，跑 4 轮取 P50。测的是
 **host enqueue**：不含 `synchronize`；两次调用之间的 parity 比对会强制同步，
 所以两条后端面对同样的（空闲流水）条件，**比值可比**，绝对值比背靠背 decode 低。
@@ -213,7 +213,7 @@ ctypes_host ≈ 0.24–0.63 ms   ← 其中 91% 是 Python 里建销 descriptor 
 剩下 2 个（`chunk_gated_delta_rule_fwd_prepare` / `_bwd_finalize`）是 A5 专属内核，
 910b 上不参与这张表；它们的正确性由 `regression_stable_a5.py` 在 950 上覆盖。
 
-结论：**"不回退 thin" 这条要求在本轮拿到了逐算子的证据**——不是抽样外推，
+结论：**"不回退 pybind" 这条要求在本轮拿到了逐算子的证据**——不是抽样外推，
 而是 24/24 都快于我们此前实际发货的 ctypes 路径。
 
 ### 4.3 与 vllm-ascend 的内部分工差异（口径对齐）
@@ -331,7 +331,7 @@ baseline 必须清空，否则发版门禁不放行。
 ### C4. 运行期回退可视化（已实现）
 
 解析后端时记录 `BACKENDS`（算子 → 服务它的后端）与 `FALLBACKS`（被迫走 ctypes 的
-算子及次数）；`FLA_NPU_THIN_TRACE=1` 让每个算子打一行到 stderr：
+算子及次数）；`FLA_NPU_STABLE_TRACE=1` 让每个算子打一行到 stderr：
 
 ```
 [fla-npu] npu_fast_gelu_custom: stable
@@ -346,9 +346,9 @@ public dispatch: 24 operators, backends ['stable'], no fallback
 ALL PASS: full stable parity          (259 PASS, 基线 246 + 3 条 SKIP)
 ```
 
-四种模式的行为也逐一对过：默认 → `stable`；`FLA_NPU_THIN_TRACE=1` 打印该行；
-`FLA_NPU_THIN_ABI=ctypes` → `ctypes`（显式选择，不计回退）；
-`FLA_NPU_THIN_VALIDATE=1` → `ctypes` 且**记录一次回退**（带原因）。
+四种模式的行为也逐一对过：默认 → `stable`；`FLA_NPU_STABLE_TRACE=1` 打印该行；
+`FLA_NPU_STABLE_ABI=ctypes` → `ctypes`（显式选择，不计回退）；
+`FLA_NPU_STABLE_VALIDATE=1` → `ctypes` 且**记录一次回退**（带原因）。
 
 ### C5. 补全演练缺口（已完成）
 
@@ -380,8 +380,8 @@ ALL PASS: full stable parity          (259 PASS, 基线 246 + 3 条 SKIP)
 
 `.inc` 改了但忘记重编 `.so` 时，此前会退化成一个难读的 dispatcher 错误，
 甚至静默用错 stream。现在构建把 `.inc` 的 md5 通过
-`-DFLA_STABLE_SOURCE_HASH=` 编进 `libfla_npu_thin.so`（导出
-`fla_npu_thin_source_hash()`），`_stable.load()` 用 ctypes 读出来与
+`-DFLA_STABLE_SOURCE_HASH=` 编进 `libfla_npu_stable.so`（导出
+`fla_npu_stable_source_hash()`），`_stable.load()` 用 ctypes 读出来与
 `_stable_generated._GENERATED_HASH` 比对；不一致直接抛
 "was built from different generated adapters ... Rebuild ..."。负例已实测
 （把 glue 的 hash 改掉后加载报错），旧产物（无该符号）按兼容处理。
@@ -457,8 +457,8 @@ ABI，`python` 块负责 activation 字符串与 CPU 元数据数组的归一）
 | B4 | 校验分层（schema + C++ 廉价断言），把 GDR 压回 ≤1.15× | 无 |
 | C3 | ✅ parity 基线入库（910B3 245 + 950PR 12，丢失场景即 FAIL） | — |
 | B5 | ✅ 逐算子 A/B 表，两把尺子：对 ctypes 24/24 更快（0.19–0.39×）；对 pybind 23 个里 21 个持平或更快（最差 1.24×） | 见 §4.4 与 §9.4 |
-| D1 | ✅ 默认链 stable → ctypes；`FLA_NPU_THIN_ABI=pybind/ctypes` 才算显式切换（顺带修掉 `=ctypes` 其实没生效的老问题） | — |
-| D2 | ✅ 默认构建不再编 `_C_thin`，wheel 自带 `libfla_npu_thin.so`；一键编包产物 `py3-none-any` 并在干净目录安装后跑通全量 | — |
+| D1 | ✅ 默认链 stable → ctypes；`FLA_NPU_STABLE_ABI=pybind/ctypes` 才算显式切换（顺带修掉 `=ctypes` 其实没生效的老问题） | — |
+| D2 | ✅ 默认构建不再编 `_C_thin`，wheel 自带 `libfla_npu_stable.so`；一键编包产物 `py3-none-any` 并在干净目录安装后跑通全量 | — |
 | D3 | ✅ 发布矩阵：ABI-free wheel 声明 `torch>=2.7.1` / `torch_npu>=2.7.1` 下限（pybind wheel 仍是精确 pin），加载失败时给出"需要 ≥2.7.1"的明确报错 | — |
 
 建议顺序：**C1 → B4 → B5 →（#390 就绪后）conv1d update 变体**。
@@ -486,7 +486,7 @@ ABI，`python` 块负责 activation 字符串与 CPU 元数据数组的归一）
 | 轻 wrapper 算子比值偏高（GDR 1.26×） | 30 次/step × +0.02 ms ≈ +0.6 ms/step | B2/B4；并把该比值写进文档而非隐藏 |
 | 删除 `_C_thin` 后回退手段变少 | 出问题只能退 ctypes（更慢）或回滚版本 | D1 与 D2 分成两个 commit，中间留一个"stable 为默认但 pybind 仍可显式启用"的可回退点 |
 | 上游内核坏域（`solve_tri` 的 `ntd`） | 无法"覆盖" | 记录为内核问题；stable 与 ctypes 行为一致，不计入覆盖缺口 |
-| 非法输入报错类型不同型 | 客户代码若 `except` 具体异常会受影响 | 文档写明契约；`FLA_NPU_THIN_VALIDATE=1` 可开全量校验换取同型报错 |
+| 非法输入报错类型不同型 | 客户代码若 `except` 具体异常会受影响 | 文档写明契约；`FLA_NPU_STABLE_VALIDATE=1` 可开全量校验换取同型报错 |
 | NPU 内部 format 张量（非 ND） | stable 无法读取 format | 现网统一 ND；若需支持，Python 侧查 `npu_get_format` 把 code 传进 descriptor |
 | `stable_abi_audit.py` 只在本地跑 | 新引入的 ATen 依赖可能悄悄回流 | 把 audit 挂到 CI（检查 0 个 `_ZN2at/_ZN3c10`、wheel tag、`.so` 单一） |
 
@@ -495,4 +495,4 @@ ABI，`python` 块负责 activation 字符串与 CPU 元数据数组的归一）
 - `solve_tri` 的 `ntd`/转置域：上游内核自身返回全 0，ctypes 亦然——两路径一致，记为内核限制。
 - NPU 内部 format（非 ND）张量：stable 侧无稳定 API 可读 format，当前统一 ND。
 - 版本下限：头文件下限 torch 2.9，运行期符号下限 **2.7.1**（无 debug probe 构建）。
-- `torch.ops.fla_npu_thin.*` 是**实现细节**，对外只暴露 `fla_npu.ops.ascendc.*`。
+- `torch.ops.fla_npu_stable.*` 是**实现细节**，对外只暴露 `fla_npu.ops.ascendc.*`。

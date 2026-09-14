@@ -1,9 +1,9 @@
 #include <vector>
 #include <torch/extension.h>
 
-#include "thin_stable/runtime.h"
+#include "stable/runtime.h"
 
-namespace fla_npu_thin {
+namespace fla_npu_stable {
 
 at::Tensor npu_recurrent_gated_delta_rule(
     const at::Tensor& query,
@@ -463,10 +463,10 @@ std::vector<at::Tensor> npu_chunk_gated_delta_rule_fwd_prepare(
     bool use_gate_in_kernel,
     uint64_t stream);
 
-}  // namespace fla_npu_thin
+}  // namespace fla_npu_stable
 
 PYBIND11_MODULE(_C_thin, m) {
-  using namespace fla_npu_thin;
+  using namespace fla_npu_stable;
   m.def("init", [](const std::string& path) {
     Runtime::instance().init(path);
   });

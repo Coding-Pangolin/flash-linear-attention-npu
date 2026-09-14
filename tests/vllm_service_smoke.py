@@ -5,7 +5,7 @@ The per-operator parity suite compares two host paths with the same kernel, so
 it cannot see the failure modes that only appear in a server: several worker
 threads on several NPU streams, an asynchronous engine, and an operator mix
 where recurrent and conv1d calls interleave.  That gap is not hypothetical --
-the earlier thin launcher cached the current stream in a process-global and
+the earlier stable launcher cached the current stream in a process-global and
 only survived single-stream use.
 
 What this checks, against a server that is already running:

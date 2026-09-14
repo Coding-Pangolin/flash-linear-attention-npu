@@ -11,10 +11,10 @@
 #include <memory>
 #include <vector>
 
-#include "thin_stable/runtime.h"
+#include "stable/runtime.h"
 #include "thin_launcher/tensor_desc.h"
 
-namespace fla_npu_thin {
+namespace fla_npu_stable {
 
 namespace {
 
@@ -111,4 +111,4 @@ at::Tensor npu_causal_conv1d(
   return output;
 }
 
-}  // namespace fla_npu_thin
+}  // namespace fla_npu_stable

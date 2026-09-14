@@ -12,9 +12,9 @@
 //
 // Included by stable_ops.cpp (single TU); registration lives there.
 
-#include "thin_stable/at_facade.h"
-#include "thin_stable/boxed.h"
-#include "thin_stable/exec.h"
+#include "stable/at_facade.h"
+#include "stable/boxed.h"
+#include "stable/exec.h"
 
 #include <cstdint>
 #include <optional>
@@ -24,24 +24,24 @@
 namespace {
 
 using torch::stable::Tensor;
-using fla_npu_thin::stable::TensorMeta;
-using fla_npu_thin::stable::at_shim::kFloat;
-using fla_npu_thin::stable::allocate_like;
-using fla_npu_thin::stable::allocate_sizes;
-using fla_npu_thin::stable::int_array;
-using fla_npu_thin::stable::int_values;
-using fla_npu_thin::stable::meta_of;
-using fla_npu_thin::stable::logical_optional_tensor;
-using fla_npu_thin::stable::logical_out_tensor;
-using fla_npu_thin::stable::logical_tensor;
-using fla_npu_thin::stable::nd_optional_tensor;
-using fla_npu_thin::stable::nd_out_tensor;
-using fla_npu_thin::stable::nd_tensor;
-using fla_npu_thin::stable::optional_tensor;
-using fla_npu_thin::stable::out_tensor;
-using fla_npu_thin::stable::scalar;
-using fla_npu_thin::stable::size_of;
-using fla_npu_thin::stable::tensor;
+using fla_npu_stable::stable::TensorMeta;
+using fla_npu_stable::stable::at_shim::kFloat;
+using fla_npu_stable::stable::allocate_like;
+using fla_npu_stable::stable::allocate_sizes;
+using fla_npu_stable::stable::int_array;
+using fla_npu_stable::stable::int_values;
+using fla_npu_stable::stable::meta_of;
+using fla_npu_stable::stable::logical_optional_tensor;
+using fla_npu_stable::stable::logical_out_tensor;
+using fla_npu_stable::stable::logical_tensor;
+using fla_npu_stable::stable::nd_optional_tensor;
+using fla_npu_stable::stable::nd_out_tensor;
+using fla_npu_stable::stable::nd_tensor;
+using fla_npu_stable::stable::optional_tensor;
+using fla_npu_stable::stable::out_tensor;
+using fla_npu_stable::stable::scalar;
+using fla_npu_stable::stable::size_of;
+using fla_npu_stable::stable::tensor;
 
 // --- chunk counting ---------------------------------------------------------
 

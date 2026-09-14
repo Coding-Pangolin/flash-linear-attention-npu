@@ -6,7 +6,7 @@
 // the typed adapter, and pushes the results back.  That shuffle is derived from
 // the adapter's own signature, so an operator registers with one line:
 //
-//   m.impl("npu_x", &fla_npu_thin::stable::boxed_adapter<run_npu_x>);
+//   m.impl("npu_x", &fla_npu_stable::stable::boxed_adapter<run_npu_x>);
 //
 // and `run_npu_x` is a plain typed function.  Parameter types must be one of
 // Tensor, std::optional<Tensor>, int64_t, double, bool; the return type must be
@@ -24,7 +24,7 @@
 
 #include <torch/csrc/stable/stableivalue_conversions.h>
 
-namespace fla_npu_thin {
+namespace fla_npu_stable {
 namespace stable {
 
 using torch::stable::Tensor;
@@ -126,11 +126,11 @@ void boxed_adapter(StableIValue* stack, uint64_t num_inputs,
   // would otherwise silently write past the stack (or leave slots unset).
   if (packed != num_outputs) {
     throw std::runtime_error(
-        "fla_npu_thin(stable): boxed adapter packed " +
+        "fla_npu(stable): boxed adapter packed " +
         std::to_string(packed) + " outputs but the schema declares " +
         std::to_string(num_outputs));
   }
 }
 
 }  // namespace stable
-}  // namespace fla_npu_thin
+}  // namespace fla_npu_stable

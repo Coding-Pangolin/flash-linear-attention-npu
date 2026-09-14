@@ -6,13 +6,13 @@ exists so the A5 kernels can be checked on their own as well -- for instance on
 a host whose installed OPP carries the A5 kernels but rejects some A2-era
 inputs, where the full A2 suite is not the right first check.
 
-The mechanics are identical: every call to the thin backend is rerouted to the
+The mechanics are identical: every call to the stable backend is rerouted to the
 Stable-ABI launcher through the same shim, and the ctypes implementation stays
 the reference.
 
 Usage (241, wheel/package importable)::
 
-    PYTHONPATH=<pkg> FLA_NPU_STABLE_LIB=/path/libfla_npu_thin.so \
+    PYTHONPATH=<pkg> FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so \
         python tests/regression_stable_a5.py
 """
 from __future__ import annotations
@@ -33,11 +33,11 @@ from regression_stable_full import StableShim, check_baseline  # noqa: E402
 
 def main() -> int:
     import regression_950_ops as a5
-    import regression_thin_ops as suite_module
+    import regression_ops as suite_module
 
     shim = StableShim()
-    a5._thin = shim
-    suite_module._thin = shim
+    a5._launcher = shim
+    suite_module._launcher = shim
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
     device = str(torch.npu.get_device_name(0))
@@ -56,7 +56,7 @@ def main() -> int:
     # aclnnRecurrentGatedDeltaRule, no KDA backward, no fast_gelu -- which is
     # why this driver is the A5 slice of the suite rather than the whole thing.
     scenarios += [
-        # regression_thin_ops' KDA case covers BSND and TND; the 950-only one
+        # regression_ops' KDA case covers BSND and TND; the 950-only one
         # above is BSND, so this adds the varlen spelling to the A5 record too.
         suite_module.scenario_recurrent_kda,
         suite_module.scenario_chunk_fwd_h,

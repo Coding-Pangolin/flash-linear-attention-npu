@@ -1,4 +1,4 @@
-# Thin launcher：torch Stable ABI 迁移方案
+# Stable launcher：torch Stable ABI 迁移方案
 
 > **本文是迁移过程记录，描述的是 codegen 阶段的状态。** 当前实现（手写适配 +
 > 共享宏、codegen 与 pybind 产物已删除）见
@@ -7,7 +7,7 @@
 > `tools/op_stable_codegen.py`、`op_specs/`、`csrc_stable/generated/`、
 > `_stable_generated.py` 均已移除。
 
-> 分支：`feat/stable-abi-thin`（基于 `feat/fla-npu-thin-launcher` / PR #496）
+> 分支：`feat/stable-abi-macro`（基于 PR #496）
 > 目标：把 `_C_thin` 从"pybind11 + `at::Tensor`（libtorch C++ ABI + cpXXX）"迁到
 > "dispatcher 注册 + `torch::stable`（C 符号 ABI）"，用一个产物同时覆盖多个
 > torch 版本与多个 Python 版本。
@@ -37,7 +37,7 @@
 
 `torch.ops` 只是**实现细节**：对外的 `fla_npu.ops.ascendc.*` 不变，legacy
 `torch.ops.npu.*` 的废弃计划不变（那是 torch_npu op-plugin 提供的命名空间，
-与本方案的私有命名空间 `fla_npu_thin::` 不是一回事）。
+与本方案的私有命名空间 `fla_npu_stable::` 不是一回事）。
 
 ## 3. 已核实的 stable ABI 能力（torch 2.7.1 / 2.9 均有）
 
@@ -60,7 +60,7 @@
 - 产出 `torch API → stable 等价物` 对照表（本文档第 3 节是起点）。
 - 新增 `tools/stable_abi_audit.py`：
   1. 源码级：stable 构建的源文件不得出现 `ATen/`、`c10/`、`pybind11`、`torch/extension.h`；
-  2. **ELF 级（关键）**：`nm -D --undefined-only libfla_npu_thin.so` 中不得出现
+  2. **ELF 级（关键）**：`nm -D --undefined-only libfla_npu_stable.so` 中不得出现
      C++ mangled 的 ATen/c10 符号（`_ZN2at*`、`_ZN3c10*`），只允许
      `aoti_torch_*` + libc/libstdc++。这条把"是否真的只用稳定符号"变成可测断言。
 - 门禁：audit 对现状 `.so` 必须报违规（证明它能拦），对新 `.so` 必须通过。
@@ -77,7 +77,7 @@
 
 | # | 测试 | 复用的资产 | 通过标准 |
 | --- | --- | --- | --- |
-| T1 | 数值 parity（ctypes vs stable） | `tests/regression_thin_ops.py` 的 GDR 场景输入构造 | 逐输出 diff 0.0，state 亦 0.0 |
+| T1 | 数值 parity（ctypes vs stable） | `tests/regression_ops.py` 的 GDR 场景输入构造 | 逐输出 diff 0.0，state 亦 0.0 |
 | T2 | mutation 契约 | `tests/regression_mutation_contract.py` | 该 bump 的 bump、requires_grad 拒绝行为一致 |
 | T3 | 多线程多 stream | `test_thin_stream_interleaving.py` 的用法 | 事件落在调用线程的 stream |
 | T4 | 非连续 state（gap/offset） | 同上 GDR 场景 | parity 0.0 |
@@ -89,7 +89,7 @@
 
 ### Phase 2：跨 torch 版本加载矩阵（收益证明）
 
-用**低版本** torch（2.7.1）编一次 `libfla_npu_thin.so`，同一产物在下列环境跑 T1/T3/T6：
+用**低版本** torch（2.7.1）编一次 `libfla_npu_stable.so`，同一产物在下列环境跑 T1/T3/T6：
 
 - 241：torch 2.7.1 + torch_npu 2.7.1（py3.10，conda fzy）
 - 241：torch 2.9 + torch_npu 2.9（py3.12，系统 python）
@@ -108,9 +108,9 @@
 
 ### Phase 4：打包与切换
 
-- 产物 `libfla_npu_thin.so`（无 cpXXX）；wheel 平台标签改为不依赖 Python 版本；
+- 产物 `libfla_npu_stable.so`（无 cpXXX）；wheel 平台标签改为不依赖 Python 版本；
 - 元数据写 `torch>=<实测下限>,<上限`；import 时用 `aoti_torch_abi_version()` 做一次检查；
-- `FLA_NPU_THIN_ABI=stable|pybind|ctypes` 三门并存，默认切换只在 G2/G3 全绿后进行。
+- `FLA_NPU_STABLE_ABI=stable|pybind|ctypes` 三门并存，默认切换只在 G2/G3 全绿后进行。
 
 ## 5. 风险与退路
 
@@ -141,7 +141,7 @@
    实测把 `_build_info.TORCH_VERSION` 改成 `2.8.0+cpu` 后报
    "…was built against torch 2.8.0+cpu but torch 2.9.0+cpu is imported…" 并给出
    重装/绕过指引；`FLA_NPU_SKIP_ABI_CHECK=1` 时按预期放行。
-4. **三后端开关** `FLA_NPU_THIN_ABI`（实测解析到的后端模块）：
+4. **三后端开关** `FLA_NPU_STABLE_ABI`（实测解析到的后端模块）：
    unset → `_thin`（pybind，默认）；`stable` → `_stable`（torch.ops stable）；
    `ctypes` → `_aclnn_ctypes`。
 
@@ -255,9 +255,9 @@ stable 各调一次，两轮独立复跑）给出可信比值：
 2. 按 T5 门禁（≤1.15×）：**KDA 达标（1.11×），GDR 不达标（1.26×）**。
 3. 因此 Phase 3 的决策是"**按算子决定**"，而不是一刀切：
 
-   - **默认仍是 pybind**（`FLA_NPU_THIN_ABI` 不设）；这两条 ABI 轴的风险已经由
+   - **默认仍是 pybind**（`FLA_NPU_STABLE_ABI` 不设）；这两条 ABI 轴的风险已经由
      Phase 4 的 pin + 运行期 ABI 检查压住了（装错 torch 从"崩"变成"pip 拒装/清晰报错"）。
-   - **stable 作为可选后端保留并可用**（`FLA_NPU_THIN_ABI=stable`），适合
+   - **stable 作为可选后端保留并可用**（`FLA_NPU_STABLE_ABI=stable`），适合
      "Python 版本矩阵 / torch 补丁升级必须重出包"成为主要痛点的场景。
    - **全量 codegen + 23 个算子迁移暂不投入**，触发条件写死为其中任意一条：
      (a) 需要支持新的 Python 版本而 pybind 侧无法出包；
@@ -297,7 +297,7 @@ ctypes 仍是最终回退。下面统计的是 **stable 后端的覆盖率**：
 | 输出用 `alloc` 原始 C++（ATen 惯用法） | 8 | 加一层 ATen 形状的门面（`at::empty`/`empty_like`/`Tensor::options()` → shim 分配），让现有 alloc 字符串原样编译 |
 | spec `helpers` 用 ATen 惯用法 | 5 | 同上，门面覆盖后自动可用 |
 
-**门面已落盘**：`csrc_stable/include/thin_stable/at_facade.h` 提供
+**门面已落盘**：`csrc_stable/include/stable/at_facade.h` 提供
 `at_shim::{Tensor, TensorOptions, empty, empty_like, kFloat, kBFloat16, ...}`，
 全部基于 stable 元数据、经 `aoti_torch_empty_strided` 分配，`Tensor` 持有
 stable 张量的副本（shared_ptr）**不偷所有权**。已核对的必需子集（来自 spec 原文）：
@@ -327,7 +327,7 @@ stable 张量的副本（shared_ptr）**不偷所有权**。已核对的必需�
   `tools/stable_coverage.py` + `tools/op_abi_parity.py`。
 - `tests/regression_stable_abi_ops.py`（当时名为 `..._generated.py`）：逐算子的
   parity 驱动（ctypes 参考）。
-- 产物：`libfla_npu_thin.so` 136 KB、**0 个 ATen/c10 符号**。
+- 产物：`libfla_npu_stable.so` 136 KB、**0 个 ATen/c10 符号**。
 
 | 阶段 | 交付 | 证据 |
 | --- | --- | --- |
@@ -335,7 +335,7 @@ stable 张量的副本（shared_ptr）**不偷所有权**。已核对的必需�
 | Phase 1 单算子竖切 | GDR + KDA stable 适配、测试驱动 | T1/T2/T3/T6/T7 全绿；T8 记录"stable stream API 在 NPU 返回 0"；T5 GDR 1.26×、KDA 1.11×（交替采样） |
 | Phase 2 跨版本 | 同一产物跨 torch | 2.9 头编译的 x86_64 产物在 2.7.1 与 2.9 上 parity 全 0.0、契约正确、host 1.05× |
 | Phase 3 codegen + 迁移 | **按算子决策**：stable 可选、pybind 默认 | §6.11 的决策与三个触发条件 |
-| Phase 4 打包 | `_build_info.py`、wheel pin、运行期 ABI 检查、`FLA_NPU_THIN_ABI` 三后端 | 221 上编包实测（METADATA pin、mismatch 报错、bypass、三后端解析） |
+| Phase 4 打包 | `_build_info.py`、wheel pin、运行期 ABI 检查、`FLA_NPU_STABLE_ABI` 三后端 | 221 上编包实测（METADATA pin、mismatch 报错、bypass、三后端解析） |
 
 ### 7.3 覆盖刷新：A1 门面接线之后（2026-09-11，取代 §7.1 的 16/26）
 
@@ -353,12 +353,12 @@ stable 张量的副本（shared_ptr）**不偷所有权**。已核对的必需�
 ```
 stable ops exercised: 22
 243 PASS / 0 FAIL   ->   ALL PASS: full stable parity
-libfla_npu_thin.so = 243 536 B;  undefined _ZN2at/_ZN3c10 = 0;  aoti_torch_* = 41
+libfla_npu_stable.so = 243 536 B;  undefined _ZN2at/_ZN3c10 = 0;  aoti_torch_* = 41
 ```
 
 门面接线的实现要点与两个新根因（都已修）：
 
-1. `csrc_stable/include/thin_stable/at_facade.h` 提供 spec 文本需要的 ATen 子集
+1. `csrc_stable/include/stable/at_facade.h` 提供 spec 文本需要的 ATen 子集
    （`at_shim::{Tensor, TensorOptions, empty, empty_like, kFloat, kBFloat16, kHalf}`），
    `alloc` 原文里的 `at::` 由生成器**机械替换成 `shim::`**（不能 `namespace at =`，
    会与 torch 头里的真 `at` 命名空间歧义）。
@@ -403,7 +403,7 @@ libfla_npu_thin.so = 243 536 B;  undefined _ZN2at/_ZN3c10 = 0;  aoti_torch_* = 4
 
 - **不放默认**：换 stable 的代价是每调用 +0.04 ms（11 张量参数算子），按
   30 次/step 约 +1.2 ms/step，而我们无法用测试证明这值得；
-- **不放弃**：`FLA_NPU_THIN_ABI=stable` 已经可用，凡是"Python 版本矩阵"或
+- **不放弃**：`FLA_NPU_STABLE_ABI=stable` 已经可用，凡是"Python 版本矩阵"或
   "torch 补丁升级必须重出包"成为主要痛点的场景，可以按需打开；
 - **继续的条件**：先解决 §6.4 第 4 条的逐参数解包（`to<AtenTensorHandle>` 段错误，
   预期回收 ~20us，能把 stable 直连压到 0.045–0.055）。这一项需要调试器会话，
@@ -444,12 +444,12 @@ codegen 侧的准备（spec → stable 适配）不受此阻塞，但只有在�
 - `csrc_stable/src/stable_recurrent_gdr.cpp`：recurrent GDR 的 stable 注册 + 实现骨架
   （复用 `csrc_thin/src/runtime.cpp` 的 dlopen 符号解析，descriptor 语义与 ctypes 对齐）。
 - `csrc_stable/build_stable.py`：不链接 torch 编译期头之外的任何东西（只 include
-  `torch/csrc/stable/*`），产出 `libfla_npu_thin.so`。
+  `torch/csrc/stable/*`），产出 `libfla_npu_stable.so`。
 - `tests/regression_stable_abi.py`：T1/T2/T5/T6 的驱动（T3/T7 在 Phase 1 收尾补）。
 
 ### 6.1 竖切实测（2026-09-11，221 / 910B3，torch 2.9.0 + torch_npu 2.9.0.post2）
 
-产物 `libfla_npu_thin.so`（60 KB）：
+产物 `libfla_npu_stable.so`（60 KB）：
 
 ```
 NEEDED: libtorch_cpu.so / libc10.so / libtorch.so / libstdc++ / libm / libgcc_s / libc
@@ -463,9 +463,9 @@ undefined 的 aoti_torch_* 符号: 40                 ← 全部走稳定 C shim
 | --- | --- |
 | T1 parity（ctypes vs stable，非连续 paged state） | **PASS，out diff 0.0 / state diff 0.0** |
 | T6 ELF 符号审计 | PASS（0 个 `_ZN2at/_ZN3c10`） |
-| T5 host P50（同 shape，batch 8×q=1） | ctypes **0.5089 ms**、pybind-thin **0.0617 ms**、**stable 0.0686 ms** |
+| T5 host P50（同 shape，batch 8×q=1） | ctypes **0.5089 ms**、pybind **0.0617 ms**、**stable 0.0686 ms** |
 
-即：stable 路径比 ctypes 快 **7.4×**，与 pybind-thin 相差 11%（Gate T5 的预算是
+即：stable 路径比 ctypes 快 **7.4×**，与 pybind 相差 11%（Gate T5 的预算是
 ≤1.15×），已在 vllm-ascend custom（0.073 ms）同一量级。注意该数字未含 Python
 侧 stream 查询（驱动里把 stream 提到循环外，约 +0.002 ms 若放回）。
 
@@ -492,7 +492,7 @@ undefined 的 aoti_torch_* 符号: 40                 ← 全部走稳定 C shim
 
 两条都说明：stable 路径的 descriptor 语义必须逐条对齐
 `csrc_thin/src/tensor_desc.cpp`，不能想当然。Phase 3 的 codegen 要把这两条写成
-共享的 `thin_tensor.h` 实现，而不是每个算子各写一遍。
+共享的 `acl_meta.h` 实现，而不是每个算子各写一遍。
 
 ### 6.4 Phase 1 完成情况（2026-09-11，batch 8 与 batch 100 各一轮）
 
@@ -565,7 +565,7 @@ T5 明细（host P50，ms；batch 8 / batch 100 两轮）：
    读取下标恰为 `0..len(params)`、写回恰为 `0..outputs-1`，并已用负例验证能拦下。
 
 另外，本轮把 **`.so` 与 Python glue 必须同源** 做成硬检查：`.inc` 的 md5 由
-`build_stable.py` 编进库（导出 `fla_npu_thin_source_hash()`），`_stable.load()` 与
+`build_stable.py` 编进库（导出 `fla_npu_stable_source_hash()`），`_stable.load()` 与
 `_stable_generated._GENERATED_HASH` 比对，不一致直接报错并给出重编命令。
 起因是改了 `.inc` 没重编 `.so`，三次实跑结果作废、多花了一轮排查。
 
@@ -588,8 +588,8 @@ Python 侧 API 契约的修法也记在这里：`tools/op_api_parity.py` 用 `as
 
 | 构建 | 产物 | 安装后 |
 | --- | --- | --- |
-| 默认 | `...-910b.aarch64-py3-none-any.whl`，含 `libfla_npu_thin.so`、无 `_C_thin` | 无 `FLA_NPU_STABLE_LIB` / `ASCEND_CUSTOM_OPP_PATH` 也能跑全量 256 PASS |
-| `FLA_NPU_BUILD_THIN=1` | `...-910b.aarch64-cp311-cp311-linux_aarch64.whl`，含 `_C_thin*.so` + `libfla_npu_thin.so` + torch pin | `FLA_NPU_THIN_ABI=pybind` → `_thin`；不设该变量 → 仍然 `_stable_generated` |
+| 默认 | `...-910b.aarch64-py3-none-any.whl`，含 `libfla_npu_stable.so`、无 `_C_thin` | 无 `FLA_NPU_STABLE_LIB` / `ASCEND_CUSTOM_OPP_PATH` 也能跑全量 256 PASS |
+| `FLA_NPU_BUILD_THIN=1` | `...-910b.aarch64-cp311-cp311-linux_aarch64.whl`，含 `_C_thin*.so` + `libfla_npu_stable.so` + torch pin | `FLA_NPU_STABLE_ABI=pybind` → `_thin`；不设该变量 → 仍然 `_stable_generated` |
 
 `test_wheel_environment.py` 也补了 4 个用例覆盖这对开关（默认必须是 ABI-free、
 pybind 必须 opt-in、`FLA_NPU_BUILD_STABLE_ABI=0` 能出纯 ctypes wheel、
@@ -599,7 +599,7 @@ pybind 必须 opt-in、`FLA_NPU_BUILD_STABLE_ABI=0` 能出纯 ctypes wheel、
 
 ### 8.2 API 契约覆盖到 pybind，三条后端一致（2026-09-11 最后一项）
 
-`FLA_NPU_THIN_ABI=pybind` 仍然可选，所以它的 Python 表面也是对外 API 的一部分。
+`FLA_NPU_STABLE_ABI=pybind` 仍然可选，所以它的 Python 表面也是对外 API 的一部分。
 `tools/op_api_parity.py` 改成**逐后端**比对（不再"谁先找到算子就只比谁"），于是把
 pybind 的 9 处漂移也照出来了：位置默认值丢失（`causal_conv1d_bwd`、
 `chunk_gated_delta_rule_fwd_prepare`、`chunk_kda_fwd`、`recurrent_kda`）、
@@ -618,7 +618,7 @@ SIGNATURES MATCH: every backend exposes the ctypes call shape
 （pybind codegen 会跳过 cpp_only 参数），而 ctypes 是**收下但忽略**。所以 `_thin.py`
 把它加进 Python 签名、但不转发给扩展——与 ctypes 行为一致，而不是硬塞进 ABI。
 
-pybind 这一侧用 `tests/regression_thin_ops.py`（ctypes vs `_thin`）实测：
+pybind 这一侧用 `tests/regression_ops.py`（ctypes vs `_thin`）实测：
 **26 个场景 ALL PASS / 246 PASS**，其中 6 个 conv1d 场景显式 SKIP（pybind 覆盖 25/26，
 它本来就没有 `npu_causal_conv1d`）。
 
@@ -661,9 +661,9 @@ public dispatch: 24 operators, backends ['stable'], no fallback
 ALL PASS: full stable parity          (当时 259 PASS，基线 246 + 3 条带原因 SKIP)
 ```
 
-顺带把四种模式的行为钉住了：默认 `stable`；`FLA_NPU_THIN_TRACE=1` 逐算子打印
-`[fla-npu] <op>: stable`；`FLA_NPU_THIN_ABI=ctypes` 显示 `ctypes` 但**不计**回退
-（那是显式选择）；`FLA_NPU_THIN_VALIDATE=1` 显示 `ctypes` 并记一次回退（带原因）。
+顺带把四种模式的行为钉住了：默认 `stable`；`FLA_NPU_STABLE_TRACE=1` 逐算子打印
+`[fla-npu] <op>: stable`；`FLA_NPU_STABLE_ABI=ctypes` 显示 `ctypes` 但**不计**回退
+（那是显式选择）；`FLA_NPU_STABLE_VALIDATE=1` 显示 `ctypes` 并记一次回退（带原因）。
 这样"某个算子悄悄退回 ctypes"这件事从"没人会发现"变成"跑一次就报"。
 
 ### 8.5 场景广度补强：把"声明了但没跑"找出来（2026-09-11 收尾）
@@ -791,7 +791,7 @@ Python marshalling——这正是"共用实现、只搬发射"这个设计要覆
 
 **对 ctypes（旧发货路径）**：24 个算子全部更快，比值 0.19×–0.39×（快 2.6–5.3 倍）。
 
-**对 pybind（ABI 绑定的那套 thin）**：23 个算子，**21 个持平或更快**，只有 3 个略慢，
+**对 pybind（ABI 绑定的那套 stable）**：23 个算子，**21 个持平或更快**，只有 3 个略慢，
 最差 1.24×：
 
 | 算子 | pybind | stable | 比值 |

@@ -1,8 +1,8 @@
-"""全量算子 stable parity：复用 regression_thin_ops 的每个场景，但把
-`_thin`（pybind）整体改道到 stable 后端，逐个与 ctypes 参考对比。
+"""全量算子 stable parity：复用 regression_ops 的每个场景，但把
+`_launcher`（默认 pybind）整体改道到 stable 后端，逐个与 ctypes 参考对比。
 
 用法（221/241，wheel 已装入环境）：
-    FLA_NPU_STABLE_LIB=/path/libfla_npu_thin.so PYTHONPATH=<env> \
+    FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
         python tests/regression_stable_full.py
 
 任何算子/场景在 stable 侧缺失或回退，都会在这里暴露为 AttributeError/差异。
@@ -87,7 +87,7 @@ def check_baseline(device: str, suite) -> int:
 
 
 class StableShim:
-    """Stands in for the `_thin` module inside the regression suite."""
+    """Stands in for the `_launcher` module inside the regression suite."""
 
     def __init__(self):
         self.calls: dict[str, int] = {}
@@ -113,11 +113,11 @@ class StableShim:
 
 
 class PublicShim:
-    """Stands in for `_thin` by calling the public API.
+    """Stands in for `_launcher` by calling the public API.
 
     The scenarios then exercise the *whole* dispatch chain -- backend
     selection, the mutation contract, the wrapper -- instead of pinning the
-    backend directly.  With FLA_NPU_THIN_TRACE=1 every operator announces which
+    backend directly.  With FLA_NPU_STABLE_TRACE=1 every operator announces which
     backend served it, and the run fails if anything had to fall back to ctypes
     (FALLBACKS is the counted form of "the launcher did not carry this
     operator", which changes the dependency footprint and must not happen
@@ -156,8 +156,8 @@ def main() -> int:
     if not _stable.available():
         raise SystemExit(
             "no Stable-ABI launcher: set FLA_NPU_STABLE_LIB to a built "
-            "libfla_npu_thin.so, or install a wheel that bundles one")
-    import regression_thin_ops as suite
+            "libfla_npu_stable.so, or install a wheel that bundles one")
+    import regression_ops as suite
 
     suite.group_cli(parser)
     args = parser.parse_args()
@@ -165,7 +165,7 @@ def main() -> int:
     shim = StableShim()
     if (os.environ.get("FLA_NPU_DISPATCH") or "").strip().lower() == "public":
         shim = PublicShim()
-    suite._thin = shim  # every scenario now exercises the stable backend
+    suite._launcher = shim  # every scenario now exercises the stable backend
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
     scenarios = [
@@ -237,7 +237,7 @@ def main() -> int:
     elif "950" in device:
         import regression_950_ops as a5
 
-        a5._thin = shim
+        a5._launcher = shim
         for scenario in (a5.scenario_fwd_prepare, a5.scenario_bwd_finalize,
                          a5.scenario_chunk_gated_delta_rule_fwd_a5,
                          suite.scenario_chunk_gated_delta_rule_bwd):

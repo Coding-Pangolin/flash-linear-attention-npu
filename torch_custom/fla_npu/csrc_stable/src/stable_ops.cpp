@@ -1,4 +1,4 @@
-// Single translation unit for every Stable-ABI thin adapter.
+// Single translation unit for every Stable-ABI adapter.
 //
 // torch/csrc/stable/tensor_inl.h defines non-inline member functions (e.g.
 // `Tensor::scalar_type()`), so including the stable headers from more than one
@@ -27,7 +27,7 @@
 // default visibility explicitly -- otherwise ctypes cannot find the symbol and
 // the check would silently pass for every artifact.
 extern "C" __attribute__((visibility("default")))
-const char* fla_npu_thin_source_hash() {
+const char* fla_npu_stable_source_hash() {
   return FLA_STABLE_SOURCE_HASH;
 }
 
@@ -35,7 +35,7 @@ const char* fla_npu_thin_source_hash() {
 // namespace per TU: the macros expand to a fixed static-init symbol name, so a
 // second block for the same namespace would be a redefinition.  The codegen
 // phase therefore collects every adapter's schema/impl into these two lists.
-STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
+STABLE_TORCH_LIBRARY(fla_npu_stable, m) {
   m.def(kSchemaRecurrentGdr);
   m.def(kSchemaRecurrentKda);
   m.def(kSchema_npu_fast_gelu_custom);
@@ -72,81 +72,81 @@ STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
 #endif
 }
 
-STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
+STABLE_TORCH_LIBRARY_IMPL(fla_npu_stable, CompositeExplicitAutograd, m) {
   m.impl("npu_recurrent_gated_delta_rule", &boxed_recurrent_gated_delta_rule);
   m.impl("npu_recurrent_kda", &boxed_recurrent_kda);
   m.impl("npu_fast_gelu_custom",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_fast_gelu_custom>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_fast_gelu_custom>);
   m.impl("npu_fast_gelu_custom_backward",
-         &fla_npu_thin::stable::boxed_adapter<
+         &fla_npu_stable::stable::boxed_adapter<
              run_npu_fast_gelu_custom_backward>);
   m.impl("npu_kda_gate_cumsum",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_kda_gate_cumsum>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_kda_gate_cumsum>);
   m.impl("npu_chunk_kda_bwd_intra",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_kda_bwd_intra>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_kda_bwd_intra>);
   m.impl("npu_chunk_kda_bwd_recompute",
-         &fla_npu_thin::stable::boxed_adapter<
+         &fla_npu_stable::stable::boxed_adapter<
              run_npu_chunk_kda_bwd_recompute>);
   m.impl("npu_chunk_kda_fwd",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_kda_fwd>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_kda_fwd>);
   m.impl("npu_chunk_bwd_dv_local",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_bwd_dv_local>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_bwd_dv_local>);
   m.impl("npu_chunk_local_cumsum",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_local_cumsum>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_local_cumsum>);
   m.impl("npu_chunk_scaled_dot_kkt",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_scaled_dot_kkt>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_scaled_dot_kkt>);
   m.impl("npu_chunk_bwd_dqkwg",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_bwd_dqkwg>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_bwd_dqkwg>);
   m.impl("npu_prepare_wy_repr_bwd_da",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_prepare_wy_repr_bwd_da>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_prepare_wy_repr_bwd_da>);
   m.impl(
       "npu_prepare_wy_repr_bwd_full",
-      &fla_npu_thin::stable::boxed_adapter<run_npu_prepare_wy_repr_bwd_full>);
+      &fla_npu_stable::stable::boxed_adapter<run_npu_prepare_wy_repr_bwd_full>);
   m.impl("npu_prepare_wy_repr_bwd",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_prepare_wy_repr_bwd>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_prepare_wy_repr_bwd>);
   m.impl("npu_recompute_w_u_fwd",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_recompute_w_u_fwd>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_recompute_w_u_fwd>);
   m.impl("npu_causal_conv1d_bwd",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_causal_conv1d_bwd>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_causal_conv1d_bwd>);
   m.impl("npu_chunk_fwd_o",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_fwd_o>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_fwd_o>);
   m.impl("npu_chunk_gdn_bwd_intra",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_gdn_bwd_intra>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_gdn_bwd_intra>);
   m.impl("npu_causal_conv1d_fn",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_causal_conv1d_fn>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_causal_conv1d_fn>);
   m.impl("npu_causal_conv1d_update",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_causal_conv1d_update>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_causal_conv1d_update>);
   m.impl("npu_causal_conv1d",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_causal_conv1d>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_causal_conv1d>);
   m.impl("npu_chunk_fwd_h",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_fwd_h>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_fwd_h>);
   m.impl(
       "npu_chunk_gated_delta_rule_fwd_h",
-      &fla_npu_thin::stable::boxed_adapter<
+      &fla_npu_stable::stable::boxed_adapter<
           run_npu_chunk_gated_delta_rule_fwd_h>);
   m.impl(
       "npu_chunk_gated_delta_rule_bwd_dhu",
-      &fla_npu_thin::stable::boxed_adapter<
+      &fla_npu_stable::stable::boxed_adapter<
           run_npu_chunk_gated_delta_rule_bwd_dhu>);
   m.impl(
       "npu_chunk_gated_delta_rule_fwd",
-      &fla_npu_thin::stable::boxed_adapter<
+      &fla_npu_stable::stable::boxed_adapter<
           run_npu_chunk_gated_delta_rule_fwd>);
   m.impl("npu_solve_tri",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_solve_tri>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_solve_tri>);
   m.impl(
       "npu_chunk_gated_delta_rule_fwd_prepare",
-      &fla_npu_thin::stable::boxed_adapter<
+      &fla_npu_stable::stable::boxed_adapter<
           run_npu_chunk_gated_delta_rule_fwd_prepare>);
   m.impl(
       "npu_chunk_gated_delta_rule_bwd_finalize",
-      &fla_npu_thin::stable::boxed_adapter<
+      &fla_npu_stable::stable::boxed_adapter<
           run_npu_chunk_gated_delta_rule_bwd_finalize>);
   m.impl("npu_chunk_kda_bwd",
-         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_kda_bwd>);
+         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_kda_bwd>);
   m.impl(
       "npu_chunk_gated_delta_rule_bwd",
-      &fla_npu_thin::stable::boxed_adapter<
+      &fla_npu_stable::stable::boxed_adapter<
           run_npu_chunk_gated_delta_rule_bwd>);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.impl("_stream_probe", &boxed_stream_probe);

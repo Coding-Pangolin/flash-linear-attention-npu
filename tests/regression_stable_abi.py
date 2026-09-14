@@ -1,7 +1,7 @@
 """Stable-ABI 竖切验证（Phase 1）：recurrent GDR 走 torch.ops 注册的 stable 实现。
 
-用法（221，已 build 出 libfla_npu_thin.so）：
-    FLA_NPU_STABLE_LIB=/path/libfla_npu_thin.so PYTHONPATH=<env> \
+用法（221，已 build 出 libfla_npu_stable.so）：
+    FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
         python tests/regression_stable_abi.py
 
 覆盖计划里的 T1（parity）、T2（mutation 契约）、T3（多线程多 stream）、
@@ -89,7 +89,7 @@ def main():
     torch.npu.set_device(0)
     torch.manual_seed(20260911)
     if not STABLE_LIB:
-        raise SystemExit("set FLA_NPU_STABLE_LIB to the built libfla_npu_thin.so")
+        raise SystemExit("set FLA_NPU_STABLE_LIB to the built libfla_npu_stable.so")
     assert _stable.available(), "stable library loaded but op not registered"
     print(f"loaded {STABLE_LIB}")
     inputs = make_inputs()
@@ -150,7 +150,7 @@ def main():
     # --- T8 stable stream probe ----------------------------------------------
     device_index = int(torch.npu.current_device())
     py_raw = int(torch_npu._C._npu_getCurrentRawStream(device_index))
-    if hasattr(torch.ops.fla_npu_thin, "_stream_probe"):
+    if hasattr(torch.ops.fla_npu_stable, "_stream_probe"):
         shim_id, stable_id = _stable.stream_probe(device_index)
         print(f"T8 stream probe: python_raw={py_raw} shim_stream_id={shim_id} "
               f"stable_stream_id={stable_id} "
@@ -221,21 +221,21 @@ def main():
           f"(events landed on the calling stream, parity 0.0)")
 
     # --- T5 host A/B (5 rows: isolate dispatcher vs Python wrapper) ----------
-    from fla_npu.ops.ascendc import _thin
+    from fla_npu.ops.ascendc import _thin as pybind
 
     state_a, _ = inputs["make_state"]()
     state_b, _ = inputs["make_state"]()
     state_r, _ = inputs["make_state"]()
     stream = int(torch_npu._C._npu_getCurrentRawStream(device_index))
-    ext = _thin._extension()
+    ext = pybind._extension()
     # Cache the op handle once: the torch.ops attribute chain costs a few us per
     # call and is not what we are measuring.
-    _stable_op = torch.ops.fla_npu_thin.npu_recurrent_gated_delta_rule
+    _stable_op = torch.ops.fla_npu_stable.npu_recurrent_gated_delta_rule
     pybind_public = _wrap_mutable_direct_op(
         "npu_recurrent_gated_delta_rule",
-        _thin.npu_recurrent_gated_delta_rule)
+        pybind.npu_recurrent_gated_delta_rule)
 
-    def thin_direct():
+    def pybind_direct():
         return ext.npu_recurrent_gated_delta_rule(
             inputs["query"], inputs["key"], inputs["value"], state_b,
             inputs["beta"], float(inputs["scale"]), inputs["actual_seq_lengths"],
@@ -249,15 +249,15 @@ def main():
             float(inputs["scale"]), stream)
 
     with torch.no_grad():
-        probe = (bench(lambda: torch.ops.fla_npu_thin._stream_probe(0))
-                 if hasattr(torch.ops.fla_npu_thin, "_stream_probe") else 0.0)
+        probe = (bench(lambda: torch.ops.fla_npu_stable._stream_probe(0))
+                 if hasattr(torch.ops.fla_npu_stable, "_stream_probe") else 0.0)
         a = bench(lambda: ct.npu_recurrent_gated_delta_rule(
             inputs["query"], inputs["key"], inputs["value"], state_a,
             beta=inputs["beta"], g=inputs["g"], scale=inputs["scale"],
             actual_seq_lengths=inputs["actual_seq_lengths"],
             ssm_state_indices=inputs["ssm_state_indices"],
             num_accepted_tokens=None))
-        b = bench(thin_direct)
+        b = bench(pybind_direct)
         e = bench(stable_direct)
         c = bench(lambda: call_public_stable(inputs, state_s))
         d = bench(lambda: stable_op(

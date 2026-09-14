@@ -1,6 +1,6 @@
-"""Stable-ABI thin backend (Phase 1).
+"""Stable-ABI backend (Phase 1).
 
-Loads ``libfla_npu_thin.so`` (a plain shared object registered through
+Loads ``libfla_npu_stable.so`` (a plain shared object registered through
 ``STABLE_TORCH_LIBRARY``) and exposes the same Python call shape as the ctypes
 and pybind backends.  This module contains no ABI-sensitive code: the only
 tensor objects crossing the boundary are handled by torch's own dispatcher.
@@ -36,7 +36,7 @@ _INT_CACHE_MAX = 64
 
 # The stable value conversions have no std::string support, so string enum
 # arguments travel as int codes.  Every layout argument uses the same order --
-# BSND, BNSD, TND, NTD -- which is what `thin_stable/layout_math.h` assumes;
+# BSND, BNSD, TND, NTD -- which is what `stable/layout_math.h` assumes;
 # tools/op_abi_parity.py checks these tables against the adapters' name tables.
 _LAYOUT_CODES = {"BSND": 0, "BNSD": 1, "TND": 2, "NTD": 3}
 
@@ -62,11 +62,11 @@ def _lib_path() -> str:
         return path
     # Wheels that ship the ABI-free launcher place it next to this module.
     bundled = os.path.join(os.path.dirname(os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__)))), "libfla_npu_thin.so")
+        os.path.dirname(os.path.abspath(__file__)))), "libfla_npu_stable.so")
     if os.path.exists(bundled):
         return bundled
     raise RuntimeError(
-        f"{_LIB_ENV} is not set and no bundled libfla_npu_thin.so was found")
+        f"{_LIB_ENV} is not set and no bundled libfla_npu_stable.so was found")
 
 
 def _current_stream_ptr() -> int:
@@ -157,8 +157,8 @@ def _check_build_stamp(path: str) -> None:
         import ctypes
 
         lib = ctypes.CDLL(path)
-        lib.fla_npu_thin_source_hash.restype = ctypes.c_char_p
-        actual = lib.fla_npu_thin_source_hash().decode("utf-8", "replace")
+        lib.fla_npu_stable_source_hash.restype = ctypes.c_char_p
+        actual = lib.fla_npu_stable_source_hash().decode("utf-8", "replace")
     except Exception:
         return
     if actual in ("unknown", expected):
@@ -174,7 +174,7 @@ def available() -> bool:
         load()
         import torch
 
-        return hasattr(torch.ops.fla_npu_thin, "npu_recurrent_gated_delta_rule")
+        return hasattr(torch.ops.fla_npu_stable, "npu_recurrent_gated_delta_rule")
     except Exception:
         return False
 
@@ -191,7 +191,7 @@ def _op(name: str):
         load()
         import torch
 
-        op = getattr(torch.ops.fla_npu_thin, name)
+        op = getattr(torch.ops.fla_npu_stable, name)
         _OP_CACHE[name] = op
     return op
 
@@ -400,7 +400,7 @@ def _char_code(op_name: str, argument: str, value):
 # does no argument binding at run time) that maps the public argument names
 # onto the adapter's schema and nothing else.  Validation stays with the
 # operator: an illegal input either reaches aclnn and comes back as a status,
-# or is caught by the C++ adapter.  FLA_NPU_THIN_VALIDATE=1 routes
+# or is caught by the C++ adapter.  FLA_NPU_STABLE_VALIDATE=1 routes
 # such a call through the ctypes reference instead, which validates in Python
 # and reports a precise message.
 #
@@ -456,7 +456,7 @@ def npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db, dg, *,
     shape/flag guard only kept the dense-BNSD case on this path and sent
     everything else through the ctypes reference, which cost as much as the
     reference for the whole operator; validation is now the kernel's job, and
-    FLA_NPU_THIN_VALIDATE=1 routes a call through the reference when a precise
+    FLA_NPU_STABLE_VALIDATE=1 routes a call through the reference when a precise
     Python-side message matters.
     """
 
@@ -968,7 +968,7 @@ def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
     ``layout='tnd'`` is refused rather than forwarded.  Measured on 910B3 with
     the OPP in this tree: the kernel kills the process for that spelling, with
     and without cu_seqlens, so letting it through would turn an illegal input
-    into a crash on the thin path -- exactly the class of input the reference
+    into a crash on the stable path -- exactly the class of input the reference
     rejects in Python.
     """
 

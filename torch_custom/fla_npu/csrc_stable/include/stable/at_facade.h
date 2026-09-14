@@ -12,7 +12,7 @@
 // nothing is stolen and nothing dangles.
 #pragma once
 
-#include "thin_stable/acl_meta.h"
+#include "stable/acl_meta.h"
 
 #include <cstdint>
 #include <memory>
@@ -20,7 +20,7 @@
 #include <string>
 #include <vector>
 
-namespace fla_npu_thin {
+namespace fla_npu_stable {
 namespace stable {
 namespace at_shim {
 
@@ -70,7 +70,7 @@ class Tensor {
   TensorMeta meta() const {
     if (!defined()) {
       throw std::runtime_error(
-          "fla_npu_thin(stable): undefined tensor used in a size/options "
+          "fla_npu(stable): undefined tensor used in a size/options "
           "expression");
     }
     return meta_of(*holder_);
@@ -93,4 +93,4 @@ inline Tensor empty_like(const Tensor& like) {
 
 }  // namespace at_shim
 }  // namespace stable
-}  // namespace fla_npu_thin
+}  // namespace fla_npu_stable

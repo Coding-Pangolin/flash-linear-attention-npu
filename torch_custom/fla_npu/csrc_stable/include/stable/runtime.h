@@ -10,7 +10,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace fla_npu_thin {
+namespace fla_npu_stable {
 
 class Runtime {
  public:
@@ -34,4 +34,4 @@ class Runtime {
   std::unordered_map<std::string, void*> cache_;
 };
 
-}  // namespace fla_npu_thin
+}  // namespace fla_npu_stable

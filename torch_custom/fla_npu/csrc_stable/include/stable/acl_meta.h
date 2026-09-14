@@ -1,4 +1,4 @@
-// Shared descriptor/metadata layer for the Stable-ABI thin launchers.
+// Shared descriptor/metadata layer for the Stable-ABI launchers.
 //
 // Everything here talks to CANN through the dlopen'd acl* symbols and to torch
 // exclusively through the aoti_torch_* C shims.  No ATen/c10 headers, no
@@ -9,7 +9,7 @@
 #include <torch/csrc/stable/stableivalue_conversions.h>
 #include <torch/csrc/stable/tensor.h>
 
-#include "thin_stable/runtime.h"
+#include "stable/runtime.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-namespace fla_npu_thin {
+namespace fla_npu_stable {
 namespace stable {
 
 typedef struct aclTensor aclTensor;
@@ -59,7 +59,7 @@ inline int32_t acl_dtype(int32_t scalar_type) {
       return 27;  // kBFloat16 -> ACL_BF16
     default:
       throw std::runtime_error(
-          "fla_npu_thin(stable): unsupported tensor dtype id " +
+          "fla_npu(stable): unsupported tensor dtype id " +
           std::to_string(scalar_type));
   }
 }
@@ -82,7 +82,7 @@ inline int64_t element_size(int32_t scalar_type) {
       return 8;
     default:
       throw std::runtime_error(
-          "fla_npu_thin(stable): unsupported dtype id " +
+          "fla_npu(stable): unsupported dtype id " +
           std::to_string(scalar_type));
   }
 }
@@ -172,7 +172,7 @@ inline TensorMeta meta_of(const torch::stable::Tensor& tensor) {
 inline int64_t size_of(const TensorMeta& meta, int64_t dim) {
   if (dim < 0 || dim >= meta.ndim) {
     throw std::runtime_error(
-        "fla_npu_thin(stable): size_of dim out of range");
+        "fla_npu(stable): size_of dim out of range");
   }
   return meta.sizes[static_cast<size_t>(dim)];
 }
@@ -263,7 +263,7 @@ class AclTensorView {
     }
     if (ptr_ == nullptr) {
       throw std::runtime_error(
-          "fla_npu_thin(stable): aclCreateTensor returned nullptr");
+          "fla_npu(stable): aclCreateTensor returned nullptr");
     }
   }
 
@@ -363,7 +363,7 @@ inline std::vector<int64_t> host_int_values(AtenTensorHandle handle) {
     }
   } else {
     throw std::runtime_error(
-        "fla_npu_thin(stable): int[] argument must be an int32/int64 tensor");
+        "fla_npu(stable): int[] argument must be an int32/int64 tensor");
   }
   return values;
 }
@@ -382,7 +382,7 @@ class AclIntArrayView {
     ptr_ = create(owned_.data(), static_cast<uint64_t>(owned_.size()));
     if (ptr_ == nullptr) {
       throw std::runtime_error(
-          "fla_npu_thin(stable): aclCreateIntArray returned nullptr");
+          "fla_npu(stable): aclCreateIntArray returned nullptr");
     }
   }
 
@@ -405,4 +405,4 @@ class AclIntArrayView {
 };
 
 }  // namespace stable
-}  // namespace fla_npu_thin
+}  // namespace fla_npu_stable

@@ -31,9 +31,9 @@
 #include <utility>
 #include <vector>
 
-#include "thin_stable/acl_meta.h"
+#include "stable/acl_meta.h"
 
-namespace fla_npu_thin {
+namespace fla_npu_stable {
 namespace stable {
 
 // --- argument holders -------------------------------------------------------
@@ -205,7 +205,7 @@ inline std::vector<int64_t> int_values(
         }
       } else {
         throw std::runtime_error(
-            "fla_npu_thin(stable): int[] argument must be an int32/int64 "
+            "fla_npu(stable): int[] argument must be an int32/int64 "
             "tensor");
       }
     }
@@ -227,7 +227,7 @@ inline const char* enum_name(const char* const (&names)[N], int64_t code) {
   if (code >= 0 && static_cast<size_t>(code) < N) {
     return names[code];
   }
-  throw std::runtime_error("fla_npu_thin(stable): bad enum code " +
+  throw std::runtime_error("fla_npu(stable): bad enum code " +
                            std::to_string(code));
 }
 
@@ -284,7 +284,7 @@ inline void exec(const char* api, const TensorMeta& workspace_meta,
                                      std::tuple_size<Elements>::value>{},
                                  &workspace_size, &executor);
   if (get_ret != 0) {
-    throw std::runtime_error("fla_npu_thin(stable): " + base +
+    throw std::runtime_error("fla_npu(stable): " + base +
                              "GetWorkspaceSize failed: " +
                              std::to_string(get_ret));
   }
@@ -303,17 +303,17 @@ inline void exec(const char* api, const TensorMeta& workspace_meta,
   const int launch_ret = launch(workspace_ptr, workspace_size, executor,
                                 reinterpret_cast<void*>(stream));
   if (launch_ret != 0) {
-    throw std::runtime_error("fla_npu_thin(stable): " + base + " failed: " +
+    throw std::runtime_error("fla_npu(stable): " + base + " failed: " +
                              std::to_string(launch_ret));
   }
 }
 
 }  // namespace stable
-}  // namespace fla_npu_thin
+}  // namespace fla_npu_stable
 
 // Arguments go in aclnn order; see the header comment for why that is checked
 // offline rather than at run time.
 #define FLA_STABLE_EXEC(api, workspace_meta, stream, ...)         \
-  ::fla_npu_thin::stable::exec(                                   \
+  ::fla_npu_stable::stable::exec(                                   \
       (api), (workspace_meta), (stream),                          \
       std::forward_as_tuple(__VA_ARGS__))

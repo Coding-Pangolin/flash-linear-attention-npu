@@ -182,7 +182,7 @@ class WheelEnvironmentTest(unittest.TestCase):
         """The default artifact must not pin the CPython/libtorch C++ ABI.
 
         ``_C_thin`` is a CPython extension and therefore drags both ABI axes
-        into the wheel; the Stable-ABI ``libfla_npu_thin.so`` is plain package
+        into the wheel; the Stable-ABI ``libfla_npu_stable.so`` is plain package
         data, so the default build ships that one and stays ``py3-none-any``.
         """
 
@@ -268,7 +268,7 @@ class WheelEnvironmentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             wheel = Path(temp_dir) / "demo-1.0-py3-none-any.whl"
             self._write_minimal_wheel(
-                wheel, {"fla_npu/libfla_npu_thin.so": b"\x7fELF"})
+                wheel, {"fla_npu/libfla_npu_stable.so": b"\x7fELF"})
             build_wheel["_inject_runtime_pins"](wheel)
             text = self._wheel_metadata(wheel)
         self.assertIn("Requires-Dist: torch>=2.7.1", text)

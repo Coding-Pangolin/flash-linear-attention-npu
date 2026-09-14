@@ -1,11 +1,11 @@
-#include "thin_stable/runtime.h"
+#include "stable/runtime.h"
 
 #include <dlfcn.h>
 
 #include <cstdlib>
 #include <stdexcept>
 
-namespace fla_npu_thin {
+namespace fla_npu_stable {
 
 namespace {
 
@@ -38,8 +38,8 @@ void Runtime::init(const std::string& custom_lib_path) {
   }
   if (cust_path.empty()) {
     throw std::runtime_error(
-        "thin launcher: FLA_NPU_OP_API_LIB is not set; call "
-        "fla_npu.load_ascendc_opapi_libraries() before using the thin launcher");
+        "stable launcher: FLA_NPU_OP_API_LIB is not set; call "
+        "fla_npu.load_ascendc_opapi_libraries() before using the stable launcher");
   }
   custom_handle_ = open_custom_library(cust_path);
   cann_handle_ = dlopen_required("libopapi.so", "CANN opapi");
@@ -64,10 +64,10 @@ void* Runtime::symbol(const std::string& name) {
     addr = dlsym(cann_handle_, name.c_str());
   }
   if (addr == nullptr) {
-    throw std::runtime_error("thin launcher: symbol not found: " + name);
+    throw std::runtime_error("stable launcher: symbol not found: " + name);
   }
   cache_[name] = addr;
   return addr;
 }
 
-}  // namespace fla_npu_thin
+}  // namespace fla_npu_stable

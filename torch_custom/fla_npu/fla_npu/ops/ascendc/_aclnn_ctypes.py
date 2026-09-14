@@ -2165,9 +2165,9 @@ def _launch_causal_conv1d(
         conv_states = conv_states.contiguous()
 
     # This is the ctypes reference: it validates in Python, normalises the
-    # metadata and builds the aclnn call, descriptors included.  The thin path
+    # metadata and builds the aclnn call, descriptors included.  The stable path
     # does not come through here any more -- the family has real adapters -- so
-    # this stays the parity baseline and the FLA_NPU_THIN_VALIDATE=1 target.
+    # this stays the parity baseline and the FLA_NPU_STABLE_VALIDATE=1 target.
     out = _infer_causal_conv1d_y(x, int(head_num), int(run_mode))
     activation_buffer = ctypes.create_string_buffer(str(activation).encode("utf-8"))
     result = _call_aclnn(

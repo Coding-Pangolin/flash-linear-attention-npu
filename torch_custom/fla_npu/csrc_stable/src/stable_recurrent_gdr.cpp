@@ -1,4 +1,4 @@
-// Stable-ABI thin adapter: npu_recurrent_gated_delta_rule.
+// Stable-ABI adapter: npu_recurrent_gated_delta_rule.
 //
 // Included by stable_ops.cpp (single TU).  Only torch/csrc/stable/* plus the
 // shared acl_meta helper: no ATen/c10, no pybind11.
@@ -9,7 +9,7 @@
 #include <torch/csrc/stable/stableivalue_conversions.h>
 #include <torch/csrc/stable/tensor.h>
 
-#include "thin_stable/acl_meta.h"
+#include "stable/acl_meta.h"
 
 #include <cstdint>
 #include <optional>
@@ -17,17 +17,17 @@
 namespace {
 
 using torch::stable::Tensor;
-using fla_npu_thin::stable::AclTensorView;
-using fla_npu_thin::stable::LaunchFn;
-using fla_npu_thin::stable::TensorMeta;
-using fla_npu_thin::stable::aclOpExecutor;
-using fla_npu_thin::stable::aclTensor;
-using fla_npu_thin::stable::allocate_bytes;
-using fla_npu_thin::stable::allocate_like;
-using fla_npu_thin::stable::meta_of;
-using fla_npu_thin::stable::meta_of_handle;
-using fla_npu_thin::stable::meta_optional_handle;
-using fla_npu_thin::stable::kAclFormatNd;
+using fla_npu_stable::stable::AclTensorView;
+using fla_npu_stable::stable::LaunchFn;
+using fla_npu_stable::stable::TensorMeta;
+using fla_npu_stable::stable::aclOpExecutor;
+using fla_npu_stable::stable::aclTensor;
+using fla_npu_stable::stable::allocate_bytes;
+using fla_npu_stable::stable::allocate_like;
+using fla_npu_stable::stable::meta_of;
+using fla_npu_stable::stable::meta_of_handle;
+using fla_npu_stable::stable::meta_optional_handle;
+using fla_npu_stable::stable::kAclFormatNd;
 
 // Prefixed per op: everything lives in one TU (see stable_ops.cpp), so shared
 // local names would collide.
@@ -57,7 +57,7 @@ Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
                                       std::optional<AtenTensorHandle> g,
                                       std::optional<AtenTensorHandle> gk,
                                       double scale, int64_t stream) {
-  auto& rt = fla_npu_thin::Runtime::instance();
+  auto& rt = fla_npu_stable::Runtime::instance();
   auto get_ws = reinterpret_cast<GdrGetWorkspaceFn>(
       rt.symbol("aclnnRecurrentGatedDeltaRuleGetWorkspaceSize"));
   auto launch =
@@ -86,7 +86,7 @@ Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
       static_cast<float>(scale), v_out.get(), &workspace_size, &executor);
   if (get_ret != 0) {
     throw std::runtime_error(
-        "fla_npu_thin(stable): aclnnRecurrentGatedDeltaRuleGetWorkspaceSize "
+        "fla_npu(stable): aclnnRecurrentGatedDeltaRuleGetWorkspaceSize "
         "failed: " +
         std::to_string(get_ret));
   }
@@ -102,7 +102,7 @@ Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
                                 reinterpret_cast<void*>(stream));
   if (launch_ret != 0) {
     throw std::runtime_error(
-        "fla_npu_thin(stable): aclnnRecurrentGatedDeltaRule failed: " +
+        "fla_npu(stable): aclnnRecurrentGatedDeltaRule failed: " +
         std::to_string(launch_ret));
   }
   return out;

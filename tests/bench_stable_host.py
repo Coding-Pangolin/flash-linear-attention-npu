@@ -1,6 +1,6 @@
 """Per-operator host timings: ctypes vs the Stable-ABI backend.
 
-Every scenario in ``regression_thin_ops`` already builds correct inputs for its
+Every scenario in ``regression_ops`` already builds correct inputs for its
 operator and calls it through both backends; this driver reuses exactly those
 calls (by wrapping the two namespaces) instead of duplicating input
 construction, so the numbers are measured on the inputs that are known to be
@@ -18,7 +18,7 @@ decode loop.
 
 * ``ctypes`` (default) -- the shipped-before reference implementation, i.e.
   "how much did the host path improve over what we used to ship";
-* ``pybind`` -- the other thin launcher (`_C_thin`, FLA_NPU_THIN_ABI=pybind),
+* ``pybind`` -- the pybind launcher (`_C_thin`, FLA_NPU_STABLE_ABI=pybind),
   i.e. "how does the ABI-free backend compare with the ABI-pinned one".  That
   run needs a wheel built with FLA_NPU_BUILD_THIN=1.
 
@@ -46,7 +46,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from regression_stable_full import StableShim  # noqa: E402
 
-import regression_thin_ops as suite  # noqa: E402
+import regression_ops as suite  # noqa: E402
 from fla_npu.ops.ascendc import _aclnn_ctypes as ct  # noqa: E402
 
 # name -> {"ctypes": [...], "stable": [...]}
@@ -87,10 +87,10 @@ def main() -> int:
               "variant) from stopping the run."))
     args = parser.parse_args()
 
-    if not suite._thin.__class__.__name__ == "StableShim":
+    if not suite._launcher.__class__.__name__ == "StableShim":
         pass  # StableShim is installed below either way
     shim = StableShim()
-    suite._thin = shim
+    suite._launcher = shim
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
 
@@ -137,7 +137,7 @@ def main() -> int:
     torch.npu.synchronize()
 
     if args.baseline == "pybind":
-        # The scenarios call `ct.<op>` for the reference and `_thin.<op>` for the
+        # The scenarios call `ct.<op>` for the reference and `_launcher.<op>` for the
         # backend under test; pointing `ct` at the pybind wrapper turns the same
         # comparison into pybind-vs-stable on identical inputs.
         from fla_npu.ops.ascendc import _thin as pybind

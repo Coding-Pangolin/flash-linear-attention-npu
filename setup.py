@@ -609,7 +609,7 @@ def _thin_build_enabled() -> bool:
     Off by default.  ``_C_thin`` is the only piece that pins the CPython ABI and
     the libtorch C++ ABI, so it is now an opt-in A/B build
     (``FLA_NPU_BUILD_THIN=1``); the default wheel carries the Stable-ABI
-    ``libfla_npu_thin.so`` instead, which is plain package data and keeps the
+    ``libfla_npu_stable.so`` instead, which is plain package data and keeps the
     wheel ``py3-none-any``.
     """
 
@@ -629,7 +629,7 @@ def _stable_build_enabled() -> bool:
 
 
 def _build_thin_inplace():
-    """Compile the thin launcher into the source package before wheel staging.
+    """Compile the stable launcher into the source package before wheel staging.
 
     Mirrors the legacy extension flow: torch.utils.cpp_extension builds the
     .so in-place inside torch_custom/fla_npu/fla_npu, then FlaNpuBuildPy copies
@@ -652,7 +652,7 @@ def _build_thin_inplace():
 
 
 def _build_stable_inplace():
-    """Compile libfla_npu_thin.so into the source package before staging.
+    """Compile libfla_npu_stable.so into the source package before staging.
 
     Same in-place flow as the pybind launcher, but the artifact is a plain
     shared library (no CPython module init), so it ships as package data and the
@@ -661,7 +661,7 @@ def _build_stable_inplace():
 
     if not _stable_build_enabled():
         return
-    out = FLA_NPU_PACKAGE_DIR / "libfla_npu_thin.so"
+    out = FLA_NPU_PACKAGE_DIR / "libfla_npu_stable.so"
     _run(
         [
             sys.executable,
@@ -673,7 +673,7 @@ def _build_stable_inplace():
         TORCH_EXTENSION_DIR,
     )
     if not out.exists():
-        raise RuntimeError(f"libfla_npu_thin.so was not produced under {FLA_NPU_PACKAGE_DIR}")
+        raise RuntimeError(f"libfla_npu_stable.so was not produced under {FLA_NPU_PACKAGE_DIR}")
 
 
 _THIN_BUILD_ENABLED = _thin_build_enabled()
@@ -708,7 +708,7 @@ class FlaNpuBuildPy(_build_py):
                 str(so_file),
                 str(Path(self.build_lib) / "fla_npu" / so_file.name),
             )
-        stable_so = FLA_NPU_PACKAGE_DIR / "libfla_npu_thin.so"
+        stable_so = FLA_NPU_PACKAGE_DIR / "libfla_npu_stable.so"
         if _STABLE_BUILD_ENABLED and stable_so.exists():
             shutil.copy2(
                 str(stable_so),

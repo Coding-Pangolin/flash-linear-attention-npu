@@ -1,11 +1,11 @@
-"""Wheel 安装态数值回归：已迁移 thin 算子的 ctypes-vs-thin parity。
+"""Wheel 安装态数值回归：已迁移 stable 算子的 ctypes-vs-stable parity。
 
 用法（221 上，wheel 已 pip install --target envXXX）:
-    PYTHONPATH=/path/envXXX python tests/regression_thin_ops.py
+    PYTHONPATH=/path/envXXX python tests/regression_ops.py
 
-每个场景对同一输入分别走 ctypes 与 thin 两条 host 路径，断言每个输出
+每个场景对同一输入分别走 ctypes 与 stable 两条 host 路径，断言每个输出
 tensor 的逐元素差为 0（同一 OPP kernel，期望 bitwise 相同）。host P50
-仅作参考；合法域说明见 thin-migration-inventory.md。
+仅作参考；合法域说明见 stable-abi-inventory.md。
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ torch.npu.config.allow_internal_format = False
 torch.npu.set_compile_mode(jit_compile=False)
 
 from fla_npu.ops.ascendc import _aclnn_ctypes as ct  # noqa: E402
-from fla_npu.ops.ascendc import _thin  # noqa: E402
+from fla_npu.ops.ascendc import _thin as _launcher  # noqa: E402
 
 
 # name -> max |diff| observed for that scenario (0.0 when it matched).  The
@@ -127,7 +127,7 @@ def missing_from_groups(names: list[str]) -> None:
         raise SystemExit(
             "these scenarios are in no group, so a --group run would silently "
             f"skip them: {', '.join(ungrouped)}; add them to GROUPS in "
-            "regression_thin_ops.py")
+            "regression_ops.py")
 
 
 def group_cli(parser) -> None:
@@ -148,7 +148,7 @@ def print_groups(names: list[str]) -> None:
     print(f"{'total':<12} {len(names):>9}")
 
 
-# Set by the pybind driver (FLA_NPU_THIN_ABI=pybind): the launcher being
+# Set by the pybind driver (FLA_NPU_STABLE_ABI=pybind): the launcher being
 # superseded must not block the A/B run, so a case the reference accepts but
 # that backend cannot run is recorded as a gap instead of failing.  The
 # Stable-ABI driver leaves this None, so for the shipped backend the same
@@ -231,11 +231,11 @@ def scenario_fast_gelu():
     x = torch.randn(4, 128, 256, dtype=torch.float16, device="npu")
     torch.npu.synchronize()
     assert_parity("fast_gelu_custom",
-                  ct.npu_fast_gelu_custom(x), _thin.npu_fast_gelu_custom(x))
+                  ct.npu_fast_gelu_custom(x), _launcher.npu_fast_gelu_custom(x))
     grad = torch.randn_like(x)
     assert_parity("fast_gelu_custom_backward",
                   ct.npu_fast_gelu_custom_backward(grad, x),
-                  _thin.npu_fast_gelu_custom_backward(grad, x))
+                  _launcher.npu_fast_gelu_custom_backward(grad, x))
 
 
 def scenario_recurrent_gated_delta_rule():
@@ -281,7 +281,7 @@ def scenario_recurrent_gated_delta_rule():
               ssm_state_indices=ssm_state_indices,
               num_accepted_tokens=None)
     out_c = ct.npu_recurrent_gated_delta_rule(query, key, value, state_c, **kw)
-    out_t = _thin.npu_recurrent_gated_delta_rule(query, key, value, state_t,
+    out_t = _launcher.npu_recurrent_gated_delta_rule(query, key, value, state_t,
                                                  **kw)
     torch.npu.synchronize()
     assert_parity("recurrent_gated_delta_rule", out_c, out_t)
@@ -300,7 +300,7 @@ def scenario_recompute():
     kw = dict(g=g, gk=None, cu_seqlens=None, chunk_indices=None)
     assert_parity("recompute_w_u_fwd",
                   ct.npu_recompute_w_u_fwd(k, v, beta, A, cs, **kw),
-                  _thin.npu_recompute_w_u_fwd(k, v, beta, A, cs, **kw))
+                  _launcher.npu_recompute_w_u_fwd(k, v, beta, A, cs, **kw))
 
 
 def scenario_pwy_full():
@@ -319,7 +319,7 @@ def scenario_pwy_full():
     assert_parity("prepare_wy_repr_bwd_full",
                   ct.npu_prepare_wy_repr_bwd_full(
                       k, v, beta, A, dA, dw, du, g, cs, **kw),
-                  _thin.npu_prepare_wy_repr_bwd_full(
+                  _launcher.npu_prepare_wy_repr_bwd_full(
                       k, v, beta, A, dA, dw, du, g, cs, **kw))
 
 
@@ -337,7 +337,7 @@ def scenario_pwy():
     kw = dict(chunk_size=cs, cu_seqlens=None, chunk_indices=None)
     assert_parity("prepare_wy_repr_bwd",
                   ct.npu_prepare_wy_repr_bwd(k, v, beta, A, dw, du, g, **kw),
-                  _thin.npu_prepare_wy_repr_bwd(k, v, beta, A, dw, du, g, **kw))
+                  _launcher.npu_prepare_wy_repr_bwd(k, v, beta, A, dw, du, g, **kw))
 
 
 def scenario_dv_local():
@@ -352,7 +352,7 @@ def scenario_dv_local():
               cu_seqlens=None, chunk_indices=None)
     assert_parity("chunk_bwd_dv_local",
                   ct.npu_chunk_bwd_dv_local(q, k, d_o, g, **kw),
-                  _thin.npu_chunk_bwd_dv_local(q, k, d_o, g, **kw))
+                  _launcher.npu_chunk_bwd_dv_local(q, k, d_o, g, **kw))
 
 
 def scenario_pwy_da():
@@ -370,7 +370,7 @@ def scenario_pwy_da():
     assert_parity("prepare_wy_repr_bwd_da",
                   ct.npu_prepare_wy_repr_bwd_da(
                       k, v, beta, A, dw, du, g, **kw),
-                  _thin.npu_prepare_wy_repr_bwd_da(
+                  _launcher.npu_prepare_wy_repr_bwd_da(
                       k, v, beta, A, dw, du, g, **kw))
 
 
@@ -389,14 +389,14 @@ def scenario_gated_fwd_h():
     assert_parity(
         "chunk_gated_delta_rule_fwd_h(dense)",
         ct.npu_chunk_gated_delta_rule_fwd_h(k, w, u, g, chunk_size=cs),
-        _thin.npu_chunk_gated_delta_rule_fwd_h(k, w, u, g, chunk_size=cs))
+        _launcher.npu_chunk_gated_delta_rule_fwd_h(k, w, u, g, chunk_size=cs))
     is0 = torch.randn(B, Hv, K, V, dtype=torch.float32, device="npu")
     assert_parity(
         "chunk_gated_delta_rule_fwd_h(final)",
         ct.npu_chunk_gated_delta_rule_fwd_h(
             k, w, u, g, initial_state=is0, output_final_state=True,
             chunk_size=cs),
-        _thin.npu_chunk_gated_delta_rule_fwd_h(
+        _launcher.npu_chunk_gated_delta_rule_fwd_h(
             k, w, u, g, initial_state=is0, output_final_state=True,
             chunk_size=cs))
     # state_v_first is the other declared flag of this operator (it swaps the
@@ -408,7 +408,7 @@ def scenario_gated_fwd_h():
         lambda: ct.npu_chunk_gated_delta_rule_fwd_h(
             k, w, u, g, initial_state=isv, output_final_state=True,
             chunk_size=cs, state_v_first=True),
-        lambda: _thin.npu_chunk_gated_delta_rule_fwd_h(
+        lambda: _launcher.npu_chunk_gated_delta_rule_fwd_h(
             k, w, u, g, initial_state=isv, output_final_state=True,
             chunk_size=cs, state_v_first=True))
 
@@ -419,7 +419,7 @@ def scenario_chunk_fwd_h():
     torch.npu.synchronize()
     assert_parity("chunk_fwd_h",
                   ct.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs),
-                  _thin.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs))
+                  _launcher.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs))
     # The declared flags of this operator: each one switches a different kernel
     # path, so they are covered rather than left to the default.
     for label, kw in (("final_state", dict(output_final_state=True)),
@@ -430,7 +430,7 @@ def scenario_chunk_fwd_h():
         parity_or_domain_skip(
             f"chunk_fwd_h({label})",
             lambda kw=kw: ct.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs, **kw),
-            lambda kw=kw: _thin.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs,
+            lambda kw=kw: _launcher.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs,
                                                 **kw))
 
 
@@ -448,7 +448,7 @@ def scenario_chunk_fwd_o():
         "chunk_fwd_o(BNSD)",
         ct.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs,
                            output_layout="BNSD"),
-        _thin.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs,
+        _launcher.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs,
                               output_layout="BNSD"))
     # NTD is the other output layout this kernel accepts from BNSD inputs, and
     # it is where the spec's per-layout alloc mapping would go wrong silently.
@@ -457,7 +457,7 @@ def scenario_chunk_fwd_o():
         "chunk_fwd_o(NTD)",
         ct.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs,
                            output_layout="NTD"),
-        _thin.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs,
+        _launcher.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs,
                               output_layout="NTD"))
     # The rest of the declared domain is rejected by this OPP's kernel when
     # driven with BNSD inputs (BSND/TND expect the inputs laid out that way) --
@@ -472,7 +472,7 @@ def scenario_chunk_fwd_o():
             f"chunk_fwd_o({label})",
             lambda kw=kw: ct.npu_chunk_fwd_o(q, k, v, h, scale, g=g,
                                              chunk_size=cs, **kw),
-            lambda kw=kw: _thin.npu_chunk_fwd_o(q, k, v, h, scale, g=g,
+            lambda kw=kw: _launcher.npu_chunk_fwd_o(q, k, v, h, scale, g=g,
                                                 chunk_size=cs, **kw))
 
 
@@ -493,7 +493,7 @@ def scenario_bwd_dhu():
               dht=None, cu_seqlens=cu, chunk_indices=ci)
     assert_parity("chunk_gated_delta_rule_bwd_dhu",
                   ct.npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, do, dv, **kw),
-                  _thin.npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, do, dv, **kw))
+                  _launcher.npu_chunk_gated_delta_rule_bwd_dhu(q, k, w, do, dv, **kw))
 
 
 def _clone_args(kwargs):
@@ -508,14 +508,14 @@ def _clone_args(kwargs):
 
 
 def _backend_carries(name: str) -> bool:
-    """Whether the selected thin backend exposes *name* at all.
+    """Whether the selected stable backend exposes *name* at all.
 
     The pybind launcher covers 25 of the 26 operators (it predates
     npu_causal_conv1d), so a run against it records a skip rather than failing
     on an attribute that was never part of that backend.
     """
 
-    return callable(getattr(_thin, name, None))
+    return callable(getattr(_launcher, name, None))
 
 
 def _aclnn_status(exc):
@@ -538,7 +538,7 @@ def _aclnn_status_or_none(exc):
     return match.group(1) if match else None
 
 
-def parity_or_domain_skip(name, call_ct, call_thin):
+def parity_or_domain_skip(name, call_ct, call_launcher):
     """Parity, or a recorded skip when the *reference* itself rejects the input.
 
     Some legal-looking parameter combinations are not implemented by the kernel
@@ -560,20 +560,20 @@ def parity_or_domain_skip(name, call_ct, call_thin):
     except (RuntimeError, ValueError) as exc:
         status = _aclnn_status_or_none(exc)
         try:
-            call_thin()
-        except (RuntimeError, ValueError) as thin_exc:
-            thin_status = _aclnn_status_or_none(thin_exc)
+            call_launcher()
+        except (RuntimeError, ValueError) as launcher_exc:
+            launcher_status = _aclnn_status_or_none(launcher_exc)
             if status is None:
                 # The reference refused it before reaching aclnn (its Python
                 # validation); the launcher passed it on and the kernel refused.
                 SKIPPED[name] = (
                     f"reference rejects by validation "
-                    f"({str(exc).splitlines()[0][:70]}); thin rejects too "
-                    f"({str(thin_exc).splitlines()[0][:50]})")
+                    f"({str(exc).splitlines()[0][:70]}); stable rejects too "
+                    f"({str(launcher_exc).splitlines()[0][:50]})")
             else:
-                assert status == thin_status, (
-                    f"{name}: ctypes rejected with {status} but thin with "
-                    f"{thin_status}")
+                assert status == launcher_status, (
+                    f"{name}: ctypes rejected with {status} but stable with "
+                    f"{launcher_status}")
                 SKIPPED[name] = f"both backends rejected the inputs: {status}"
             print(f"SKIP {name} ({SKIPPED[name]})")
             return
@@ -583,10 +583,10 @@ def parity_or_domain_skip(name, call_ct, call_thin):
             print(f"SKIP {name} ({SKIPPED[name]})")
             return
         raise AssertionError(
-            f"{name}: ctypes rejected the inputs ({status}) but the thin "
+            f"{name}: ctypes rejected the inputs ({status}) but the stable "
             f"backend accepted them") from None
     try:
-        thin_result = call_thin()
+        launcher_result = call_launcher()
     except (RuntimeError, ValueError) as exc:
         if GAP_TOLERANT_BACKEND is None:
             raise
@@ -595,7 +595,7 @@ def parity_or_domain_skip(name, call_ct, call_thin):
                          f"reference accepts: {status}")
         print(f"SKIP {name} ({SKIPPED[name]})")
         return
-    assert_parity(name, reference, thin_result)
+    assert_parity(name, reference, launcher_result)
 
 
 def _conv1d_outcome(fn, kwargs):
@@ -638,13 +638,13 @@ def _conv1d_parity(name, kwargs, mutated=("conv_states",), defined_rows=None,
         print(f"SKIP {name} ({reason})")
         return
     kind_ct, out_ct, args_ct = _conv1d_outcome(ct.npu_causal_conv1d, kwargs)
-    kind_th, out_th, args_th = _conv1d_outcome(_thin.npu_causal_conv1d, kwargs)
+    kind_th, out_th, args_th = _conv1d_outcome(_launcher.npu_causal_conv1d, kwargs)
     assert kind_ct == kind_th, (
-        f"{name}: ctypes={kind_ct} but thin={kind_th} "
+        f"{name}: ctypes={kind_ct} but stable={kind_th} "
         f"({out_ct if kind_ct == 'err' else ''})")
     if kind_ct == "err":
         assert out_ct == out_th, (
-            f"{name}: aclnn status mismatch ctypes={out_ct} thin={out_th}")
+            f"{name}: aclnn status mismatch ctypes={out_ct} stable={out_th}")
         SKIPPED[name] = f"both backends rejected the inputs: {out_ct}"
         print(f"SKIP {name} (both backends rejected the inputs: {out_ct})")
         return
@@ -824,7 +824,7 @@ def scenario_conv1d_new_apis():
     parity_or_domain_skip(
         "causal_conv1d_fn(dense)",
         lambda: _fn_case(ct, x, weight, bias),
-        lambda: _fn_case(_thin, x, weight, bias))
+        lambda: _fn_case(_launcher, x, weight, bias))
     # fn, varlen with device metadata (the vLLM-style call).
     xv = _seq(5 * 16, 1.0).reshape(5, 16).to(dt).npu()
     qsl = torch.tensor([0, 2, 5], dtype=torch.int32, device="npu")
@@ -840,13 +840,13 @@ def scenario_conv1d_new_apis():
         "causal_conv1d_fn(varlen, initial state)",
         lambda: _fn_case(ct, xv, weight, None, qsl=qsl, cache=cache,
                          initial=initial),
-        lambda: _fn_case(_thin, xv, weight, None, qsl=qsl, cache=cache,
+        lambda: _fn_case(_launcher, xv, weight, None, qsl=qsl, cache=cache,
                          initial=initial))
     # update: in-place on conv_state, returns the mutated x.
     parity_or_domain_skip(
         "causal_conv1d_update(dense)",
         lambda: _update_case(ct, dt),
-        lambda: _update_case(_thin, dt))
+        lambda: _update_case(_launcher, dt))
 
 
 def _fn_case(backend, x, weight, bias, qsl=None, cache=None, initial=None):
@@ -906,7 +906,7 @@ def scenario_conv1d_bwd_bnsd():
               activation=2, input_layout="BNSD")
     parity_or_domain_skip("causal_conv1d_bwd(BNSD)",
                           lambda: ct.npu_causal_conv1d_bwd(**kw),
-                          lambda: _thin.npu_causal_conv1d_bwd(**kw))
+                          lambda: _launcher.npu_causal_conv1d_bwd(**kw))
     # The other declared input_layouts: BSND keeps x dim-last and moves y/dy to
     # (B,S,H,D); TND/NTD are the varlen spellings and need query_start_loc.
     ys = (ylog.reshape(batch, seqlen, num_heads, head_dim).contiguous())
@@ -915,7 +915,7 @@ def scenario_conv1d_bwd_bnsd():
         "causal_conv1d_bwd(BSND)",
         lambda: ct.npu_causal_conv1d_bwd(**dict(kw, y=ys, dy=dys,
                                                 input_layout="BSND")),
-        lambda: _thin.npu_causal_conv1d_bwd(**dict(kw, y=ys, dy=dys,
+        lambda: _launcher.npu_causal_conv1d_bwd(**dict(kw, y=ys, dy=dys,
                                                    input_layout="BSND")))
     flat = torch.arange(batch * seqlen * dim).reshape(1, batch * seqlen, dim)
     yflat = ylog.reshape(batch * seqlen, num_heads, head_dim)
@@ -928,7 +928,7 @@ def scenario_conv1d_bwd_bnsd():
                 xl, yflat, weight, dyflat, initial_state=st, dht=dht,
                 query_start_loc=[0, batch * seqlen], activation=2,
                 input_layout=layout),
-            lambda xl=xl, layout=layout: _thin.npu_causal_conv1d_bwd(
+            lambda xl=xl, layout=layout: _launcher.npu_causal_conv1d_bwd(
                 xl, yflat, weight, dyflat, initial_state=st, dht=dht,
                 query_start_loc=[0, batch * seqlen], activation=2,
                 input_layout=layout))
@@ -966,7 +966,7 @@ def _kda_fwd_tensors(layout, dt, *, B=1, T=128, H=4, HV=4, K=128, V=128):
 def scenario_chunk_kda_fwd():
     """kda_fwd 全域名（#491）：4 layout x dense/varlen x flag 矩阵 parity。
 
-    合法域由 ctypes 参考实现界定；thin 只有在每个组合的逐输出 diff 都为 0、
+    合法域由 ctypes 参考实现界定；stable 只有在每个组合的逐输出 diff 都为 0、
     且 None 掩码与返回元组顺序都一致时才算覆盖（合法域记录见
     tools/stable_coverage.py 与 tools/stable_ctypes_fallbacks.py）。
     """
@@ -1017,7 +1017,7 @@ def scenario_chunk_kda_fwd():
                     torch.npu.synchronize()
                     assert_parity(tag,
                                   ct.npu_chunk_kda_fwd(q, k, v, g, beta, **kw),
-                                  _thin.npu_chunk_kda_fwd(q, k, v, g, beta,
+                                  _launcher.npu_chunk_kda_fwd(q, k, v, g, beta,
                                                           **kw))
                     total += 1
     print(f"PASS chunk_kda_fwd full-domain matrix ({total} combinations)")
@@ -1057,7 +1057,7 @@ def scenario_chunk_kda_fwd_variants():
             f"chunk_kda_fwd(var {layout} B={B} T={T} H={H} HV={HV} "
             f"V={V} cs={cs} g={str(gdt).split('.')[-1]})",
             ct.npu_chunk_kda_fwd(q, k, v, g, beta, **kw),
-            _thin.npu_chunk_kda_fwd(q, k, v, g, beta, **kw))
+            _launcher.npu_chunk_kda_fwd(q, k, v, g, beta, **kw))
     print(f"PASS chunk_kda_fwd variants ({len(variants)} cases)")
 
 
@@ -1080,7 +1080,7 @@ def scenario_chunk_kda_bwd_intra():
         "chunk_kda_bwd_intra(BNSD dense)",
         ct.npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db,
                                    dg, **kw),
-        _thin.npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db,
+        _launcher.npu_chunk_kda_bwd_intra(q, k, gk, beta, dAqk, dAkk, dq, dk, db,
                                       dg, **kw))
     # BSND is the operator's default layout; the tensors move the token and head
     # axes, the values do not change.
@@ -1098,7 +1098,7 @@ def scenario_chunk_kda_bwd_intra():
                                    + [db.transpose(1, 2).contiguous(),
                                       dg.transpose(1, 2).contiguous()],
                                    **kw_bsnd),
-        _thin.npu_chunk_kda_bwd_intra(*[t.transpose(1, 2).contiguous()
+        _launcher.npu_chunk_kda_bwd_intra(*[t.transpose(1, 2).contiguous()
                                         for t in (q, k)]
                                       + [gk.transpose(1, 2).contiguous(),
                                          beta.transpose(1, 2).contiguous(),
@@ -1124,7 +1124,7 @@ def scenario_chunk_kda_bwd_intra():
     parity_or_domain_skip(
         "chunk_kda_bwd_intra(TND varlen)",
         lambda: ct.npu_chunk_kda_bwd_intra(*packed, **kw_tnd),
-        lambda: _thin.npu_chunk_kda_bwd_intra(*packed, **kw_tnd))
+        lambda: _launcher.npu_chunk_kda_bwd_intra(*packed, **kw_tnd))
 
 
 def scenario_chunk_kda_bwd():
@@ -1153,7 +1153,7 @@ def scenario_chunk_kda_bwd():
         "chunk_kda_bwd(dense BNSD)",
         ct.npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new,
                              h, d_o, K ** -0.5, **kw),
-        _thin.npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg,
+        _launcher.npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg,
                                 v_new, h, d_o, K ** -0.5, **kw))
     # The remaining declared flags of this operator.
     for label, extra in (("state_v_first", dict(state_v_first=True)),
@@ -1164,7 +1164,7 @@ def scenario_chunk_kda_bwd():
             lambda extra=extra: ct.npu_chunk_kda_bwd(
                 q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o,
                 K ** -0.5, **dict(kw, **extra)),
-            lambda extra=extra: _thin.npu_chunk_kda_bwd(
+            lambda extra=extra: _launcher.npu_chunk_kda_bwd(
                 q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o,
                 K ** -0.5, **dict(kw, **extra)))
 
@@ -1208,7 +1208,7 @@ def scenario_chunk_kda_bwd_recompute():
             lambda extra=extra: ct.npu_chunk_kda_bwd_recompute(
                 q, k, v, g, beta, a, cs, use_exp2=True, lower_bound=-5.0,
                 **extra),
-            lambda extra=extra: _thin.npu_chunk_kda_bwd_recompute(
+            lambda extra=extra: _launcher.npu_chunk_kda_bwd_recompute(
                 q, k, v, g, beta, a, cs, use_exp2=True, lower_bound=-5.0,
                 **extra))
 
@@ -1222,7 +1222,7 @@ def scenario_chunk_gated_delta_rule_bwd():
     `dh0` only exists when an initial state was passed.
 
     The reference requires `use_exp2=True`, `use_gate_in_kernel=False` and
-    K=V=128 with `chunk_size=64`; the gates are exercised here so that the thin
+    K=V=128 with `chunk_size=64`; the gates are exercised here so that the stable
     path's matching refusals are recorded rather than discovered later.
     """
 
@@ -1254,14 +1254,14 @@ def scenario_chunk_gated_delta_rule_bwd():
     parity_or_domain_skip(
         "chunk_gated_delta_rule_bwd(dense BNSD)",
         lambda: ct.npu_chunk_gated_delta_rule_bwd(*args, **kw),
-        lambda: _thin.npu_chunk_gated_delta_rule_bwd(*args, **kw))
+        lambda: _launcher.npu_chunk_gated_delta_rule_bwd(*args, **kw))
     # With an initial state the first output slot stops being None, which is the
     # branch the mask in the wrapper has to get right.
     args_state, kw_state = make(with_state=True)
     parity_or_domain_skip(
         "chunk_gated_delta_rule_bwd(initial state)",
         lambda: ct.npu_chunk_gated_delta_rule_bwd(*args_state, **kw_state),
-        lambda: _thin.npu_chunk_gated_delta_rule_bwd(*args_state, **kw_state))
+        lambda: _launcher.npu_chunk_gated_delta_rule_bwd(*args_state, **kw_state))
     # The two flags the composite does not implement must be refused on both
     # paths; the helper records that instead of comparing anything.
     for label, extra in (("use_exp2", dict(use_exp2=False)),
@@ -1270,7 +1270,7 @@ def scenario_chunk_gated_delta_rule_bwd():
             f"chunk_gated_delta_rule_bwd({label}=unsupported)",
             lambda extra=extra: ct.npu_chunk_gated_delta_rule_bwd(
                 *args, **dict(kw, **extra)),
-            lambda extra=extra: _thin.npu_chunk_gated_delta_rule_bwd(
+            lambda extra=extra: _launcher.npu_chunk_gated_delta_rule_bwd(
                 *args, **dict(kw, **extra)))
 
 
@@ -1301,7 +1301,7 @@ def scenario_dqkwg():
               scale=0.088, use_exp2=None, transpose_state_layout=None)
     assert_parity("chunk_bwd_dqkwg",
                   ct.npu_chunk_bwd_dqkwg(q, k, v, g, h, do, dh, dv, cs, **kw),
-                  _thin.npu_chunk_bwd_dqkwg(q, k, v, g, h, do, dh, dv, cs,
+                  _launcher.npu_chunk_bwd_dqkwg(q, k, v, g, h, do, dh, dv, cs,
                                             **kw))
     # use_exp2 / transpose_state_layout: both are declared, neither is the
     # default, so they get their own cases (a rejected combination is recorded).
@@ -1313,7 +1313,7 @@ def scenario_dqkwg():
             f"chunk_bwd_dqkwg({label})",
             lambda extra=extra: ct.npu_chunk_bwd_dqkwg(
                 q, k, v, g, h, do, dh, dv, cs, **dict(kw, **extra)),
-            lambda extra=extra: _thin.npu_chunk_bwd_dqkwg(
+            lambda extra=extra: _launcher.npu_chunk_bwd_dqkwg(
                 q, k, v, g, h, do, dh, dv, cs, **dict(kw, **extra)))
 
 
@@ -1326,20 +1326,20 @@ def scenario_chunk_local_cumsum():
         assert_parity(
             f"chunk_local_cumsum(fixed_{suffix})",
             ct.npu_chunk_local_cumsum(fixed, chunk_size=64),
-            _thin.npu_chunk_local_cumsum(fixed, chunk_size=64))
+            _launcher.npu_chunk_local_cumsum(fixed, chunk_size=64))
         odd = torch.randn(2, 3, 129, dtype=dt, device="npu")
         torch.npu.synchronize()
         assert_parity(
             f"chunk_local_cumsum(odd_t_{suffix})",
             ct.npu_chunk_local_cumsum(odd, chunk_size=64),
-            _thin.npu_chunk_local_cumsum(odd, chunk_size=64))
+            _launcher.npu_chunk_local_cumsum(odd, chunk_size=64))
     reverse = torch.randn(2, 3, 128, dtype=torch.float16, device="npu")
     torch.npu.synchronize()
     kw = dict(chunk_size=64, reverse=True, scale=0.25)
     assert_parity(
         "chunk_local_cumsum(reverse_scale_fp16)",
         ct.npu_chunk_local_cumsum(reverse, **kw),
-        _thin.npu_chunk_local_cumsum(reverse, **kw))
+        _launcher.npu_chunk_local_cumsum(reverse, **kw))
     # output_dtype and head_first are both real parameters of the operator.
     for label, extra in (("output_dtype=bfloat16",
                           dict(output_dtype="bfloat16")),
@@ -1351,7 +1351,7 @@ def scenario_chunk_local_cumsum():
             f"chunk_local_cumsum({label})",
             lambda extra=extra: ct.npu_chunk_local_cumsum(
                 reverse, chunk_size=64, **extra),
-            lambda extra=extra: _thin.npu_chunk_local_cumsum(
+            lambda extra=extra: _launcher.npu_chunk_local_cumsum(
                 reverse, chunk_size=64, **extra))
     varlen = torch.randn(1, 2, 128, dtype=torch.float16, device="npu")
     cu = [0, 128]
@@ -1361,7 +1361,7 @@ def scenario_chunk_local_cumsum():
         "chunk_local_cumsum(varlen_single_fp16)",
         ct.npu_chunk_local_cumsum(varlen, chunk_size=64, cu_seqlens=cu,
                                   chunk_indices_out=ci),
-        _thin.npu_chunk_local_cumsum(varlen, chunk_size=64, cu_seqlens=cu,
+        _launcher.npu_chunk_local_cumsum(varlen, chunk_size=64, cu_seqlens=cu,
                                      chunk_indices_out=ci))
 
 
@@ -1376,12 +1376,12 @@ def scenario_scaled_dot_kkt():
         assert_parity(
             f"chunk_scaled_dot_kkt({suffix})",
             ct.npu_chunk_scaled_dot_kkt(k, g, beta, chunk_size=cs),
-            _thin.npu_chunk_scaled_dot_kkt(k, g, beta, chunk_size=cs))
+            _launcher.npu_chunk_scaled_dot_kkt(k, g, beta, chunk_size=cs))
 
 
 def scenario_solve_tri_dense():
-    # Dense bsnd/bnsd is native thin; varlen (tnd/ntd) intentionally
-    # delegates to ctypes inside the _thin wrapper, so only dense is covered.
+    # Dense bsnd/bnsd is native stable; varlen (tnd/ntd) intentionally
+    # delegates to ctypes inside the pybind wrapper, so only dense is covered.
     B, H, T = 2, 4, 128
     for dt, suffix in ((torch.float16, "fp16"), (torch.bfloat16, "bf16")):
         for bt in (16, 64, 128):
@@ -1390,14 +1390,14 @@ def scenario_solve_tri_dense():
             assert_parity(
                 f"solve_tri(bsnd_{suffix}_bt{bt})",
                 ct.npu_solve_tri(a_bsnd, layout="bsnd"),
-                _thin.npu_solve_tri(a_bsnd, layout="bsnd"))
+                _launcher.npu_solve_tri(a_bsnd, layout="bsnd"))
         a_bnsd = ((torch.randn(B, T, H, 64) * 0.1).to(dt).npu()
                   .permute(0, 2, 1, 3).contiguous())
         torch.npu.synchronize()
         assert_parity(
             f"solve_tri(bnsd_{suffix})",
             ct.npu_solve_tri(a_bnsd, layout="bnsd"),
-            _thin.npu_solve_tri(a_bnsd, layout="bnsd"))
+            _launcher.npu_solve_tri(a_bnsd, layout="bnsd"))
         # tnd and ntd are broken upstream on this OPP: tnd kills the process on
         # *both* backends (measured with and without cu_seqlens), ntd returns
         # zeros.  The wrapper refuses tnd with a message instead of crashing,
@@ -1417,7 +1417,7 @@ def scenario_solve_tri_guards():
     a = (torch.randn(64, 4, 64) * 0.1).to(torch.float16).npu()
     torch.npu.synchronize()
     for backend, label in ((ct.npu_solve_tri, "ctypes"),
-                           (_thin.npu_solve_tri, "thin")):
+                           (_launcher.npu_solve_tri, "stable")):
         try:
             backend(a, layout="tnd")
         except RuntimeError as exc:
@@ -1448,14 +1448,14 @@ def scenario_kda_gate_cumsum():
         assert_parity(
             f"kda_gate_cumsum({suffix})",
             ct.npu_kda_gate_cumsum(g, cs, **kw),
-            _thin.npu_kda_gate_cumsum(g, cs, **kw))
+            _launcher.npu_kda_gate_cumsum(g, cs, **kw))
         # safe_gate is the operator's other declared flag.
         torch.npu.synchronize()
         parity_or_domain_skip(
             f"kda_gate_cumsum({suffix},safe_gate)",
             lambda g=g, kw=kw: ct.npu_kda_gate_cumsum(
                 g, cs, **dict(kw, safe_gate=True)),
-            lambda g=g, kw=kw: _thin.npu_kda_gate_cumsum(
+            lambda g=g, kw=kw: _launcher.npu_kda_gate_cumsum(
                 g, cs, **dict(kw, safe_gate=True)))
 
 
@@ -1481,7 +1481,7 @@ def scenario_recurrent_kda():
     kw = dict(cu_seqlens=cu, scale=K ** -0.5, layout="BSND",
               state_v_first=True)
     oc = ct.npu_recurrent_kda(q, k, v, g, beta, st_c, **kw)
-    ot = _thin.npu_recurrent_kda(q, k, v, g, beta, st_t, **kw)
+    ot = _launcher.npu_recurrent_kda(q, k, v, g, beta, st_t, **kw)
     torch.npu.synchronize()
     assert_parity("recurrent_kda(dense BSND)", oc, ot)
     record_extra("recurrent_kda(state)", st_c, st_t)
@@ -1498,7 +1498,7 @@ def scenario_recurrent_kda():
     kw_t = dict(cu_seqlens=cu_t, scale=K ** -0.5, layout="TND",
                 state_v_first=True)
     oc_t = ct.npu_recurrent_kda(q_t, k_t, v_t, g_t, beta_t, st_ct, **kw_t)
-    ot_t = _thin.npu_recurrent_kda(q_t, k_t, v_t, g_t, beta_t, st_tt, **kw_t)
+    ot_t = _launcher.npu_recurrent_kda(q_t, k_t, v_t, g_t, beta_t, st_tt, **kw_t)
     torch.npu.synchronize()
     assert_parity("recurrent_kda(dense TND)", oc_t, ot_t)
     record_extra("recurrent_kda(TND state)", st_ct, st_tt)
@@ -1508,7 +1508,7 @@ def scenario_chunk_gated_delta_rule_fwd():
     """Fused GDN forward (legacy Phase6 domain: BNSD dense).
 
     Upstream #495 fixed the op_api/ctypes parameter passing, so the fused op
-    now runs on A2; the thin adapter covers the legacy path and falls back to
+    now runs on A2; the stable adapter covers the legacy path and falls back to
     ctypes for the A5 (use_exp2) / varlen / other-layout combos.
     """
 
@@ -1529,7 +1529,7 @@ def scenario_chunk_gated_delta_rule_fwd():
         assert_parity(
             f"chunk_gated_delta_rule_fwd({suffix})",
             ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
-            _thin.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
+            _launcher.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
 
     # GVA + final state + fp32 initial state (labels name the layout the case
     # drives, so the checked-in coverage record says which axes were covered:
@@ -1595,7 +1595,7 @@ def scenario_chunk_gated_delta_rule_fwd():
     _finite_parity(
         "chunk_gated_delta_rule_fwd(varlen_B1_T128_c64)",
         ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
-        _thin.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
+        _launcher.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
 
     # The operator's other declared layouts.  Measured on A2: BSND is rejected
     # by the kernel (161002), and the rank-3 TND/NTD spellings are refused by the
@@ -1630,7 +1630,7 @@ def scenario_chunk_gated_delta_rule_fwd():
             cs2=cs2: ct.npu_chunk_gated_delta_rule_fwd(
                 q2, k2, v2, g2, beta2, chunk_size=cs2, layout=layout),
             lambda q2=q2, k2=k2, v2=v2, g2=g2, beta2=beta2, layout=layout,
-            cs2=cs2: _thin.npu_chunk_gated_delta_rule_fwd(
+            cs2=cs2: _launcher.npu_chunk_gated_delta_rule_fwd(
                 q2, k2, v2, g2, beta2, chunk_size=cs2, layout=layout))
 
 
@@ -1648,15 +1648,15 @@ def main():
         return
 
     # This driver *is* the pybind comparison: it calls the compiled ``_C_thin``
-    # through _thin.  The default wheel no longer ships that extension, so say
+    # through _launcher.  The default wheel no longer ships that extension, so say
     # so instead of dying inside an import -- regression_stable_full.py is the
     # driver for the default wheel, and it reroutes the same scenarios.
     try:
-        _thin._extension()
+        _launcher._extension()
     except Exception as exc:
         raise SystemExit(
-            "regression_thin_ops needs the pybind build (FLA_NPU_BUILD_THIN=1) "
-            "with FLA_NPU_THIN_ABI=pybind; the default ABI-free wheel carries "
+            "regression_ops needs the pybind build (FLA_NPU_BUILD_THIN=1) "
+            "with FLA_NPU_STABLE_ABI=pybind; the default ABI-free wheel carries "
             "no _C_thin. Run regression_stable_full.py for that one. "
             f"Original error: {exc}")
     # This driver always runs the pybind launcher, so a case it cannot run is a
@@ -1676,7 +1676,7 @@ def main():
               f"({', '.join(select_groups(names, args.group))})")
     for fn in selected:
         fn()
-    print(f"ALL PASS: {len(selected)} thin-op parity scenarios")
+    print(f"ALL PASS: {len(selected)} stable-op parity scenarios")
 
 
 def _scenarios():

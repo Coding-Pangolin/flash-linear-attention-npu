@@ -67,7 +67,7 @@ def _prepare_abi_free_launcher() -> None:
     cpXXX binary.
 
     The default build is the ABI-free one: pure Python plus
-    ``libfla_npu_thin.so``, no CPython ABI, no libtorch C++ ABI.  The pybind
+    ``libfla_npu_stable.so``, no CPython ABI, no libtorch C++ ABI.  The pybind
     extension is opt-in (``FLA_NPU_BUILD_THIN=1``) for A/B comparisons, and a
     pure-ctypes wheel is ``FLA_NPU_BUILD_STABLE_ABI=0``.
     """
@@ -86,7 +86,7 @@ def _prepare_abi_free_launcher() -> None:
         return
     builder = (REPO_ROOT / "torch_custom" / "fla_npu" / "csrc_stable"
                / "build_stable.py")
-    target = package_dir / "libfla_npu_thin.so"
+    target = package_dir / "libfla_npu_stable.so"
     subprocess.run([sys.executable, str(builder), "--no-debug-probe",
                     "--out", str(target)], check=True)
     print(f"[fla-npu build] staged {target.name} ({target.stat().st_size} bytes)",
@@ -104,7 +104,7 @@ def _inject_runtime_pins(wheel_path: Path) -> None:
     * the pybind wheel (``_C_thin``) is ABI-matched, so it pins the exact torch
       and torch_npu it was built against -- installing it next to a different
       one is a hard error, not a warning;
-    * the Stable-ABI wheel (``libfla_npu_thin.so``) only needs the ``aoti_torch_*``
+    * the Stable-ABI wheel (``libfla_npu_stable.so``) only needs the ``aoti_torch_*``
       runtime symbols, which exist from 2.7.1 on, so it declares a *lower bound*.
       One wheel then serves every torch/torch_npu above it.
     """
@@ -114,7 +114,7 @@ def _inject_runtime_pins(wheel_path: Path) -> None:
         blobs = {info.filename: archive.read(info.filename) for info in infos}
 
     has_pybind = any(name.endswith(".so") and "_C_thin" in name for name in blobs)
-    has_stable = any(name.endswith("libfla_npu_thin.so") for name in blobs)
+    has_stable = any(name.endswith("libfla_npu_stable.so") for name in blobs)
     if has_pybind:
         pins = _runtime_pins()
     elif has_stable:
@@ -312,7 +312,7 @@ def main() -> int:
         env["FLA_NPU_BUILD_ARGS"] = build_args
     subprocess.run(command, cwd=REPO_ROOT, check=True, env=env)
 
-    # With the thin launcher enabled the wheel is no longer py3-none-any
+    # With the stable launcher enabled the wheel is no longer py3-none-any
     # (it embeds a cpXXX-linux_aarch64 extension), so resolve the actual file.
     wheel_files = sorted(wheel_dir.glob("flash_linear_attention_npu-*.whl"))
     if not wheel_files:

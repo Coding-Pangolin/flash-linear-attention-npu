@@ -3,8 +3,8 @@
 
 The ctypes module is the reference users have been calling: its parameter
 order, which parameters carry defaults, and the default values themselves are
-part of the published API.  A thin backend that changes any of those turns a
-working call into a ``TypeError`` -- and because the thin path is selected
+part of the published API.  A stable backend that changes any of those turns a
+working call into a ``TypeError`` -- and because the stable path is selected
 transparently by ``_get_direct_op``, the caller never asked for that change.
 
 This tool parses the three modules with :mod:`ast` (no import, so no torch and
@@ -36,7 +36,7 @@ OPS_DIR = SETUP_DIR / "fla_npu" / "ops" / "ascendc"
 REFERENCE = OPS_DIR / "_aclnn_ctypes.py"
 BACKENDS = {
     "stable": OPS_DIR / "_stable.py",
-    # Still selectable with FLA_NPU_THIN_ABI=pybind, so its Python surface is
+    # Still selectable with FLA_NPU_STABLE_ABI=pybind, so its Python surface is
     # part of the published API too -- a caller who switches backends must not
     # discover that a keyword was renamed.
     "pybind": OPS_DIR / "_thin.py",
@@ -188,7 +188,7 @@ def evaluate() -> dict:
                 rows.append({"op": name, "backend": label, "problems": []})
                 continue
             # Every backend that exposes the operator is compared, not just the
-            # one that happens to answer first: FLA_NPU_THIN_ABI switches
+            # one that happens to answer first: FLA_NPU_STABLE_ABI switches
             # between them, so a caller must not hit a renamed keyword by
             # changing a flag.
             rows.append({

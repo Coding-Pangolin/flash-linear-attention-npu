@@ -206,8 +206,11 @@ def adapters() -> dict[str, dict]:
 
     for source in sorted(SRC_DIR.glob("stable_*.cpp")):
         text = source.read_text(encoding="utf-8")
-        for call in re.finditer(r"cstr\((k[A-Za-z0-9]+Names)\s*,\s*([a-z0-9_]+)\)",
-                                text):
+        # `cstr` builds the argument inline; `enum_name` resolves it once and
+        # the adapter reuses the pointer -- both are enum tables.
+        for call in re.finditer(
+                r"(?:cstr|enum_name)\((k[A-Za-z0-9]+Names)\s*,\s*([a-z0-9_]+)\)",
+                text):
             owner = _enclosing_run(text, call.start())
             table = re.search(
                 re.escape(call.group(1)) + r"\[\]\s*=\s*\{(.*?)\};", text, re.S)
@@ -303,6 +306,22 @@ def evaluate() -> dict:
 
     for name in sorted(set(adapter_info) - set(published)):
         blockers.append(f"{name}: adapter exists but is not published")
+
+    # ...and the other direction: a table in Python that no adapter consumes is
+    # a stale code order waiting to be used (this is how the recurrent KDA
+    # layout silently changed meaning when the canonical order was introduced).
+    for name, arguments in sorted(enums.items()):
+        adapter_enums = adapter_info.get(name, {}).get("enums", {})
+        for argument, table in arguments.items():
+            if argument not in adapter_enums:
+                blockers.append(
+                    f"{name}: _stable._ENUM[{argument!r}] has no cstr() table "
+                    "in any adapter")
+            elif list(table) != adapter_enums[argument]["names"]:
+                blockers.append(
+                    f"{name}: _stable._ENUM[{argument!r}] {list(table)} != "
+                    f"{adapter_enums[argument]['table']} "
+                    f"{adapter_enums[argument]['names']}")
 
     return {"rows": rows, "blockers": blockers,
             "adapter_count": len(adapter_info)}

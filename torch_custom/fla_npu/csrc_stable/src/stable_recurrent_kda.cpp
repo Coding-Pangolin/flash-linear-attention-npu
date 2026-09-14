@@ -8,6 +8,9 @@
 #include <torch/csrc/stable/tensor.h>
 
 #include "thin_stable/acl_meta.h"
+// Only for the enum-table helper: this adapter builds its argument list by
+// hand (see the boxed entry point below), so it does not use FLA_STABLE_EXEC.
+#include "thin_stable/exec.h"
 
 #include <cstdint>
 #include <optional>
@@ -19,6 +22,7 @@ using fla_npu_thin::stable::AclTensorView;
 using fla_npu_thin::stable::TensorMeta;
 using fla_npu_thin::stable::allocate_bytes;
 using fla_npu_thin::stable::allocate_like;
+using fla_npu_thin::stable::enum_name;
 using fla_npu_thin::stable::meta_of;
 using fla_npu_thin::stable::meta_of_handle;
 using fla_npu_thin::stable::meta_optional_handle;
@@ -41,24 +45,16 @@ constexpr const char* kSchemaRecurrentKda =
     "npu_recurrent_kda(Tensor q, Tensor k, Tensor v, Tensor g, Tensor beta, "
     "Tensor(a!) initial_state, Tensor? cu_seqlens, "
     "Tensor? ssm_state_indices, Tensor? A_log, Tensor? dt_bias, "
-    "Tensor? num_accepted_tokens, int layout_code, float scale, "
+    "Tensor? num_accepted_tokens, int layout, float scale, "
     "bool output_final_state, bool inplace_final_state, "
     "bool use_qk_l2norm_in_kernel, bool use_gate_in_kernel, "
     "bool use_beta_sigmoid_in_kernel, bool allow_neg_eigval, bool safe_gate, "
     "float lower_bound, bool state_v_first, int stream) -> (Tensor, Tensor?)";
 
-const char* layout_name(int64_t layout_code) {
-  switch (layout_code) {
-    case 0:
-      return "BSND";
-    case 1:
-      return "TND";
-    default:
-      throw std::runtime_error(
-          "fla_npu_thin(stable): unknown layout code " +
-          std::to_string(layout_code));
-  }
-}
+// This operator only implements the two spellings the reference accepts, so its
+// table is the (BSND, TND) subset rather than the canonical four; the codes
+// must match _stable._ENUM["npu_recurrent_kda"]["layout"].
+constexpr const char* kRecurrentKdaLayoutNames[] = {"BSND", "TND"};
 
 // Returns (attn_out, final_state).  Mirrors the ctypes wrapper:
 //  * inplace_final_state=True  -> the kernel writes the caller's initial_state;
@@ -73,7 +69,7 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
                        std::optional<AtenTensorHandle> A_log,
                        std::optional<AtenTensorHandle> dt_bias,
                        std::optional<AtenTensorHandle> num_accepted_tokens,
-                       int64_t layout_code, double scale,
+                       int64_t layout, double scale,
                        bool output_final_state, bool inplace_final_state,
                        bool use_qk_l2norm_in_kernel, bool use_gate_in_kernel,
                        bool use_beta_sigmoid_in_kernel, bool allow_neg_eigval,
@@ -118,7 +114,7 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
   const int get_ret = get_ws(
       v_q.get(), v_k.get(), v_v.get(), v_g.get(), v_beta.get(), v_state.get(),
       v_cu.get(), v_idx.get(), v_alog.get(), v_dtb.get(), v_accepted.get(),
-      layout_name(layout_code), scale, output_final_state,
+      enum_name(kRecurrentKdaLayoutNames, layout), scale, output_final_state,
       inplace_final_state, use_qk_l2norm_in_kernel, use_gate_in_kernel,
       use_beta_sigmoid_in_kernel, allow_neg_eigval, safe_gate, lower_bound,
       state_v_first, v_out.get(), v_final.get(), &workspace_size, &executor);
@@ -181,7 +177,7 @@ void boxed_recurrent_kda(StableIValue* stack, uint64_t num_inputs,
   const auto a_log = to<std::optional<Tensor>>(stack[8]);
   const auto dt_bias = to<std::optional<Tensor>>(stack[9]);
   const auto num_accepted_tokens = to<std::optional<Tensor>>(stack[10]);
-  const int64_t layout_code = to<int64_t>(stack[11]);
+  const int64_t layout = to<int64_t>(stack[11]);
   const double scale = to<double>(stack[12]);
   const bool output_final_state = to<bool>(stack[13]);
   const bool inplace_final_state = to<bool>(stack[14]);
@@ -212,7 +208,7 @@ void boxed_recurrent_kda(StableIValue* stack, uint64_t num_inputs,
       num_accepted_tokens.has_value()
           ? std::optional<AtenTensorHandle>(num_accepted_tokens->get())
           : std::nullopt,
-      layout_code, scale, output_final_state, inplace_final_state,
+      layout, scale, output_final_state, inplace_final_state,
       use_qk_l2norm_in_kernel, use_gate_in_kernel,
       use_beta_sigmoid_in_kernel, allow_neg_eigval, safe_gate, lower_bound,
       state_v_first, stream, &out, &final_state, &has_final_state);

@@ -19,7 +19,7 @@
 
 namespace fla_npu_thin {
 namespace stable {
-namespace layout {
+namespace layout_math {
 
 // Must match the name tables the adapters pass to aclnn and `_stable.py`'s
 // `_LAYOUT_CODES`; tools/op_abi_parity.py checks those two against each other.
@@ -104,6 +104,6 @@ inline int64_t chunks(const std::vector<int64_t>& cu_seqlens,
   return (tokens + chunk_size - 1) / chunk_size;
 }
 
-}  // namespace layout
+}  // namespace layout_math
 }  // namespace stable
 }  // namespace fla_npu_thin

@@ -32,6 +32,120 @@ from fla_npu.ops.ascendc import _thin  # noqa: E402
 SCENARIOS: dict[str, float] = {}
 # name -> reason, for cases both backends reject (domain limits, missing kernel).
 SKIPPED: dict[str, str] = {}
+# Named slices of the scenario list.
+#
+# The whole matrix is the merge gate: every operator at every layout, flag,
+# dtype and boundary it declares.  On 910B3 that is ~10 minutes, which is the
+# wrong granularity for an edit loop that touched one family, so the scenarios
+# are grouped by operator family and a driver can run one group instead.
+#
+# Membership is by function name, so the two drivers (this one and
+# regression_stable_full.py, which carries a few extra conv1d scenarios) share
+# the same table.  check_groups() fails if a scenario belongs to no group, so
+# adding a scenario cannot silently drop it out of every fast path.
+GROUPS: dict[str, tuple[str, ...]] = {
+    # What vLLM actually calls, in the order it calls it: the decode path.
+    "hot": (
+        "scenario_recurrent_gated_delta_rule",
+        "scenario_recurrent_kda",
+        "scenario_conv1d_new_apis",
+        "scenario_conv1d_update",
+    ),
+    "recurrent": (
+        "scenario_recurrent_gated_delta_rule",
+        "scenario_recurrent_kda",
+    ),
+    "conv1d": (
+        "scenario_conv1d_new_apis",
+        "scenario_conv1d_prefill",
+        "scenario_conv1d_update",
+        "scenario_conv1d_varlen_initial_state",
+        "scenario_conv1d_gather_padding",
+        "scenario_conv1d_varlen_pad_slot",
+        "scenario_conv1d_bwd_bnsd",
+    ),
+    "kda": (
+        "scenario_chunk_kda_fwd",
+        "scenario_chunk_kda_fwd_variants",
+        "scenario_chunk_kda_bwd_intra",
+        "scenario_chunk_kda_bwd",
+        "scenario_chunk_kda_bwd_recompute",
+        "scenario_kda_gate_cumsum",
+    ),
+    # Everything in the chunked GDN backward, which is the bulk of the matrix
+    # and the slowest group (T=256..1024 shapes).
+    "chunk": (
+        "scenario_recompute",
+        "scenario_pwy_full",
+        "scenario_pwy",
+        "scenario_dv_local",
+        "scenario_pwy_da",
+        "scenario_gated_fwd_h",
+        "scenario_chunk_fwd_h",
+        "scenario_chunk_fwd_o",
+        "scenario_bwd_dhu",
+        "scenario_dqkwg",
+        "scenario_chunk_local_cumsum",
+        "scenario_scaled_dot_kkt",
+        "scenario_solve_tri_dense",
+        "scenario_solve_tri_guards",
+        "scenario_chunk_gated_delta_rule_fwd",
+        "scenario_chunk_gated_delta_rule_bwd",
+    ),
+    "smoke": ("scenario_fast_gelu",),
+}
+
+
+def check_groups(names: list[str]) -> list[str]:
+    """Scenario names that no group selects (must be empty)."""
+
+    covered = {name for members in GROUPS.values() for name in members}
+    return [name for name in names if name not in covered]
+
+
+def select_groups(names: list[str], wanted: list[str]) -> list[str]:
+    """Filter *names* by group, keeping the driver's own order."""
+
+    if not wanted:
+        return names
+    selected: set[str] = set()
+    for group in wanted:
+        if group not in GROUPS:
+            raise SystemExit(f"unknown group {group!r}; known: "
+                             f"{', '.join(sorted(GROUPS))}")
+        selected.update(GROUPS[group])
+    return [name for name in names if name in selected]
+
+
+def missing_from_groups(names: list[str]) -> None:
+    """Fail loudly when a scenario was added without a group."""
+
+    ungrouped = check_groups(names)
+    if ungrouped:
+        raise SystemExit(
+            "these scenarios are in no group, so a --group run would silently "
+            f"skip them: {', '.join(ungrouped)}; add them to GROUPS in "
+            "regression_thin_ops.py")
+
+
+def group_cli(parser) -> None:
+    """The --group/--list-groups options both drivers share."""
+
+    parser.add_argument("--group", action="append", default=[],
+                        help="run only this group (repeatable); see "
+                             "--list-groups")
+    parser.add_argument("--list-groups", action="store_true",
+                        help="print the groups and exit")
+
+
+def print_groups(names: list[str]) -> None:
+    print(f"{'group':<12} {'scenarios':>9}  members")
+    for group, members in GROUPS.items():
+        present = [name for name in names if name in members]
+        print(f"{group:<12} {len(present):>9}  {', '.join(present)}")
+    print(f"{'total':<12} {len(names):>9}")
+
+
 # Set by the pybind driver (FLA_NPU_THIN_ABI=pybind): the launcher being
 # superseded must not block the A/B run, so a case the reference accepts but
 # that backend cannot run is recorded as a gap instead of failing.  The
@@ -1464,6 +1578,18 @@ def scenario_chunk_gated_delta_rule_fwd():
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    group_cli(parser)
+    args = parser.parse_args()
+
+    if args.list_groups:
+        # The listing needs no backend at all, so it answers even on a machine
+        # without the pybind build.
+        print_groups([fn.__name__ for fn in _scenarios()])
+        return
+
     # This driver *is* the pybind comparison: it calls the compiled ``_C_thin``
     # through _thin.  The default wheel no longer ships that extension, so say
     # so instead of dying inside an import -- regression_stable_full.py is the
@@ -1482,7 +1608,24 @@ def main():
     GAP_TOLERANT_BACKEND = "pybind"
     torch.npu.set_device(0)
     torch.manual_seed(20260909)
-    scenarios = [
+    scenarios = _scenarios()
+    names = [fn.__name__ for fn in scenarios]
+    missing_from_groups(names)
+    chosen = set(select_groups(names, args.group))
+    selected = [fn for fn in scenarios if fn.__name__ in chosen]
+    if args.group:
+        print(f"groups {', '.join(args.group)}: "
+              f"{len(selected)} of {len(scenarios)} scenarios "
+              f"({', '.join(select_groups(names, args.group))})")
+    for fn in selected:
+        fn()
+    print(f"ALL PASS: {len(selected)} thin-op parity scenarios")
+
+
+def _scenarios():
+    """The scenario functions this driver runs, in order."""
+
+    return [
         scenario_fast_gelu,
         scenario_recurrent_gated_delta_rule,
         scenario_recompute,
@@ -1512,9 +1655,6 @@ def main():
         scenario_conv1d_update,
         scenario_recurrent_kda,
     ]
-    for fn in scenarios:
-        fn()
-    print(f"ALL PASS: {len(scenarios)} thin-op parity scenarios")
 
 
 if __name__ == "__main__":

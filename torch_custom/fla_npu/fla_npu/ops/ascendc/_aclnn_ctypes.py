@@ -1907,23 +1907,6 @@ PAD_SLOT_ID = -1
 NULL_BLOCK_ID = 0
 
 
-def _stable_causal_conv1d_launcher():
-    """The launcher's internal aclnnCausalConv1d op, or None to stay on ctypes.
-
-    The conv1d family is the one case where the Python layer is shared: three
-    public APIs (legacy / fn / update) differ only in how they marshal into one
-    aclnn ABI, so instead of three adapters the launcher exposes that ABI once
-    and the shared launcher below hands the launch to it.  Imported lazily --
-    the ctypes module has to keep working with no launcher present.
-    """
-
-    try:
-        from fla_npu.ops.ascendc import _stable
-
-        return _stable.causal_conv1d_launcher()
-    except Exception:
-        return None
-
 
 def _causal_conv1d_state_needs_dense_copy(conv_states) -> bool:
     """Whether ``conv_states`` cannot be handed to aclnnCausalConv1d as-is.
@@ -1955,199 +1938,7 @@ def _causal_conv1d_state_needs_dense_copy(conv_states) -> bool:
     return (not contiguous) or offset != 0
 
 
-# ---------------------------------------------------------------------------
-# conv1d fast path
-# ---------------------------------------------------------------------------
-#
-# The conv1d family keeps its Python public API (validation, metadata
-# normalisation, output inference, the update copy-back) because three public
-# functions share one aclnn ABI.  That Python layer is pure per-call host cost:
-# measured on 910B3 for UPDATE with batch=100/channels=4096, the public call is
-# ~0.19 ms while reaching the launcher's launch op directly with pre-built
-# positional arguments is ~0.07 ms -- i.e. about two thirds of the host cost is
-# the Python marshalling, and the raw call is already at parity with the
-# vLLM-Ascend custom op.
-#
-# So the fast path below does not move work into C++: it skips the Python work
-# that the launcher makes redundant.  It only engages for the canonical calling
-# shape (dim-last x, dense NPU tensors, device metadata, no *_cpu twins); every
-# other input -- including anything the slow path would reject or have to stage
-# -- returns ``_CONV1D_FAST_MISS`` and is handled exactly as before, so error
-# behaviour and the non-dense conv_state staging path stay untouched.
 
-_CONV1D_FAST_MISS = object()
-_CONV1D_ACTIVATION_CODES = {"none": 0, "silu": 1, "swish": 2}
-_CONV1D_FAST_BACKEND: dict = {"resolved": False, "value": None}
-
-
-def _conv1d_fast_backend():
-    """``(launch op, raw-stream accessor)`` for the launcher, or ``None``.
-
-    Resolved once per process: the launcher is either loaded or it is not.
-    Everything else on the hot path is read per call -- in particular the
-    stream, which must never be cached across threads (that is what corrupted
-    the early vLLM runs).
-    """
-
-    if not _CONV1D_FAST_BACKEND["resolved"]:
-        backend = None
-        try:
-            import torch
-
-            from fla_npu.ops.ascendc import _stable
-
-            if _stable.available():
-                _stable.load()
-                backend = (
-                    torch.ops.fla_npu_thin._causal_conv1d_launch,
-                    _stable._current_stream_ptr,
-                    torch,
-                )
-        except Exception:
-            backend = None
-        _CONV1D_FAST_BACKEND["resolved"] = True
-        _CONV1D_FAST_BACKEND["value"] = backend
-    return _CONV1D_FAST_BACKEND["value"]
-
-
-def _conv1d_dense_npu_tensor(tensor, device, dtype) -> bool:
-    """Canonical hot-path tensor: right device/dtype, dense, no storage offset."""
-
-    if tensor.device != device or tensor.dtype != dtype:
-        return False
-    return tensor.is_contiguous() and tensor.storage_offset() == 0
-
-
-def _conv1d_update_via_launcher(
-    x,
-    conv_state,
-    weight,
-    bias,
-    activation,
-    conv_state_indices,
-    num_accepted_tokens,
-    query_start_loc,
-    max_query_len,
-    null_block_id,
-    out,
-    *,
-    validate_data: bool,
-    block_idx_last_scheduled_token,
-    initial_state_idx,
-    cpu_metadata_used: bool,
-):
-    """Launch ``aclnnCausalConv1d`` directly, or ``_CONV1D_FAST_MISS``.
-
-    Returns the same object the slow path would: ``out`` when the caller passed
-    one, otherwise ``x`` after the result is written back into it.
-    """
-
-    if validate_data or cpu_metadata_used:
-        return _CONV1D_FAST_MISS
-    if block_idx_last_scheduled_token is not None or initial_state_idx is not None:
-        return _CONV1D_FAST_MISS
-    if activation is None:
-        activation_code = _CONV1D_ACTIVATION_CODES["none"]
-    else:
-        activation_code = _CONV1D_ACTIVATION_CODES.get(activation)
-        if activation_code is None and isinstance(activation, str):
-            activation_code = _CONV1D_ACTIVATION_CODES.get(activation.lower())
-        if activation_code is None:
-            return _CONV1D_FAST_MISS
-    if isinstance(null_block_id, bool) or not isinstance(null_block_id, int):
-        return _CONV1D_FAST_MISS
-    if isinstance(max_query_len, bool) or not isinstance(max_query_len, int):
-        return _CONV1D_FAST_MISS
-
-    backend = _conv1d_fast_backend()
-    if backend is None:
-        return _CONV1D_FAST_MISS
-    # The launcher's handle, the raw-stream accessor and the torch module are
-    # cached together: this module deliberately does not import torch at module
-    # scope, so the fast path reuses the handle the backend resolution needed.
-    raw_launch, stream_accessor, torch_module = backend
-
-    device = x.device
-    if device.type != "npu" or x.dim() != 2:
-        return _CONV1D_FAST_MISS
-    dtype = x.dtype
-    if dtype not in (torch_module.float16, torch_module.bfloat16):
-        return _CONV1D_FAST_MISS
-    if not _conv1d_dense_npu_tensor(x, device, dtype):
-        return _CONV1D_FAST_MISS
-    if weight.dim() != 2 or not _conv1d_dense_npu_tensor(weight, device, dtype):
-        return _CONV1D_FAST_MISS
-    if weight.shape[1] != x.shape[1]:
-        return _CONV1D_FAST_MISS
-    # ``weight`` must be 2..4 wide; the kernel rejects anything else, and the
-    # update path additionally requires width 4 for num_accepted_tokens.
-    width = int(weight.shape[0])
-    if width < 2 or width > 4:
-        return _CONV1D_FAST_MISS
-    if bias is not None and not _conv1d_dense_npu_tensor(bias, device, dtype):
-        return _CONV1D_FAST_MISS
-    # conv_state must be dense: the op cannot be told about its strides (see
-    # ``_causal_conv1d_state_needs_dense_copy``), so non-dense states keep going
-    # through the slow path, which stages them through a dense copy.
-    if conv_state.dim() != 3 or not _conv1d_dense_npu_tensor(
-            conv_state, device, dtype):
-        return _CONV1D_FAST_MISS
-    if conv_state.shape[1] < width - 1 or conv_state.shape[2] != x.shape[1]:
-        return _CONV1D_FAST_MISS
-
-    batch = int(x.shape[0])
-    if conv_state_indices is None:
-        return _CONV1D_FAST_MISS
-    if conv_state_indices.device != device or (
-            conv_state_indices.dtype != torch_module.int32):
-        return _CONV1D_FAST_MISS
-    if conv_state_indices.numel() != batch:
-        return _CONV1D_FAST_MISS
-    if query_start_loc is not None:
-        if query_start_loc.device != device or (
-                query_start_loc.dtype != torch_module.int32):
-            return _CONV1D_FAST_MISS
-        if query_start_loc.numel() != batch + 1:
-            return _CONV1D_FAST_MISS
-        if max_query_len < 0:
-            return _CONV1D_FAST_MISS
-    if num_accepted_tokens is not None:
-        if num_accepted_tokens.device != device:
-            return _CONV1D_FAST_MISS
-        if num_accepted_tokens.dtype != torch_module.int32:
-            return _CONV1D_FAST_MISS
-        if num_accepted_tokens.numel() != batch or width != 4:
-            return _CONV1D_FAST_MISS
-    if out is not None:
-        if out.shape != x.shape or out.dtype != dtype or out.device != device:
-            return _CONV1D_FAST_MISS
-
-    result = raw_launch(
-        x,
-        weight,
-        bias,
-        conv_state,
-        query_start_loc,
-        conv_state_indices,
-        None,  # has_initial_state
-        num_accepted_tokens,
-        None,  # query_start_loc_cpu
-        None,  # cache_indices_cpu
-        None,  # has_initial_state_cpu
-        None,  # num_accepted_tokens_cpu
-        activation_code,
-        -(1 << 63),  # pad_slot_id: UPDATE never pads
-        null_block_id,
-        1,  # run_mode: UPDATE
-        0,  # head_num
-        max_query_len,
-        int(stream_accessor()),
-    )
-    if out is not None:
-        out.copy_(result)
-        return out
-    x.copy_(result)
-    return x
 
 
 def _launch_causal_conv1d(
@@ -2181,30 +1972,10 @@ def _launch_causal_conv1d(
         conv_state_restore = conv_states
         conv_states = conv_states.contiguous()
 
-    # One Python implementation, two launch paths.  Everything above this line
-    # (validation, metadata normalisation, the update copy-back) is shared by
-    # every backend; what this migration replaces is the launch itself --
-    # building and destroying a descriptor forest per call.  So when the
-    # Stable-ABI launcher is loaded it takes over exactly that step, and this
-    # function keeps building the aclnn call itself when it is not.
-    launcher = _stable_causal_conv1d_launcher()
-    if launcher is not None:
-        result = launcher(
-            x=x, weight=weight, bias=bias, conv_states=conv_states,
-            query_start_loc=query_start_loc, cache_indices=cache_indices,
-            has_initial_state=has_initial_state,
-            num_accepted_tokens=num_accepted_tokens,
-            query_start_loc_cpu=query_start_loc_cpu,
-            cache_indices_cpu=cache_indices_cpu,
-            has_initial_state_cpu=has_initial_state_cpu,
-            num_accepted_tokens_cpu=num_accepted_tokens_cpu,
-            activation=str(activation), pad_slot_id=int(pad_slot_id),
-            null_block_id=int(null_block_id), run_mode=int(run_mode),
-            head_num=int(head_num), max_query_len=int(max_query_len))
-        if conv_state_restore is not None:
-            conv_state_restore.copy_(conv_states)
-        return result
-
+    # This is the ctypes reference: it validates in Python, normalises the
+    # metadata and builds the aclnn call, descriptors included.  The thin path
+    # does not come through here any more -- the family has real adapters -- so
+    # this stays the parity baseline and the FLA_NPU_THIN_VALIDATE=1 target.
     out = _infer_causal_conv1d_y(x, int(head_num), int(run_mode))
     activation_buffer = ctypes.create_string_buffer(str(activation).encode("utf-8"))
     result = _call_aclnn(
@@ -2401,30 +2172,6 @@ def npu_causal_conv1d_update(
     query_start_loc_cpu: torch.Tensor | Sequence[int] | None = None,
 ) -> torch.Tensor:
     """Run UPDATE with dim-last data and mutate ``conv_state`` in place."""
-    fast = _conv1d_update_via_launcher(
-        x,
-        conv_state,
-        weight,
-        bias,
-        activation,
-        conv_state_indices,
-        num_accepted_tokens,
-        query_start_loc,
-        max_query_len,
-        null_block_id,
-        out,
-        validate_data=validate_data,
-        block_idx_last_scheduled_token=block_idx_last_scheduled_token,
-        initial_state_idx=initial_state_idx,
-        cpu_metadata_used=(
-            conv_state_indices_cpu is not None
-            or num_accepted_tokens_cpu is not None
-            or query_start_loc_cpu is not None
-        ),
-    )
-    if fast is not _CONV1D_FAST_MISS:
-        return fast
-
     _reject_unsupported_causal_conv1d_scheduling(
         block_idx_last_scheduled_token=block_idx_last_scheduled_token,
         initial_state_idx=initial_state_idx,

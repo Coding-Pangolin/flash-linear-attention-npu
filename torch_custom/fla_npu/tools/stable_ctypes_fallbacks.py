@@ -33,17 +33,6 @@ MODULES = ("_stable.py", "_stable_generated.py")
 # op -> (kind, reason).  "kernel" means no wrapper-side fix exists yet because
 # the operator itself is broken; "pending" means the port has not happened.
 DECLARED: dict[str, tuple[str, str]] = {
-    "npu_causal_conv1d": (
-        "pending",
-        "the three conv1d entry points still share the ctypes marshalling layer "
-        "and only hand their launch to the launcher; replacing that with real "
-        "adapters is batch C6",
-    ),
-    "npu_causal_conv1d_fn": ("pending", "same as npu_causal_conv1d (batch C6)"),
-    "npu_causal_conv1d_update": (
-        "pending",
-        "same as npu_causal_conv1d (batch C6)",
-    ),
     "npu_solve_tri": (
         "kernel",
         "layout='tnd' kills the process and layout='ntd' returns all zeros on "

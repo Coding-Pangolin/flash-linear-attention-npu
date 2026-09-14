@@ -12,6 +12,8 @@
 #include "thin_launcher/runtime.h"
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -235,6 +237,30 @@ class AclTensorView {
                   acl_dtype(meta.scalar_type), meta.strides.data(),
                   meta.storage_offset, format_, storage_dims.data(),
                   static_cast<uint64_t>(storage_dims.size()), meta.data);
+    // Off by default: `FLA_STABLE_DEBUG_DESC=1` prints what this descriptor
+    // looks like, which is the only way to compare our arguments with the
+    // ctypes reference's when a tiling accepts one and rejects the other.
+    if (const char* debug = std::getenv("FLA_STABLE_DEBUG_DESC")) {
+      if (debug[0] == '1') {
+        std::fprintf(stderr, "[desc] shape=(");
+        for (int64_t dim = 0; dim < meta.ndim; ++dim) {
+          std::fprintf(stderr, "%s%lld", dim ? "," : "",
+                       static_cast<long long>(meta.sizes[dim]));
+        }
+        std::fprintf(stderr, ") strides=(");
+        for (int64_t dim = 0; dim < meta.ndim; ++dim) {
+          std::fprintf(stderr, "%s%lld", dim ? "," : "",
+                       static_cast<long long>(meta.strides[dim]));
+        }
+        std::fprintf(stderr, ") offset=%lld format=%d storage=(",
+                     static_cast<long long>(meta.storage_offset), format_);
+        for (size_t dim = 0; dim < storage_dims.size(); ++dim) {
+          std::fprintf(stderr, "%s%lld", dim ? "," : "",
+                       static_cast<long long>(storage_dims[dim]));
+        }
+        std::fprintf(stderr, ") dtype=%d\n", meta.scalar_type);
+      }
+    }
     if (ptr_ == nullptr) {
       throw std::runtime_error(
           "fla_npu_thin(stable): aclCreateTensor returned nullptr");

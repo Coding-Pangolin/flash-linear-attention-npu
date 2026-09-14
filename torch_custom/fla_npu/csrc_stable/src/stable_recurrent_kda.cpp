@@ -70,7 +70,7 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
                        AtenTensorHandle beta, AtenTensorHandle initial_state,
                        std::optional<AtenTensorHandle> cu_seqlens,
                        std::optional<AtenTensorHandle> ssm_state_indices,
-                       std::optional<AtenTensorHandle> a_log,
+                       std::optional<AtenTensorHandle> A_log,
                        std::optional<AtenTensorHandle> dt_bias,
                        std::optional<AtenTensorHandle> num_accepted_tokens,
                        int64_t layout_code, double scale,
@@ -107,7 +107,7 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
   AclTensorView v_state(meta_of_handle(state_handle));
   AclTensorView v_cu(meta_optional_handle(cu_seqlens));
   AclTensorView v_idx(meta_optional_handle(ssm_state_indices));
-  AclTensorView v_alog(meta_optional_handle(a_log));
+  AclTensorView v_alog(meta_optional_handle(A_log));
   AclTensorView v_dtb(meta_optional_handle(dt_bias));
   AclTensorView v_accepted(meta_optional_handle(num_accepted_tokens));
   AclTensorView v_out(meta_of(*out));

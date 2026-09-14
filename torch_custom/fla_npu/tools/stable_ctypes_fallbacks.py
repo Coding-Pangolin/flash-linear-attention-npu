@@ -28,33 +28,16 @@ from pathlib import Path
 
 SETUP_DIR = Path(__file__).resolve().parents[1]
 ASCENDC_DIR = SETUP_DIR / "fla_npu" / "ops" / "ascendc"
-MODULES = ("_stable.py", "_stable_generated.py")
+MODULES = ("_stable.py",)
 
 # op -> (kind, reason).  "kernel" means no wrapper-side fix exists yet because
 # the operator itself is broken; "pending" means the port has not happened.
-DECLARED: dict[str, tuple[str, str]] = {
-    "npu_solve_tri": (
-        "kernel",
-        "layout='tnd' kills the process and layout='ntd' returns all zeros on "
-        "the OPP we have, on both backends, so the reference is the only path "
-        "that 'works' for ntd -- it needs a kernel fix, not a wrapper fix",
-    ),
-    "npu_chunk_gated_delta_rule_bwd_finalize": (
-        "pending",
-        "generated wrapper still narrows the domain to chunk_size=64 without "
-        "use_gate_in_kernel/use_exp2 and delegates the rest; ported in C4",
-    ),
-    "npu_chunk_gated_delta_rule_fwd_prepare": (
-        "pending",
-        "generated wrapper still requires use_qk_l2norm_in_kernel+use_exp2 "
-        "chunk_size=64 and delegates the rest; ported in C4",
-    ),
-    "npu_chunk_kda_bwd": (
-        "pending",
-        "generated wrapper narrows to dense/chunk_size=64/safe_gate/default "
-        "flags and delegates the rest; ported in C5",
-    ),
-}
+# Empty on purpose: no adapter reaches the ctypes reference any more.  The
+# operator-level gaps that remain are not delegations -- they are recorded as
+# recorded kernel limitations in the regression baseline (see
+# npu_solve_tri's refused 'tnd' spelling, and the conv1d FN initial-state
+# rows), which is why this list has nothing left to declare.
+DECLARED: dict[str, tuple[str, str]] = {}
 
 
 def passthrough_names(stable_text: str) -> list[str]:

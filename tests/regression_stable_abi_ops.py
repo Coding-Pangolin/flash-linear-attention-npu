@@ -1,6 +1,10 @@
-"""Generated stable adapters: parity against the ctypes reference.
+"""Stable adapters, operator by operator: parity against the ctypes reference.
 
-usage: FLA_NPU_STABLE_LIB=... python tests/regression_stable_abi_generated.py
+``regression_stable_full.py`` is the driver for the whole operator list; this
+one is the narrow form for a single adapter run, with the two steps it owns
+(ctypes first, then the launcher, bit-for-bit) spelled out.
+
+usage: FLA_NPU_STABLE_LIB=... python tests/regression_stable_abi_ops.py
 """
 from __future__ import annotations
 
@@ -134,7 +138,7 @@ def main():
         print(f"{status} {name}")
         if diff != 0.0:
             failures.append((name, diff))
-    print("ALL PASS: generated stable adapters" if not failures
+    print("ALL PASS: stable adapters" if not failures
           else f"FAILURES: {failures}")
     return 0 if not failures else 1
 

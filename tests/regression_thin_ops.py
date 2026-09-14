@@ -685,12 +685,27 @@ def scenario_conv1d_new_apis():
     qsl = torch.tensor([0, 2, 5], dtype=torch.int32, device="npu")
     cache = torch.tensor([0, 1], dtype=torch.int32, device="npu")
     initial = torch.tensor([True, False], dtype=torch.bool, device="npu")
-    parity_or_domain_skip(
-        "causal_conv1d_fn(varlen)",
-        lambda: _fn_case(ct, xv, weight, None, qsl=qsl, cache=cache,
-                         initial=initial),
-        lambda: _fn_case(_thin, xv, weight, None, qsl=qsl, cache=cache,
-                         initial=initial))
+    # With `has_initial_state` the FN kernel snapshots the initial states into a
+    # workspace and reads them back after SyncAll (see
+    # causal_conv1d_fn_tasks.h::PrefetchInitStatesToWorkspace).  What comes back
+    # for those sequences depends on the call's allocation history rather than
+    # on its inputs: on 910B3, two *ctypes* calls with identical inputs differ
+    # by 260 in exactly those rows, and a third run shows 0 where the first
+    # showed 300.  Rows whose sequence has has_initial_state=False are
+    # bit-identical between the two backends, which is what makes this a kernel
+    # issue rather than a marshalling one.
+    reference = _fn_case(ct, xv, weight, None, qsl=qsl, cache=cache,
+                         initial=initial)
+    adapted = _fn_case(_thin, xv, weight, None, qsl=qsl, cache=cache,
+                       initial=initial)
+    assert_parity("causal_conv1d_fn(varlen, no initial state)",
+                  (reference[2:],), (adapted[2:],))
+    SKIPPED["causal_conv1d_fn(varlen, initial state)"] = (
+        "the rows of the sequence that reads an initial state are not "
+        "reproducible in that kernel (ctypes against itself differs), so they "
+        "are recorded instead of compared")
+    print(f"SKIP causal_conv1d_fn(varlen, initial state) "
+          f"({SKIPPED['causal_conv1d_fn(varlen, initial state)']})")
     # update: in-place on conv_state, returns the mutated x.
     parity_or_domain_skip(
         "causal_conv1d_update(dense)",
@@ -812,7 +827,8 @@ def scenario_chunk_kda_fwd():
     """kda_fwd 全域名（#491）：4 layout x dense/varlen x flag 矩阵 parity。
 
     合法域由 ctypes 参考实现界定；thin 只有在每个组合的逐输出 diff 都为 0、
-    且 None 掩码与返回元组顺序都一致时才算覆盖（见 op_policy_check.py）。
+    且 None 掩码与返回元组顺序都一致时才算覆盖（合法域记录见
+    tools/stable_coverage.py 与 tools/stable_ctypes_fallbacks.py）。
     """
     H, HV, K, V = 4, 4, 128, 128
     layouts = ("BSND", "BNSD", "TND", "NTD")
@@ -995,6 +1011,37 @@ def scenario_chunk_kda_bwd():
             lambda extra=extra: _thin.npu_chunk_kda_bwd(
                 q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o,
                 K ** -0.5, **dict(kw, **extra)))
+
+
+def scenario_chunk_kda_bwd_recompute():
+    """The KDA saved tensors: gate cumsum plus the recomputed w/u/qg/kg.
+
+    `use_gate_in_kernel` decides whether the fp32 gate cumsum is materialized,
+    so both spellings are exercised -- that is also the only optional output
+    here.
+    """
+
+    B, H, T, K, cs = 2, 4, 256, 128, 64
+    dt = torch.bfloat16
+    q = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
+    k = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
+    v = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
+    g = torch.randn(B, H, T, K, dtype=torch.float32, device="npu")
+    beta = torch.randn(B, H, T, dtype=dt, device="npu")
+    a = torch.randn(B, H, T, cs, dtype=dt, device="npu") * 5e-2
+    A_log = torch.randn(H, dtype=torch.float32, device="npu")
+    torch.npu.synchronize()
+    for label, extra in (("gate", dict(use_gate_in_kernel=True, A_log=A_log)),
+                         ("no gate", dict(use_gate_in_kernel=False,
+                                          A_log=None))):
+        parity_or_domain_skip(
+            f"chunk_kda_bwd_recompute({label})",
+            lambda extra=extra: ct.npu_chunk_kda_bwd_recompute(
+                q, k, v, g, beta, a, cs, use_exp2=True, lower_bound=-5.0,
+                **extra),
+            lambda extra=extra: _thin.npu_chunk_kda_bwd_recompute(
+                q, k, v, g, beta, a, cs, use_exp2=True, lower_bound=-5.0,
+                **extra))
 
 
 def scenario_dqkwg():
@@ -1375,6 +1422,7 @@ def main():
         scenario_chunk_kda_fwd_variants,
         scenario_chunk_kda_bwd_intra,
         scenario_chunk_kda_bwd,
+        scenario_chunk_kda_bwd_recompute,
         scenario_dqkwg,
         scenario_chunk_local_cumsum,
         scenario_scaled_dot_kkt,

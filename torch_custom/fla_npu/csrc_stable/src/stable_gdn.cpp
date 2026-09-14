@@ -44,6 +44,8 @@ using fla_npu_thin::stable::scalar;
 using fla_npu_thin::stable::size_of;
 using fla_npu_thin::stable::tensor;
 
+namespace layout_math = fla_npu_thin::stable::layout_math;
+
 // Table order is the code order; _stable.py's _char_code tables must match.
 // Every layout name table in this file uses the code order
 // thin_stable/layout_math.h documents (BSND, BNSD, TND, NTD); the Python side
@@ -220,11 +222,11 @@ run_npu_chunk_gated_delta_rule_fwd(
   const std::vector<int64_t> cu = int_values(cu_seqlens);
   const std::vector<int64_t> ci = int_values(chunk_indices);
   // The token axis is read from `q`; the packed spellings are rank 3.
-  const int64_t batch = layout::batch(q_meta, layout);
-  const int64_t tokens = layout::tokens(q_meta, layout);
-  const int64_t heads = layout::value_heads(v_meta, layout);
-  const int64_t k_dim = layout::key_dim(q_meta, layout);
-  const int64_t v_dim = layout::value_dim(v_meta, layout);
+  const int64_t batch = layout_math::batch(q_meta, layout);
+  const int64_t tokens = layout_math::tokens(q_meta, layout);
+  const int64_t heads = layout_math::value_heads(v_meta, layout);
+  const int64_t k_dim = layout_math::key_dim(q_meta, layout);
+  const int64_t v_dim = layout_math::value_dim(v_meta, layout);
   const int64_t state_tail_k = state_v_first ? v_dim : k_dim;
   const int64_t state_tail_v = state_v_first ? k_dim : v_dim;
 
@@ -238,7 +240,7 @@ run_npu_chunk_gated_delta_rule_fwd(
                                     ? meta_of(*initial_state).scalar_type
                                     : kFloat;
     out_final_state = allocate_sizes(
-        {layout::sequences(cu, batch), heads, state_tail_k, state_tail_v},
+        {layout_math::sequences(cu, batch), heads, state_tail_k, state_tail_v},
         state_dtype, q_meta);
   }
   std::optional<Tensor> out_a_log;
@@ -260,7 +262,7 @@ run_npu_chunk_gated_delta_rule_fwd(
   std::optional<Tensor> out_h;
   if (return_intermediate_states) {
     out_h = allocate_sizes({batch, heads,
-                            layout::chunks(cu, ci, chunk_size, tokens),
+                            layout_math::chunks(cu, ci, chunk_size, tokens),
                             state_tail_k, state_tail_v},
                            q_meta.scalar_type, q_meta);
   }
@@ -458,8 +460,8 @@ run_npu_chunk_gated_delta_rule_bwd(
   const TensorMeta q_meta = meta_of(q);
   const TensorMeta v_meta = meta_of(v);
   const int64_t batch = size_of(q_meta, 0);
-  const int64_t tokens = layout::tokens4(q_meta, layout);
-  const int64_t heads = layout::value_heads4(v_meta, layout);
+  const int64_t tokens = layout_math::tokens4(q_meta, layout);
+  const int64_t heads = layout_math::value_heads4(v_meta, layout);
 
   Tensor out_dq = allocate_sizes(q_meta.sizes, q_meta.scalar_type, q_meta);
   Tensor out_dk = allocate_sizes(meta_of(k).sizes, meta_of(k).scalar_type,

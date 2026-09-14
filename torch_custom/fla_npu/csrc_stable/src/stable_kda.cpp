@@ -30,11 +30,18 @@ using fla_npu_thin::stable::allocate_like;
 using fla_npu_thin::stable::allocate_sizes;
 using fla_npu_thin::stable::cstr;
 using fla_npu_thin::stable::int_array;
+using fla_npu_thin::stable::int_values;
 using fla_npu_thin::stable::meta_of;
 using fla_npu_thin::stable::optional_tensor;
 using fla_npu_thin::stable::out_tensor;
 using fla_npu_thin::stable::scalar;
+using fla_npu_thin::stable::size_of;
 using fla_npu_thin::stable::tensor;
+
+// The layout arithmetic lives in a named namespace so its helpers cannot
+// collide with the adapter-local ones; alias it here because these files sit in
+// an anonymous namespace at global scope.
+namespace layout_math = fla_npu_thin::stable::layout_math;
 
 
 // ---------------------------------------------------------------------------
@@ -71,7 +78,10 @@ Tensor run_npu_kda_gate_cumsum(Tensor g, std::optional<Tensor> A_log,
 // conversions cannot carry one, so the caller passes a code and this table is
 // the single source of the legal values.  The order must match the Python
 // _char_code table -- tools/op_abi_parity.py checks exactly that.
-constexpr const char* kChunkKdaBwdIntraLayoutNames[] = {"BSND", "BNSD"};
+// The kernel takes the layout as a string.  TND is the packed varlen spelling;
+// NTD is not part of this operator's domain (the reference rejects it), so it
+// has no code.
+constexpr const char* kChunkKdaBwdIntraLayoutNames[] = {"BSND", "BNSD", "TND"};
 
 constexpr const char* kSchema_chunk_kda_bwd_intra =
     "npu_chunk_kda_bwd_intra(Tensor q, Tensor k, Tensor gk, Tensor beta, "
@@ -183,12 +193,12 @@ run_npu_chunk_kda_fwd(
   const TensorMeta v_meta = meta_of(v);
   const std::vector<int64_t> cu = int_values(cu_seqlens);
   const std::vector<int64_t> ci = int_values(chunk_indices);
-  const int64_t tokens = layout::tokens(q_meta, layout);
-  const int64_t heads = layout::value_heads(v_meta, layout);
-  const int64_t k_dim = layout::key_dim(q_meta, layout);
-  const int64_t v_dim = layout::value_dim(v_meta, layout);
-  const bool rank3 = layout::packed(layout);
-  const int64_t batch_size = layout::batch(q_meta, layout);
+  const int64_t tokens = layout_math::tokens(q_meta, layout);
+  const int64_t heads = layout_math::value_heads(v_meta, layout);
+  const int64_t k_dim = layout_math::key_dim(q_meta, layout);
+  const int64_t v_dim = layout_math::value_dim(v_meta, layout);
+  const bool rank3 = layout_math::packed(layout);
+  const int64_t batch_size = layout_math::batch(q_meta, layout);
 
   // The head-major spellings put the batch dimension in front of the chunk
   // count; the packed ones do not have one.
@@ -211,7 +221,7 @@ run_npu_chunk_kda_fwd(
   std::optional<Tensor> out_final_state;
   if (output_final_state) {
     out_final_state = allocate_sizes(
-        {layout::sequences(cu, batch_size), heads,
+        {layout_math::sequences(cu, batch_size), heads,
          state_v_first ? v_dim : k_dim, state_v_first ? k_dim : v_dim},
         kFloat, q_meta);
   }
@@ -239,7 +249,7 @@ run_npu_chunk_kda_fwd(
   if (disable_recompute || return_intermediate_states) {
     std::vector<int64_t> h_sizes = leading;
     h_sizes.insert(h_sizes.end(),
-                   {layout::chunks(cu, ci, chunk_size, tokens), heads,
+                   {layout_math::chunks(cu, ci, chunk_size, tokens), heads,
                     state_v_first ? v_dim : k_dim,
                     state_v_first ? k_dim : v_dim});
     out_h = allocate_sizes(h_sizes, q_dtype, q_meta);

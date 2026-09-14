@@ -559,39 +559,47 @@ def scenario_conv1d_varlen_initial_state():
     A2 rejects the varlen form outright (aclnnCausalConv1dGetWorkspaceSize
     561002) on both backends; the helper records that as SKIP with the status
     instead of pretending the case is covered.
+
+    The cache indices avoid block 0: that is `null_block_id`, and a sequence
+    addressing it is skipped by the kernel (see scenario_conv1d_new_apis).
     """
 
     x = _seq(5 * 16, 1.0).to(torch.bfloat16).npu()
     weight = _seq(4 * 16, 101.0).reshape(4, 16).to(torch.bfloat16).npu()
-    states = _seq(2 * 3 * 16, 301.0).reshape(2, 3, 16).to(torch.bfloat16).npu()
+    states = _seq(3 * 3 * 16, 301.0).reshape(3, 3, 16).to(torch.bfloat16).npu()
     _conv1d_parity("conv1d_varlen_initial_state", dict(
         x=x, weight=weight, bias=None, conv_states=states,
-        query_start_loc=[0, 2, 5], cache_indices=[0, 1],
+        query_start_loc=[0, 2, 5], cache_indices=[1, 2],
         initial_state_mode=[1, 0], activation_mode=0, pad_slot_id=-1,
         run_mode=0))
 
 
 def scenario_conv1d_update():
-    """Reference: test_npu_causal_conv1d_update_* and _spec_decode_*."""
+    """Reference: test_npu_causal_conv1d_update_* and _spec_decode_*.
+
+    Every case keeps block 0 out of `cache_indices`: that id is `null_block_id`
+    (the padding slot), and a sequence addressing it is skipped by the kernel,
+    so comparing that row would compare uninitialised memory.
+    """
 
     cases = [
         ("update", dict(x=_seq(2 * 16, 1.0).reshape(2, 16).to(torch.bfloat16).npu(),
                         weight=_seq(4 * 16, 101.0).reshape(4, 16).to(torch.bfloat16).npu(),
                         bias=_seq(16, 201.0).to(torch.bfloat16).npu(),
-                        conv_states=_seq(2 * 3 * 16, 301.0).reshape(2, 3, 16).to(torch.bfloat16).npu(),
-                        cache_indices=[0, 1], activation_mode=1,
+                        conv_states=_seq(3 * 3 * 16, 301.0).reshape(3, 3, 16).to(torch.bfloat16).npu(),
+                        cache_indices=[1, 2], activation_mode=1,
                         pad_slot_id=-1, run_mode=1)),
         ("spec_decode", dict(x=_seq(2 * 4 * 16, 1.0).reshape(2, 4, 16).to(torch.bfloat16).npu(),
                              weight=_seq(4 * 16, 101.0).reshape(4, 16).to(torch.bfloat16).npu(),
                              bias=_seq(16, 201.0).to(torch.bfloat16).npu(),
-                             conv_states=_seq(2 * 6 * 16, 301.0).reshape(2, 6, 16).to(torch.bfloat16).npu(),
-                             cache_indices=[0, 1], num_accepted_tokens=[2, 4],
+                             conv_states=_seq(3 * 6 * 16, 301.0).reshape(3, 6, 16).to(torch.bfloat16).npu(),
+                             cache_indices=[1, 2], num_accepted_tokens=[2, 4],
                              activation_mode=0, pad_slot_id=-1, run_mode=1)),
         ("width3_no_bias", dict(x=_seq(3 * 16, 1.0).reshape(3, 16).to(torch.bfloat16).npu(),
                                 weight=_seq(3 * 16, 101.0).reshape(3, 16).to(torch.bfloat16).npu(),
                                 bias=None,
-                                conv_states=_seq(3 * 2 * 16, 301.0).reshape(3, 2, 16).to(torch.bfloat16).npu(),
-                                cache_indices=[0, 1, 2], activation_mode=0,
+                                conv_states=_seq(4 * 2 * 16, 301.0).reshape(4, 2, 16).to(torch.bfloat16).npu(),
+                                cache_indices=[1, 2, 3], activation_mode=0,
                                 pad_slot_id=-1, run_mode=1)),
     ]
     for label, kwargs in cases:
@@ -683,29 +691,20 @@ def scenario_conv1d_new_apis():
     # fn, varlen with device metadata (the vLLM-style call).
     xv = _seq(5 * 16, 1.0).reshape(5, 16).to(dt).npu()
     qsl = torch.tensor([0, 2, 5], dtype=torch.int32, device="npu")
-    cache = torch.tensor([0, 1], dtype=torch.int32, device="npu")
+    # Block ids must not collide with `null_block_id` (0 by default): a sequence
+    # whose cache index is the null block is *skipped* by the kernel, which
+    # leaves its output rows unwritten -- whatever the allocator had there is
+    # then read back, so such a case is not a parity test at all (measured: the
+    # same ctypes call twice differs by 9.5e6 in those rows).  Block 0 is
+    # reserved in vLLM's paged cache for the same reason.
+    cache = torch.tensor([1, 2], dtype=torch.int32, device="npu")
     initial = torch.tensor([True, False], dtype=torch.bool, device="npu")
-    # With `has_initial_state` the FN kernel snapshots the initial states into a
-    # workspace and reads them back after SyncAll (see
-    # causal_conv1d_fn_tasks.h::PrefetchInitStatesToWorkspace).  What comes back
-    # for those sequences depends on the call's allocation history rather than
-    # on its inputs: on 910B3, two *ctypes* calls with identical inputs differ
-    # by 260 in exactly those rows, and a third run shows 0 where the first
-    # showed 300.  Rows whose sequence has has_initial_state=False are
-    # bit-identical between the two backends, which is what makes this a kernel
-    # issue rather than a marshalling one.
-    reference = _fn_case(ct, xv, weight, None, qsl=qsl, cache=cache,
-                         initial=initial)
-    adapted = _fn_case(_thin, xv, weight, None, qsl=qsl, cache=cache,
-                       initial=initial)
-    assert_parity("causal_conv1d_fn(varlen, no initial state)",
-                  (reference[2:],), (adapted[2:],))
-    SKIPPED["causal_conv1d_fn(varlen, initial state)"] = (
-        "the rows of the sequence that reads an initial state are not "
-        "reproducible in that kernel (ctypes against itself differs), so they "
-        "are recorded instead of compared")
-    print(f"SKIP causal_conv1d_fn(varlen, initial state) "
-          f"({SKIPPED['causal_conv1d_fn(varlen, initial state)']})")
+    parity_or_domain_skip(
+        "causal_conv1d_fn(varlen, initial state)",
+        lambda: _fn_case(ct, xv, weight, None, qsl=qsl, cache=cache,
+                         initial=initial),
+        lambda: _fn_case(_thin, xv, weight, None, qsl=qsl, cache=cache,
+                         initial=initial))
     # update: in-place on conv_state, returns the mutated x.
     parity_or_domain_skip(
         "causal_conv1d_update(dense)",
@@ -715,7 +714,9 @@ def scenario_conv1d_new_apis():
 
 def _fn_case(backend, x, weight, bias, qsl=None, cache=None, initial=None):
     dt = x.dtype
-    states = _seq(2 * 3 * 16, 301.0).reshape(2, 3, 16).to(dt).npu()
+    # Three blocks, so the two sequences can use ids 1 and 2 and leave the null
+    # block (0) alone.
+    states = _seq(3 * 3 * 16, 301.0).reshape(3, 3, 16).to(dt).npu()
     kwargs = {}
     if qsl is not None:
         kwargs = dict(query_start_loc=qsl, cache_indices=cache,
@@ -728,8 +729,10 @@ def _update_case(backend, dt):
     x = _seq(2 * 16, 1.0).reshape(2, 16).to(dt).npu()
     weight = _seq(4 * 16, 101.0).reshape(4, 16).to(dt).npu()
     bias = _seq(16, 201.0).to(dt).npu()
-    states = _seq(2 * 3 * 16, 301.0).reshape(2, 3, 16).to(dt).npu()
-    indices = torch.tensor([0, 1], dtype=torch.int32, device="npu")
+    states = _seq(3 * 3 * 16, 301.0).reshape(3, 3, 16).to(dt).npu()
+    # See the varlen case: block id 0 is the null block, and a sequence that
+    # addresses it is skipped (its output row is never written).
+    indices = torch.tensor([1, 2], dtype=torch.int32, device="npu")
     out = backend.npu_causal_conv1d_update(
         x, states, weight, bias, activation="silu",
         conv_state_indices=indices)
@@ -969,6 +972,22 @@ def scenario_chunk_kda_bwd_intra():
                                       + [db.transpose(1, 2).contiguous(),
                                          dg.transpose(1, 2).contiguous()],
                                       **kw_bsnd))
+    # TND is the packed varlen spelling: rank-3 tensors and cu_seqlens.  Both
+    # sequences fit in one batch dimension, which is what the physical B=1
+    # convention means here.
+    # The packed tensors hold B*T tokens, and the reference requires cu_seqlens
+    # to start at 0 and end at exactly that length.
+    cu = [0, T, B * T]
+    kw_tnd = dict(kw, layout="TND", cu_seqlens=cu)
+    packed = [t.reshape(B * T, H, K) for t in (q, k)]
+    packed += [gk.reshape(B * T, H, K), beta.reshape(B * T, H),
+               dAqk.reshape(B * T, H, cs), dAkk.reshape(B * T, H, cs)]
+    packed += [t.reshape(B * T, H, K) for t in (dq, dk)]
+    packed += [db.reshape(B * T, H), dg.reshape(B * T, H, K)]
+    parity_or_domain_skip(
+        "chunk_kda_bwd_intra(TND varlen)",
+        lambda: ct.npu_chunk_kda_bwd_intra(*packed, **kw_tnd),
+        lambda: _thin.npu_chunk_kda_bwd_intra(*packed, **kw_tnd))
 
 
 def scenario_chunk_kda_bwd():

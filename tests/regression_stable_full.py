@@ -142,6 +142,11 @@ class PublicShim:
 
 
 def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    suite_cli = None
+
     # Either FLA_NPU_STABLE_LIB points at a build tree, or an installed wheel
     # carries the launcher next to the package -- both are ordinary customer
     # setups, so accept whichever resolves instead of demanding the env var.
@@ -150,6 +155,9 @@ def main() -> int:
             "no Stable-ABI launcher: set FLA_NPU_STABLE_LIB to a built "
             "libfla_npu_thin.so, or install a wheel that bundles one")
     import regression_thin_ops as suite
+
+    suite.group_cli(parser)
+    args = parser.parse_args()
 
     shim = StableShim()
     if (os.environ.get("FLA_NPU_DISPATCH") or "").strip().lower() == "public":
@@ -191,6 +199,23 @@ def main() -> int:
         suite.scenario_chunk_gated_delta_rule_fwd,
         suite.scenario_chunk_gated_delta_rule_bwd,
     ]
+    names = [scenario.__name__ for scenario in scenarios]
+    suite.missing_from_groups(names)
+    if args.list_groups:
+        suite.print_groups(names)
+        return 0
+    chosen = set(suite.select_groups(names, args.group))
+    scenarios = [scenario for scenario in scenarios
+                 if scenario.__name__ in chosen]
+    if args.group:
+        # A subset must not be compared against the whole-matrix baseline: the
+        # scenarios that were not selected would look like lost coverage.
+        global BASELINE_WRITE
+        BASELINE_WRITE = False
+        print(f"groups {', '.join(args.group)}: {len(scenarios)} of "
+              f"{len(names)} scenarios "
+              f"({', '.join(suite.select_groups(names, args.group))}); "
+              "baseline comparison skipped for a subset run")
     for scenario in scenarios:
         print(f"--- entering {scenario.__name__}", flush=True)
         scenario()

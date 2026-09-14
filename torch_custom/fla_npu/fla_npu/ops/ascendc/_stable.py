@@ -617,3 +617,57 @@ def npu_recompute_w_u_fwd(k, v, beta, A, chunk_size, *, g=None, gk=None,
         _host_ints(cu_seqlens), _host_ints(chunk_indices),
         chunk_size, _current_stream_ptr(),
     )
+
+
+def npu_causal_conv1d_bwd(x, y, weight, dy, initial_state=None, dht=None, *,
+                          query_start_loc=None, activation=0,
+                          input_layout="BSND"):
+    """dx / dweight / dbias / d(initial_state) of the causal conv1d.
+
+    ``input_layout`` selects whether the state gradient carries one row per
+    batch entry or one per segment, which the adapter derives from the layout
+    name and the query_start_loc values.
+    """
+
+    return _op("npu_causal_conv1d_bwd")(
+        x, y, weight, dy, initial_state, dht,
+        _host_ints(query_start_loc),
+        activation,
+        _char_code("npu_causal_conv1d_bwd", "input_layout", str(input_layout)),
+        _current_stream_ptr(),
+    )
+
+
+def npu_chunk_fwd_o(q, k, v, h, scale, *, g=None, g_gamma=None,
+                    cu_seqlens=None, chunk_indices=None, chunk_size=None,
+                    transpose_state_layout=False, use_exp2=False,
+                    output_layout="BNSD"):
+    """Output of one chunked attention pass.
+
+    ``g_gamma`` is part of the published signature and ignored, exactly as the
+    ctypes reference ignores it.  ``chunk_size`` defaults to 64 and ``use_exp2``
+    to False, matching the reference's defaults.
+    """
+
+    return _op("npu_chunk_fwd_o")(
+        q, k, v, h, g,
+        _host_ints(cu_seqlens),
+        _host_ints(chunk_indices),
+        scale,
+        64 if chunk_size is None else chunk_size,
+        False if use_exp2 is None else bool(use_exp2),
+        bool(transpose_state_layout),
+        _char_code("npu_chunk_fwd_o", "output_layout", output_layout),
+        _current_stream_ptr(),
+    )
+
+
+def npu_chunk_gdn_bwd_intra(q, k, v, g, beta, A, d_o, scale, chunk_size, *,
+                            cu_seqlens=None, chunk_indices=None, use_exp2=True):
+    """dq / dk / dv of one chunk."""
+
+    return _op("npu_chunk_gdn_bwd_intra")(
+        q, k, v, g, beta, A, d_o,
+        _host_ints(cu_seqlens), _host_ints(chunk_indices),
+        scale, chunk_size, use_exp2, _current_stream_ptr(),
+    )

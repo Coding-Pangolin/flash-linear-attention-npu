@@ -11,6 +11,7 @@
 #include "stable_fast_gelu.cpp"
 #include "stable_kda.cpp"
 #include "stable_chunk.cpp"
+#include "stable_gdn.cpp"
 #include "../generated/ops_stable_generated.inc"
 
 // Build stamp: the md5 of the generated adapters this library was compiled
@@ -48,6 +49,9 @@ STABLE_TORCH_LIBRARY(fla_npu_thin, m) {
   m.def(kSchema_prepare_wy_repr_bwd_full);
   m.def(kSchema_prepare_wy_repr_bwd);
   m.def(kSchema_recompute_w_u_fwd);
+  m.def(kSchema_causal_conv1d_bwd);
+  m.def(kSchema_chunk_fwd_o);
+  m.def(kSchema_chunk_gdn_bwd_intra);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.def("_stream_probe(int device_index) -> (int, int)");
 #endif
@@ -83,6 +87,12 @@ STABLE_TORCH_LIBRARY_IMPL(fla_npu_thin, CompositeExplicitAutograd, m) {
          &fla_npu_thin::stable::boxed_adapter<run_npu_prepare_wy_repr_bwd>);
   m.impl("npu_recompute_w_u_fwd",
          &fla_npu_thin::stable::boxed_adapter<run_npu_recompute_w_u_fwd>);
+  m.impl("npu_causal_conv1d_bwd",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_causal_conv1d_bwd>);
+  m.impl("npu_chunk_fwd_o",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_fwd_o>);
+  m.impl("npu_chunk_gdn_bwd_intra",
+         &fla_npu_thin::stable::boxed_adapter<run_npu_chunk_gdn_bwd_intra>);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.impl("_stream_probe", &boxed_stream_probe);
 #endif

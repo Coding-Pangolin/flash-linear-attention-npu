@@ -110,7 +110,12 @@ inline OutTensorArg out_tensor(const torch::stable::Tensor& value) {
 // stable conversions have no int[]), so the adapter copies the values out of
 // it.  An absent/empty value becomes a null aclIntArray, exactly like the
 // ctypes path passing nullptr.
-inline IntArrayArg int_array(const std::optional<torch::stable::Tensor>& value) {
+//
+// Adapters that need the metadata *before* the call -- an output shape that
+// counts segments, for instance -- take the values with `int_values` and hand
+// the same vector to `int_array`, so the values are copied once.
+inline std::vector<int64_t> int_values(
+    const std::optional<torch::stable::Tensor>& value) {
   std::vector<int64_t> values;
   if (value.has_value()) {
     const TensorMeta meta = meta_of(*value);
@@ -132,7 +137,11 @@ inline IntArrayArg int_array(const std::optional<torch::stable::Tensor>& value) 
       }
     }
   }
-  return IntArrayArg(std::move(values));
+  return values;
+}
+
+inline IntArrayArg int_array(const std::optional<torch::stable::Tensor>& value) {
+  return IntArrayArg(int_values(value));
 }
 inline IntArrayArg int_array(std::vector<int64_t> values) {
   return IntArrayArg(std::move(values));
@@ -141,12 +150,17 @@ inline IntArrayArg int_array(std::vector<int64_t> values) {
 // Enum-coded `char*` argument: the name table is the single source of the legal
 // values, so the same array feeds `cstr` and the coverage gate.
 template <size_t N>
-inline CStrArg cstr(const char* const (&names)[N], int64_t code) {
+inline const char* enum_name(const char* const (&names)[N], int64_t code) {
   if (code >= 0 && static_cast<size_t>(code) < N) {
-    return CStrArg(names[code]);
+    return names[code];
   }
   throw std::runtime_error("fla_npu_thin(stable): bad enum code " +
                            std::to_string(code));
+}
+
+template <size_t N>
+inline CStrArg cstr(const char* const (&names)[N], int64_t code) {
+  return CStrArg(enum_name(names, code));
 }
 
 template <class T>

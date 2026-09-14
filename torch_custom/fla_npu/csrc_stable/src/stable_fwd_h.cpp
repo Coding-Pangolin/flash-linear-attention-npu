@@ -209,22 +209,31 @@ run_npu_chunk_gated_delta_rule_bwd_dhu(
     std::optional<Tensor> cu_seqlens, std::optional<Tensor> chunk_indices,
     double scale, int64_t chunk_size, bool use_exp2,
     bool transpose_state_layout, int64_t stream) {
-  (void)transpose_state_layout;  // affects the caller's layout, not the call
   const TensorMeta q_meta = meta_of(q);
   const TensorMeta dv_meta = meta_of(dv);
+  const std::vector<int64_t> cu = int_values(cu_seqlens);
   const std::vector<int64_t> ci = int_values(chunk_indices);
-  const int64_t chunks =
-      count_chunks(ci, chunk_size, size_of(q_meta, 2));
+  const int64_t chunks = count_chunks(ci, chunk_size, size_of(q_meta, 2));
   const std::vector<int64_t> dh_sizes = {
       size_of(q_meta, 0), size_of(dv_meta, 1), chunks, size_of(q_meta, 3),
       size_of(dv_meta, 3)};
 
   Tensor out_dh = allocate_sizes(dh_sizes, q_meta.scalar_type, q_meta);
   // dh0 mirrors h0's presence: without an initial state there is nothing to
-  // differentiate against, so the slot stays absent.
+  // differentiate against, so the slot stays absent.  Its shape is one state
+  // per *sequence* (not per chunk), and `transpose_state_layout` is what the
+  // operator calls `stateVFirst`: it swaps the two state dimensions, which is
+  // why the same flag decides whether the tail is (K, V) or (V, K).
   std::optional<Tensor> out_dh0;
   if (h0.has_value()) {
-    out_dh0 = allocate_sizes(dh_sizes, q_meta.scalar_type, q_meta);
+    const int64_t sequences = cu.empty()
+                                  ? size_of(q_meta, 0)
+                                  : static_cast<int64_t>(cu.size()) - 1;
+    out_dh0 = allocate_sizes(
+        {sequences, size_of(dv_meta, 1),
+         transpose_state_layout ? size_of(dv_meta, 3) : size_of(q_meta, 3),
+         transpose_state_layout ? size_of(q_meta, 3) : size_of(dv_meta, 3)},
+        q_meta.scalar_type, q_meta);
   }
   Tensor out_dv = allocate_like(dv_meta);
 
@@ -232,8 +241,9 @@ run_npu_chunk_gated_delta_rule_bwd_dhu(
                   tensor(q_meta), tensor(meta_of(k)), tensor(meta_of(w)),
                   tensor(meta_of(d_o)), tensor(dv_meta), optional_tensor(g),
                   optional_tensor(gK), optional_tensor(h0), optional_tensor(dht),
-                  int_array(int_values(cu_seqlens)), int_array(ci),
-                  scalar(scale), scalar(chunk_size), scalar(use_exp2),
+                  int_array(cu), int_array(ci), scalar(scale),
+                  scalar(chunk_size), scalar(use_exp2),
+                  scalar(transpose_state_layout),
                   out_tensor(meta_of(out_dh)),
                   out_tensor(meta_or_undefined(out_dh0)),
                   out_tensor(meta_of(out_dv)));

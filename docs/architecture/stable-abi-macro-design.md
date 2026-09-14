@@ -1,0 +1,74 @@
+# Stable-ABI 薄层设计（手写适配 + 共享宏）
+
+本文描述当前实现的结构、约定和门禁。面向两类读者：想知道"一次调用怎么走"的人，和要新增算子的人（后者直接看 [stable-abi-op-onboarding.md](stable-abi-op-onboarding.md)）。
+
+## 1. 目标与约束
+
+- **无 ABI 依赖**：不依赖 CPython ABI（不是扩展模块），不依赖 torch_npu 的 C++ ABI（只用 `torch/csrc/stable` 的 `aoti_torch_*` C 面）。因此同一个 `.so` 可以在不同 torch/torch_npu/Python 之间复用。
+- **host 开销与 vLLM 同量级**：调用路径上不建 Python 对象（无逐次 `ctypes` 描述符、无 `getattr` 链、无 `inspect.signature`）。
+- **可读、可审计**：一个算子 = 一个 C++ 适配 + 一个 Python 包装，参数顺序在三处（schema、适配函数、aclnn）一致，并由离线门禁检查。
+
+## 2. 层次
+
+```
+调用方 (fla / vLLM)
+  └─ fla_npu.ops.ascendc._stable.<op>()     真签名的 Python 包装：名字映射 + int[]/枚举转换
+       └─ torch.ops.fla_npu_thin.<op>(...)  STABLE_TORCH_LIBRARY 注册的算子（boxed）
+            └─ boxed_adapter<run_<op>>      按 schema 拆栈，调用适配函数，打包返回
+                 └─ FLA_STABLE_EXEC(...)     RAII 持有 aclTensor/aclIntArray/字符串/标量
+                      └─ aclnn<Op>GetWorkspaceSize → workspace → aclnn<Op>
+```
+
+文件：
+
+| 文件 | 职责 |
+| --- | --- |
+| `fla_npu/ops/ascendc/_stable.py` | 每算子一个包装；`_host_ints`（int[]）、`_char_code`/`_ENUM`（枚举）、`_current_stream_ptr` |
+| `csrc_stable/src/stable_ops.cpp` | 单 TU：包含各适配文件，`m.def`/`m.impl` 注册，构建戳符号 |
+| `csrc_stable/src/stable_<family>.cpp` | 适配实现：`kSchema_<op>` + `run_<op>` |
+| `csrc_stable/include/thin_stable/boxed.h` | `boxed_adapter`：按函数签名拆栈/打包 |
+| `csrc_stable/include/thin_stable/exec.h` | RAII 参数持有者 + `FLA_STABLE_EXEC` 宏 |
+| `csrc_stable/include/thin_stable/acl_meta.h` | `TensorMeta`、`AclTensorView`、`AclIntArrayView`、分配/元数据读取 |
+| `csrc_stable/include/thin_stable/at_facade.h` | 最小 ATen 形状门面（dtype 常量、`TensorOptions`） |
+| `csrc_stable/include/thin_stable/layout_math.h` | 各 layout 下的 token/head/dim/chunk 数 |
+
+## 3. 书写约定（门禁依赖这些）
+
+1. **参数顺序三处一致**：`kSchema_<op>` 的形参顺序 = `run_<op>` 的形参顺序 = `FLA_STABLE_EXEC` 转发给 aclnn 的顺序（schema 里仅用于控制输出的布尔参数不转发，例如 `output_final_state`）。由 `tools/op_abi_parity.py` 检查前两者，`tools/op_abi_validate.py` 检查 aclnn 那一侧（对 OPP 头文件）。
+2. **`int[]` 跨边界用 host int64 tensor**：schema 里写 `Tensor?`，Python 侧 `_host_ints(...)`，C++ 侧 `int_array(...)` 读 host 指针并 `aclCreateIntArray`。device 元数据（vLLM 的 `query_start_loc` 等）走 `optional_tensor(...)`，两者语义不同但 schema 类型相同，区别在调用点。
+3. **`char*` 跨边界用 int code**：schema 里写 `int`，Python 侧 `_char_code(op, arg, value)` 查 `_stable._ENUM`，C++ 侧 `cstr(k<Op><Arg>Names, code)` 查名表并做边界检查。**名表顺序必须与 `_ENUM` 一致**，由 `stable_coverage.py` 检查。所有 layout 参数统一用 `BSND=0, BNSD=1, TND=2, NTD=3`（`layout_math.h` 的 `layout::Code`）。
+4. **可选输出**：schema 写 `Tensor?`，缺席时 C++ 返回 `std::nullopt`；`boxed.h` 的 `pack` 会把它写成 **boxed optional**——直接塞 tensor handle 会让 dispatcher 当指针解引用（`chunk_fwd_h` 段错误就是这么来的）。
+5. **原地修改**：在 `__init__.py` 的 `MUTATED_ARGUMENTS` 登记参数名；写入与否取决于参数值时再登记 `MUTATION_FLAGS`（例如 `npu_recurrent_kda` 的 `inplace_final_state`）。
+6. **描述符**：`AclTensorView` 对连续张量用逻辑 shape 作 storage shape（与 `nd_tensor` 一致），非连续退化为 `(numel,)`。OPP 侧 `isview=0` 时该字段不可观测；`isview=1` 的算子（如 `RecurrentGatedDeltaRule`）必须与参考一致——这是 `npu_recurrent_gated_delta_rule` 的 state 走 stride 的关键。
+
+## 4. 构建戳
+
+`csrc_stable/build_stable.py` 把 `csrc_stable/{src,include}`（含文件名、CRLF 归一化）哈希后：
+
+- 编入 `.so`：`-DFLA_STABLE_SOURCE_HASH=...`，导出 `fla_npu_thin_source_hash()`；
+- 写入 `fla_npu/ops/ascendc/_stable_hash.py::SOURCE_HASH`。
+
+`_stable.load()` 比对两者，不一致直接报错并给出重编命令。这样"换了适配但没重编 .so"不会静默按旧 stack index 发 kernel。
+
+## 5. 门禁
+
+全部离线（不需要 NPU）：
+
+| 工具 | 检查 | 失败含义 |
+| --- | --- | --- |
+| `tools/stable_coverage.py` | 每个公开 `npu_*` 都有 wrapper / schema / `run_` / 注册；C++ 枚举名表与 `_stable._ENUM` 一致 | 有算子没接上，或枚举顺序漂移 |
+| `tools/op_abi_parity.py` | schema 形参 vs 适配函数形参（名字与类型） | 位置型拆栈会静默错位 |
+| `tools/op_api_parity.py` | `_stable`/`_thin` 对 ctypes 的公开签名（参数名、顺序、默认值） | 调用方换后端会 TypeError |
+| `tools/stable_ctypes_fallbacks.py` | 没有适配层回退到 ctypes | 回退会带上描述符森林的开销 |
+| `tools/op_abi_validate.py` | ctypes 参数表与每个 `FLA_STABLE_EXEC` 对 **OPP 头文件** | aclnn 形参变了（例如 `stateVFirst`）而调用点没跟 |
+| `tools/op_abi_validate.py --json` | 同上，产出报告 | — |
+
+需要 NPU 的验证：`tests/regression_stable_full.py`（逐算子 ctypes↔launcher 逐位对比 + 场景集基线）、`tests/regression_stable_abi_ops.py`（单算子窄跑）、`tests/regression_stable_a5.py`（950 侧）、benchmark `tests/bench_stable_host.py`。
+
+## 6. 已知边界（记录，不隐藏）
+
+- **`solve_tri` 的 `tnd`**：该 OPP 上 kernel 直接杀进程（ctypes/launcher 都一样），薄层包装里显式拒绝，避免把非法输入变成崩溃。
+- **conv1d FN + `has_initial_state`**：初态序列的输出行在 kernel 里不可复现（同一 ctypes 调用两次结果差 260，第三次是 0），回归里按 kernel 级记录并只对 `has_initial_state=False` 的区间断言 parity。
+- **`int[]` 只能是 host int32/int64 tensor**：device tensor 会被 `int_values` 拒绝（否则按 host 指针读 device 内存）。
+- **`char*` 只能取表内取值**：非法字符串在 Python 侧报错、非法 code 在 C++ 侧报错，与 ctypes"把任意字符串交给 kernel"不同型。
+- **pybind 后端**（`_thin.py` + `_C_thin`）仍在树上，仅用于 A/B；删除前置条件是 launcher 通过真实 vLLM 服务验证（见 plan 的 R20）。

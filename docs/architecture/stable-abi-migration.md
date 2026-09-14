@@ -1,5 +1,12 @@
 # Thin launcher：torch Stable ABI 迁移方案
 
+> **本文是迁移过程记录，描述的是 codegen 阶段的状态。** 当前实现（手写适配 +
+> 共享宏、codegen 与 pybind 产物已删除）见
+> [stable-abi-macro-design.md](stable-abi-macro-design.md) 与
+> [stable-abi-op-onboarding.md](stable-abi-op-onboarding.md)。文中的
+> `tools/op_stable_codegen.py`、`op_specs/`、`csrc_stable/generated/`、
+> `_stable_generated.py` 均已移除。
+
 > 分支：`feat/stable-abi-thin`（基于 `feat/fla-npu-thin-launcher` / PR #496）
 > 目标：把 `_C_thin` 从"pybind11 + `at::Tensor`（libtorch C++ ABI + cpXXX）"迁到
 > "dispatcher 注册 + `torch::stable`（C 符号 ABI）"，用一个产物同时覆盖多个
@@ -315,7 +322,11 @@ stable 张量的副本（shared_ptr）**不偷所有权**。已核对的必需�
 - `tools/op_stable_codegen.py`：从现有 spec 生成 stable 适配器（单/多输出、可选输出、
   optional 张量、int 数组、标量、`cpp_only` 条件），产出
   `csrc_stable/generated/ops_stable_generated.inc`，由 `stable_ops.cpp` 单 TU 聚合注册。
-- `tests/regression_stable_abi_generated.py`：生成算子的 parity 驱动（ctypes 参考）。
+  **该生成器与其产物已在后续分支删除**：每个算子改为手写适配
+  （`csrc_stable/src/stable_<family>.cpp`），门禁换成
+  `tools/stable_coverage.py` + `tools/op_abi_parity.py`。
+- `tests/regression_stable_abi_ops.py`（当时名为 `..._generated.py`）：逐算子的
+  parity 驱动（ctypes 参考）。
 - 产物：`libfla_npu_thin.so` 136 KB、**0 个 ATen/c10 符号**。
 
 | 阶段 | 交付 | 证据 |

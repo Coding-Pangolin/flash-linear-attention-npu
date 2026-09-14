@@ -228,7 +228,13 @@ def main() -> int:
     # this prints an explicit SKIP naming them, so the coverage record says why
     # rather than counting them as covered.
     device = str(torch.npu.get_device_name(0))
-    if "950" in device:
+    # They live outside the scenario list (their own module), so the `a5` group
+    # selects them explicitly: a run that picked another group must not drag
+    # them in, and `--group a5` must run them even though the list is empty.
+    run_a5 = not args.group or "a5" in args.group
+    if not run_a5:
+        print("Ascend950-only scenarios skipped (not selected by --group)")
+    elif "950" in device:
         import regression_950_ops as a5
 
         a5._thin = shim

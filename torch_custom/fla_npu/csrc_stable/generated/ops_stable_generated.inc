@@ -2737,133 +2737,6 @@ void boxed_npu_chunk_scaled_dot_kkt(StableIValue* stack, uint64_t num_inputs,
   stack[0] = from(outputs[0]);
 }
 
-// ---- generated: npu_fast_gelu_custom ----
-using npu_fast_gelu_custom_GetWorkspaceFn = int (*)(
-    const aclTensor*,
-    aclTensor*,
-    uint64_t*, aclOpExecutor**);
-constexpr const char* kSchema_npu_fast_gelu_custom =
-    "npu_fast_gelu_custom(Tensor self, int stream) -> Tensor";
-
-void boxed_npu_fast_gelu_custom(StableIValue* stack, uint64_t num_inputs,
-                 uint64_t num_outputs) {
-  (void)num_inputs;
-  (void)num_outputs;
-  const Tensor self_t = to<Tensor>(stack[0]);
-  const TensorMeta self_meta = meta_of(self_t);
-  const int64_t stream = to<int64_t>(stack[1]);
-
-  auto& rt = Runtime::instance();
-  auto get_ws = reinterpret_cast<npu_fast_gelu_custom_GetWorkspaceFn>(
-      rt.symbol("aclnnFastGeluGetWorkspaceSize"));
-  auto launch = reinterpret_cast<LaunchFn>(
-      rt.symbol("aclnnFastGelu"));
-  uint64_t workspace_size = 0;
-  aclOpExecutor* executor = nullptr;
-
-  std::vector<Tensor> outputs;
-  std::vector<bool> output_present;
-  outputs.push_back(allocate_like(self_meta));
-  output_present.push_back(true);
-
-  std::vector<std::unique_ptr<AclTensorView>> views;
-  views.push_back(std::make_unique<AclTensorView>(self_meta));
-  views.push_back(std::make_unique<AclTensorView>(meta_of(outputs[0])));
-
-  const int get_ret = get_ws(
-      views[0]->get(),
-      views[1]->get(),
-      &workspace_size, &executor);
-  if (get_ret != 0) {
-    throw std::runtime_error(
-        "aclnnFastGeluGetWorkspaceSize failed: " +
-        std::to_string(get_ret));
-  }
-  Tensor workspace;
-  void* workspace_ptr = nullptr;
-  if (workspace_size != 0) {
-    workspace = allocate_bytes(static_cast<int64_t>(workspace_size),
-                                   self_meta);
-    TORCH_ERROR_CODE_CHECK(
-        aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
-  }
-  const int launch_ret = launch(workspace_ptr, workspace_size,
-                                executor,
-                                reinterpret_cast<void*>(stream));
-  if (launch_ret != 0) {
-    throw std::runtime_error(
-        "aclnnFastGelu failed: " +
-        std::to_string(launch_ret));
-  }
-  stack[0] = from(outputs[0]);
-}
-
-// ---- generated: npu_fast_gelu_custom_backward ----
-using npu_fast_gelu_custom_backward_GetWorkspaceFn = int (*)(
-    const aclTensor*,
-    const aclTensor*,
-    aclTensor*,
-    uint64_t*, aclOpExecutor**);
-constexpr const char* kSchema_npu_fast_gelu_custom_backward =
-    "npu_fast_gelu_custom_backward(Tensor grad, Tensor self, int stream) -> Tensor";
-
-void boxed_npu_fast_gelu_custom_backward(StableIValue* stack, uint64_t num_inputs,
-                 uint64_t num_outputs) {
-  (void)num_inputs;
-  (void)num_outputs;
-  const Tensor grad_t = to<Tensor>(stack[0]);
-  const TensorMeta grad_meta = meta_of(grad_t);
-  const Tensor self_t = to<Tensor>(stack[1]);
-  const TensorMeta self_meta = meta_of(self_t);
-  const int64_t stream = to<int64_t>(stack[2]);
-
-  auto& rt = Runtime::instance();
-  auto get_ws = reinterpret_cast<npu_fast_gelu_custom_backward_GetWorkspaceFn>(
-      rt.symbol("aclnnFastGeluBackwardGetWorkspaceSize"));
-  auto launch = reinterpret_cast<LaunchFn>(
-      rt.symbol("aclnnFastGeluBackward"));
-  uint64_t workspace_size = 0;
-  aclOpExecutor* executor = nullptr;
-
-  std::vector<Tensor> outputs;
-  std::vector<bool> output_present;
-  outputs.push_back(allocate_like(grad_meta));
-  output_present.push_back(true);
-
-  std::vector<std::unique_ptr<AclTensorView>> views;
-  views.push_back(std::make_unique<AclTensorView>(grad_meta));
-  views.push_back(std::make_unique<AclTensorView>(self_meta));
-  views.push_back(std::make_unique<AclTensorView>(meta_of(outputs[0])));
-
-  const int get_ret = get_ws(
-      views[0]->get(),
-      views[1]->get(),
-      views[2]->get(),
-      &workspace_size, &executor);
-  if (get_ret != 0) {
-    throw std::runtime_error(
-        "aclnnFastGeluBackwardGetWorkspaceSize failed: " +
-        std::to_string(get_ret));
-  }
-  Tensor workspace;
-  void* workspace_ptr = nullptr;
-  if (workspace_size != 0) {
-    workspace = allocate_bytes(static_cast<int64_t>(workspace_size),
-                                   grad_meta);
-    TORCH_ERROR_CODE_CHECK(
-        aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
-  }
-  const int launch_ret = launch(workspace_ptr, workspace_size,
-                                executor,
-                                reinterpret_cast<void*>(stream));
-  if (launch_ret != 0) {
-    throw std::runtime_error(
-        "aclnnFastGeluBackward failed: " +
-        std::to_string(launch_ret));
-  }
-  stack[0] = from(outputs[0]);
-}
-
 // ---- generated: npu_kda_gate_cumsum ----
 using npu_kda_gate_cumsum_GetWorkspaceFn = int (*)(
     const aclTensor*,
@@ -3679,8 +3552,6 @@ void register_generated_defs(Library& m) {
   m.def(kSchema_npu_chunk_kda_fwd);
   m.def(kSchema_npu_chunk_local_cumsum);
   m.def(kSchema_npu_chunk_scaled_dot_kkt);
-  m.def(kSchema_npu_fast_gelu_custom);
-  m.def(kSchema_npu_fast_gelu_custom_backward);
   m.def(kSchema_npu_kda_gate_cumsum);
   m.def(kSchema_npu_prepare_wy_repr_bwd);
   m.def(kSchema_npu_prepare_wy_repr_bwd_da);
@@ -3709,8 +3580,6 @@ void register_generated_impls(Library& m) {
   m.impl("npu_chunk_kda_fwd", &boxed_npu_chunk_kda_fwd);
   m.impl("npu_chunk_local_cumsum", &boxed_npu_chunk_local_cumsum);
   m.impl("npu_chunk_scaled_dot_kkt", &boxed_npu_chunk_scaled_dot_kkt);
-  m.impl("npu_fast_gelu_custom", &boxed_npu_fast_gelu_custom);
-  m.impl("npu_fast_gelu_custom_backward", &boxed_npu_fast_gelu_custom_backward);
   m.impl("npu_kda_gate_cumsum", &boxed_npu_kda_gate_cumsum);
   m.impl("npu_prepare_wy_repr_bwd", &boxed_npu_prepare_wy_repr_bwd);
   m.impl("npu_prepare_wy_repr_bwd_da", &boxed_npu_prepare_wy_repr_bwd_da);

@@ -231,12 +231,17 @@ run_npu_chunk_gated_delta_rule_fwd(
   const TensorMeta v_meta = meta_of(v);
   const std::vector<int64_t> cu = int_values(cu_seqlens);
   const std::vector<int64_t> ci = int_values(chunk_indices);
-  // The token axis is read from `q`; the packed spellings are rank 3.
-  const int64_t batch = layout_math::batch(q_meta, layout);
-  const int64_t tokens = layout_math::tokens(q_meta, layout);
-  const int64_t heads = layout_math::value_heads(v_meta, layout);
-  const int64_t k_dim = layout_math::key_dim(q_meta, layout);
-  const int64_t v_dim = layout_math::value_dim(v_meta, layout);
+  // This operator accepts the TND/NTD *names* but always reads a rank-4
+  // tensor: for TND the token axis is dim 1 and the heads are dim 2, exactly
+  // like BSND.  Using the packed (rank-3) helpers here produced o/A/g_cumsum/
+  // final_state with the wrong shapes, and the Ascend950 tiling rejected the
+  // call with 161002 (the shapes were visible in a descriptor dump: e.g. A came
+  // out as [1, 128, 1, 64] instead of [1, 4, 128, 64]).
+  const int64_t batch = size_of(q_meta, 0);
+  const int64_t tokens = layout_math::tokens4(q_meta, layout);
+  const int64_t heads = layout_math::value_heads4(v_meta, layout);
+  const int64_t k_dim = size_of(q_meta, 3);
+  const int64_t v_dim = size_of(v_meta, 3);
   const int64_t state_tail_k = state_v_first ? v_dim : k_dim;
   const int64_t state_tail_v = state_v_first ? k_dim : v_dim;
 

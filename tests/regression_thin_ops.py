@@ -532,11 +532,14 @@ def parity_or_domain_skip(name, call_ct, call_thin):
         SKIPPED[name] = f"the OPP does not carry the kernel: {exc}"
         print(f"SKIP {name} ({SKIPPED[name]})")
         return
-    except RuntimeError as exc:
+    # The reference validates in Python and raises ValueError for some
+    # operators and RuntimeError for others (`use_exp2=False is not supported`
+    # is a ValueError), so both count as "the reference refused it".
+    except (RuntimeError, ValueError) as exc:
         status = _aclnn_status_or_none(exc)
         try:
             call_thin()
-        except RuntimeError as thin_exc:
+        except (RuntimeError, ValueError) as thin_exc:
             thin_status = _aclnn_status_or_none(thin_exc)
             if status is None:
                 # The reference refused it before reaching aclnn (its Python
@@ -562,7 +565,7 @@ def parity_or_domain_skip(name, call_ct, call_thin):
             f"backend accepted them") from None
     try:
         thin_result = call_thin()
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         if GAP_TOLERANT_BACKEND is None:
             raise
         status = _aclnn_status(exc)
@@ -1153,7 +1156,11 @@ def scenario_chunk_kda_bwd_recompute():
 
     `use_gate_in_kernel` decides whether the fp32 gate cumsum is materialized,
     so both spellings are exercised -- that is also the only optional output
-    here.
+    here.  The `no gate` spelling is recorded rather than run on Ascend950:
+    measured there, it raises an AI Core exception (error code 271) inside the
+    kernel and takes the device down with it, so it cannot be a parity case
+    until the OPP is fixed.  On 910B both spellings reject with 561103 and the
+    helper records that.
     """
 
     B, H, T, K, cs = 2, 4, 256, 128, 64
@@ -1169,6 +1176,15 @@ def scenario_chunk_kda_bwd_recompute():
     for label, extra in (("gate", dict(use_gate_in_kernel=True, A_log=A_log)),
                          ("no gate", dict(use_gate_in_kernel=False,
                                           A_log=None))):
+        if label == "no gate" and "950" in str(
+                torch.npu.get_device_name(0)):
+            name = f"chunk_kda_bwd_recompute({label})"
+            SKIPPED[name] = (
+                "kernel defect: use_gate_in_kernel=False raises an AI Core "
+                "exception (error code 271) on Ascend950 and leaves the device "
+                "in an error state, so it is not run")
+            print(f"SKIP {name} ({SKIPPED[name]})")
+            continue
         parity_or_domain_skip(
             f"chunk_kda_bwd_recompute({label})",
             lambda extra=extra: ct.npu_chunk_kda_bwd_recompute(
@@ -1214,17 +1230,20 @@ def scenario_chunk_gated_delta_rule_bwd():
         return (q, k, v, g, beta, a, d_o), kw
 
     args, kw = make(with_state=False)
-    assert_parity(
+    # Both paths may reject the inputs on an OPP whose tiling does not implement
+    # this operator yet; the helper records that instead of failing, and the
+    # case turns into a real parity test as soon as one accepts it.
+    parity_or_domain_skip(
         "chunk_gated_delta_rule_bwd(dense BNSD)",
-        ct.npu_chunk_gated_delta_rule_bwd(*args, **kw),
-        _thin.npu_chunk_gated_delta_rule_bwd(*args, **kw))
+        lambda: ct.npu_chunk_gated_delta_rule_bwd(*args, **kw),
+        lambda: _thin.npu_chunk_gated_delta_rule_bwd(*args, **kw))
     # With an initial state the first output slot stops being None, which is the
     # branch the mask in the wrapper has to get right.
     args_state, kw_state = make(with_state=True)
-    assert_parity(
+    parity_or_domain_skip(
         "chunk_gated_delta_rule_bwd(initial state)",
-        ct.npu_chunk_gated_delta_rule_bwd(*args_state, **kw_state),
-        _thin.npu_chunk_gated_delta_rule_bwd(*args_state, **kw_state))
+        lambda: ct.npu_chunk_gated_delta_rule_bwd(*args_state, **kw_state),
+        lambda: _thin.npu_chunk_gated_delta_rule_bwd(*args_state, **kw_state))
     # The two flags the composite does not implement must be refused on both
     # paths; the helper records that instead of comparing anything.
     for label, extra in (("use_exp2", dict(use_exp2=False)),

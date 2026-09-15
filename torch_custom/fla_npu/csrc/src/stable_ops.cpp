@@ -41,6 +41,16 @@ int32_t fla_npu_stable_stream_resolver_available() {
   return fla_npu_stable::Runtime::instance().has_stream_resolver() ? 1 : 0;
 }
 
+// The stream the most recent operator call on the calling thread launched on,
+// resolved by the launcher or handed in by the caller (see resolve_stream).
+// The multi-stream regression reads it back after every call: it is the only
+// way to see a stream the launcher decided, and the value is per thread, which
+// is exactly the property that has to hold when vLLM interleaves workers.
+extern "C" __attribute__((visibility("default")))
+int64_t fla_npu_stable_last_resolved_stream() {
+  return fla_npu_stable::stable::t_last_resolved_stream;
+}
+
 // Exactly one library-definition block and one implementation block per
 // namespace per TU: the macros expand to a fixed static-init symbol name, so a
 // second block for the same namespace would be a redefinition.  The codegen

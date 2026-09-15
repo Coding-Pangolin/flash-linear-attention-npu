@@ -23,6 +23,8 @@ _LIB_ENV = "FLA_NPU_STABLE_LIB"
 # Keep in sync with STABLE_ABI_MIN_TORCH in scripts/build_wheel.py.
 _MIN_TORCH = "2.7.1"
 _loaded_path: str | None = None
+# ctypes handle of the loaded launcher; see _launcher_lib.
+_lib_handle = None
 _OP_CACHE: dict[str, object] = {}
 # Cached objects for the hot path.  `torch`/`torch_npu` are plain module
 # handles and the raw-stream accessor is a plain function: caching *those* is
@@ -111,6 +113,46 @@ def _resolves_stream() -> bool:
             value = False
         _launcher_resolves_stream = value
     return _launcher_resolves_stream
+
+
+def _launcher_lib():
+    """The loaded launcher as a ctypes handle, or None when there is none.
+
+    Cached: the readback below is only used by the multi-stream regression, but
+    re-opening the library on every call would dwarf what it measures.
+    """
+
+    global _lib_handle
+    if _lib_handle is None:
+        try:
+            import ctypes
+
+            load()
+            _lib_handle = ctypes.CDLL(_loaded_path)
+        except Exception:
+            _lib_handle = False
+    return _lib_handle or None
+
+
+def _last_resolved_stream() -> int | None:
+    """The stream the launcher used for the last call on this thread.
+
+    ``None`` when no launcher is loaded or it predates the readback symbol.  The
+    value is thread-local on the C++ side, so it answers the only question that
+    matters under vLLM: did *this* worker's call go to *this* worker's stream.
+    """
+
+    lib = _launcher_lib()
+    if lib is None:
+        return None
+    try:
+        readback = lib.fla_npu_stable_last_resolved_stream
+    except AttributeError:
+        return None
+    import ctypes
+
+    readback.restype = ctypes.c_int64
+    return int(readback())
 
 
 def _current_stream_ptr() -> int:

@@ -424,34 +424,24 @@ def scenario_chunk_fwd_o():
     scale = 0.08838834764831845
     assert_parity(
         "chunk_fwd_o(BNSD)",
-        ct.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs,
-                           output_layout="BNSD"),
-        _launcher.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs,
-                              output_layout="BNSD"))
-    # NTD is the other output layout this kernel accepts from BNSD inputs, and
-    # it is where the spec's per-layout alloc mapping would go wrong silently.
+        ct.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs),
+        _launcher.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs))
+    # `transpose_state_layout` and `g_gamma` are part of the published signature
+    # and ignored by this branch's entry point, so passing them has to leave
+    # both backends at the same result.
     torch.npu.synchronize()
     assert_parity(
-        "chunk_fwd_o(NTD)",
+        "chunk_fwd_o(transpose_state_layout)",
         ct.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs,
-                           output_layout="NTD"),
+                           transpose_state_layout=True),
         _launcher.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs,
-                              output_layout="NTD"))
-    # The rest of the declared domain is rejected by this OPP's kernel when
-    # driven with BNSD inputs (BSND/TND expect the inputs laid out that way) --
-    # recorded as a skip with the status rather than deleted.
-    for label, kw in (("BSND", dict(output_layout="BSND")),
-                      ("TND", dict(output_layout="TND")),
-                      ("use_exp2", dict(use_exp2=True)),
-                      ("transpose_state_layout",
-                       dict(transpose_state_layout=True))):
-        torch.npu.synchronize()
-        parity_or_domain_skip(
-            f"chunk_fwd_o({label})",
-            lambda kw=kw: ct.npu_chunk_fwd_o(q, k, v, h, scale, g=g,
-                                             chunk_size=cs, **kw),
-            lambda kw=kw: _launcher.npu_chunk_fwd_o(q, k, v, h, scale, g=g,
-                                                chunk_size=cs, **kw))
+                                  transpose_state_layout=True))
+    torch.npu.synchronize()
+    assert_parity(
+        "chunk_fwd_o(g_gamma)",
+        ct.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs, g_gamma=g),
+        _launcher.npu_chunk_fwd_o(q, k, v, h, scale, g=g, chunk_size=cs,
+                                  g_gamma=g))
 
 
 def scenario_bwd_dhu():

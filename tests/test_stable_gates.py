@@ -279,6 +279,24 @@ class CtypesTableGateTest(unittest.TestCase):
         self.assertEqual(tool.header_kind("double scale"), "double")
         self.assertEqual(tool.header_kind("const char *layout"), "char_ptr")
 
+    def test_a_comment_inside_a_call_is_not_an_argument(self) -> None:
+        """A comma inside `// ...` must not split the parameter list.
+
+        The adapters comment individual arguments ("// the fused kernel takes
+        no cu_seqlens/chunk_indices"); with a comma in that comment the call
+        site parsed one argument too long, which is what the
+        chunk_gated_delta_rule_bwd_dhu row of this gate used to report.
+        """
+
+        tool = _load_tool("op_abi_validate.py")
+        params = tool.split_params(
+            "Tensor a, // one, two\n"
+            "tensor(b), /* three, four */ scalar(c)")
+        self.assertEqual(len(params), 3, params)
+        # String literals are left alone: a layout name can hold anything.
+        self.assertEqual(tool.split_params('cstr("a//b"), scalar(c)'),
+                         ['cstr("a//b")', 'scalar(c)'])
+
 
 class LauncherOnlyCoverageTest(unittest.TestCase):
     """An operator with no ctypes wrapper has to be a declared state.

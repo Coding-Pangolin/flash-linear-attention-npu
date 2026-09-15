@@ -69,12 +69,38 @@ ImportError: /…/fla_npu/libfla_npu_stable.so: version `GLIBCXX_3.4.32' not fou
   从 torch 自己的 .so 解析到的是无版本符号，于是产物对它没有任何版本要求。
 - 出货产物（221 上 GCC 11 编）要求 `≤ 3.4.21` + `GLIBC_2.2.5`；在 conda 的 2.7.1 环境里编出来的那份要求 `3.4.32`。
 
+**这条轴不只属于 launcher —— 包的真实下限由 OPP 决定。** 在同一个安装态包里逐个量（aarch64）：
+
+| 产物 | GLIBCXX 上限 | 谁编的 |
+| --- | --- | --- |
+| `libfla_npu_stable.so`（我们的 launcher） | 3.4.21 | 我们 |
+| `libfla_npu_thin.so`（旧的 pybind 方案，留作对照） | 3.4.21 | 我们 |
+| OPP `libcust_opapi.so` / `liboptiling.so` / `libcust_opmaster_rt2.0.so` | **3.4.29** | 我们（同一容器） |
+| OPP `libcust_opsproto_rt2.0.so` / `libes_transformer_cust.so` | 3.4.18 / 3.4.11 | 我们 |
+| CANN `libopapi.so` / CANN 目录内最高 | 3.4.18 / 3.4.26 | CANN 官方 |
+| 目标机 libstdc++（Ubuntu 22.04） | 3.4.30 | — |
+
+两个结论：
+
+1. **这条轴在 ctypes 方案里同样存在**——那时我们没有 C++ 的 host 层，但 OPP 里的 C++ 产物一直是编译产物，
+   而且它的要求（3.4.29）比今天的 launcher（3.4.21）**还高**。换适配方案并不能去掉这条轴。
+2. **今天整包的下限是 OPP 的 3.4.29，不是 launcher 的 3.4.21。** 即使把 launcher 降到 3.4.19，
+   包在 Ubuntu 20.04（上限 3.4.27）上照样装不起来。要真正降下限，必须同时降 OPP 的构建工具链。
+
+`ci/Dockerfile` 的基础镜像是 `cann:9.1.0-910b-ubuntu22.04-py3.12-devel`，Ubuntu 22.04 + GCC 11 的
+libstdc++ 上限恰好是 3.4.29，所以**走 CI 编出来的产物天然就是这条水位**（目标机留一级余量）；
+真正危险的是人手在更新的机器（例如 Ubuntu 24.04 / GCC 13 的 241）上编产物再发出去。
+
 **为什么"内部测不出来"**：`3.4.32` 这批产物在构建机上当然能加载（构建机就有新库），
 而客户用 conda python 时进程里也是 conda 自带的 `libstdc++ 6.0.34`（提供到 `3.4.34`），也可能恰好不报；
 换成系统 python 或更老的镜像就报。**同一台机器、同一个包，换个 python 入口结论就变。**
 
 **防护**：`tools/stable_abi_audit.py --lib` 断言 `GLIBCXX` 上限（阈值在 `tools/stable_abi_symbols.json` 的 `max_glibcxx`）。
-**缺口**：该断言未挂 CI；发版用哪个容器未固定；`3.4.21` 是当前实测水位而不是目标值（要支持 RHEL/CentOS 7 的 `3.4.19` 需要另一套手段）。
+**缺口**：
+
+- 该断言只看**一个** launcher，不看包内其余 `.so`——而真正顶着下限的是 OPP 的那三个文件，需要把"取包内最大值"作为判据；
+- 未挂 CI；`max_glibcxx` 现在写 3.4.21（launcher 的水位），与"整包下限 3.4.29"不是一回事，两者要对齐；
+- 发版容器没有写进流程（`ci/Dockerfile` 已经是 22.04，但"不要用更新的机器编产物"目前只是口头约定）。
 
 ### A2. glibc 下限
 
@@ -262,9 +288,11 @@ FLA_NPU_STABLE_TRACE=1 python -c "import fla_npu, torch; print(fla_npu.ops.ascen
 1. torch 2.8 / 2.10 / 2.11 的**运行时**验证（目前只有编译）。
 2. Python 3.9 / 3.12 / 3.13 的实测。
 3. `GLIBC_`（C 库）上限断言。
-4. 六版本产物的 6×6 交叉矩阵（X 编 → Y 跑）。
-5. 发版容器的固定，以及 CI 里挂上 audit（`--lib` 那条会与容器绑定）。
-6. SoC 与包标签的运行期校验。
-7. torch_npu 补丁级版本的运行期校验（或明确它已不相关）。
-8. 在真正的老 libstdc++ 环境上复现一次客户侧的加载失败，把报错形态钉死。
-9. 非 conda 的系统 python 加载"要求 3.4.32 的产物"的实测。
+4. **包内 `.so` 的 GLIBCXX 上限断言**：现在只查 launcher，OPP 的三个 3.4.29 文件没有门禁覆盖；
+   判据应当是"包内所有 `.so` 的最大值 ≤ 目标机水位"，而不是单个文件。
+5. 六版本产物的 6×6 交叉矩阵（X 编 → Y 跑）。
+6. 发版容器的固定，以及 CI 里挂上 audit（`--lib` 那条会与容器绑定）。
+7. SoC 与包标签的运行期校验。
+8. torch_npu 补丁级版本的运行期校验（或明确它已不相关）。
+9. 在真正的老 libstdc++ 环境上复现一次客户侧的加载失败，把报错形态钉死。
+10. 非 conda 的系统 python 加载"要求 3.4.32 的产物"的实测。

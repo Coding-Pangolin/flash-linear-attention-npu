@@ -23,7 +23,11 @@ practice.
 
 Usage::
 
-    python tools/op_abi_validate.py --opp-include <opp>/op_api/include/aclnnop
+    # both include directories: the vendor OPP's, and CANN's for the built-in
+    # operators.  FastGelu ships with CANN, so passing only the OPP reports it
+    # as a missing header rather than as a mismatch.
+    python tools/op_abi_validate.py \
+        --opp-include <opp>/op_api/include/aclnnop <cann>/include/aclnnop
     python tools/op_abi_validate.py --opp-include ... --json report.json
 
 Exits non-zero when a call site disagrees with the header.

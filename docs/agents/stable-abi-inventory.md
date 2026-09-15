@@ -100,7 +100,7 @@
 | npu_chunk_kda_fwd | ✅（dense BSND 合法域；其它布局/flag 委托 ctypes） | ✅ | 0.0（10 输出 + None 语义） | 1.04 → 0.114 ms |
 | npu_chunk_kda_bwd_intra | ✅（BNSD dense 单发射合法域；BSND 分段路径委托 ctypes） | ✅ | 0.0（4 输出） | 0.73 → 0.091 ms |
 | npu_chunk_kda_bwd | ✅（dense BNSD 简单域：偶数头、T%64=0、gate off；tail/奇头/varlen 回退委托 ctypes） | ✅ | 0.0（dq/dk/dv/db/dg + 3×None） | 0.88 → 0.111 ms |
-| npu_solve_tri | ✅（bsnd/bnsd dense） | ✅ | 0.0（fp16/bf16 × BT 16/32/64/128）；**两个 packed spelling（`tnd`/`ntd`）都是上游 kernel 缺陷**：实测（910B3、本树 OPP）**两侧都 core dump**，ctypes 参考同样崩，所以两个 wrapper 都改成明确拒绝（`layout='tnd'/'ntd' is refused ...`）并各记一条带原因的 SKIP；早前"ntd 返回全 0"的说法是错的，已在 `scenario_solve_tri_guards` 里纠正 | 910b：0.372 → 0.098 ms；950：0.033 → 0.009 ms（dense bsnd fp16 BT64） |
+| npu_solve_tri | ✅（bsnd/bnsd dense） | ✅ | 0.0（fp16/bf16 × BT 16/32/64/128）；`tnd` 因段错误被两个 wrapper 一致拒绝（记 SKIP）；**`ntd` 实测同样会段错误**（6 种拼写：5 段错误 + 1 个 161001，没有任何一种能出结果），但**故意不拦截**——参考实现也不拦，是否拦由算子责任人决定；早前"ntd 返回全 0"的注释是错的 | 910b：0.372 → 0.098 ms；950：0.033 → 0.009 ms（dense bsnd fp16 BT64） |
 
 ## 下一步
 
@@ -121,10 +121,11 @@
    两套环境结果一致。注意：T 非 chunk 整数倍时 `A` 的尾块 padding 行两侧都是
    未初始化内存（valid 区域仍 0.0）；只给 `cu_seqlens` 时 stable 会自动派生
    canonical `chunk_indices`（ctypes 要求成对提供，属 stable 的超集）。
-4. `npu_solve_tri`：bsnd/bnsd dense 已原生 stable 并 0.0；**`tnd` 与 `ntd` 都是
-   上游 kernel 缺陷**（实测两侧都段错误，ctypes 也崩），两个 wrapper 一致拒绝并
-   记 SKIP，建议上游修；`npu_chunk_gated_delta_rule_bwd` 的四个 spelling 在 950 的
-   这份 OPP 上全是 `161002`（tiling 未实现，两侧一致拒绝），同样逐 spelling 记录。
+4. `npu_solve_tri`：bsnd/bnsd dense 已原生 stable 并 0.0；`tnd` 被拒绝（段错误）；
+   **`ntd` 与 `tnd` 表现相同（段错误），但按"与参考实现保持一致"的要求不拦截**，
+   只把实测记录在案（6 种拼写全无结果），是否拦由算子责任人决定。
+   `npu_chunk_gated_delta_rule_bwd` 的四个 spelling 在 950 的这份 OPP 上全是
+   `161002`（tiling 未实现，两侧一致拒绝），已逐 spelling 记录。
 5. 收尾：设备回归全绿（场景与运行方式见 `tests/stable_abi/README.md`）——
    910B3 与 Ascend950PR 两份基线都在 `tests/stable_abi/stable_scenarios.json`，
    950 专属的四场景（fwd_prepare / bwd_finalize / chunk_gated_delta_rule_fwd A5 域 /
@@ -136,7 +137,7 @@
 
 | 算子 | 回退条件 | 性质 | 结论/计划 |
 | --- | --- | --- | --- |
-| `npu_solve_tri` | `layout in ("tnd", "ntd")` | 上游 kernel 缺陷（实测两侧都段错误） | 两个 wrapper 一致拒绝（不是回退 ctypes）；建议上游修 |
+| `npu_solve_tri` | `layout == "tnd"` | 上游 kernel 缺陷（段错误） | 明确拒绝（不是回退 ctypes）；`ntd` 同类缺陷但**不拦**（与参考一致），交算子责任人 |
 | `npu_chunk_gated_delta_rule_fwd_prepare` | `a_log`/`dt_bias` 非空 | stable 1-D 描述符 161002 | 保持回退；待查 1-D/format 描述符 |
 | `npu_chunk_kda_fwd` | 非 BSND、varlen、`output_final_state`、`return_intermediate_states` | spec 未展开（与 composite 同类，可做） | 下一步：layout helpers + 条件输出 + `return_code` |
 | `npu_chunk_kda_bwd_intra` | BSND（分段）/varlen | 需把 ctypes wrapper 的**多发射分段**语义搬进 C++ | 需 codegen 支持子发射循环 |

@@ -1464,37 +1464,38 @@ def scenario_solve_tri_dense():
 
 
 def scenario_solve_tri_guards():
-    """The launcher must refuse the upstream-broken spellings, not crash.
+    """The launcher must refuse the upstream-broken spelling, not crash.
 
-    Measured first, then encoded: both packed spellings kill the process on the
-    ctypes reference *and* on the launcher, with and without cu_seqlens, so
-    neither is a legal domain on this OPP.  ``ntd`` was measured when the
-    scenario for the declared spellings was added -- an earlier note claiming it
-    returns zeros was wrong, it segfaults exactly like ``tnd``.  Refusing them
-    with a message is the documented contract ("illegal input errors, and does
-    not have to error the same way"); matching the reference by crashing would
-    not be.
+    Measured first, then encoded: ``layout="tnd"`` kills the process on the
+    ctypes reference *and* on the launcher, with and without cu_seqlens, so it
+    is not a legal domain on this OPP.  Refusing it with a message is the
+    documented contract ("illegal input errors, and does not have to error the
+    same way"); matching the reference by crashing would not be.
+
+    ``ntd`` behaves the same way -- measured while the missing-spelling work
+    added a scenario for it: five of six shapes segfault, the sixth is rejected
+    161001, so no ntd call produces a result.  It is *not* covered here because
+    it is not intercepted: the reference forwards it too, and whether to refuse
+    it is the operator owner's decision (see the inventory's known limits).
+    A scenario that calls it would take the test process down.
     """
 
     a = (torch.randn(64, 4, 64) * 0.1).to(torch.float16).npu()
     torch.npu.synchronize()
-    for layout in ("tnd", "ntd"):
-        for backend, label in ((ct.npu_solve_tri, "ctypes"),
-                               (_launcher.npu_solve_tri, "stable")):
-            name = f"solve_tri({layout} refused by {label})"
-            try:
-                backend(a, layout=layout)
-            except RuntimeError as exc:
-                assert layout in str(exc), f"{label}: unexpected message {exc}"
-                # A refusal is coverage too: recorded with its reason so the
-                # scenario set shrinks visibly if the guard is ever dropped.
-                SKIPPED[name] = (
-                    f"layout='{layout}' is refused because the operator "
-                    "crashes the process for that spelling")
-                print(f"SKIP {name} ({SKIPPED[name]})")
-            else:
-                raise AssertionError(
-                    f"{label} accepted the crashing {layout} spelling")
+    for backend, label in ((ct.npu_solve_tri, "ctypes"),
+                           (_launcher.npu_solve_tri, "stable")):
+        try:
+            backend(a, layout="tnd")
+        except RuntimeError as exc:
+            assert "tnd" in str(exc), f"{label}: unexpected message {exc}"
+            # A refusal is coverage too: recorded with its reason so the
+            # scenario set shrinks visibly if the guard is ever dropped.
+            name = f"solve_tri(tnd refused by {label})"
+            SKIPPED[name] = ("layout='tnd' is refused because the operator "
+                             "crashes the process for that spelling")
+            print(f"SKIP {name} ({SKIPPED[name]})")
+        else:
+            raise AssertionError(f"{label} accepted the crashing tnd spelling")
 
 
 def scenario_kda_gate_cumsum():

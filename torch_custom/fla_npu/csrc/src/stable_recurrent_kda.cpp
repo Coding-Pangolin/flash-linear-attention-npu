@@ -4,7 +4,7 @@
 // libtorch C++ ABI.  `layout` is an int code because the stable value
 // conversions have no std::string support (0 = BSND, 1 = TND); Python maps it.
 // Owns: npu_recurrent_kda.  Pre-macro for the same reason as
-// stable_recurrent_gdr.cpp.
+// stable_recurrent_gdr.cpp, and it resolves the stream sentinel the same way.
 
 #include <torch/csrc/stable/library.h>
 #include <torch/csrc/stable/stableivalue_conversions.h>
@@ -12,7 +12,8 @@
 
 #include "stable/acl_meta.h"
 // Only for the enum-table helper: this adapter builds its argument list by
-// hand (see the boxed entry point below), so it does not use FLA_STABLE_EXEC.
+// hand (see the boxed entry point below), so it does not use FLA_STABLE_EXEC --
+// which also means it must call launch_stream itself.
 #include "stable/exec.h"
 
 #include <cstdint>
@@ -30,6 +31,7 @@ using fla_npu_stable::stable::meta_of;
 using fla_npu_stable::stable::meta_of_handle;
 using fla_npu_stable::stable::meta_optional_handle;
 using fla_npu_stable::stable::kAclFormatNd;
+using fla_npu_stable::stable::launch_stream;
 
 using fla_npu_stable::stable::aclOpExecutor;
 using fla_npu_stable::stable::aclTensor;
@@ -135,8 +137,9 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
     TORCH_ERROR_CODE_CHECK(
         aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
   }
-  const int launch_ret = launch(workspace_ptr, workspace_size, executor,
-                                reinterpret_cast<void*>(stream));
+  const int launch_ret =
+      launch(workspace_ptr, workspace_size, executor,
+             launch_stream(stream, v_meta));
   if (launch_ret != 0) {
     throw std::runtime_error(
         "fla_npu(stable): aclnnRecurrentKda failed: " +

@@ -91,6 +91,30 @@ ImportError: /…/fla_npu/libfla_npu_stable.so: version `GLIBCXX_3.4.32' not fou
 libstdc++ 上限恰好是 3.4.29，所以**走 CI 编出来的产物天然就是这条水位**（目标机留一级余量）；
 真正危险的是人手在更新的机器（例如 Ubuntu 24.04 / GCC 13 的 241）上编产物再发出去。
 
+**这条下限不是本次改动引入的：已发布的 26.6.0 包就已经在同一个水位上。** 量一个 26.6.0 的正式
+wheel（`flash_linear_attention_npu-26.6.0-910b.aarch64-py3-none-any.whl`）：
+
+```
+fla_npu/custom_aclnn_extension_lib.cpython-311-aarch64-linux-gnu.so      3.4.21
+fla_npu/opp/.../op_api/lib/libcust_opapi.so                              3.4.29
+fla_npu/opp/.../op_api/lib/libopapi.so                                   3.4.29
+fla_npu/opp/.../op_tiling/lib/linux/aarch64/libcust_opmaster_rt2.0.so    3.4.29
+fla_npu/opp/.../op_tiling/liboptiling.so                                 3.4.29
+fla_npu/opp/.../op_proto/lib/linux/aarch64/libcust_opsproto_rt2.0.so     3.4.18
+```
+
+也就是说：这条轴在客户手里**已经存在至少一个发布周期**，且没有触发过问题——反过来可以推断
+**实际部署的机器都在 3.4.29 之上**（等价于 Ubuntu 22.04+ / GCC 11+）。
+所以它的定位不是"今天会不会炸"，而是两件事：
+
+1. **防止下限继续上漂**：本次在 Ubuntu 24.04 上编 launcher 就得到了 3.4.32；如果哪天有人用
+   GCC 14 / 24.04 的镜像重建 OPP，下限会抬到 3.4.33 之上，Ubuntu 22.04 就开始出问题。
+2. **把支持矩阵写实**：本包要求 `libstdc++ ≥ 3.4.29`，即 Ubuntu 22.04+ / openEuler 22.03+ /
+   GCC 11+；CANN 9.1 自己的库只需要 ≤ 3.4.26，所以顶着这条线的是我们的 OPP，不是 CANN。
+
+顺带一个判断依据：这类失败是**硬报错**（OPP 加载不了会直接报 aclnn 加载失败），不会被静默吞掉，
+所以"没遇到过"在这里是相当强的证据，而不只是"没人注意"。
+
 **为什么"内部测不出来"**：`3.4.32` 这批产物在构建机上当然能加载（构建机就有新库），
 而客户用 conda python 时进程里也是 conda 自带的 `libstdc++ 6.0.34`（提供到 `3.4.34`），也可能恰好不报；
 换成系统 python 或更老的镜像就报。**同一台机器、同一个包，换个 python 入口结论就变。**

@@ -69,8 +69,6 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "scenario_chunk_kda_fwd",
         "scenario_chunk_kda_fwd_variants",
         "scenario_chunk_kda_bwd_intra",
-        "scenario_chunk_kda_bwd",
-        "scenario_chunk_kda_bwd_recompute",
         "scenario_kda_gate_cumsum",
     ),
     # Everything in the chunked GDN backward, which is the bulk of the matrix
@@ -82,7 +80,6 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "scenario_dv_local",
         "scenario_pwy_da",
         "scenario_gated_fwd_h",
-        "scenario_chunk_fwd_h",
         "scenario_chunk_fwd_o",
         "scenario_bwd_dhu",
         "scenario_dqkwg",
@@ -90,12 +87,8 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "scenario_scaled_dot_kkt",
         "scenario_solve_tri_dense",
         "scenario_solve_tri_guards",
-        "scenario_chunk_gated_delta_rule_fwd",
     ),
     "smoke": ("scenario_fast_gelu",),
-    # Ascend950-only: the fused backward composes the 950-only finalize kernel,
-    # so it runs with the A5 driver rather than in the A2 matrix.
-    "a5": ("scenario_chunk_gated_delta_rule_bwd",),
 }
 
 
@@ -417,25 +410,6 @@ def scenario_gated_fwd_h():
             chunk_size=cs, state_v_first=True))
 
 
-def scenario_chunk_fwd_h():
-    B, Hk, Hv, T, K, V, cs = 1, 2, 2, 256, 128, 128, 64
-    k, w, u, g = _fwd_h_inputs(B, Hk, Hv, T, K, V)
-    torch.npu.synchronize()
-    assert_parity("chunk_fwd_h",
-                  ct.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs),
-                  _launcher.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs))
-    # The declared flags of this operator: each one switches a different kernel
-    # path, so they are covered rather than left to the default.
-    for label, kw in (("final_state", dict(output_final_state=True)),
-                      ("save_new_value_false", dict(save_new_value=False)),
-                      ("state_v_first", dict(state_v_first=True)),
-                      ("use_exp2", dict(use_exp2=True))):
-        torch.npu.synchronize()
-        parity_or_domain_skip(
-            f"chunk_fwd_h({label})",
-            lambda kw=kw: ct.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs, **kw),
-            lambda kw=kw: _launcher.npu_chunk_fwd_h(k, w, u, g=g, chunk_size=cs,
-                                                **kw))
 
 
 def scenario_chunk_fwd_o():
@@ -1152,185 +1126,6 @@ def scenario_chunk_kda_bwd_intra():
         lambda: _launcher.npu_chunk_kda_bwd_intra(*packed, **kw_tnd))
 
 
-def scenario_chunk_kda_bwd():
-    B, H, T, K, V, cs = 2, 4, 256, 128, 128, 64
-    dt = torch.bfloat16
-    NT = T // cs
-    q = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
-    k = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
-    v = torch.randn(B, H, T, V, dtype=dt, device="npu") * 5e-2
-    beta = torch.randn(B, H, T, dtype=dt, device="npu")
-    gk = torch.randn(B, H, T, K, dtype=torch.float32, device="npu")
-    Aqk = torch.randn(B, H, T, cs, dtype=dt, device="npu") * 5e-2
-    Akk = torch.randn(B, H, T, cs, dtype=dt, device="npu") * 5e-2
-    w = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
-    qg = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
-    kg = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
-    v_new = torch.randn(B, H, T, V, dtype=dt, device="npu") * 5e-2
-    h = torch.randn(B, NT, H, K, V, dtype=dt, device="npu") * 5e-2
-    d_o = torch.randn(B, H, T, V, dtype=dt, device="npu") * 5e-2
-    torch.npu.synchronize()
-    kw = dict(raw_g=None, A_log=None, dt_bias=None, initial_state=None,
-              dht=None, cu_seqlens=None, chunk_indices=None, chunk_size=cs,
-              safe_gate=True, use_gate_in_kernel=False, disable_recompute=True,
-              use_exp2=True, state_v_first=False)
-    assert_parity(
-        "chunk_kda_bwd(dense BNSD)",
-        ct.npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new,
-                             h, d_o, K ** -0.5, **kw),
-        _launcher.npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg,
-                                v_new, h, d_o, K ** -0.5, **kw))
-    # The remaining declared flags of this operator.
-    for label, extra in (("state_v_first", dict(state_v_first=True)),
-                         ("recompute", dict(disable_recompute=False))):
-        torch.npu.synchronize()
-        parity_or_domain_skip(
-            f"chunk_kda_bwd({label})",
-            lambda extra=extra: ct.npu_chunk_kda_bwd(
-                q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o,
-                K ** -0.5, **dict(kw, **extra)),
-            lambda extra=extra: _launcher.npu_chunk_kda_bwd(
-                q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o,
-                K ** -0.5, **dict(kw, **extra)))
-
-
-def scenario_chunk_kda_bwd_recompute():
-    """The KDA saved tensors: gate cumsum plus the recomputed w/u/qg/kg.
-
-    `use_gate_in_kernel` decides whether the fp32 gate cumsum is materialized,
-    so both spellings are exercised -- that is also the only optional output
-    here.  The `no gate` spelling is recorded rather than run on Ascend950:
-    measured there, it raises an AI Core exception (error code 271) inside the
-    kernel and takes the device down with it, so it cannot be a parity case
-    until the OPP is fixed.  On 910B both spellings reject with 561103 and the
-    helper records that.
-    """
-
-    B, H, T, K, cs = 2, 4, 256, 128, 64
-    dt = torch.bfloat16
-    q = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
-    k = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
-    v = torch.randn(B, H, T, K, dtype=dt, device="npu") * 5e-2
-    g = torch.randn(B, H, T, K, dtype=torch.float32, device="npu")
-    beta = torch.randn(B, H, T, dtype=dt, device="npu")
-    a = torch.randn(B, H, T, cs, dtype=dt, device="npu") * 5e-2
-    A_log = torch.randn(H, dtype=torch.float32, device="npu")
-    torch.npu.synchronize()
-    for label, extra in (("gate", dict(use_gate_in_kernel=True, A_log=A_log)),
-                         ("no gate", dict(use_gate_in_kernel=False,
-                                          A_log=None))):
-        if label == "no gate" and "950" in str(
-                torch.npu.get_device_name(0)):
-            name = f"chunk_kda_bwd_recompute({label})"
-            SKIPPED[name] = (
-                "kernel defect: use_gate_in_kernel=False raises an AI Core "
-                "exception (error code 271) on Ascend950 and leaves the device "
-                "in an error state, so it is not run")
-            print(f"SKIP {name} ({SKIPPED[name]})")
-            continue
-        parity_or_domain_skip(
-            f"chunk_kda_bwd_recompute({label})",
-            lambda extra=extra: ct.npu_chunk_kda_bwd_recompute(
-                q, k, v, g, beta, a, cs, use_exp2=True, lower_bound=-5.0,
-                **extra),
-            lambda extra=extra: _launcher.npu_chunk_kda_bwd_recompute(
-                q, k, v, g, beta, a, cs, use_exp2=True, lower_bound=-5.0,
-                **extra))
-
-
-def scenario_chunk_gated_delta_rule_bwd():
-    """The composite GDN backward added by main (#532).
-
-    One aclnn call for the whole backward graph, so the parity check is the
-    interesting part: the operator's public tuple has eight slots, two of which
-    (`d_a_log`, `d_dt_bias`) the implementation reserves and never fills, and
-    `dh0` only exists when an initial state was passed.
-
-    The reference requires `use_exp2=True`, `use_gate_in_kernel=False` and
-    K=V=128 with `chunk_size=64`; the gates are exercised here so that the stable
-    path's matching refusals are recorded rather than discovered later.
-    """
-
-    B, HK, HV, T, K, V, cs = 2, 2, 4, 256, 128, 128, 64
-    dt = torch.bfloat16
-
-    def make(*, with_state):
-        q = torch.randn(B, HK, T, K, dtype=dt, device="npu") * 5e-2
-        k = torch.randn(B, HK, T, K, dtype=dt, device="npu") * 5e-2
-        v = torch.randn(B, HV, T, V, dtype=dt, device="npu") * 5e-2
-        # BNSD: g/beta are head-major here, while A stays [B, HV, T, chunk].
-        g = torch.randn(B, HV, T, dtype=torch.float32, device="npu")
-        beta = torch.randn(B, HV, T, dtype=dt, device="npu")
-        a = torch.randn(B, HV, T, cs, dtype=dt, device="npu") * 5e-2
-        d_o = torch.randn(B, HV, T, V, dtype=dt, device="npu") * 5e-2
-        kw = dict(layout="BNSD", scale=K ** -0.5, chunk_size=cs,
-                  use_exp2=True, use_gate_in_kernel=False)
-        if with_state:
-            state = torch.randn(B, HV, K, V, dtype=dt, device="npu") * 5e-2
-            kw["initial_state"] = state
-            kw["dht"] = torch.randn_like(state) * 5e-2
-        torch.npu.synchronize()
-        return (q, k, v, g, beta, a, d_o), kw
-
-    args, kw = make(with_state=False)
-    # Both paths may reject the inputs on an OPP whose tiling does not implement
-    # this operator yet; the helper records that instead of failing, and the
-    # case turns into a real parity test as soon as one accepts it.
-    parity_or_domain_skip(
-        "chunk_gated_delta_rule_bwd(dense BNSD)",
-        lambda: ct.npu_chunk_gated_delta_rule_bwd(*args, **kw),
-        lambda: _launcher.npu_chunk_gated_delta_rule_bwd(*args, **kw))
-    # With an initial state the first output slot stops being None, which is the
-    # branch the mask in the wrapper has to get right.
-    args_state, kw_state = make(with_state=True)
-    parity_or_domain_skip(
-        "chunk_gated_delta_rule_bwd(initial state)",
-        lambda: ct.npu_chunk_gated_delta_rule_bwd(*args_state, **kw_state),
-        lambda: _launcher.npu_chunk_gated_delta_rule_bwd(*args_state, **kw_state))
-    # The two flags the composite does not implement must be refused on both
-    # paths; the helper records that instead of comparing anything.
-    for label, extra in (("use_exp2", dict(use_exp2=False)),
-                         ("use_gate_in_kernel", dict(use_gate_in_kernel=True))):
-        parity_or_domain_skip(
-            f"chunk_gated_delta_rule_bwd({label}=unsupported)",
-            lambda extra=extra: ct.npu_chunk_gated_delta_rule_bwd(
-                *args, **dict(kw, **extra)),
-            lambda extra=extra: _launcher.npu_chunk_gated_delta_rule_bwd(
-                *args, **dict(kw, **extra)))
-    # The operator's other three declared spellings.  It accepts the TND/NTD
-    # *names* but still reads a rank-4 tensor (layout_math::tokens4), so only the
-    # token axis moves -- BSND/TND put it on dim 1, BNSD/NTD on dim 2 -- and the
-    # two packed names additionally take cu_seqlens with a physical batch of 1.
-    #
-    # Two contract details the reference spells out (and rejected the first
-    # version of these cases for): `A` stays BNSD-shaped whatever the layout says
-    # ("A must have BNSD shape [B, HV, T, chunk_size]"), and a packed spelling
-    # needs cu_seqlens *and* chunk_indices together.
-    def token_major(tensor):
-        return (tensor.transpose(1, 2).contiguous()
-                if tensor.dim() >= 3 else tensor)
-
-    # q, k, v, g, beta and d_o follow the layout; A does not (args[5]).
-    bsnd = (tuple(token_major(tensor) for tensor in args[:5])
-            + (args[5], token_major(args[6])))
-    kw_bsnd = dict(kw, layout="BSND")
-    parity_or_domain_skip(
-        "chunk_gated_delta_rule_bwd(dense BSND)",
-        lambda: ct.npu_chunk_gated_delta_rule_bwd(*bsnd, **kw_bsnd),
-        lambda: _launcher.npu_chunk_gated_delta_rule_bwd(*bsnd, **kw_bsnd))
-    # One sequence of T tokens, chunk_size tokens per chunk: the canonical
-    # (sequence, chunk) pairs the reference asks for.
-    chunk_indices = [pair for chunk in range(T // cs) for pair in (0, chunk)]
-    for layout, spelled in (("TND", bsnd), ("NTD", args)):
-        packed = tuple(tensor[:1].contiguous() for tensor in spelled)
-        kw_packed = dict(kw, layout=layout, cu_seqlens=[0, T],
-                         chunk_indices=chunk_indices)
-        parity_or_domain_skip(
-            f"chunk_gated_delta_rule_bwd(varlen {layout})",
-            lambda s=packed, k=kw_packed: ct.npu_chunk_gated_delta_rule_bwd(
-                *s, **k),
-            lambda s=packed, k=kw_packed: _launcher
-            .npu_chunk_gated_delta_rule_bwd(*s, **k))
 
 
 def scenario_dqkwg():
@@ -1569,134 +1364,6 @@ def scenario_recurrent_kda():
     record_extra("recurrent_kda(TND state)", st_ct, st_tt)
 
 
-def scenario_chunk_gated_delta_rule_fwd():
-    """Fused GDN forward (legacy Phase6 domain: BNSD dense).
-
-    Upstream #495 fixed the op_api/ctypes parameter passing, so the fused op
-    now runs on A2; the stable adapter covers the legacy path and falls back to
-    ctypes for the A5 (use_exp2) / varlen / other-layout combos.
-    """
-
-    def make_case(B, Hk, Hv, T, V, chunk, suffix, with_final=True,
-                  st_dtype=None):
-        dt = torch.bfloat16
-        q = (torch.randn(B, Hk, T, 128, device="npu") * 0.05).to(dt)
-        k = (torch.randn(B, Hk, T, 128, device="npu") * 0.05).to(dt)
-        v = (torch.randn(B, Hv, T, V, device="npu") * 0.05).to(dt)
-        g = (torch.randn(B, T, Hv, device="npu") * 1.25).to(torch.float32)
-        beta = torch.sigmoid(torch.randn(B, T, Hv, device="npu"))
-        kw = dict(chunk_size=chunk, output_final_state=with_final)
-        if st_dtype is not None:
-            kw["initial_state"] = (
-                torch.randn(B, Hv, 128, V, device="npu") * 0.02).to(st_dtype)
-            kw["output_final_state"] = True
-        torch.npu.synchronize()
-        assert_parity(
-            f"chunk_gated_delta_rule_fwd({suffix})",
-            ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
-            _launcher.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
-
-    # GVA + final state + fp32 initial state (labels name the layout the case
-    # drives, so the checked-in coverage record says which axes were covered:
-    # BSND/TND/NTD are exercised by the Ascend950 driver).
-    make_case(2, 2, 4, 128, 128, 64, "BNSD_B2_Hk2_Hv4_T128_V128_c64",
-              st_dtype=torch.float32)
-    # bf16 initial state, chunk 128, V=256
-    make_case(2, 2, 4, 256, 256, 128, "B2_Hk2_Hv4_T256_V256_c128",
-              st_dtype=torch.bfloat16)
-    # no initial/final state
-    make_case(1, 2, 2, 192, 128, 64, "B1_Hk2_Hv2_T192_V128_c64",
-              with_final=False)
-
-    # varlen (physical B=1, canonical chunk_indices)
-    B, Hk, Hv, T, V, cs = 1, 2, 4, 128, 128, 64
-    dt = torch.bfloat16
-    q = (torch.randn(B, Hk, T, 128, device="npu") * 0.05).to(dt)
-    k = (torch.randn(B, Hk, T, 128, device="npu") * 0.05).to(dt)
-    v = (torch.randn(B, Hv, T, V, device="npu") * 0.05).to(dt)
-    g = (torch.randn(B, T, Hv, device="npu") * 1.25).to(torch.float32)
-    beta = torch.sigmoid(torch.randn(B, T, Hv, device="npu"))
-    cu = [0, 30, 128]
-    ci = []
-    for seq, (begin, end) in enumerate(zip(cu[:-1], cu[1:])):
-        for chunk in range((end - begin + cs - 1) // cs):
-            ci.extend((seq, chunk))
-    torch.npu.synchronize()
-    kw = dict(chunk_size=cs, output_final_state=True, cu_seqlens=cu,
-              chunk_indices=ci)
-
-    def _finite_parity(name, oc, ot):
-        # `A` is a chunk-local lower triangle: only the columns up to the
-        # token's offset inside its chunk are written, and the rest keeps
-        # whatever the allocator had.  On 910B both paths left NaN there; on
-        # Ascend950 they leave *finite* garbage (measured 7e29 and 3.4e38) that
-        # differs between the two allocations, which is what made this case fail
-        # there.  The mask below compares the part the operator actually
-        # computes -- it is derived from cu_seqlens, not from a tolerance.
-        #
-        # The result is recorded in SCENARIOS rather than only printed: the
-        # scenario-set check is what notices if this case is ever dropped.
-        assert len(oc) == len(ot)
-        offsets = torch.zeros(T, dtype=torch.long)
-        for begin, end in zip(cu, cu[1:]):
-            offsets[begin:end] = torch.arange(end - begin) % cs
-        columns = torch.arange(cs)
-        triangle = (columns[None, :] <= offsets[:, None]).npu()
-        for i, (a, b) in enumerate(zip(oc, ot)):
-            if a is None or b is None:
-                assert a is None and b is None, f"{name}[{i}]: None mismatch"
-                continue
-            assert tuple(a.shape) == tuple(b.shape), f"{name}[{i}]: shape"
-            af, bf = a.float(), b.float()
-            finite = torch.isfinite(af) & torch.isfinite(bf)
-            if a.dim() == 4 and a.shape[-1] == cs:
-                finite = finite & triangle[None, None, :, :]
-            if finite.any():
-                diff = float((af - bf).abs()[finite].max().item())
-                assert diff == 0.0, f"{name}[{i}]: diff={diff}"
-        SCENARIOS[name] = 0.0
-        print(f"PASS {name}")
-
-    _finite_parity(
-        "chunk_gated_delta_rule_fwd(varlen_B1_T128_c64)",
-        ct.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw),
-        _launcher.npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, **kw))
-
-    # The operator's other declared layouts.  Measured on A2: BSND is rejected
-    # by the kernel (161002), and the rank-3 TND/NTD spellings are refused by the
-    # reference's own validation ("q, k and v must be rank-4").  They are still
-    # exercised -- by the Ascend950 driver, whose kernel does implement them --
-    # so here they are recorded rather than left as unexplained gaps.
-    for layout in ("BSND", "TND", "NTD"):
-        B2, Hk2, Hv2, T2, V2, cs2 = 1, 2, 2, 128, 128, 64
-
-        def rnd(*shape):
-            return (torch.randn(*shape, device="npu") * 0.05).to(torch.bfloat16)
-
-        if layout == "BSND":
-            q2, k2 = rnd(B2, T2, Hk2, 128), rnd(B2, T2, Hk2, 128)
-            v2 = rnd(B2, T2, Hv2, V2)
-            g2 = (torch.randn(B2, T2, Hv2, device="npu") * 1.25).to(torch.float32)
-            beta2 = torch.sigmoid(torch.randn(B2, T2, Hv2, device="npu"))
-        elif layout == "TND":
-            q2, k2 = rnd(T2, Hk2, 128), rnd(T2, Hk2, 128)
-            v2 = rnd(T2, Hv2, V2)
-            g2 = (torch.randn(T2, Hv2, device="npu") * 1.25).to(torch.float32)
-            beta2 = torch.sigmoid(torch.randn(T2, Hv2, device="npu"))
-        else:  # NTD
-            q2, k2 = rnd(Hk2, T2, 128), rnd(Hk2, T2, 128)
-            v2 = rnd(Hv2, T2, V2)
-            g2 = (torch.randn(Hv2, T2, device="npu") * 1.25).to(torch.float32)
-            beta2 = torch.sigmoid(torch.randn(Hv2, T2, device="npu"))
-        torch.npu.synchronize()
-        parity_or_domain_skip(
-            f"chunk_gated_delta_rule_fwd(layout={layout})",
-            lambda q2=q2, k2=k2, v2=v2, g2=g2, beta2=beta2, layout=layout,
-            cs2=cs2: ct.npu_chunk_gated_delta_rule_fwd(
-                q2, k2, v2, g2, beta2, chunk_size=cs2, layout=layout),
-            lambda q2=q2, k2=k2, v2=v2, g2=g2, beta2=beta2, layout=layout,
-            cs2=cs2: _launcher.npu_chunk_gated_delta_rule_fwd(
-                q2, k2, v2, g2, beta2, chunk_size=cs2, layout=layout))
 
 
 def main():
@@ -1746,21 +1413,17 @@ def _scenarios():
         scenario_dv_local,
         scenario_pwy_da,
         scenario_gated_fwd_h,
-        scenario_chunk_fwd_h,
         scenario_chunk_fwd_o,
         scenario_bwd_dhu,
         scenario_conv1d_bwd_bnsd,
         scenario_chunk_kda_fwd,
         scenario_chunk_kda_fwd_variants,
         scenario_chunk_kda_bwd_intra,
-        scenario_chunk_kda_bwd,
-        scenario_chunk_kda_bwd_recompute,
         scenario_dqkwg,
         scenario_chunk_local_cumsum,
         scenario_scaled_dot_kkt,
         scenario_solve_tri_dense,
         scenario_kda_gate_cumsum,
-        scenario_chunk_gated_delta_rule_fwd,
         scenario_conv1d_prefill,
         scenario_conv1d_varlen_initial_state,
         scenario_conv1d_update,

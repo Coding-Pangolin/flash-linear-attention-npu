@@ -25,12 +25,13 @@ python tests/stable_abi/regression_stable_full.py
 
 - 每个场景都做 ctypes↔launcher 的逐位对比，并和 `stable_scenarios.json` 里本机
   对应那份基线比对：少了场景会报 `lost`，多了会报 `scenario added`。
-- `--group hot|recurrent|conv1d|kda|chunk|smoke|a5` 只跑一组（编辑循环用，几十秒）；
+- `--group hot|recurrent|conv1d|kda|chunk|smoke` 只跑一组（编辑循环用，几十秒）；
   `--list-groups` 列出分组。
 - `FLA_NPU_BASELINE_WRITE=1` 重录本机基线（**只改本机那一份**，另一台不动）。
 
-`Ascend950` 专属的四个场景在 `regression_950_ops.py`，由 `--group a5` 选中；
-在 910B 上跑全量时会打印对应的 SKIP 及原因。
+本分支的 OPP 没有 `Ascend950` 专属算子：`fwd_prepare` / `bwd_finalize` 以及由它们
+组合出来的 `chunk_gated_delta_rule_bwd` 随各自的算子 PR 一起进来，届时再带上对应
+场景。
 
 ## 其余
 
@@ -38,7 +39,7 @@ python tests/stable_abi/regression_stable_full.py
 | --- | --- | --- |
 | `test_stable_stream_interleaving.py` | 多线程 × 各自 stream × recurrent+conv1d 交替；每此调用必须读当次 stream（带自检负例） | `python tests/stable_abi/test_stable_stream_interleaving.py --threads 8 --rounds 3` |
 | `regression_mutation_contract.py` | 原地更新算子的 version/grad 契约与数值 | `python tests/stable_abi/regression_mutation_contract.py` |
-| `customer_switch_compat.py` | 客户可见面：31 个算子的公开签名 + 若干真实调用的结果与原地契约，`FLA_NPU_STABLE_ABI=ctypes` 与默认后端对照 | `python tests/stable_abi/customer_switch_compat.py` |
+| `customer_switch_compat.py` | 客户可见面：本分支发布算子的公开签名 + 若干真实调用的结果与原地契约，`FLA_NPU_STABLE_ABI=ctypes` 与默认后端对照 | `python tests/stable_abi/customer_switch_compat.py` |
 | `test_stable_fallback_warning.py` | 加载不到 launcher 时必须告警：库缺失、库不是 launcher、以及正常加载三种情形，并检查降级原因写成"launcher 不可用"而不是"算子没带" | `python tests/stable_abi/test_stable_fallback_warning.py --lib <so>` |
 | `bench_stable_host.py` | 逐算子 host A/B（对比 ctypes 与 launcher） | `python tests/stable_abi/bench_stable_host.py [--rounds 5]` |
 

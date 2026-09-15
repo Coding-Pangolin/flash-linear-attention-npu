@@ -61,12 +61,6 @@ _ASCENDC_OPS = (
 # here that ctypes still defines, so the two lists cannot drift apart.
 _LAUNCHER_ONLY_OPS: tuple[str, ...] = ()
 
-# ChunkFwdH 仅提供解耦 ctypes 稳定入口，不注册 torch.ops.npu，也不挂到
-# torch_npu.ops 的可选兼容命名空间。
-_TORCH_NPU_COMPAT_OPS = tuple(
-    name for name in _ASCENDC_OPS if name != "npu_chunk_fwd_h"
-)
-
 BACKWARD_OPS = {
     "fast_gelu_custom": "fast_gelu_custom_backward",
     "npu_fast_gelu_custom": "npu_fast_gelu_custom_backward",

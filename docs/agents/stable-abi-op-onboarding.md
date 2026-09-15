@@ -26,9 +26,9 @@
 | 文件 | 拥有的算子族 |
 | --- | --- |
 | `stable_conv1d.cpp` | conv1d 全族：`npu_causal_conv1d`、`_fn`、`_update`、`_bwd` |
-| `stable_gdn.cpp` | gated-delta-rule 的复合/派生：`npu_chunk_gated_delta_rule_fwd`、`_bwd`、`_bwd_finalize`、`_fwd_prepare`、`npu_chunk_fwd_o`、`npu_chunk_gdn_bwd_intra` |
-| `stable_fwd_h.cpp` | h/dh 递归族：`npu_chunk_fwd_h`、`npu_chunk_gated_delta_rule_fwd_h`、`npu_chunk_gated_delta_rule_bwd_dhu` |
-| `stable_kda.cpp` | KDA 族：`npu_chunk_kda_fwd`、`_bwd`、`_bwd_intra`、`_bwd_recompute`、`npu_kda_gate_cumsum` |
+| `stable_gdn.cpp` | gated-delta-rule 的派生：`npu_chunk_fwd_o`（本分支只有它；main 还有复合的 `_fwd`/`_bwd`/`_bwd_finalize`/`_fwd_prepare` 与 `npu_chunk_gdn_bwd_intra`，本分支没有对应 kernel，所以不带适配） |
+| `stable_fwd_h.cpp` | h/dh 递归族：`npu_chunk_gated_delta_rule_fwd_h`、`npu_chunk_gated_delta_rule_bwd_dhu`（main 的 `npu_chunk_fwd_h` 同样没有本分支 kernel） |
+| `stable_kda.cpp` | KDA 族：`npu_chunk_kda_fwd`、`npu_chunk_kda_bwd_intra`、`npu_kda_gate_cumsum`（main 的 `npu_chunk_kda_bwd`、`_bwd_recompute` 不在本分支） |
 | `stable_chunk.cpp` | 两族共用的 chunk 级工具：`*wy_repr*`、`chunk_scaled_dot_kkt`、`chunk_local_cumsum`、`chunk_bwd_dqkwg`、`chunk_bwd_dv_local`、`recompute_w_u_fwd`、`solve_tri` |
 | `stable_fast_gelu.cpp` | `npu_fast_gelu_custom`、`npu_fast_gelu_custom_backward` |
 | `stable_recurrent_gdr.cpp`、`stable_recurrent_kda.cpp` | 两个 **pre-macro** 适配（各自一个文件：它们的 `state` 是原地参数，不能用宏拆栈，见 §7） |

@@ -3,6 +3,13 @@
 > 基于 `torch_custom/fla_npu/fla_npu/ops/ascendc/_aclnn_ctypes.py` 当前导出集合
 > （#496 分支，未含 #390 的 causal_conv1d_update；后者合入后并入 conv1d 批次）。
 
+> **本分支（v26.9.0）范围**：有 8 个算子在 main 上才有，本分支既没有 kernel
+> 也没有 OPP 入口 —— `npu_chunk_fwd_h`、`npu_chunk_gdn_bwd_intra`、
+> `npu_chunk_gated_delta_rule_fwd` / `_fwd_prepare` / `_bwd_finalize` / `_bwd`、
+> `npu_chunk_kda_bwd`、`npu_chunk_kda_bwd_recompute`。它们在本分支**不带适配层**，
+> 也不会被 `_ASCENDC_OPS` 发布；下面的清单沿用 main 的完整口径，只为对照两条线，
+> 这 8 个算子的适配随各自的算子 PR 一起进来。
+
 ## 迁移批次总览
 
 | 批次 | 算子 | 说明 |

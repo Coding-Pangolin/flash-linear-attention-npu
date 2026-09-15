@@ -42,7 +42,6 @@ STABLE_TORCH_LIBRARY(fla_npu_stable, m) {
   m.def(kSchema_npu_fast_gelu_custom_backward);
   m.def(kSchema_kda_gate_cumsum);
   m.def(kSchema_chunk_kda_bwd_intra);
-  m.def(kSchema_chunk_kda_bwd_recompute);
   m.def(kSchema_chunk_kda_fwd);
   m.def(kSchema_chunk_bwd_dv_local);
   m.def(kSchema_chunk_local_cumsum);
@@ -54,19 +53,12 @@ STABLE_TORCH_LIBRARY(fla_npu_stable, m) {
   m.def(kSchema_recompute_w_u_fwd);
   m.def(kSchema_causal_conv1d_bwd);
   m.def(kSchema_chunk_fwd_o);
-  m.def(kSchema_chunk_gdn_bwd_intra);
   m.def(kSchema_causal_conv1d);
   m.def(kSchema_causal_conv1d_fn);
   m.def(kSchema_causal_conv1d_update);
-  m.def(kSchema_chunk_fwd_h);
   m.def(kSchema_chunk_gated_delta_rule_fwd_h);
   m.def(kSchema_chunk_gated_delta_rule_bwd_dhu);
-  m.def(kSchema_chunk_gated_delta_rule_fwd);
   m.def(kSchema_solve_tri);
-  m.def(kSchema_chunk_gated_delta_rule_fwd_prepare);
-  m.def(kSchema_chunk_gated_delta_rule_bwd_finalize);
-  m.def(kSchema_chunk_kda_bwd);
-  m.def(kSchema_chunk_gated_delta_rule_bwd);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.def("_stream_probe(int device_index) -> (int, int)");
 #endif
@@ -84,9 +76,6 @@ STABLE_TORCH_LIBRARY_IMPL(fla_npu_stable, CompositeExplicitAutograd, m) {
          &fla_npu_stable::stable::boxed_adapter<run_npu_kda_gate_cumsum>);
   m.impl("npu_chunk_kda_bwd_intra",
          &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_kda_bwd_intra>);
-  m.impl("npu_chunk_kda_bwd_recompute",
-         &fla_npu_stable::stable::boxed_adapter<
-             run_npu_chunk_kda_bwd_recompute>);
   m.impl("npu_chunk_kda_fwd",
          &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_kda_fwd>);
   m.impl("npu_chunk_bwd_dv_local",
@@ -110,16 +99,12 @@ STABLE_TORCH_LIBRARY_IMPL(fla_npu_stable, CompositeExplicitAutograd, m) {
          &fla_npu_stable::stable::boxed_adapter<run_npu_causal_conv1d_bwd>);
   m.impl("npu_chunk_fwd_o",
          &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_fwd_o>);
-  m.impl("npu_chunk_gdn_bwd_intra",
-         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_gdn_bwd_intra>);
   m.impl("npu_causal_conv1d_fn",
          &fla_npu_stable::stable::boxed_adapter<run_npu_causal_conv1d_fn>);
   m.impl("npu_causal_conv1d_update",
          &fla_npu_stable::stable::boxed_adapter<run_npu_causal_conv1d_update>);
   m.impl("npu_causal_conv1d",
          &fla_npu_stable::stable::boxed_adapter<run_npu_causal_conv1d>);
-  m.impl("npu_chunk_fwd_h",
-         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_fwd_h>);
   m.impl(
       "npu_chunk_gated_delta_rule_fwd_h",
       &fla_npu_stable::stable::boxed_adapter<
@@ -128,26 +113,8 @@ STABLE_TORCH_LIBRARY_IMPL(fla_npu_stable, CompositeExplicitAutograd, m) {
       "npu_chunk_gated_delta_rule_bwd_dhu",
       &fla_npu_stable::stable::boxed_adapter<
           run_npu_chunk_gated_delta_rule_bwd_dhu>);
-  m.impl(
-      "npu_chunk_gated_delta_rule_fwd",
-      &fla_npu_stable::stable::boxed_adapter<
-          run_npu_chunk_gated_delta_rule_fwd>);
   m.impl("npu_solve_tri",
          &fla_npu_stable::stable::boxed_adapter<run_npu_solve_tri>);
-  m.impl(
-      "npu_chunk_gated_delta_rule_fwd_prepare",
-      &fla_npu_stable::stable::boxed_adapter<
-          run_npu_chunk_gated_delta_rule_fwd_prepare>);
-  m.impl(
-      "npu_chunk_gated_delta_rule_bwd_finalize",
-      &fla_npu_stable::stable::boxed_adapter<
-          run_npu_chunk_gated_delta_rule_bwd_finalize>);
-  m.impl("npu_chunk_kda_bwd",
-         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_kda_bwd>);
-  m.impl(
-      "npu_chunk_gated_delta_rule_bwd",
-      &fla_npu_stable::stable::boxed_adapter<
-          run_npu_chunk_gated_delta_rule_bwd>);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.impl("_stream_probe", &boxed_stream_probe);
 #endif

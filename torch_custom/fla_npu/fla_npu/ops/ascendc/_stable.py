@@ -42,14 +42,11 @@ _LAYOUT_CODES = {"BSND": 0, "BNSD": 1, "TND": 2, "NTD": 3}
 
 _ENUM = {
     "npu_causal_conv1d_bwd": {"input_layout": _LAYOUT_CODES},
-    "npu_chunk_fwd_o": {"output_layout": _LAYOUT_CODES},
-    "npu_chunk_gated_delta_rule_fwd": {"layout": _LAYOUT_CODES},
     "npu_chunk_kda_bwd_intra": {"layout": {"BSND": 0, "BNSD": 1, "TND": 2}},
     "npu_chunk_kda_fwd": {"layout": _LAYOUT_CODES},
     # The recurrent KDA kernel only implements the two spellings the reference
     # accepts, so this op's table is the (BSND, TND) subset.
     "npu_recurrent_kda": {"layout": {"BSND": 0, "TND": 1}},
-    "npu_chunk_gated_delta_rule_bwd": {"layout": _LAYOUT_CODES},
     "npu_chunk_local_cumsum": {"output_dtype": {"float32": 0,
                                                 "bfloat16": 1}},
     "npu_solve_tri": {"layout": {"bsnd": 0, "bnsd": 1, "tnd": 2, "ntd": 3}},
@@ -628,37 +625,26 @@ def npu_causal_conv1d_bwd(x, y, weight, dy, initial_state=None, dht=None, *,
 
 def npu_chunk_fwd_o(q, k, v, h, scale, *, g=None, g_gamma=None,
                     cu_seqlens=None, chunk_indices=None, chunk_size=None,
-                    transpose_state_layout=False, use_exp2=False,
-                    output_layout="BNSD"):
+                    transpose_state_layout=False):
     """Output of one chunked attention pass.
 
     ``g_gamma`` is part of the published signature and ignored, exactly as the
-    ctypes reference ignores it.  ``chunk_size`` defaults to 64 and ``use_exp2``
-    to False, matching the reference's defaults.
+    ctypes reference ignores it, and so is ``transpose_state_layout``: this
+    branch's aclnn entry point takes neither, so there is nothing to forward.
+    ``chunk_size`` defaults to 64, matching the reference.
     """
 
+    del g_gamma, transpose_state_layout
     return _op("npu_chunk_fwd_o")(
         q, k, v, h, g,
         _host_ints(cu_seqlens),
         _host_ints(chunk_indices),
         scale,
         64 if chunk_size is None else chunk_size,
-        False if use_exp2 is None else bool(use_exp2),
-        bool(transpose_state_layout),
-        _char_code("npu_chunk_fwd_o", "output_layout", output_layout),
         _current_stream_ptr(),
     )
 
 
-def npu_chunk_gdn_bwd_intra(q, k, v, g, beta, A, d_o, scale, chunk_size, *,
-                            cu_seqlens=None, chunk_indices=None, use_exp2=True):
-    """dq / dk / dv of one chunk."""
-
-    return _op("npu_chunk_gdn_bwd_intra")(
-        q, k, v, g, beta, A, d_o,
-        _host_ints(cu_seqlens), _host_ints(chunk_indices),
-        scale, chunk_size, use_exp2, _current_stream_ptr(),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -844,20 +830,6 @@ def _canonical_chunk_indices(cu_seqlens, chunk_size):
     return indices
 
 
-def npu_chunk_fwd_h(k, w, u, *, g=None, gk=None, initial_state=None,
-                    output_final_state=False, chunk_size=64,
-                    save_new_value=True, cu_seqlens=None, chunk_indices=None,
-                    use_exp2=False, state_v_first=False):
-    """Chunk-local states h, the recomputed v, and optionally the final state."""
-
-    if cu_seqlens and not chunk_indices:
-        chunk_indices = _canonical_chunk_indices(cu_seqlens, chunk_size)
-    return _op("npu_chunk_fwd_h")(
-        k, w, u, g, gk, initial_state,
-        output_final_state, chunk_size, save_new_value,
-        _host_ints(cu_seqlens), _host_ints(chunk_indices),
-        use_exp2, state_v_first, _current_stream_ptr(),
-    )
 
 
 def npu_chunk_gated_delta_rule_fwd_h(k, w, u, g=None, *, gk=None,
@@ -882,39 +854,21 @@ def npu_chunk_gated_delta_rule_bwd_dhu(
         q, k, w, d_o, dv, scale, chunk_size, *, g=None, gK=None, h0=None,
         dht=None, cu_seqlens=None, chunk_indices=None, use_exp2=False,
         transpose_state_layout=False):
-    """dh / dh0 / dv, where dh0 is only produced when h0 was supplied."""
+    """dh / dh0 / dv, where dh0 is only produced when h0 was supplied.
 
+    ``transpose_state_layout`` is part of the published signature and ignored,
+    exactly as the ctypes reference ignores it: this branch's entry point has no
+    stateVFirst flag, so dh0 always carries the (K, V) tail.  ``use_exp2``
+    follows the reference's own default: ``None`` means "true when gK was
+    supplied".
+    """
+
+    del transpose_state_layout
+    use_exp2 = bool(gK is not None) if use_exp2 is None else bool(use_exp2)
     return _op("npu_chunk_gated_delta_rule_bwd_dhu")(
         q, k, w, d_o, dv, g, gK, h0, dht,
         _host_ints(cu_seqlens), _host_ints(chunk_indices),
-        scale, chunk_size, use_exp2, transpose_state_layout,
-        _current_stream_ptr(),
-    )
-
-
-# ---------------------------------------------------------------------------
-# kda backward recompute
-# ---------------------------------------------------------------------------
-
-
-def npu_chunk_kda_bwd_recompute(q, k, v, g, beta, a, chunk_size, *,
-                                A_log=None, dt_bias=None, cu_seqlens=None,
-                                chunk_indices=None, use_gate_in_kernel=True,
-                                use_exp2=True, lower_bound=-5.0):
-    """Recompute the KDA saved tensors (`gk`, `w`, `u`, `qg`, `kg`).
-
-    The declared order starts with the gate cumsum because that is the tensor
-    the caller almost always wants; aclnn takes the recomputed tensors first,
-    so the adapter reorders the results before returning them.
-    """
-
-    return _op("npu_chunk_kda_bwd_recompute")(
-        q, k, v, g, beta, a, A_log, dt_bias,
-        _host_ints(cu_seqlens), _host_ints(chunk_indices),
-        chunk_size,
-        True if use_exp2 is None else bool(use_exp2),
-        -5.0 if lower_bound is None else float(lower_bound),
-        bool(use_gate_in_kernel),
+        scale, chunk_size, use_exp2,
         _current_stream_ptr(),
     )
 
@@ -952,44 +906,6 @@ def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size=64, *,
     return (*result, initial_state)
 
 
-def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, initial_state=None,
-                                   output_final_state=False, chunk_size=64,
-                                   cu_seqlens=None, chunk_indices=None,
-                                   scale=None, use_exp2=False,
-                                   use_qk_l2norm_in_kernel=False,
-                                   use_gate_in_kernel=False,
-                                   use_beta_sigmoid_in_kernel=False,
-                                   allow_neg_eigval=False,
-                                   disable_recompute=True,
-                                   return_intermediate_states=False,
-                                   state_v_first=False, layout="BNSD"):
-    """Fused GDN forward: `o` plus the intermediates the backward consumes.
-
-    The public tuple grows with the flags -- `(g_cumsum, A)` appear with
-    ``disable_recompute`` and ``h`` with ``return_intermediate_states`` -- while
-    the operator itself always has those slots, so the filtering happens here.
-    """
-
-    if scale is None:
-        scale = float(k.shape[-1]) ** -0.5
-    result = _op("npu_chunk_gated_delta_rule_fwd")(
-        q, k, v, g, beta, initial_state,
-        _host_ints(cu_seqlens), _host_ints(chunk_indices),
-        _char_code("npu_chunk_gated_delta_rule_fwd", "layout", layout),
-        float(scale), chunk_size, bool(use_exp2),
-        bool(use_qk_l2norm_in_kernel), bool(use_gate_in_kernel),
-        bool(use_beta_sigmoid_in_kernel), bool(allow_neg_eigval),
-        bool(disable_recompute), bool(output_final_state),
-        bool(return_intermediate_states), bool(state_v_first),
-        _current_stream_ptr(),
-    )
-    o, final_state, g_cumsum, a, h = result
-    public = [o, final_state]
-    if disable_recompute:
-        public.extend((g_cumsum, a))
-    if return_intermediate_states:
-        public.append(h)
-    return tuple(public)
 
 
 def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
@@ -1024,354 +940,4 @@ def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
     )
 
 
-def npu_chunk_gated_delta_rule_fwd_prepare(
-        q, k, v, g, beta, chunk_size=64, *, use_qk_l2norm_in_kernel=False,
-        use_gate_in_kernel=False, use_beta_sigmoid_in_kernel=False,
-        allow_neg_eigval=False, use_exp2=False, a_log=None, dt_bias=None,
-        cu_seqlens=None, chunk_indices=None, output_a=True):
-    """Phase-6 prefill preparation: normalized q/k, beta and the WY tensors.
 
-    `beta_out` has to be a real tensor either way, so when the kernel is not
-    asked to sigmoid it the reference returns a float32 copy of `beta` -- the
-    same conversion happens here.
-    """
-
-    # The kernel implements exactly these spellings; the reference refuses the
-    # others, and the allocations below assume them.
-    if not use_qk_l2norm_in_kernel:
-        raise RuntimeError(
-            "npu_chunk_gated_delta_rule_fwd_prepare: "
-            "use_qk_l2norm_in_kernel currently only supports True.")
-    if use_gate_in_kernel:
-        raise RuntimeError(
-            "npu_chunk_gated_delta_rule_fwd_prepare: use_gate_in_kernel "
-            "currently only supports False.")
-    if not use_exp2:
-        raise RuntimeError(
-            "npu_chunk_gated_delta_rule_fwd_prepare: use_exp2 currently only "
-            "supports True.")
-    if cu_seqlens and not chunk_indices:
-        chunk_indices = _canonical_chunk_indices(cu_seqlens, chunk_size)
-    (q_hat, k_hat, q_rstd, k_rstd, beta_out, g_cumsum, w, u, a) = _op(
-        "npu_chunk_gated_delta_rule_fwd_prepare")(
-            q, k, v, g, beta,
-            a_log if use_gate_in_kernel else None,
-            dt_bias if use_gate_in_kernel else None,
-            _host_ints(cu_seqlens), _host_ints(chunk_indices),
-            chunk_size, bool(use_qk_l2norm_in_kernel),
-            bool(use_gate_in_kernel), bool(use_beta_sigmoid_in_kernel),
-            bool(allow_neg_eigval), bool(use_exp2), bool(output_a),
-            _current_stream_ptr())
-    if beta_out is None:
-        import torch
-
-        beta_out = beta.to(dtype=torch.float32)
-    return q_hat, k_hat, q_rstd, k_rstd, beta_out, g_cumsum, w, u, a
-
-
-def npu_chunk_gated_delta_rule_bwd_finalize(
-        q, k, v, v_new, do, du, g, beta, h, dh, a, *, q_rstd=None,
-        k_rstd=None, beta_raw=None, cu_seqlens=None, chunk_indices=None,
-        scale=None, chunk_size=64, use_qk_l2_norm_in_kernel=False,
-        use_beta_sigmoid_in_kernel=False, use_gate_in_kernel=False,
-        state_v_first=False, use_exp2=True):
-    """The Ascend950-only backward finalize, returning dq/dk/dv/dbeta/dg.
-
-    The kernel exists only for Ascend950, and calling it anywhere else has no
-    defined result, so the device is checked here rather than letting the
-    launch decide.
-    """
-
-    import torch
-
-    device_index = q.device.index
-    if device_index is None:
-        device_index = torch.npu.current_device()
-    device_name = torch.npu.get_device_name(device_index)
-    if not device_name.startswith("Ascend950"):
-        raise RuntimeError(
-            "npu_chunk_gated_delta_rule_bwd_finalize only supports Ascend "
-            f"950, got {device_name}.")
-    if use_gate_in_kernel:
-        raise RuntimeError(
-            "npu_chunk_gated_delta_rule_bwd_finalize: use_gate_in_kernel only "
-            "supports False.")
-    if not use_exp2:
-        raise RuntimeError(
-            "npu_chunk_gated_delta_rule_bwd_finalize: use_exp2 only supports "
-            "True.")
-    if scale is None:
-        scale = 1.0 / (128.0 ** 0.5)
-    return _op("npu_chunk_gated_delta_rule_bwd_finalize")(
-        q, k, v, v_new, do, du, g, beta, h, dh, a,
-        q_rstd, k_rstd, beta_raw,
-        _host_ints(cu_seqlens), _host_ints(chunk_indices),
-        float(scale), chunk_size, bool(use_qk_l2_norm_in_kernel),
-        bool(use_beta_sigmoid_in_kernel), bool(use_gate_in_kernel),
-        bool(state_v_first), bool(use_exp2),
-        _current_stream_ptr(),
-    )
-
-
-def npu_chunk_gated_delta_rule_bwd(
-        q, k, v, g, beta, A, d_o, scale, chunk_size, *, layout="BSND",
-        initial_state=None, dht=None, q_rstd=None, k_rstd=None, beta_raw=None,
-        a_log=None, dt_bias=None, use_exp2=True, use_gate_in_kernel=False,
-        use_qk_l2norm_in_kernel=False, use_beta_sigmoid_in_kernel=False,
-        state_v_first=False, cu_seqlens=None, chunk_indices=None,
-        return_intermediate_states=False):
-    """The composite GDN backward, in one aclnn call.
-
-    Returns `(dq, dk, dv, d_beta, d_g, dh0, d_a_log, d_dt_bias)`; the last two
-    are reserved slots the operator does not fill yet and come back as None,
-    exactly like the reference.  `return_intermediate_states` is accepted for
-    ABI compatibility and has no effect, again like the reference.
-    """
-
-    # The composite backward implements neither of these, and it receives the
-    # values, so the reference's refusal has to be repeated here.
-    if not use_exp2:
-        raise RuntimeError(
-            "npu_chunk_gated_delta_rule_bwd: use_exp2=False is not supported.")
-    if use_gate_in_kernel:
-        raise RuntimeError(
-            "npu_chunk_gated_delta_rule_bwd: use_gate_in_kernel=True is not "
-            "supported.")
-    if cu_seqlens and not chunk_indices:
-        chunk_indices = _canonical_chunk_indices(cu_seqlens, chunk_size)
-    return _op("npu_chunk_gated_delta_rule_bwd")(
-        q, k, v, g, beta, A, d_o, initial_state, dht, q_rstd, k_rstd,
-        beta_raw, a_log, dt_bias,
-        _host_ints(cu_seqlens), _host_ints(chunk_indices),
-        _char_code("npu_chunk_gated_delta_rule_bwd", "layout", layout),
-        float(scale), chunk_size, bool(use_exp2), bool(use_gate_in_kernel),
-        bool(use_qk_l2norm_in_kernel), bool(use_beta_sigmoid_in_kernel),
-        bool(state_v_first),
-        _current_stream_ptr(),
-    )
-
-
-def _kda_bwd_single_launch(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h,
-                           d_o, raw_g, A_log, dt_bias, scale, chunk_size,
-                           safe_gate, lower_bound, use_gate_in_kernel):
-    """One fused call on the tensors it is given, dense or packed."""
-
-    return _op("npu_chunk_kda_bwd")(
-        q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o, raw_g, A_log,
-        dt_bias,
-        None, None,  # the fused kernel takes no cu_seqlens/chunk_indices
-        float(scale), int(chunk_size), bool(safe_gate),
-        bool(use_gate_in_kernel), float(lower_bound),
-        True,  # disable_recompute is the only supported spelling
-        True,  # use_exp2 likewise
-        False,  # state_v_first likewise
-        _current_stream_ptr(),
-    )
-
-
-def npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o,
-                      scale, *, raw_g=None, A_log=None, dt_bias=None,
-                      initial_state=None, dht=None, cu_seqlens=None,
-                      chunk_indices=None, chunk_size=64, safe_gate=True,
-                      lower_bound=-5.0, use_gate_in_kernel=False,
-                      disable_recompute=True, use_exp2=True,
-                      state_v_first=False):
-    """Fused KDA backward, returning `(dq, dk, dv, db, dg, dh0, dA, dbias)`.
-
-    Three shape-specific workarounds sit on top of the single launch, and they
-    are the reason this wrapper is longer than the others:
-
-    * a packed sequence whose last chunk is short (or a packed V=256 call on
-      Atlas A2) is split into independent dense calls, because the fused
-      pipeline produces stale or non-finite values for those;
-    * a single packed sequence with a short tail is instead padded inside its
-      last chunk and the token gradients sliced back;
-    * on A2 an odd head count gets a duplicated partner head, because the
-      Intra pipeline processes heads in pairs.
-
-    All three are the reference's own strategy; the only difference here is
-    that the dense call goes to the launcher instead of to ctypes.
-    """
-
-    import torch
-
-    chunk_size = int(chunk_size)
-    # The flags below are *reserved but not implemented* by this operator.  The
-    # reference refuses them in Python, and the adapter hard-codes the supported
-    # values, so accepting them here would silently ignore the caller's request
-    # instead of reporting it.
-    if not disable_recompute:
-        raise RuntimeError(
-            "npu_chunk_kda_bwd: disable_recompute=false is reserved but not "
-            "supported.")
-    if not use_exp2:
-        raise RuntimeError(
-            "npu_chunk_kda_bwd: use_exp2=false is reserved but not supported.")
-    if state_v_first:
-        raise RuntimeError(
-            "npu_chunk_kda_bwd: state_v_first=true is reserved but not "
-            "supported.")
-    if initial_state is not None or dht is not None:
-        raise RuntimeError(
-            "npu_chunk_kda_bwd: initial_state and dht are not supported by the "
-            "current fused backward.")
-    if not safe_gate:
-        raise RuntimeError(
-            "npu_chunk_kda_bwd: safe_gate=False is reserved but not supported.")
-    cu = None if cu_seqlens is None else tuple(int(x) for x in cu_seqlens)
-    is_varlen = cu is not None
-    if is_varlen:
-        heads, seqlen = int(q.shape[0]), int(q.shape[1])
-        value_dim = int(v.shape[2])
-    else:
-        batch, heads, seqlen, _ = q.shape
-        value_dim = int(v.shape[3])
-    indices = (None if chunk_indices is None
-               else tuple(int(x) for x in chunk_indices))
-    if indices is None and cu is not None:
-        indices = _canonical_chunk_indices(cu, chunk_size)
-    use_gate_in_kernel = bool(use_gate_in_kernel)
-    safe_gate = bool(safe_gate)
-    lower_bound = -5.0 if lower_bound is None else float(lower_bound)
-    scale = float(scale)
-    launch = _kda_bwd_single_launch
-
-    use_dense_varlen_fallback = is_varlen and value_dim == 256
-    has_varlen_tail = is_varlen and any(
-        (end - begin) % chunk_size != 0 for begin, end in zip(cu, cu[1:]))
-    is_a2_device = False
-    is_a5_device = False
-    if use_dense_varlen_fallback or heads % 2 != 0 or has_varlen_tail:
-        device_index = q.device.index
-        if device_index is None:
-            device_index = torch.npu.current_device()
-        device_name = str(torch.npu.get_device_name(device_index))
-        is_a2_device = device_name.startswith("Ascend910B")
-        is_a5_device = "950" in device_name
-
-    if (is_a2_device and use_dense_varlen_fallback) or (
-            is_a5_device and has_varlen_tail):
-        sequence_results = []
-        chunk_begin = 0
-        for token_begin, token_end in zip(cu, cu[1:]):
-            sequence_length = token_end - token_begin
-            if sequence_length == 0:
-                continue
-            sequence_chunks = (sequence_length + chunk_size - 1) // chunk_size
-
-            def dense_slice(tensor):
-                if tensor is None:
-                    return None
-                return tensor.narrow(1, token_begin, sequence_length) \
-                    .unsqueeze(0).contiguous()
-
-            sequence_results.append(npu_chunk_kda_bwd(
-                dense_slice(q), dense_slice(k), dense_slice(v),
-                dense_slice(beta), dense_slice(gk), dense_slice(Aqk),
-                dense_slice(Akk), dense_slice(w), dense_slice(qg),
-                dense_slice(kg), dense_slice(v_new),
-                h.narrow(0, chunk_begin, sequence_chunks).unsqueeze(0)
-                 .contiguous(),
-                dense_slice(d_o), scale,
-                raw_g=dense_slice(raw_g), A_log=A_log, dt_bias=dt_bias,
-                initial_state=None, dht=None, cu_seqlens=None,
-                chunk_indices=None, chunk_size=chunk_size, safe_gate=safe_gate,
-                lower_bound=lower_bound,
-                use_gate_in_kernel=use_gate_in_kernel,
-                disable_recompute=True, use_exp2=True, state_v_first=False))
-            chunk_begin += sequence_chunks
-
-        # Token gradients are concatenated along the token axis; the scalar
-        # gradients (dA, dbias) are summed, because each sequence contributed
-        # an independent reduction.
-        restored = []
-        for output_index in range(8):
-            values = [result[output_index] for result in sequence_results]
-            if values[0] is None:
-                restored.append(None)
-            elif output_index < 5:
-                restored.append(torch.cat(
-                    [value.squeeze(0) for value in values], dim=1).contiguous())
-            else:
-                total = values[0]
-                for value in values[1:]:
-                    total = total + value
-                restored.append(total)
-        return tuple(restored)
-
-    # A single packed sequence with a short tail is padded inside its last
-    # chunk: zero-gradient rows change neither the math nor the chunk layout,
-    # and the token gradients are sliced back afterwards.
-    original_seqlen = seqlen
-    original_heads = heads
-    padded_tail = seqlen % chunk_size != 0 and (cu is None or len(cu) == 2)
-    token_dim = 1 if is_varlen else 2
-    if padded_tail:
-        padded_seqlen = ((seqlen + chunk_size - 1) // chunk_size) * chunk_size
-        pad_rows = padded_seqlen - seqlen
-
-        def pad_rows_of(tensor, repeat_last=False):
-            if tensor is None:
-                return None
-            pad_shape = list(tensor.shape)
-            pad_shape[token_dim] = pad_rows
-            if repeat_last:
-                tail = tensor.narrow(token_dim, seqlen - 1, 1) \
-                    .expand(*pad_shape).clone()
-            else:
-                tail = tensor.new_zeros(pad_shape)
-            return torch.cat((tensor, tail), dim=token_dim).contiguous()
-
-        q, k, v = (pad_rows_of(tensor) for tensor in (q, k, v))
-        beta = pad_rows_of(beta)
-        # `gk` is cumulative: repeating its last value keeps every padded
-        # contraction finite while contributing no gradient.
-        gk = pad_rows_of(gk, repeat_last=True)
-        Aqk, Akk = (pad_rows_of(tensor) for tensor in (Aqk, Akk))
-        w, qg, kg, v_new, d_o = (pad_rows_of(tensor)
-                                 for tensor in (w, qg, kg, v_new, d_o))
-        raw_g = pad_rows_of(raw_g)
-        seqlen = padded_seqlen
-        cu = None if cu is None else (0, padded_seqlen)
-        indices = _canonical_chunk_indices(cu, chunk_size)
-
-    # A2's fused Intra pipeline processes heads in pairs; a lone final head can
-    # keep a stale correction from the previous launch.
-    padded_head = bool(heads % 2 != 0 and is_a2_device)
-    if padded_head:
-        head_dim = 0 if is_varlen else 1
-
-        def duplicate_head(tensor, dim):
-            if tensor is None:
-                return None
-            return torch.cat(
-                (tensor, tensor.narrow(dim, heads - 1, 1).clone()),
-                dim=dim).contiguous()
-
-        (q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, d_o, raw_g) = (
-            duplicate_head(tensor, head_dim)
-            for tensor in (q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, d_o,
-                           raw_g))
-        h = duplicate_head(h, 1 if is_varlen else 2)
-        A_log = duplicate_head(A_log, 0)
-        dt_bias = duplicate_head(dt_bias, 0)
-        heads += 1
-
-    result = launch(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o,
-                    raw_g, A_log, dt_bias, scale, chunk_size, safe_gate,
-                    lower_bound, use_gate_in_kernel)
-    restored = []
-    for index, value in enumerate(result):
-        if value is None:
-            restored.append(None)
-            continue
-        if padded_tail and index < 5:
-            value = value.narrow(token_dim, 0, original_seqlen)
-        if padded_head:
-            if index < 5:
-                value = value.narrow(0 if is_varlen else 1, 0, original_heads)
-            elif index in (6, 7):
-                value = value.narrow(0, 0, original_heads)
-        restored.append(value.contiguous()
-                        if padded_tail or padded_head else value)
-    return tuple(restored)

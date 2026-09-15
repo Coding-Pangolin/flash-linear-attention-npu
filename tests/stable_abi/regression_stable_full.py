@@ -26,12 +26,6 @@ from fla_npu.ops.ascendc import _stable  # noqa: E402
 
 STABLE_LIB = os.environ.get("FLA_NPU_STABLE_LIB", "")
 BASELINE = Path(__file__).resolve().parent / "stable_scenarios.json"
-# One baseline entry covering the Ascend950-only operators: on a non-950 host
-# they are a recorded skip, on Ascend950 they are recorded passes.  The fused
-# backward belongs here too -- it composes the 950-only finalize kernel, so A2
-# refuses it with a parameter error (aclnn 161002) rather than computing it.
-A5_SCENARIOS = ("Ascend950-only: fwd_prepare / bwd_finalize / fwd(a5) / "
-                "chunk_gated_delta_rule_bwd")
 BASELINE_WRITE = os.environ.get("FLA_NPU_BASELINE_WRITE", "").strip().lower() in {
     "1", "true", "yes", "on"}
 
@@ -178,7 +172,6 @@ def main() -> int:
         suite.scenario_dv_local,
         suite.scenario_pwy_da,
         suite.scenario_gated_fwd_h,
-        suite.scenario_chunk_fwd_h,
         suite.scenario_chunk_fwd_o,
         suite.scenario_bwd_dhu,
         suite.scenario_conv1d_new_apis,
@@ -192,15 +185,12 @@ def main() -> int:
         suite.scenario_chunk_kda_fwd,
         suite.scenario_chunk_kda_fwd_variants,
         suite.scenario_chunk_kda_bwd_intra,
-        suite.scenario_chunk_kda_bwd,
-        suite.scenario_chunk_kda_bwd_recompute,
         suite.scenario_dqkwg,
         suite.scenario_chunk_local_cumsum,
         suite.scenario_scaled_dot_kkt,
         suite.scenario_solve_tri_dense,
         suite.scenario_solve_tri_guards,
         suite.scenario_kda_gate_cumsum,
-        suite.scenario_chunk_gated_delta_rule_fwd,
     ]
     names = [scenario.__name__ for scenario in scenarios]
     suite.missing_from_groups(names)
@@ -223,36 +213,10 @@ def main() -> int:
         print(f"--- entering {scenario.__name__}", flush=True)
         scenario()
 
-    # Two operators only exist in the Ascend950 OPP
-    # (chunk_gated_delta_rule_fwd_prepare / _bwd_finalize).  They are exercised
-    # by their own driver instead of being silently absent: on a non-950 host
-    # this prints an explicit SKIP naming them, so the coverage record says why
-    # rather than counting them as covered.
+    # This branch's OPP has no Ascend950-only operator: the 950 kernels
+    # (fwd_prepare / bwd_finalize and the composite backward that composes them)
+    # arrive with their own PR, so there is no separate driver to fold in here.
     device = str(torch.npu.get_device_name(0))
-    # They live outside the scenario list (their own module), so the `a5` group
-    # selects them explicitly: a run that picked another group must not drag
-    # them in, and `--group a5` must run them even though the list is empty.
-    run_a5 = not args.group or "a5" in args.group
-    if not run_a5:
-        print("Ascend950-only scenarios skipped (not selected by --group)")
-    elif "950" in device:
-        import regression_950_ops as a5
-
-        a5._launcher = shim
-        for scenario in (a5.scenario_fwd_prepare, a5.scenario_bwd_finalize,
-                         a5.scenario_chunk_gated_delta_rule_fwd_a5,
-                         suite.scenario_chunk_gated_delta_rule_bwd):
-            print(f"--- entering {scenario.__name__} (Ascend950)",
-                  flush=True)
-            scenario()
-    else:
-        reason = (f"requires Ascend950, this host reports {device!r}")
-        suite.SKIPPED[A5_SCENARIOS] = reason
-        print(f"SKIP {A5_SCENARIOS}: {reason}")
-    if "950" in device:
-        # The A5 driver keeps its own recorder; fold it into this run's record
-        # so one baseline covers whatever the host can actually execute.
-        suite.SCENARIOS.update(a5.SCENARIOS)
     print(f"\nstable ops exercised: {len(shim.calls)}")
     for name in sorted(shim.calls):
         print(f"  {name}: {shim.calls[name]} call(s)")

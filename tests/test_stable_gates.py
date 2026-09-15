@@ -151,7 +151,9 @@ class CoverageGateTest(unittest.TestCase):
     def test_current_tree_has_no_unexplained_gap(self) -> None:
         report = self.tool.evaluate()
         self.assertEqual(report["blockers"], [])
-        self.assertGreater(report["adapter_count"], 25)
+        # One adapter per published operator on this branch; the floor is the
+        # count itself so a silently dropped adapter still fails the test.
+        self.assertGreaterEqual(report["adapter_count"], 23)
 
     def test_missing_wrapper_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -183,18 +185,20 @@ class CoverageGateTest(unittest.TestCase):
             for path in SRC_DIR.glob("stable_*.cpp"):
                 (src / path.name).write_text(path.read_text(encoding="utf-8"),
                                              encoding="utf-8")
-            target = src / "stable_gdn.cpp"
+            target = src / "stable_kda.cpp"
             text = target.read_text(encoding="utf-8")
             # Swap two layout names in the C++ table only: the Python table no
             # longer agrees, which is exactly the silent-layout-change bug.
             changed = text.replace(
-                'kGdnFwdLayoutNames[] = {"BSND", "BNSD", "TND", "NTD"}',
-                'kGdnFwdLayoutNames[] = {"BNSD", "BSND", "TND", "NTD"}')
+                'kChunkKdaFwdLayoutNames[] = {"BSND", "BNSD", "TND",\n'
+                '                                                   "NTD"}',
+                'kChunkKdaFwdLayoutNames[] = {"BNSD", "BSND", "TND",\n'
+                '                                                   "NTD"}')
             self.assertNotEqual(changed, text)
             target.write_text(changed, encoding="utf-8")
             with mock.patch.object(self.tool, "SRC_DIR", src):
                 report = self.tool.evaluate()
-            self.assertTrue(any("kGdnFwdLayoutNames order" in item
+            self.assertTrue(any("kChunkKdaFwdLayoutNames order" in item
                                 for item in report["blockers"]),
                             report["blockers"])
 
@@ -206,7 +210,7 @@ class AbiParityGateTest(unittest.TestCase):
     def test_current_tree_matches(self) -> None:
         report = self.tool.evaluate()
         self.assertEqual(report["problems"], [])
-        self.assertGreater(report["checked"], 25)
+        self.assertGreaterEqual(report["checked"], 23)
 
     def test_parameter_reorder_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -255,7 +259,10 @@ class CtypesTableGateTest(unittest.TestCase):
     def test_every_entry_ends_with_workspace_and_executor(self) -> None:
         tool = _load_tool("op_abi_validate.py")
         table = tool.parse_ctypes_table(OPS_DIR / "_aclnn_ctypes.py")
-        self.assertGreaterEqual(len(table), 20)
+        # This branch's ctypes module keeps a static argtype table only for the
+        # entries that predate the per-call form; every other call site is
+        # parsed from its own list, so the floor is what the table holds here.
+        self.assertGreaterEqual(len(table), 12)
         for symbol, kinds in table.items():
             with self.subTest(symbol=symbol):
                 # The trailing pair is dropped by the parser, so what is left

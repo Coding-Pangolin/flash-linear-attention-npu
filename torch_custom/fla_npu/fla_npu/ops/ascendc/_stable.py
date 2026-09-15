@@ -42,6 +42,9 @@ _INT_CACHE_MAX = 64
 _STREAM_SENTINEL = -1
 # None until the question has been asked of the loaded library.
 _launcher_resolves_stream: bool | None = None
+# torch.autograd.graph.increment_version, resolved on first use (see
+# _bump_state): the hot wrappers bump a mutated state in their own frame.
+_INCREMENT_VERSION = None
 
 # The stable value conversions have no std::string support, so string enum
 # arguments travel as int codes.  Every layout argument uses the same order --
@@ -176,6 +179,73 @@ def _current_stream_ptr() -> int:
     return int(_raw_stream_fn(torch.npu.current_device()))
 
 
+# --- the in-place contract, applied in the wrapper's own frame --------------
+#
+# `fla_npu.ops.ascendc` used to add a second Python wrapper around the operators
+# that write a state argument in place, to refuse a state that requires grad and
+# to bump its version counter afterwards.  That wrapper is two frames, a
+# resolved-mutation plan and a rebuilt tensor list on every call, and the host
+# bench charges ~8us per call for it on a decode path that walks these wrappers
+# some thirty times a step.  The four hot operators therefore apply the contract
+# in their own body and the dispatch layer skips its wrapper for them --
+# `_fla_npu_inplace_contract` is the marker it reads (see
+# __init__._get_direct_op).  Which arguments are mutable is still declared once,
+# in __init__.MUTATED_ARGUMENTS: that table is what the ctypes path and
+# tests/.../regression_mutation_contract.py read.
+
+
+def _increment_version():
+    """``torch.autograd.graph.increment_version``, resolved once."""
+
+    global _INCREMENT_VERSION
+    if _INCREMENT_VERSION is None:
+        _INCREMENT_VERSION = _modules()[0].autograd.graph.increment_version
+    return _INCREMENT_VERSION
+
+
+def _refuse_grad_state(name: str, state) -> None:
+    """Raise the same error the generic mutation wrapper raises."""
+
+    if state is not None and state.requires_grad:
+        raise RuntimeError(
+            f"{name} mutates state tensors in place. Mutable state tensors "
+            "must not require gradients; use a functional state API for "
+            "training.")
+
+
+def _bump_state(state) -> None:
+    """Bump a state argument's version counter after it was written in place."""
+
+    if state is not None:
+        _increment_version()((state,))
+
+
+# --- hot-path globals -------------------------------------------------------
+#
+# The four operators a decode step walks (recurrent GDN/KDA, conv1d fn/update)
+# are written without helper calls further down.  Inside the enqueue loop one
+# Python call in the wrapper costs ~0.7us of host time -- several times what the
+# same call costs in a tight loop, see probes/wrapper_ablation.py -- so every
+# statement that can be resolved once is resolved once here.
+#
+# The stream slot is *not* cached here: `_current_stream_ptr` is asked on every
+# call (it answers with the launcher's sentinel when the launcher resolves the
+# stream itself), which is the property tests/stable_abi's stream interleaving
+# regression spies on -- caching a stream pointer is what corrupted the vLLM run
+# earlier.
+#
+# `_INC_VERSION` is the resolved version-counter bump callable.
+_INC_VERSION = None
+
+
+def _init_hot() -> None:
+    """Resolve `_INC_VERSION`; `load` calls this so the hot bodies only read."""
+
+    global _INC_VERSION
+    if _INC_VERSION is None:
+        _INC_VERSION = _increment_version()
+
+
 def _modules():
     """(torch, torch_npu) once imported; kept out of the per-call path."""
 
@@ -198,6 +268,7 @@ def load() -> None:
     """dlopen the stable library through torch (no-op when already loaded)."""
 
     global _loaded_path
+    _init_hot()
     # Hot path: once a library is loaded, re-resolving it means an environment
     # lookup plus a filesystem stat on every single operator call (~47us
     # measured).  Only an explicitly different FLA_NPU_STABLE_LIB re-resolves.
@@ -334,10 +405,16 @@ def npu_recurrent_gated_delta_rule(
         raise RuntimeError(
             "npu_recurrent_gated_delta_rule: either g or gk must be provided.")
 
-    # Hot path: `_bound_op` reads the already-populated cache directly (the
-    # first call is what loads the library), so a decode step does not pay for
-    # the load check, the module imports or an extra Python call per operator.
-    return _bound_op("npu_recurrent_gated_delta_rule")(
+    # Hot path: a decode step walks this operator some thirty times, so it is
+    # written without helper calls and reads the op cache directly (the first
+    # call is what loads the library).  See the note above `_INC_VERSION`.
+    if state is not None and state.requires_grad:
+        _refuse_grad_state("npu_recurrent_gated_delta_rule", state)
+    stream = _current_stream_ptr()
+    op = _OP_CACHE.get("npu_recurrent_gated_delta_rule")
+    if op is None:
+        op = _op("npu_recurrent_gated_delta_rule")
+    result = op(
         query,
         key,
         value,
@@ -349,8 +426,14 @@ def npu_recurrent_gated_delta_rule(
         g,
         gk,
         float(scale),
-        _current_stream_ptr(),
+        stream,
     )
+    if state is not None:
+        bump = _INC_VERSION
+        if bump is None:
+            bump = _increment_version()
+        bump((state,))
+    return result
 
 
 def npu_recurrent_kda(
@@ -385,11 +468,15 @@ def npu_recurrent_kda(
     place when ``inplace_final_state`` is true, exactly like the ctypes path.
     """
 
-    import torch
-    import torch_npu
-
     layout_code = _char_code("npu_recurrent_kda", "layout", layout)
 
+    # The contract only covers the in-place form: with
+    # `inplace_final_state=False` the caller's tensor is not written (the
+    # recursion below runs the kernel on a scratch state instead), which is the
+    # same split the dispatch layer's MUTATION_FLAGS entry declares.
+    if (inplace_final_state and initial_state is not None
+            and initial_state.requires_grad):
+        _refuse_grad_state("npu_recurrent_kda", initial_state)
     if not inplace_final_state:
         # ctypes drives the same kernel with a scratch state and returns it,
         # leaving the caller's tensor untouched.  The stable launcher only
@@ -402,6 +489,8 @@ def npu_recurrent_kda(
             raise RuntimeError(
                 "npu_recurrent_kda: inplace_final_state=False requires "
                 "initial_state (no shape to build the scratch from)")
+        import torch
+
         scratch = torch.empty_like(initial_state)
         out, _ = npu_recurrent_kda(
             q, k, v, g, beta, scratch, cu_seqlens=cu_seqlens,
@@ -417,8 +506,12 @@ def npu_recurrent_kda(
 
     scale_value = (128.0 ** -0.5) if scale is None else float(scale)
     lower = -5.0 if lower_bound is None else float(lower_bound)
+    # Hot path, same shape as npu_recurrent_gated_delta_rule above.
     stream = _current_stream_ptr()
-    out, final_state = _op("npu_recurrent_kda")(
+    op = _OP_CACHE.get("npu_recurrent_kda")
+    if op is None:
+        op = _op("npu_recurrent_kda")
+    out, final_state = op(
         q,
         k,
         v,
@@ -444,13 +537,18 @@ def npu_recurrent_kda(
         stream,
     )
     if not output_final_state:
-        return out, None
-    if inplace_final_state and final_state is None:
+        final_state = None
+    elif inplace_final_state and final_state is None:
         # The launcher returns the inplace result implicitly (the kernel writes
         # the caller's tensor); the stable ABI cannot hand that handle back as a
         # second output without a double ownership release, so mirror ctypes
         # here, which also returns the caller's object.
         final_state = initial_state
+    if initial_state is not None:
+        bump = _INC_VERSION
+        if bump is None:
+            bump = _increment_version()
+        bump((initial_state,))
     return out, final_state
 
 
@@ -828,20 +926,43 @@ def npu_causal_conv1d_fn(x, weight, bias, conv_states=None,
         raise NotImplementedError(
             "CausalConv1d block_size_to_align is not supported by the Ascend "
             "operator")
-    state_arg, restore = (None, None) if conv_states is None else (
-        _dense_conv_state(conv_states))
-    result = _op("npu_causal_conv1d_fn")(
+    # Hot path, same shape as the decode wrappers: resolve what can be resolved
+    # once and call no helper on the way in.  See the note above `_INC_VERSION`.
+    if conv_states is not None and conv_states.requires_grad:
+        _refuse_grad_state("npu_causal_conv1d_fn", conv_states)
+    if conv_states is None or conv_states.is_contiguous():
+        state_arg = conv_states
+        restore = None
+    else:
+        state_arg, restore = _dense_conv_state(conv_states)
+    code = _CONV1D_ACTIVATION_CODES.get(
+        "none" if activation is None else str(activation))
+    if code is None:
+        code = _conv1d_activation_code(activation)
+    stream = _current_stream_ptr()
+    op = _OP_CACHE.get("npu_causal_conv1d_fn")
+    if op is None:
+        op = _op("npu_causal_conv1d_fn")
+    result = op(
         x, weight, bias, state_arg,
         query_start_loc, cache_indices, has_initial_state,
-        _host_ints(query_start_loc_cpu), _host_ints(cache_indices_cpu),
-        _host_ints(has_initial_state_cpu),
-        _conv1d_activation_code(activation),
+        None if query_start_loc_cpu is None else _host_ints(
+            query_start_loc_cpu),
+        None if cache_indices_cpu is None else _host_ints(cache_indices_cpu),
+        None if has_initial_state_cpu is None else _host_ints(
+            has_initial_state_cpu),
+        code,
         _PAD_SLOT_ID if pad_slot_id is None else pad_slot_id,
         _NULL_BLOCK_ID if null_block_id is None else null_block_id,
-        head_num, _current_stream_ptr(),
+        head_num, stream,
     )
     if restore is not None:
         restore.copy_(state_arg)
+    if conv_states is not None:
+        bump = _INC_VERSION
+        if bump is None:
+            bump = _increment_version()
+        bump((conv_states,))
     return result
 
 
@@ -862,18 +983,41 @@ def npu_causal_conv1d_update(x, conv_state, weight, bias=None, activation=None,
         _reject_conv1d_scheduling(
             block_idx_last_scheduled_token=block_idx_last_scheduled_token,
             initial_state_idx=initial_state_idx)
-    state_arg, restore = _dense_conv_state(conv_state)
-    result = _bound_op("npu_causal_conv1d_update")(
-        x, state_arg, weight, bias, _conv1d_activation_code(activation),
+    if conv_state is not None and conv_state.requires_grad:
+        _refuse_grad_state("npu_causal_conv1d_update", conv_state)
+    if conv_state is None or conv_state.is_contiguous():
+        state_arg = conv_state
+        restore = None
+    else:
+        state_arg, restore = _dense_conv_state(conv_state)
+    code = _CONV1D_ACTIVATION_CODES.get(
+        "none" if activation is None else str(activation))
+    if code is None:
+        code = _conv1d_activation_code(activation)
+    stream = _current_stream_ptr()
+    op = _OP_CACHE.get("npu_causal_conv1d_update")
+    if op is None:
+        op = _op("npu_causal_conv1d_update")
+    result = op(
+        x, state_arg, weight, bias, code,
         conv_state_indices, num_accepted_tokens, query_start_loc,
         max_query_len,
         _NULL_BLOCK_ID if null_block_id is None else null_block_id,
-        _host_ints(conv_state_indices_cpu),
-        _host_ints(num_accepted_tokens_cpu),
-        _host_ints(query_start_loc_cpu), out, _current_stream_ptr(),
+        None if conv_state_indices_cpu is None else _host_ints(
+            conv_state_indices_cpu),
+        None if num_accepted_tokens_cpu is None else _host_ints(
+            num_accepted_tokens_cpu),
+        None if query_start_loc_cpu is None else _host_ints(
+            query_start_loc_cpu),
+        out, stream,
     )
     if restore is not None:
         restore.copy_(state_arg)
+    if conv_state is not None:
+        bump = _INC_VERSION
+        if bump is None:
+            bump = _increment_version()
+        bump((conv_state,))
     if out is not None:
         # The operator wrote into the caller's buffer: it is the result, and the
         # copy the reference needs (aclnn always allocates its own output) is
@@ -1049,3 +1193,18 @@ def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
 
 
 
+# ---------------------------------------------------------------------------
+# Which wrappers apply the in-place contract themselves
+# ---------------------------------------------------------------------------
+# These four are the ones a decode step calls with a state argument.  Each
+# refuses a grad-requiring state and bumps the version counter inside its own
+# frame, which is what __init__._get_direct_op reads this marker for: adding its
+# generic mutation wrapper on top would bump the counter twice for one call, so
+# exactly one side declares the contract for a given backend.
+for _contract_op in (
+        "npu_causal_conv1d_fn",
+        "npu_causal_conv1d_update",
+        "npu_recurrent_gated_delta_rule",
+        "npu_recurrent_kda"):
+    globals()[_contract_op]._fla_npu_inplace_contract = True
+del _contract_op

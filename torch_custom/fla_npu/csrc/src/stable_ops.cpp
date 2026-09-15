@@ -31,6 +31,16 @@ const char* fla_npu_stable_source_hash() {
   return FLA_STABLE_SOURCE_HASH;
 }
 
+// Whether this library can resolve the current NPU stream on its own (see
+// Runtime::has_stream_resolver).  The Python glue asks once per loaded library
+// and then passes the negative "ask the launcher" sentinel in every `stream`
+// slot, which is what removes torch_npu's Python accessor from the hot path;
+// an older launcher without this symbol simply keeps receiving real pointers.
+extern "C" __attribute__((visibility("default")))
+int32_t fla_npu_stable_stream_resolver_available() {
+  return fla_npu_stable::Runtime::instance().has_stream_resolver() ? 1 : 0;
+}
+
 // Exactly one library-definition block and one implementation block per
 // namespace per TU: the macros expand to a fixed static-init symbol name, so a
 // second block for the same namespace would be a redefinition.  The codegen

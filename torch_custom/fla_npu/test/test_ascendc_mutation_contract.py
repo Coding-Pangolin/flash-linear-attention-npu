@@ -259,24 +259,15 @@ class AscendCMutationContractTest(unittest.TestCase):
                 self.assertEqual(
                     fast_mutated, expected,
                     f"{label}: fast path disagrees with bind reference")
-                # The fast path applies exactly when the mutated tensor is
-                # passed positionally within the signature's positional part.
-                mutated = module.MUTATED_ARGUMENTS[name][0]
-                positional = [
-                    parameter.name
-                    for parameter in signature.parameters.values()
-                    if parameter.kind in module._POSITIONAL_KINDS
-                ]
-                expect_fast = (
-                    mutated not in kwargs
-                    and mutated in positional
-                    and len(args) > positional.index(mutated)
-                )
+                # Every declared form is read straight out of the caller's
+                # arguments, keyword ones included; only an operator with a
+                # predicate still needs the full bind.
+                expect_fast = module.MUTATION_PREDICATES.get(name) is None
                 self.assertEqual(
                     used_fast, expect_fast,
                     f"{label}: unexpected path choice")
 
-    def test_kda_never_binds_when_state_is_positional(self):
+    def test_declared_call_forms_never_bind(self):
         raw_calls = []
         incremented = []
         module, spec, modules = load_ascendc_module(raw_calls)
@@ -288,19 +279,22 @@ class AscendCMutationContractTest(unittest.TestCase):
             inputs = [FakeTensor() for _ in range(5)]
             state = FakeTensor()
             kwargs = dict(cu_seqlens=FakeTensor())
-            # Fail loudly if the wrapper reaches for signature.bind().
+            # Fail loudly if any call form reaches for signature.bind().
             with mock.patch.object(inspect.Signature, "bind",
                                    side_effect=AssertionError("slow path used")):
                 module.npu_recurrent_kda(*inputs, state,
                                          inplace_final_state=True, **kwargs)
                 module.npu_recurrent_kda(*inputs, state,
                                          inplace_final_state=False, **kwargs)
-                with self.assertRaises(AssertionError):
-                    module.npu_recurrent_kda(*inputs, initial_state=state,
-                                             inplace_final_state=True, **kwargs)
+                module.npu_recurrent_kda(*inputs, initial_state=state,
+                                         inplace_final_state=True, **kwargs)
+                module.npu_recurrent_kda(*inputs, inplace_final_state=True,
+                                         **kwargs)
 
-        # inplace writes back -> bump; scratch state -> no bump.
-        self.assertEqual(incremented, [state])
+        # The two inplace forms write the caller's state back, positionally in
+        # one call and by keyword in the other -> one bump each; the scratch
+        # state and the defaulted state -> no bump.
+        self.assertEqual(incremented, [state, state])
 
     def test_declared_flag_default_must_match_signature(self):
         raw_calls = []

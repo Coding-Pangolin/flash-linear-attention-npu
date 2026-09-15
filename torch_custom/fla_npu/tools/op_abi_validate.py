@@ -95,8 +95,53 @@ KNOWN_HEADER_GAPS = {
 }
 
 
+def strip_comments(text: str) -> str:
+    """Drop C comments, leaving string literals alone.
+
+    An adapter may put a line comment between two arguments (`// the fused
+    kernel takes no cu_seqlens/chunk_indices`).  Those comments routinely carry
+    a comma, and counting one as a separator adds a phantom parameter -- which
+    is exactly how this gate started reporting
+    `aclnnChunkGatedDeltaRuleBwdDhu` as one argument too long.
+    """
+
+    out: list[str] = []
+    index, size = 0, len(text)
+    quote = ""
+    while index < size:
+        char = text[index]
+        if quote:
+            out.append(char)
+            if char == "\\" and index + 1 < size:
+                out.append(text[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in "\"'":
+            quote = char
+            out.append(char)
+            index += 1
+            continue
+        if char == "/" and text.startswith("//", index):
+            while index < size and text[index] != "\n":
+                index += 1
+            continue
+        if char == "/" and text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            index = size if end < 0 else end + 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
 def split_params(text: str) -> list[str]:
     """Split a C parameter list on top-level commas."""
+
+    text = strip_comments(text)
 
     parts: list[str] = []
     depth = 0

@@ -108,7 +108,7 @@ inner-gap 上算错（out maxdiff 1.2e5 / 1.4e5，且有 192 个 padding 元素�
 buffer）；9.2.0 + `=0`（强制 staging）仍然逐位正确。所以"直接交 view"只在
 ≥ 9.2.0 成立，更老的 runtime 必须留着 staging。
 
-## 为什么 stream 查询留在 Python
+## 为什么 stream 查询曾经留在 Python（2026-09-16 已被推翻，见下一节）
 
 把"取当前 stream"下沉进 C++ 是**不可行**的，三条路都验过：
 
@@ -122,12 +122,44 @@ buffer）；9.2.0 + `=0`（强制 staging）仍然逐位正确。所以"直接�
 因此 stream 仍是**每次调用现取**（不再缓存，缓存正是 vLLM 崩溃的根因），隔离测量
 约 1.7 µs，在完整 wrapper 里约 9 µs。
 
+> 下面三条只对 `aoti_torch_get_current_stream` 成立：它返回的是 `Stream::id()`，
+> 在 torch_npu 上不是底层句柄。这也正是当时判"下沉不可行"的原因——找错了符号。
+
+## 2026-09-16：stream 已经下沉进 launcher
+
+torch_npu 自己用的是**另一个**稳定 ABI 符号：`aoti_torch_get_current_npu_stream`，
+它返回的正是 `_npu_getCurrentRawStream` 的原始指针。`runtime.cpp` 现在
+`dlsym(RTLD_DEFAULT)` 找它（找不到再 `dlopen("libtorch_npu.so")`），**每次调用真查、
+不缓存**，Python 侧确认符号可用后一律传哨兵 `-1`。`FLA_NPU_STABLE_STREAM=python`
+是留给现场二分定位的逃生阀，强制回到 Python 取 stream。
+
+同一次运行内的空队列分层（batch 100、dim 4096、910B3，臂之间轮转）：
+
+| 层 | host P50 |
+| --- | --- |
+| `aten.is_contiguous`（参考） | 0.0034 ms |
+| boxed dispatch（不调 aclnn） | 0.0041 ms |
+| raw `torch.ops` conv1d update | 0.0462 ms |
+| + `_stable.py` wrapper | 0.0489 ms |
+| + mutation wrapper | 0.0560 ms |
+| 公共 `causal_conv1d_update` | 0.0606 ms |
+
+三点修正：
+
+- stream 解析在 raw 层已经≈0：raw+sentinel（0.0462）与 raw+调用方 stream（0.0445）
+  同值，说明省下的是 Python 取 stream 的那一段；
+- boxed 拆栈不是瓶颈：0.0041 对 `aten` 0.0034，参数从 1 个涨到 13 个只多约 5 µs；
+- 剩下的开销是 **mutation wrapper ~10 µs + kwargs 调用形态 ~4 µs**，
+  而不是 stream 查询。
+
 ## 结论
 
 - vLLM 实际调用的两个算子都在**同一量级**：recurrent 公共 API 1.35×（wrapper 口径
-  1.0×），conv1d 2.3–2.6×；device 侧 recurrent 与 vLLM 同 kernel（1.0×），conv1d 的
-  device 差异来自两套 kernel。
+  1.0×）；conv1d 空队列下 0.0606 / 0.0366 = **1.65×**（2026-09-16 口径，见上一节），
+  device 侧 recurrent 与 vLLM 同 kernel（1.0×），conv1d 的 device 差异来自两套 kernel。
 - 被替代的 ctypes 路径要贵 3.2–8.3 倍。
-- 公共 API 上还剩的两段开销来自 dispatcher 记账/mutation 包装与 boxed 拆栈，是迁移
-  计划里 R19 记录项；要再压到 1.0× 只能让热路径直接调注册 op（跳过 `_stable.py`）。
+- 公共 API 上还剩的两段开销是 **mutation wrapper（~10 µs）与 kwargs 调用形态
+  （~4 µs）**，boxed 拆栈只占 ~1 µs；要再压下去，一是让 schema 用 `Tensor(a!)`
+  标注可变参数、交给 torch 自己记版本，二是让热路径直接调注册 op（跳过 `_stable.py`）。
+  两项都还没做，都记在迁移计划的 R19 里。
 - 机器负载会移动绝对值；同一次运行内同形状的比值才是可比量。

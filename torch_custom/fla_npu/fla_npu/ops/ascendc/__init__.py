@@ -280,6 +280,13 @@ def _get_direct_op(name: str):
     stable_op = _get_stable_op(name)
     if stable_op is not None:
         _note_backend(name, "stable")
+        # A backend that applies the in-place contract in its own frame is
+        # returned as it is.  Wrapping it here would bump the version counter a
+        # second time for one call, and the wrapper costs ~8us on the decode
+        # path (`_stable`'s four hot wrappers declare the contract; the ctypes
+        # reference never does).
+        if getattr(stable_op, "_fla_npu_inplace_contract", False):
+            return stable_op
         return _wrap_mutable_direct_op(name, stable_op)
     try:
         op = ASCENDC_CTYPES_OPS[name]
@@ -565,6 +572,16 @@ def _make_raw_wrapper(name: str) -> Callable:
     def wrapper(*args, **kwargs):
         if not bound:
             bound.append(_get_direct_op(name))
+            # The backend is fixed for the life of the process, so hand the
+            # module-level names straight to it: this frame plus the
+            # *args/**kwargs re-expansion is ~3us of the host time per call,
+            # measured in probes/wrapper_mystery.py (M8 vs M9), on a decode
+            # path that walks these operators some thirty times a step.
+            resolved = bound[0]
+            globals()[name] = resolved
+            public_name = _strip_npu_prefix(name)
+            if globals().get(public_name) is wrapper:
+                globals()[public_name] = resolved
         return bound[0](*args, **kwargs)
 
     wrapper.__name__ = name

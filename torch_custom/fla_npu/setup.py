@@ -112,7 +112,7 @@ def _build_stable_abi_library() -> list[str]:
         return []
     import subprocess
 
-    builder = SETUP_DIR / "csrc_stable" / "build_stable.py"
+    builder = SETUP_DIR / "csrc" / "build_stable.py"
     out = SETUP_DIR / "fla_npu" / "libfla_npu_stable.so"
     subprocess.run(
         [sys.executable, str(builder), "--no-debug-probe", "--out", str(out)],

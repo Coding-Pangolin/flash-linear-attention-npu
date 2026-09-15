@@ -24,13 +24,13 @@
 | 文件 | 职责 |
 | --- | --- |
 | `fla_npu/ops/ascendc/_stable.py` | 每算子一个包装；`_host_ints`（int[]）、`_char_code`/`_ENUM`（枚举）、`_current_stream_ptr` |
-| `csrc_stable/src/stable_ops.cpp` | 单 TU：包含各适配文件，`m.def`/`m.impl` 注册，构建戳符号 |
-| `csrc_stable/src/stable_<family>.cpp` | 适配实现：`kSchema_<op>` + `run_<op>` |
-| `csrc_stable/include/stable/boxed.h` | `boxed_adapter`：按函数签名拆栈/打包 |
-| `csrc_stable/include/stable/exec.h` | RAII 参数持有者 + `FLA_STABLE_EXEC` 宏 |
-| `csrc_stable/include/stable/acl_meta.h` | `TensorMeta`、`AclTensorView`、`AclIntArrayView`、分配/元数据读取 |
-| `csrc_stable/include/stable/at_facade.h` | 最小 ATen 形状门面（dtype 常量、`TensorOptions`） |
-| `csrc_stable/include/stable/layout_math.h` | 各 layout 下的 token/head/dim/chunk 数 |
+| `csrc/src/stable_ops.cpp` | 单 TU：包含各适配文件，`m.def`/`m.impl` 注册，构建戳符号 |
+| `csrc/src/stable_<family>.cpp` | 适配实现：`kSchema_<op>` + `run_<op>` |
+| `csrc/include/stable/boxed.h` | `boxed_adapter`：按函数签名拆栈/打包 |
+| `csrc/include/stable/exec.h` | RAII 参数持有者 + `FLA_STABLE_EXEC` 宏 |
+| `csrc/include/stable/acl_meta.h` | `TensorMeta`、`AclTensorView`、`AclIntArrayView`、分配/元数据读取 |
+| `csrc/include/stable/at_facade.h` | 最小 ATen 形状门面（dtype 常量、`TensorOptions`） |
+| `csrc/include/stable/layout_math.h` | 各 layout 下的 token/head/dim/chunk 数 |
 
 ## 3. 书写约定（门禁依赖这些）
 
@@ -43,7 +43,7 @@
 
 ## 4. 构建戳
 
-`csrc_stable/build_stable.py` 把 `csrc_stable/{src,include}`（含文件名、CRLF 归一化）哈希后：
+`csrc/build_stable.py` 把 `csrc/{src,include}`（含文件名、CRLF 归一化）哈希后：
 
 - 编入 `.so`：`-DFLA_STABLE_SOURCE_HASH=...`，导出 `fla_npu_stable_source_hash()`；
 - 写入 `fla_npu/ops/ascendc/_stable_hash.py::SOURCE_HASH`。
@@ -81,7 +81,7 @@ Ascend950（A5）的现状：`--group a5` 在 950 上跑 `regression_950_ops.py`
 ## 6. 已知边界（记录，不隐藏）
 
 - **recurrent 家族仍是 pre-macro 写法**：`npu_recurrent_gated_delta_rule` 与
-  `npu_recurrent_kda`（`csrc_stable/src/stable_recurrent_gdr.cpp` /
+  `npu_recurrent_kda`（`csrc/src/stable_recurrent_gdr.cpp` /
   `stable_recurrent_kda.cpp`）不经过 `FLA_STABLE_EXEC` + `boxed_adapter`，而是自己
   调 `get_ws`/`launch`、自己拆栈。原因是宏的拆栈会**夺走参数 handle 的所有权**：
   torch 的 `torch::stable::Tensor(AtenTensorHandle)` 把 handle 包进带删除器的

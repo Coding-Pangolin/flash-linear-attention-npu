@@ -23,7 +23,7 @@ The header closure itself is checked by ``vendor_stable_headers.py --check
 
 usage::
 
-  python stable_abi_audit.py --source ../csrc_stable/src/*.cpp
+  python stable_abi_audit.py --source ../csrc/src/*.cpp
   python stable_abi_audit.py --lib ../libfla_npu_stable.so
   python stable_abi_audit.py --vendor-syntax-only
 """
@@ -40,7 +40,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]        # torch_custom/fla_npu
-CSRC = ROOT / "csrc_stable"
+CSRC = ROOT / "csrc"
 SYMBOLS = Path(__file__).with_name("stable_abi_symbols.json")
 
 

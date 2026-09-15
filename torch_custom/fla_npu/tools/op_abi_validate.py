@@ -6,7 +6,7 @@ entry point's parameter list.  Two call sites have to agree with it:
 
 * the ctypes reference (``_GET_WORKSPACE_ARGTYPES`` in ``_aclnn_ctypes.py``),
 * each Stable-ABI adapter (``FLA_STABLE_EXEC("aclnnX", ...)`` in
-  ``csrc_stable/src/stable_*.cpp``).
+  ``csrc/src/stable_*.cpp``).
 
 Disagreement is not a theoretical concern: when the OPP grew a
 ``bool stateVFirst`` parameter in front of the outputs of
@@ -42,7 +42,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PACKAGE = HERE.parent
 CTYPES_MODULE = PACKAGE / "fla_npu" / "ops" / "ascendc" / "_aclnn_ctypes.py"
-SRC_DIR = PACKAGE / "csrc_stable" / "src"
+SRC_DIR = PACKAGE / "csrc" / "src"
 
 # Kind of a parameter as far as a mismatch is concerned.  Tensor and int[]
 # descriptors are both plain pointers here, so both sides report WILDCARD and

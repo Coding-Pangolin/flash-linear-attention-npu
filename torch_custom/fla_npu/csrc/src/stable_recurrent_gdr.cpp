@@ -4,7 +4,9 @@
 // shared acl_meta helper: no ATen/c10, no libtorch C++ ABI.
 // Owns: npu_recurrent_gated_delta_rule.  Pre-macro on purpose: its state
 // is an in-place argument, and the macro's typed unboxing would steal the
-// handle (see stable-abi-macro-design.md).
+// handle (see stable-abi-macro-design.md).  Building the argument list by hand
+// also means building the launch call by hand, so the stream sentinel has to be
+// resolved explicitly -- see launch_stream.
 
 #include <torch/csrc/stable/library.h>
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
@@ -14,6 +16,8 @@
 #include <torch/csrc/stable/tensor.h>
 
 #include "stable/acl_meta.h"
+// Only for launch_stream: the sentinel resolution the macro applies for free.
+#include "stable/exec.h"
 
 #include <cstdint>
 #include <optional>
@@ -32,6 +36,7 @@ using fla_npu_stable::stable::meta_of;
 using fla_npu_stable::stable::meta_of_handle;
 using fla_npu_stable::stable::meta_optional_handle;
 using fla_npu_stable::stable::kAclFormatNd;
+using fla_npu_stable::stable::launch_stream;
 
 // Prefixed per op: everything lives in one TU (see stable_ops.cpp), so shared
 // local names would collide.
@@ -102,8 +107,9 @@ Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
     TORCH_ERROR_CODE_CHECK(
         aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
   }
-  const int launch_ret = launch(workspace_ptr, workspace_size, executor,
-                                reinterpret_cast<void*>(stream));
+  const int launch_ret =
+      launch(workspace_ptr, workspace_size, executor,
+             launch_stream(stream, value_meta));
   if (launch_ret != 0) {
     throw std::runtime_error(
         "fla_npu(stable): aclnnRecurrentGatedDeltaRule failed: " +

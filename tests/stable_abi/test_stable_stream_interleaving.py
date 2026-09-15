@@ -25,14 +25,20 @@ timing-based control this test used to carry was vacuous for that reason.
 What is checked instead
 -----------------------
 
-The stream is read where it is decided: the wrapper resolves it by calling
-``_stable._current_stream_ptr()`` once per operator call, so this test wraps
-that accessor and records the value each call actually passed.  A thread running
-in stream S has to observe S's raw pointer on every call -- which is exactly the
-property the process-global cache broke.
+Two values per operator call, both read from the calling thread:
 
-``negative_control`` installs that cache again and asserts the check now fails,
-so a green run means the check still has teeth.
+* what the wrapper passed (``_stable._current_stream_ptr()``) -- either the
+  launcher-resolve sentinel or this thread's own raw stream, never another
+  thread's;
+* what the launcher launched on (``_stable._last_resolved_stream()``) -- it has
+  to be this thread's own raw stream.  The launcher resolves the stream in C++
+  now, so this readback of a per-thread value it stores on every call is the
+  only place the decision is observable.
+
+``negative_control`` hands the wrapper a foreign stream on purpose and requires
+the readback to report *that* stream.  That is what makes the check evidence
+rather than decoration: a readback that simply echoed the calling thread would
+fail it.
 
 usage::
 
@@ -148,8 +154,12 @@ def make_case(templates):
     )
 
 
-def run_pair(case):
-    """The decode-step mix: recurrent GDR then the conv1d update."""
+def run_pair(case, observed=None):
+    """The decode-step mix: recurrent GDR then the conv1d update.
+
+    ``observed`` collects the stream the launcher used for each call, read back
+    immediately so both operators are attributed to this thread.
+    """
 
     recurrent = _stable.npu_recurrent_gated_delta_rule(
         case["query"], case["key"], case["value"], case["state"],
@@ -157,9 +167,13 @@ def run_pair(case):
         actual_seq_lengths=case["actual_seq_lengths"],
         ssm_state_indices=case["ssm_state_indices"],
         num_accepted_tokens=None, g=case["g"])
+    if observed is not None:
+        observed.append(_stable._last_resolved_stream())
     conv = _stable.npu_causal_conv1d_update(
         case["conv_x"], case["conv_state"], case["weight"], case["bias"],
         activation="silu", conv_state_indices=case["conv_indices"])
+    if observed is not None:
+        observed.append(_stable._last_resolved_stream())
     return recurrent, conv
 
 
@@ -179,13 +193,14 @@ def install_spy(real):
 def worker(index, templates, golden, rounds, barrier, errors, notes) -> None:
     try:
         stream = torch.npu.Stream()
+        observed: list[int | None] = []
         with torch.npu.stream(stream):
             expected = raw_stream_ptr()
             _RECORD.seen = []
             barrier.wait(timeout=180)
             for _ in range(rounds):
                 case = make_case(templates)
-                recurrent, conv = run_pair(case)
+                recurrent, conv = run_pair(case, observed)
                 torch.npu.synchronize()
                 for label, got, want in (("recurrent", recurrent, golden[0]),
                                          ("conv1d", conv, golden[1])):
@@ -193,46 +208,56 @@ def worker(index, templates, golden, rounds, barrier, errors, notes) -> None:
                     if diff != 0.0:
                         raise AssertionError(
                             f"{label} parity diff={diff} on a separate stream")
-            seen = list(_RECORD.seen)
+            passed = list(_RECORD.seen)
             _RECORD.seen = None
-        if len(seen) != 2 * rounds:
+        if len(observed) != 2 * rounds or len(passed) != 2 * rounds:
             raise AssertionError(
                 f"expected {2 * rounds} stream reads for {rounds} pairs, saw "
-                f"{len(seen)}")
-        wrong = sorted({value for value in seen if value != expected})
+                f"{len(observed)} launched and {len(passed)} passed")
+        if any(value is None for value in observed):
+            raise AssertionError(
+                "the loaded launcher does not export "
+                "fla_npu_stable_last_resolved_stream, so a stream it resolves "
+                "cannot be observed")
+        wrong = sorted({value for value in passed
+                        if value not in (expected, _stable._STREAM_SENTINEL)})
         if wrong:
             raise AssertionError(
                 f"a call passed stream {wrong} instead of this thread's "
                 f"{expected}")
-        notes.append(f"thread {index}: {rounds} pairs, {len(seen)} calls, all on "
-                     f"its own stream {expected}")
+        wrong = sorted({value for value in observed if value != expected})
+        if wrong:
+            raise AssertionError(
+                f"a call launched on stream {wrong} instead of this thread's "
+                f"{expected}")
+        notes.append(f"thread {index}: {rounds} pairs, {len(passed)} calls, all "
+                     f"on its own stream {expected}")
     except Exception as exc:  # noqa: BLE001
         errors.append((index, repr(exc)))
 
 
-def negative_control(templates) -> tuple[bool, list[int], int]:
-    """Install the process-global stream cache and see whether it is caught.
+def negative_control(templates) -> tuple[bool, int | None, int]:
+    """Hand the wrapper a foreign stream and require the readback to show it.
 
-    The removed implementation cached one thread's raw stream pointer and
-    replayed it for every caller, so a call made from another stream reports the
-    cached pointer instead of the caller's.
+    This is the control that gives the readback its teeth: it proves the value
+    reports the stream the launch actually used instead of echoing the calling
+    thread.  A launcher that cached one thread's pointer and replayed it for the
+    next caller -- the shape of the failure this test exists for -- fails here.
     """
 
     frozen = raw_stream_ptr()
-    original = _stable._raw_stream_fn
     other = torch.npu.Stream()
+    original = _stable._current_stream_ptr
     try:
-        _stable._raw_stream_fn = lambda device_index: frozen
+        _stable._current_stream_ptr = lambda: frozen
         with torch.npu.stream(other):
             expected = raw_stream_ptr()
-            _RECORD.seen = []
             run_pair(make_case(templates))
             torch.npu.synchronize()
-            seen = list(_RECORD.seen)
+            saw = _stable._last_resolved_stream()
     finally:
-        _stable._raw_stream_fn = original
-        _RECORD.seen = None
-    return any(value != expected for value in seen), seen, expected
+        _stable._current_stream_ptr = original
+    return saw == frozen and saw != expected, saw, expected
 
 
 def main() -> int:
@@ -291,15 +316,15 @@ def main() -> int:
         else:
             print(f"PASS {args.threads} threads x own stream, interleaved "
                   f"recurrent+conv1d, every call on its own stream, parity 0.0")
-            detected, seen, expected = negative_control(templates)
+            detected, saw, expected = negative_control(templates)
             if detected:
-                print(f"PASS negative control: the cached pointer is detected "
-                      f"(call from {expected} reported {sorted(set(seen))})")
+                print(f"PASS negative control: a forced stream is reported "
+                      f"(call on {expected} reported {saw})")
                 print("ALL PASS: stable multi-stream interleaving")
             else:
-                print(f"FAIL negative control: the process-global stream cache "
-                      f"was not detected -- a call from stream {expected} "
-                      f"reported {seen}")
+                print(f"FAIL negative control: a call forced onto {expected} "
+                      f"reported {saw} -- the readback does not follow the "
+                      f"launch")
                 status = 1
     finally:
         _stable._current_stream_ptr = real

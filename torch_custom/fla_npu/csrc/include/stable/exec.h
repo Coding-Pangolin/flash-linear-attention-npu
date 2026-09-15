@@ -292,6 +292,39 @@ inline void trace_once(const char* api, uint64_t workspace_size,
 // `Tuple` is whatever the macro's std::forward_as_tuple produced; the holders
 // inside it live until the end of the calling full-expression, which is what
 // keeps every descriptor alive across both aclnn calls.
+//
+// A negative `stream` is the "ask the launcher" sentinel: the Python glue sends
+// it whenever this library can look the stream up itself, which keeps
+// torch_npu's Python accessor off the hot path.  It stays a real query on every
+// call, never a cache -- a cached stream is what sent kernels to another
+// thread's stream in the vLLM run.  The device comes from the operator's own
+// input, i.e. the device the kernel runs on.
+//
+// Adapters that build their argument list by hand (the two recurrent ones,
+// whose `state` is in-place and would be stolen by the macro's typed unboxing)
+// must resolve through here too.  Forwarding the sentinel raw hands the device
+// `(void*)-1`, which faults as soon as anything is queued behind it.
+//
+// The value that came out is kept per thread (see
+// fla_npu_stable_last_resolved_stream) so a test can read back *which* stream a
+// call ran on.  That matters now that the decision is made here rather than in
+// the Python glue: the multi-stream regression used to observe the wrapper's
+// argument, and with the launcher resolving it the argument is only a sentinel.
+inline thread_local int64_t t_last_resolved_stream = -1;
+
+inline int64_t resolve_stream(int64_t stream, const TensorMeta& meta) {
+  const int64_t resolved =
+      stream >= 0 ? stream
+                  : Runtime::instance().current_stream(meta.device_index);
+  t_last_resolved_stream = resolved;
+  return resolved;
+}
+
+// The same, in the form aclnn takes it.
+inline void* launch_stream(int64_t stream, const TensorMeta& meta) {
+  return reinterpret_cast<void*>(resolve_stream(stream, meta));
+}
+
 template <class Tuple>
 inline void exec(const char* api, const TensorMeta& workspace_meta,
                  int64_t stream, Tuple&& args) {
@@ -301,16 +334,8 @@ inline void exec(const char* api, const TensorMeta& workspace_meta,
   void* get_workspace = runtime.symbol(base + "GetWorkspaceSize");
   auto launch = reinterpret_cast<LaunchFn>(runtime.symbol(base));
 
-  // A negative stream is the "ask the launcher" sentinel.  The Python glue
-  // passes it whenever this library can resolve the stream itself, which takes
-  // the ~19us round trip through torch_npu's Python accessor off the hot path.
-  // It is still a query on every call, never a cache: a cached stream is what
-  // sent kernels to another thread's stream in the vLLM run.  The device comes
-  // from the operator's own input, which is the device the kernel runs on.
   const bool stream_from_launcher = stream < 0;
-  if (stream_from_launcher) {
-    stream = runtime.current_stream(workspace_meta.device_index);
-  }
+  stream = resolve_stream(stream, workspace_meta);
 
   uint64_t workspace_size = 0;
   aclOpExecutor* executor = nullptr;

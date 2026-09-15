@@ -166,7 +166,7 @@ def _check_build_stamp(path: str) -> None:
     raise RuntimeError(
         f"{path} was built from different adapter sources than this package "
         f"(library {actual}, package {expected}). Rebuild the launcher: "
-        f"python csrc_stable/build_stable.py --out {path} --no-debug-probe")
+        f"python csrc/build_stable.py --out {path} --no-debug-probe")
 
 
 def available() -> bool:
@@ -182,7 +182,7 @@ def available() -> bool:
 # The conv1d family used to be re-exported from the ctypes module with only its
 # launch handed to an internal op, which meant every call kept paying for the
 # reference marshalling.  It now has three real adapters (see the hand-written
-# wrappers at the end of this module and csrc_stable/src/stable_conv1d.cpp).
+# wrappers at the end of this module and csrc/src/stable_conv1d.cpp).
 def _op(name: str):
     """Cached torch.ops handle: the attribute chain is not free per call."""
 

@@ -21,7 +21,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SETUP_DIR = REPO_ROOT / "torch_custom" / "fla_npu"
 OPS_DIR = SETUP_DIR / "fla_npu" / "ops" / "ascendc"
-SRC_DIR = SETUP_DIR / "csrc_stable" / "src"
+SRC_DIR = SETUP_DIR / "csrc" / "src"
 
 
 def _load_tool(name: str):
@@ -101,14 +101,14 @@ class BuildStampTest(unittest.TestCase):
     def test_build_stamp_covers_every_adapter_source(self) -> None:
         import importlib.util as util
 
-        path = SETUP_DIR / "csrc_stable" / "build_stable.py"
+        path = SETUP_DIR / "csrc" / "build_stable.py"
         spec = util.spec_from_file_location("build_stable", path)
         module = util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(module)
 
         first = module.source_hash()
-        sources = sorted((SETUP_DIR / "csrc_stable" / "src").glob("*.cpp"))
+        sources = sorted((SETUP_DIR / "csrc" / "src").glob("*.cpp"))
         self.assertTrue(sources, "no adapter sources found")
         with tempfile.TemporaryDirectory() as tmp:
             target = sources[0]
@@ -127,7 +127,7 @@ class BuildStampTest(unittest.TestCase):
 
         import importlib.util as util
 
-        path = SETUP_DIR / "csrc_stable" / "build_stable.py"
+        path = SETUP_DIR / "csrc" / "build_stable.py"
         spec = util.spec_from_file_location("build_stable2", path)
         module = util.module_from_spec(spec)
         assert spec.loader is not None
@@ -141,7 +141,7 @@ class BuildStampTest(unittest.TestCase):
         self.assertIsNotNone(match, "_stable_hash.py carries no SOURCE_HASH")
         self.assertEqual(match.group(1), module.source_hash(),
                          "the checked-in stamp does not match the adapters; "
-                         "rebuild with python csrc_stable/build_stable.py")
+                         "rebuild with python csrc/build_stable.py")
 
 
 class CoverageGateTest(unittest.TestCase):
@@ -359,14 +359,14 @@ class TranslationUnitTest(unittest.TestCase):
 
     def test_the_gates_check_what_the_builder_compiles(self) -> None:
         builder = _load_module(
-            "fla_build_stable_gate", SETUP_DIR / "csrc_stable" / "build_stable.py")
+            "fla_build_stable_gate", SETUP_DIR / "csrc" / "build_stable.py")
         audit = _load_tool("stable_abi_audit.py")
         vendor = _load_tool("vendor_stable_headers.py")
         self.assertEqual(builder.TRANSLATION_UNITS, audit.translation_units())
         self.assertEqual(builder.TRANSLATION_UNITS, vendor.translation_units())
 
     def test_the_builder_uses_that_list(self) -> None:
-        source = (SETUP_DIR / "csrc_stable" / "build_stable.py").read_text(
+        source = (SETUP_DIR / "csrc" / "build_stable.py").read_text(
             encoding="utf-8")
         self.assertIn("[str(path) for path in TRANSLATION_UNITS]", source,
                       "build_stable.py stopped building the declared units")

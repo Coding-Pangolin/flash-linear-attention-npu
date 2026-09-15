@@ -6,7 +6,7 @@ layer publishes carried by the launcher, and is every adapter wired all the way
 through".  Everything is read from files in the tree:
 
 1. **Adapter coverage** -- each ``npu_*`` operator in the published list has a
-   wrapper in ``_stable.py`` and an adapter in ``csrc_stable/src`` (schema +
+   wrapper in ``_stable.py`` and an adapter in ``csrc/src`` (schema +
    ``run_`` definition + registration).
 2. **Wiring** -- a schema without an implementation, an implementation without
    its ``run_`` function, or a wrapper without a schema is a FAIL.  These are
@@ -37,7 +37,7 @@ HERE = Path(__file__).resolve().parent
 SETUP_DIR = HERE.parent
 REPO_ROOT = SETUP_DIR.parents[1]
 OPS_DIR = SETUP_DIR / "fla_npu" / "ops" / "ascendc"
-SRC_DIR = SETUP_DIR / "csrc_stable" / "src"
+SRC_DIR = SETUP_DIR / "csrc" / "src"
 BASELINE = REPO_ROOT / "tests" / "stable_coverage_baseline.json"
 
 

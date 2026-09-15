@@ -15,7 +15,7 @@
 #include "stable_fwd_h.cpp"
 
 // Build stamp: the md5 of the adapter sources this library was compiled from,
-// injected by csrc_stable/build_stable.py.  fla_npu/ops/ascendc/_stable.py
+// injected by csrc/build_stable.py.  fla_npu/ops/ascendc/_stable.py
 // reads it (through ctypes, no torch needed) and refuses to run against a
 // library built from different sources than the glue it was imported with, so
 // a stale .so cannot silently drive kernels with old schemas or old stack

@@ -30,7 +30,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SETUP_DIR = HERE.parent
-SRC_DIR = SETUP_DIR / "csrc_stable" / "src"
+SRC_DIR = SETUP_DIR / "csrc" / "src"
 
 # schema spelling -> the C++ type the boxed adapter unpacks into.  `float` maps
 # to `double` because the stable value conversions hand over a double and every

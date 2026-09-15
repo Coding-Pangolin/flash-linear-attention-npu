@@ -628,7 +628,7 @@ def _build_stable_inplace():
     _run(
         [
             sys.executable,
-            str(TORCH_EXTENSION_DIR / "csrc_stable" / "build_stable.py"),
+            str(TORCH_EXTENSION_DIR / "csrc" / "build_stable.py"),
             "--no-debug-probe",
             "--out",
             str(out),

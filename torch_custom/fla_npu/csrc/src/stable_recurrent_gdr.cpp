@@ -2,6 +2,10 @@
 //
 // Included by stable_ops.cpp (single TU).  Only torch/csrc/stable/* plus the
 // shared acl_meta helper: no ATen/c10, no libtorch C++ ABI.
+// Owns: npu_recurrent_gated_delta_rule.  Pre-macro on purpose: its state
+// is an in-place argument, and the macro's typed unboxing would steal the
+// handle (see stable-abi-macro-design.md).
+
 #include <torch/csrc/stable/library.h>
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
 #include <torch/csrc/stable/accelerator.h>

@@ -12,6 +12,9 @@
 //
 // Included by stable_ops.cpp (single TU); registration lives there.
 
+// Owns the h/dh recurrence family: npu_chunk_fwd_h,
+// npu_chunk_gated_delta_rule_fwd_h, npu_chunk_gated_delta_rule_bwd_dhu.
+
 #include "stable/at_facade.h"
 #include "stable/boxed.h"
 #include "stable/exec.h"

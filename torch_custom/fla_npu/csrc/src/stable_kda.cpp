@@ -10,6 +10,9 @@
 //
 // Included by stable_ops.cpp (single TU); registration lives there.
 
+// Owns the KDA family: npu_chunk_kda_fwd/_bwd/_bwd_intra/_bwd_recompute,
+// npu_kda_gate_cumsum.
+
 #include "stable/at_facade.h"
 #include "stable/boxed.h"
 #include "stable/exec.h"

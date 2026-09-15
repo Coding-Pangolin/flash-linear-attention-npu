@@ -15,6 +15,8 @@
 // ctypes reference), so a slip here fails offline instead of silently handing a
 // kernel the wrong tensor.
 
+// Owns: npu_fast_gelu_custom, npu_fast_gelu_custom_backward.
+
 #include "stable/boxed.h"
 #include "stable/exec.h"
 

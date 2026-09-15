@@ -998,20 +998,20 @@ def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
     The reference densifies `x` before the launch, so the same thing happens
     here: the kernel reads it as a contiguous block.
 
-    ``layout='tnd'`` is refused rather than forwarded.  Measured on 910B3 with
-    the OPP in this tree: the kernel kills the process for that spelling, with
-    and without cu_seqlens, so letting it through would turn an illegal input
-    into a crash on the stable path -- exactly the class of input the reference
-    rejects in Python.
+    The packed spellings (``tnd``/``ntd``) are refused rather than forwarded.
+    Measured on 910B3 with the OPP in this tree: the kernel kills the process
+    for either of them, with and without cu_seqlens, so letting one through
+    would turn an illegal input into a crash on the stable path -- exactly the
+    class of input the reference rejects in Python.
     """
 
     layout = str(layout)
-    if layout == "tnd":
+    if layout in ("tnd", "ntd"):
         raise RuntimeError(
-            "npu_solve_tri: layout='tnd' is refused because the operator "
-            "crashes the process on this OPP (verified on both the ctypes and "
-            "the Stable-ABI path). Use layout='bsnd'/'bnsd', or 'ntd' if the "
-            "zero-filled result is acceptable.")
+            f"npu_solve_tri: layout='{layout}' is refused because the operator "
+            "crashes the process for that spelling on this OPP (verified on "
+            "both the ctypes and the Stable-ABI path). Use layout='bsnd' or "
+            "'bnsd'.")
     return _op("npu_solve_tri")(
         x.contiguous(), _host_ints(cu_seqlens), _host_ints(chunk_indices),
         _char_code("npu_solve_tri", "layout", layout),

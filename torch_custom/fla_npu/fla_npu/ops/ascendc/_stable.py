@@ -198,11 +198,20 @@ def _current_stream_ptr() -> int:
 
 
 def _increment_version():
-    """``torch.autograd.graph.increment_version``, resolved once."""
+    """The cheapest version-counter bump this torch exposes, resolved once.
+
+    ``torch.autograd.graph.increment_version`` only normalises its argument and
+    forwards to ``torch._C._increment_version``; the public entry point costs
+    about twice as much per call (measured on 2.10 in the container), and the
+    wrappers below run once per layer per decode step.  The public name stays as
+    the fallback for a build that does not expose the private callable.
+    """
 
     global _INCREMENT_VERSION
     if _INCREMENT_VERSION is None:
-        _INCREMENT_VERSION = _modules()[0].autograd.graph.increment_version
+        torch = _modules()[0]
+        _INCREMENT_VERSION = (getattr(torch._C, "_increment_version", None)
+                              or torch.autograd.graph.increment_version)
     return _INCREMENT_VERSION
 
 

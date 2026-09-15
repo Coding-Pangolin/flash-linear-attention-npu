@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import os
 
+from ._runtime import conv_state_needs_dense_copy
+
 
 _LIB_ENV = "FLA_NPU_STABLE_LIB"
 # Lowest torch whose stable runtime symbols the launcher was verified against.
@@ -669,8 +671,10 @@ def npu_chunk_gdn_bwd_intra(q, k, v, g, beta, A, d_o, scale, chunk_size, *,
 # into which adapter is called rather than travelling as an argument.  What
 # stays here is the part the adapter cannot express: refusing the scheduling
 # parameters the operator does not implement, translating the activation name,
-# and staging a non-dense conv_state (the kernel reads it with the dense
-# strides, so a paged view would be read and written in the wrong place).
+# and pruning a conv_state the runtime cannot address directly.  A state it can
+# address crosses the boundary as the descriptor's own view -- strides and
+# storage offset included -- which is what `_runtime.conv1d_view_state_supported`
+# pins down; nothing has to be declared alongside it.
 
 _PAD_SLOT_ID = -1
 _NULL_BLOCK_ID = 0
@@ -699,16 +703,18 @@ def _reject_conv1d_scheduling(**values):
 def _dense_conv_state(conv_state):
     """(argument to pass, tensor to copy back into) for a paged conv_state.
 
-    A contiguous view is handed over as-is, storage offset included: the
-    operator addresses the state with the stride fallback and still honours the
-    descriptor's offset, so it reads and writes the right rows.  Measured
-    bit-exact against the staging path on a state whose storage offset is 96
-    elements (see `scenario_conv1d_update_offset_state`), and that state is what
-    took the staging copy off the hot path.  Only a state whose rows are not
-    dense has to be staged.
+    A state the runtime can address where the caller keeps it goes over as it
+    is: the dense case always, and a block-strided view whenever the runtime
+    hands the operator's tiling the descriptor's view description -- see
+    `_runtime.conv_state_needs_dense_copy` for the rule and
+    `_runtime.conv1d_view_state_supported` for the measured boundary (9.1.0
+    addresses such a state densely and writes into the gaps;
+    `scenario_conv1d_update_paged_state` checks the addressed case against a
+    dense reference).  Everything else is staged through a dense copy that is
+    copied back, so the in-place contract holds either way.
     """
 
-    if conv_state.is_contiguous():
+    if not conv_state_needs_dense_copy(conv_state):
         return conv_state, None
     return conv_state.contiguous(), conv_state
 

@@ -95,6 +95,34 @@ using LaunchFn = int (*)(void*, uint64_t, aclOpExecutor*, void*);
 using AclCreateIntArrayFn = aclIntArray* (*)(const int64_t*, uint64_t);
 using AclDestroyIntArrayFn = int (*)(aclIntArray*);
 
+// The descriptor entry points are looked up once per process rather than once
+// per descriptor.  Every tensor argument of every operator goes through them,
+// so a decode step would otherwise repeat the same string build and hash map
+// lookup a few hundred times per layer.
+inline AclCreateTensorFn acl_create_tensor() {
+  static const auto fn = reinterpret_cast<AclCreateTensorFn>(
+      Runtime::instance().symbol("aclCreateTensor"));
+  return fn;
+}
+
+inline AclDestroyTensorFn acl_destroy_tensor() {
+  static const auto fn = reinterpret_cast<AclDestroyTensorFn>(
+      Runtime::instance().symbol("aclDestroyTensor"));
+  return fn;
+}
+
+inline AclCreateIntArrayFn acl_create_int_array() {
+  static const auto fn = reinterpret_cast<AclCreateIntArrayFn>(
+      Runtime::instance().symbol("aclCreateIntArray"));
+  return fn;
+}
+
+inline AclDestroyIntArrayFn acl_destroy_int_array() {
+  static const auto fn = reinterpret_cast<AclDestroyIntArrayFn>(
+      Runtime::instance().symbol("aclDestroyIntArray"));
+  return fn;
+}
+
 struct TensorMeta {
   bool defined = false;
   void* data = nullptr;
@@ -227,16 +255,19 @@ class AclTensorView {
     if (!meta.defined) {
       return;
     }
-    const std::vector<int64_t> storage_dims =
-        (logical_storage && meta.contiguous)
-            ? meta.sizes
-            : std::vector<int64_t>{meta.storage_numel};
-    auto create = reinterpret_cast<AclCreateTensorFn>(
-        Runtime::instance().symbol("aclCreateTensor"));
-    ptr_ = create(meta.sizes.data(), static_cast<uint64_t>(meta.ndim),
-                  acl_dtype(meta.scalar_type), meta.strides.data(),
-                  meta.storage_offset, format_, storage_dims.data(),
-                  static_cast<uint64_t>(storage_dims.size()), meta.data);
+    // The flat extent is a single number and the logical spelling points at the
+    // metadata's own sizes, so neither needs the heap allocation this used to
+    // make once per descriptor.
+    const bool logical = logical_storage && meta.contiguous;
+    const int64_t flat_storage_numel = meta.storage_numel;
+    const int64_t* storage_dims =
+        logical ? meta.sizes.data() : &flat_storage_numel;
+    const uint64_t storage_rank =
+        logical ? static_cast<uint64_t>(meta.ndim) : 1;
+    ptr_ = acl_create_tensor()(
+        meta.sizes.data(), static_cast<uint64_t>(meta.ndim),
+        acl_dtype(meta.scalar_type), meta.strides.data(), meta.storage_offset,
+        format_, storage_dims, storage_rank, meta.data);
     // Off by default: `FLA_STABLE_DEBUG_DESC=1` prints what this descriptor
     // looks like, which is the only way to compare our arguments with the
     // ctypes reference's when a tiling accepts one and rejects the other.
@@ -254,7 +285,7 @@ class AclTensorView {
         }
         std::fprintf(stderr, ") offset=%lld format=%d storage=(",
                      static_cast<long long>(meta.storage_offset), format_);
-        for (size_t dim = 0; dim < storage_dims.size(); ++dim) {
+        for (uint64_t dim = 0; dim < storage_rank; ++dim) {
           std::fprintf(stderr, "%s%lld", dim ? "," : "",
                        static_cast<long long>(storage_dims[dim]));
         }
@@ -269,9 +300,7 @@ class AclTensorView {
 
   ~AclTensorView() {
     if (ptr_ != nullptr) {
-      auto destroy = reinterpret_cast<AclDestroyTensorFn>(
-          Runtime::instance().symbol("aclDestroyTensor"));
-      destroy(ptr_);
+      acl_destroy_tensor()(ptr_);
     }
   }
 
@@ -377,9 +406,8 @@ class AclIntArrayView {
     if (owned_.empty()) {
       return;
     }
-    auto create = reinterpret_cast<AclCreateIntArrayFn>(
-        Runtime::instance().symbol("aclCreateIntArray"));
-    ptr_ = create(owned_.data(), static_cast<uint64_t>(owned_.size()));
+    ptr_ = acl_create_int_array()(owned_.data(),
+                                  static_cast<uint64_t>(owned_.size()));
     if (ptr_ == nullptr) {
       throw std::runtime_error(
           "fla_npu(stable): aclCreateIntArray returned nullptr");
@@ -388,9 +416,7 @@ class AclIntArrayView {
 
   ~AclIntArrayView() {
     if (ptr_ != nullptr) {
-      auto destroy = reinterpret_cast<AclDestroyIntArrayFn>(
-          Runtime::instance().symbol("aclDestroyIntArray"));
-      destroy(ptr_);
+      acl_destroy_int_array()(ptr_);
     }
   }
 

@@ -22,7 +22,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -262,6 +266,29 @@ inline int call_get_workspace(void* address, Tuple& args,
 
 }  // namespace detail
 
+// `FLA_NPU_STABLE_TRACE=1` prints one line per operator the first time each one
+// runs: how much workspace its tiling asked for and which side resolved the
+// stream.  The environment is read once, so a traced build costs the same as an
+// untraced one on the hot path.
+inline bool trace_enabled() {
+  static const bool enabled = std::getenv("FLA_NPU_STABLE_TRACE") != nullptr;
+  return enabled;
+}
+
+inline void trace_once(const char* api, uint64_t workspace_size,
+                       bool stream_from_launcher) {
+  static std::mutex mutex;
+  static std::set<std::string> seen;
+  std::lock_guard<std::mutex> guard(mutex);
+  if (!seen.insert(api).second) {
+    return;
+  }
+  std::fprintf(stderr,
+               "[fla_npu(stable)] %s workspace=%llu bytes stream=%s\n", api,
+               static_cast<unsigned long long>(workspace_size),
+               stream_from_launcher ? "launcher" : "caller");
+}
+
 // `Tuple` is whatever the macro's std::forward_as_tuple produced; the holders
 // inside it live until the end of the calling full-expression, which is what
 // keeps every descriptor alive across both aclnn calls.
@@ -274,6 +301,17 @@ inline void exec(const char* api, const TensorMeta& workspace_meta,
   void* get_workspace = runtime.symbol(base + "GetWorkspaceSize");
   auto launch = reinterpret_cast<LaunchFn>(runtime.symbol(base));
 
+  // A negative stream is the "ask the launcher" sentinel.  The Python glue
+  // passes it whenever this library can resolve the stream itself, which takes
+  // the ~19us round trip through torch_npu's Python accessor off the hot path.
+  // It is still a query on every call, never a cache: a cached stream is what
+  // sent kernels to another thread's stream in the vLLM run.  The device comes
+  // from the operator's own input, which is the device the kernel runs on.
+  const bool stream_from_launcher = stream < 0;
+  if (stream_from_launcher) {
+    stream = runtime.current_stream(workspace_meta.device_index);
+  }
+
   uint64_t workspace_size = 0;
   aclOpExecutor* executor = nullptr;
   const int get_ret =
@@ -285,6 +323,9 @@ inline void exec(const char* api, const TensorMeta& workspace_meta,
     throw std::runtime_error("fla_npu(stable): " + base +
                              "GetWorkspaceSize failed: " +
                              std::to_string(get_ret));
+  }
+  if (trace_enabled()) {
+    trace_once(api, workspace_size, stream_from_launcher);
   }
 
   torch::stable::Tensor workspace;

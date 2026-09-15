@@ -71,6 +71,9 @@ class SupportedOperatorDiscoveryTest(unittest.TestCase):
             _write(root / "fla/ops/ascendc/kda/op_name_b/CMakeLists.txt", "#\n")
             _write(root / "fla/ops/ascendc/kda/op_name_b/op_host/tests/CMakeLists.txt", "#\n")
             _write(root / "fla/ops/triton/triton_core/CMakeLists.txt", "#\n")
+            # Only fla/ops/ascendc is scanned: gmm/ does not exist in this
+            # repository and must not contribute operator names.
+            _write(root / "gmm/op_name_c/op_host/CMakeLists.txt", "#\n")
 
             self.assertEqual(discover_supported_ops(root), ["op_name_a", "op_name_b"])
 

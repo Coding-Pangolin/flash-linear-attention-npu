@@ -36,33 +36,22 @@ from typing import List, Optional, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Discovery roots, same as cmake/func.cmake::op_add_subdirectory().
-OP_SEARCH_ROOTS = ("fla/ops/ascendc", "gmm")
-# Additional roots cmake globs when build.sh runs with --experimental.
-EXPERIMENTAL_SEARCH_ROOTS = (
-    "experimental/ffn",
-    "experimental/chunk_gated_delta_rule",
-    "experimental/gmm",
-    "experimental/moe",
-    "experimental/posembedding",
-)
+# Discovery root: every custom operator of this repository lives under
+# fla/ops/ascendc/<group>/<sub_group>/<op_name>/, so the directory names below
+# this root are exactly the names accepted by --ops / FLA_NPU_OPS.
+OP_SEARCH_ROOTS = ("fla/ops/ascendc",)
 # CMake reads these as "compile every operator" instead of an operator name.
 BUILD_ALL_SENTINELS = frozenset({"all", "ALL"})
 LIST_COMMAND = "bash build.sh --list-ops"
 SCRIPT_LIST_COMMAND = "python3 scripts/check_build_ops.py --list"
 
 
-def discover_supported_ops(
-    repo_root=REPO_ROOT, include_experimental: bool = False
-) -> List[str]:
+def discover_supported_ops(repo_root=REPO_ROOT) -> List[str]:
     """Return every operator name the CMake build can be filtered by."""
     repo_root = Path(repo_root)
-    search_roots = list(OP_SEARCH_ROOTS)
-    if include_experimental:
-        search_roots.extend(EXPERIMENTAL_SEARCH_ROOTS)
 
     ops = set()
-    for search_root in search_roots:
+    for search_root in OP_SEARCH_ROOTS:
         base = repo_root / search_root
         if not base.is_dir():
             continue
@@ -186,11 +175,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="human readable description of where the parameter was set",
     )
-    parser.add_argument(
-        "--experimental",
-        action="store_true",
-        help="also list operators contributed by the experimental build",
-    )
+
     parser.add_argument(
         "--list",
         action="store_true",
@@ -207,7 +192,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
-    supported = discover_supported_ops(args.repo_root, include_experimental=args.experimental)
+    supported = discover_supported_ops(args.repo_root)
 
     if args.list:
         if args.json:

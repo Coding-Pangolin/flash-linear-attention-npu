@@ -105,16 +105,11 @@ function check_ops_filter() {
     if [ -z "${OPS_FILTER_VALUE}" ]; then
         return 0
     fi
-    local experimental_option=""
-    if [[ "${ENABLE_EXPERIMENTAL}" == "TRUE" ]]; then
-        experimental_option="--experimental"
-    fi
     if ! python3 "${CURRENT_DIR}/scripts/check_build_ops.py" \
         --repo-root="${CURRENT_DIR}" \
         --ops="${OPS_FILTER_VALUE}" \
         --source="${OPS_FILTER_SOURCE}" \
-        --origin="${OPS_FILTER_SOURCE} parameter of build.sh" \
-        ${experimental_option}; then
+        --origin="${OPS_FILTER_SOURCE} parameter of build.sh"; then
         exit 1
     fi
 }

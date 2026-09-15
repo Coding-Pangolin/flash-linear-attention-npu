@@ -52,8 +52,9 @@ contiguous view，`scenario_conv1d_update_offset_state` 覆盖的就是它）：
 - `out=` 路径 / vLLM = **1.42×**（host）/ **1.36×**（device）；原地路径 = 2.4× / 2.1×。
   这个差值就是"原地语义必须多一次输出回写"的代价。
 - FLA / ctypes = **0.2–0.3×**（快 3.3–5 倍）。
-- 去掉的两处拷贝：（1）`_dense_conv_state` 对"contiguous 但带 storage offset"的
-  conv_state 做 dense staging + 回写 —— 实测不需要，直接交 view 是逐位一致的；
+- 去掉的两处拷贝：（1）`_dense_conv_state` 的 dense staging + 回写 —— 现在只留给
+  runtime 无法寻址的 state（见下一节）：带 storage offset 的 contiguous view 和
+  分块（paged）view 都直接交描述符，实测逐位一致；
   （2）`out=` 情况下适配层自分配输出、wrapper 再 `copy_` 回写 —— 现在把调用方的
   `out` 直接当 aclnn 的输出（`out` 必须是 x 的 shape/dtype/device，否则 C++ 侧拒绝）。
   原地路径的这次回写**去不掉**：kernel 边读 x 边写输出，把输出别名到 x 会让
@@ -61,6 +62,51 @@ contiguous view，`scenario_conv1d_update_offset_state` 覆盖的就是它）：
 - conv1d 剩下的 host 差是 wrapper 自己的 3 次 `_host_ints` 与 dispatcher 记账；
   device 上剩下的差来自 OPP 里的 kernel 版本（FLA 的 19 参数版 vs vLLM vendored 的
   12 参数版），不是适配层。
+
+### paged（分块）state：去掉 staging 之后（CANN 9.2.0，batch 100，200 次）
+
+state = 2574 块 × `(5, 4096)`，只有 100 块在用、由 `conv_state_indices` 寻址，
+block stride 589824 元素；同一个环境里三臂对照（host P50 / device P50，ms）：
+
+| 臂 | FLA 原地 | FLA `out=` | vLLM-Ascend custom |
+| --- | --- | --- | --- |
+| method 1（state 直接交 view） | 0.1977 / 0.2748 | **0.1399 / 0.2163** | 0.0829 / 0.1442 |
+| 强制 staging（`FLA_NPU_CONV1D_VIEW_STATE=0`） | 0.2723 / 0.3635 | 0.2413 / 0.3256 | 0.0767 / 0.1334 |
+| CANN 9.1.0（只能 staging） | 0.2565 / 0.3411 | 0.2332 / 0.3219 | 0.0772 / 0.1119 |
+
+- 去掉 staging 的收益（`out=` 是与 custom 同形的那条路）：0.2413 → 0.1399，即
+  **−0.10 ms/次（−42%）**；原地 0.2723 → 0.1977（−0.075 ms/次）。device 侧同步降
+  0.11 / 0.09 ms，因为那次 `contiguous()` + `copy_` 本身就是设备工作。
+- 精度不是交换来的：view 与 stage 的输出、state **逐位一致**（maxdiff 0.0），与
+  vLLM custom 也逐位一致（0.0）。
+- 剩下的 0.1399 vs 0.0767–0.0829 ≈ **1.7–1.8×**（host）、0.2163 vs 0.13–0.14 ≈
+  **1.5–1.6×**（device）不是这一层再拷贝：host 是公共 API 的 3 次 `_host_ints` 与
+  dispatcher / mutation 记账，device 是两条路交给 tiling 的元数据形态不同（FLA 传
+  NPU tensor + host int[]，custom 只传 host int[]），tiling 因此选了不同的配置。
+  空载机器上这个比值更低（前一次记录 `out=` 为 1.42× / 1.36×）。
+
+## conv_state 的非连续能力由 CANN 版本决定
+
+同一份 OPP（同一份源码、同一个 toolkit 编出来的）、只换 `ASCEND_HOME_PATH`：
+
+| conv_state 布局 | CANN 9.1.0-beta.1 | CANN 9.2.0-beta.1 |
+| --- | --- | --- |
+| dense，或带 storage offset 的 contiguous view | ✅ | ✅ | 
+| 分块（paged，stride=(576,64,1)） | ❌ 错值，回写还落进块间 gap | ✅ 与 dense 逐位一致 |
+| dim 内 stride≠1（转置） | ❌ 不报错、静默错值 | ✅ 被算子拒绝（561002） |
+
+算子自己在 tiling 里读 `context->GetInputStride(convStates)` 并优先用它
+(`causal_conv1d_tiling_validation.h`)，但 9.1.0 的 aclnn 单算子路径不把描述符的
+view 信息交给 tiling（算子日志 `isview=0 / stride_null=1`），于是回退到 dense
+stride。所以 `_runtime.conv1d_view_state_supported()` 按 toolkit 版本判定：
+≥ 9.2.0 直接交 view，更老或读不到版本的 runtime 仍走 dense staging + 回写，
+两种情况下正确性都由上述探针（`conv1d_state_layout_parity.py`）验收。
+`FLA_NPU_CONV1D_VIEW_STATE=1/0` 可覆盖判定。
+
+这道门禁是承重的，两个方向都验过：9.1.0 + `=1`（强制 view）在 outer-gap /
+inner-gap 上算错（out maxdiff 1.2e5 / 1.4e5，且有 192 个 padding 元素被写进
+buffer）；9.2.0 + `=0`（强制 staging）仍然逐位正确。所以"直接交 view"只在
+≥ 9.2.0 成立，更老的 runtime 必须留着 staging。
 
 ## 为什么 stream 查询留在 Python
 

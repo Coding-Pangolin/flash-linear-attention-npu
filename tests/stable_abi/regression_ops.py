@@ -60,6 +60,8 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "scenario_conv1d_prefill",
         "scenario_conv1d_update",
         "scenario_conv1d_update_offset_state",
+        "scenario_conv1d_update_paged_state",
+        "scenario_conv1d_prefill_paged_state",
         "scenario_conv1d_varlen_initial_state",
         "scenario_conv1d_gather_padding",
         "scenario_conv1d_varlen_pad_slot",
@@ -694,13 +696,13 @@ def scenario_conv1d_update():
 def scenario_conv1d_update_offset_state():
     """Update where ``conv_states`` is a contiguous view with a storage offset.
 
-    ``aclnnCausalConv1d`` never receives view information: its tiling falls back
-    to the dense strides, so a state handed over as storage-base + offset would
-    be read and written at the wrong rows (the reference stages such states
-    through a dense copy).  The adapter instead folds the offset into the
-    descriptor's data pointer, which is what this case checks -- and the states
-    must not be cloned on the way in, because a clone is dense and would hide
-    the very thing being tested.
+    The descriptor carries this view's own strides and storage offset, so a
+    state handed over as storage-base + offset is read and written at the rows
+    the caller keeps; a state that fell back to dense addressing from the
+    storage base would land somewhere else entirely
+    (``scenario_conv1d_update_paged_state`` is the block-strided variant of the
+    same check).  The states must not be cloned on the way in, because a clone
+    is dense and would hide the very thing being tested.
     """
 
     lines, state_len, dim, gap = 4, 3, 16, 96
@@ -726,6 +728,109 @@ def scenario_conv1d_update_offset_state():
     torch.npu.synchronize()
     assert_parity("conv1d_update_offset_state", out_ct, out_th)
     record_extra("conv1d_update_offset_state(conv_states)", state_ct, state_th)
+
+
+def _paged_conv_state(lines, state_len, dim, gap, initial):
+    """A block-strided view over one flat buffer: what a paged cache looks like.
+
+    Block ``i`` starts at ``i * (state_len * dim + gap)``, so the dense strides
+    the operator falls back to when the runtime drops the view description
+    address a different row for every block but the first.
+    """
+
+    block_stride = state_len * dim + gap
+    backing = torch.zeros(lines * block_stride, dtype=torch.bfloat16, device="npu")
+    view = torch.as_strided(backing, (lines, state_len, dim),
+                            (block_stride, dim, 1), 0)
+    view.copy_(initial.view(lines, state_len, dim))
+    return view
+
+
+def _conv1d_paged_state_parity(name, kwargs, state_ct, state_th, dense):
+    """Both backends on the paged state, plus a dense reference.
+
+    The dense reference is what a backend-to-backend comparison cannot catch:
+    when a runtime drops the view description, both backends fall back to the
+    same dense addressing and agree with each other while disagreeing with the
+    rows the caller actually keeps in the cache.
+    """
+
+    def run(op, state):
+        return op(kwargs["x"], conv_states=state,
+                  **{k: v for k, v in kwargs.items() if k != "x"})
+
+    out_ref = run(ct.npu_causal_conv1d, dense)
+    out_ct = run(ct.npu_causal_conv1d, state_ct)
+    torch.npu.synchronize()
+    assert_parity(f"{name}[dense reference]", out_ref, out_ct)
+    record_extra(f"{name}[dense reference state]", dense, state_ct)
+    if not _backend_carries("npu_causal_conv1d"):
+        SKIPPED[name] = "the selected backend does not carry npu_causal_conv1d"
+        print(f"SKIP {name} (the selected backend does not carry npu_causal_conv1d)")
+        return
+    out_th = run(_launcher.npu_causal_conv1d, state_th)
+    torch.npu.synchronize()
+    assert_parity(name, out_ct, out_th)
+    record_extra(f"{name}(conv_states)", state_ct, state_th)
+
+
+def scenario_conv1d_update_paged_state():
+    """Update against a paged (block-strided) conv cache.
+
+    A serving cache is one flat buffer with thousands of blocks and only a few
+    of them live, so the state is never dense.  This is the shape that used to
+    be wrong: the tiling asked an optional input for its strides, was answered
+    with nothing on a runtime that drops the view description, and addressed
+    dense rows -- the state write-back landed in the gaps and the caller kept
+    reading its stale rows.  It is still wrong to hand such a state over on such
+    a runtime, which is why the adapter stages it there
+    (``_runtime.conv1d_view_state_supported``).
+    """
+
+    lines, state_len, dim, gap = 5, 3, 16, 48
+    initial = _seq(lines * state_len * dim, 301.0).to(torch.bfloat16).npu()
+    state_ct = _paged_conv_state(lines, state_len, dim, gap, initial)
+    state_th = _paged_conv_state(lines, state_len, dim, gap, initial)
+    dense = _paged_conv_state(lines, state_len, dim, gap, initial).contiguous()
+    assert not state_ct.is_contiguous(), "the case has to hand over a paged state"
+    kwargs = dict(
+        x=_seq(2 * dim, 1.0).reshape(2, dim).to(torch.bfloat16).npu(),
+        weight=_seq(4 * dim, 101.0).reshape(4, dim).to(torch.bfloat16).npu(),
+        bias=_seq(dim, 201.0).to(torch.bfloat16).npu(),
+        cache_indices=[1, 2],
+        activation_mode=0,
+        pad_slot_id=-1,
+        run_mode=1,
+    )
+    _conv1d_paged_state_parity("conv1d_update_paged_state", kwargs,
+                               state_ct, state_th, dense)
+
+
+def scenario_conv1d_prefill_paged_state():
+    """Prefill (``run_mode=0``) against the same paged cache.
+
+    The forward path reads its history out of ``conv_states`` and writes the
+    new one back, so a stride mix-up corrupts the cache here too.
+    """
+
+    lines, state_len, dim, gap = 5, 3, 16, 48
+    initial = _seq(lines * state_len * dim, 401.0).to(torch.bfloat16).npu()
+    state_ct = _paged_conv_state(lines, state_len, dim, gap, initial)
+    state_th = _paged_conv_state(lines, state_len, dim, gap, initial)
+    dense = _paged_conv_state(lines, state_len, dim, gap, initial).contiguous()
+    kwargs = dict(
+        x=_seq(2 * 2 * dim, 1.0).reshape(2, 2, dim).to(torch.bfloat16).npu(),
+        weight=_seq(4 * dim, 101.0).reshape(4, dim).to(torch.bfloat16).npu(),
+        bias=None,
+        query_start_loc=[0, 2, 4],
+        cache_indices=[1, 2],
+        initial_state_mode=[1, 1],
+        activation_mode=0,
+        pad_slot_id=-1,
+        run_mode=0,
+    )
+    _conv1d_paged_state_parity("conv1d_prefill_paged_state", kwargs,
+                               state_ct, state_th, dense)
 
 
 def scenario_conv1d_gather_padding():
@@ -1418,6 +1523,8 @@ def _scenarios():
         scenario_conv1d_varlen_initial_state,
         scenario_conv1d_update,
         scenario_conv1d_update_offset_state,
+        scenario_conv1d_update_paged_state,
+        scenario_conv1d_prefill_paged_state,
         scenario_recurrent_kda,
     ]
 

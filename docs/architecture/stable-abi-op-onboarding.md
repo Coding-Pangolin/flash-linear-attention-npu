@@ -1,27 +1,75 @@
 # 新增算子适配（Stable-ABI 薄层）
 
-一次适配 = **2 处 C++ + 1 处 Python + 2 行注册**，外加验证件。**不要求写 ctypes 适配**：有 ctypes 就用它当参考；没有就按 §6 声明，并把参考换成 torch 实现或 golden。设计背景见 [stable-abi-macro-design.md](stable-abi-macro-design.md)。
+一次适配 = **改 1 个族文件 + 2 行注册 + 1 个 Python wrapper**，外加验证件。**不要求写 ctypes 适配**：有 ctypes 就用它当参考；没有就按 §8 声明，并把参考换成 torch 实现或 golden。设计背景见 [stable-abi-macro-design.md](stable-abi-macro-design.md)。
 
 ## 1. 交付件清单
 
 | # | 位置 | 内容 | 必改 |
 | --- | --- | --- | --- |
-| 1 | `csrc/src/stable_<family>.cpp` | `kSchema_<op>` + `run_<op>`（申请输出 + 一条 `FLA_STABLE_EXEC`） | ✅ |
+| 1 | `csrc/src/stable_<family>.cpp`（**已有族就加进那个文件**，族表见 §2） | `kSchema_<op>` + `run_<op>`（申请输出 + 一条 `FLA_STABLE_EXEC`） | ✅ |
 | 2 | `csrc/src/stable_ops.cpp` | `m.def(kSchema_<op>);` + `m.impl("<op>", &boxed_adapter<run_<op>>);` | ✅ |
 | 3 | `fla_npu/ops/ascendc/_stable.py` | 一个真签名 wrapper（`_op("<op>")(...)`） | ✅ |
 | 4 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子原地写参数：`MUTATED_ARGUMENTS` 加一行（必要时 `MUTATION_FLAGS`） | 视情况 |
 | 5 | `tests/stable_abi/regression_ops.py` | 一个 parity 场景（ctypes vs launcher 逐位）+ 在场景列表登记 | ✅ |
 | 6 | `tests/stable_abi/stable_scenarios.json` | 场景基线（`FLA_NPU_BASELINE_WRITE=1` 跑一次写入） | ✅ |
 | 7 | `tools/stable_ctypes_fallbacks.py` | 若曾登记过该算子的回退：删除条目 | 视情况 |
-| 8 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子**没有** ctypes 参考：名字加进 `_LAUNCHER_ONLY_OPS`（见 §6） | 视情况 |
+| 8 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子**没有** ctypes 参考：名字加进 `_LAUNCHER_ONLY_OPS`（见 §8） | 视情况 |
 
 公开 API 名字不需要加到任何白名单：`__init__.py` 的 `_get_stable_op(name)` 就是 `getattr(_stable, name, None)`，有同名函数即走薄层，没有才回落 ctypes 并在 `BACKENDS` 里记一笔。
 
-参考实现默认是 ctypes 同名函数；`stable_coverage.py` 的 `reference` 列会逐算子写明用的是哪一种，没有 ctypes 的见 §6。
+参考实现默认是 ctypes 同名函数；`stable_coverage.py` 的 `reference` 列会逐算子写明用的是哪一种，没有 ctypes 的见 §8。
 
-## 2. 模板
+## 2. 适配代码放哪个文件
 
-### 2.1 简单形态：`npu_kda_gate_cumsum`（24 行）
+适配代码永远写在 `csrc/src/` 下的**某个族文件**里——不是一算子一文件，也不是一个大文件。所有族文件都被 `stable_ops.cpp` `#include` 进**同一个编译单元**，所以"放哪"只影响阅读与 review，不影响构建；算子名**只**在 `stable_ops.cpp` 里重复（那是注册）。
+
+| 文件 | 拥有的算子族 |
+| --- | --- |
+| `stable_conv1d.cpp` | conv1d 全族：`npu_causal_conv1d`、`_fn`、`_update`、`_bwd` |
+| `stable_gdn.cpp` | gated-delta-rule 的复合/派生：`npu_chunk_gated_delta_rule_fwd`、`_bwd`、`_bwd_finalize`、`_fwd_prepare`、`npu_chunk_fwd_o`、`npu_chunk_gdn_bwd_intra` |
+| `stable_fwd_h.cpp` | h/dh 递归族：`npu_chunk_fwd_h`、`npu_chunk_gated_delta_rule_fwd_h`、`npu_chunk_gated_delta_rule_bwd_dhu` |
+| `stable_kda.cpp` | KDA 族：`npu_chunk_kda_fwd`、`_bwd`、`_bwd_intra`、`_bwd_recompute`、`npu_kda_gate_cumsum` |
+| `stable_chunk.cpp` | 两族共用的 chunk 级工具：`*wy_repr*`、`chunk_scaled_dot_kkt`、`chunk_local_cumsum`、`chunk_bwd_dqkwg`、`chunk_bwd_dv_local`、`recompute_w_u_fwd`、`solve_tri` |
+| `stable_fast_gelu.cpp` | `npu_fast_gelu_custom`、`npu_fast_gelu_custom_backward` |
+| `stable_recurrent_gdr.cpp`、`stable_recurrent_kda.cpp` | 两个 **pre-macro** 适配（各自一个文件：它们的 `state` 是原地参数，不能用宏拆栈，见 §7） |
+| `stable_ops.cpp` | **只有注册**：`m.def(kSchema_<op>)` + `m.impl("<op>", &boxed_adapter<run_<op>>)`，并负责 `#include` 各族文件 |
+
+判族三十秒能定：看公开名字属于哪一段——`causal_conv1d*` → conv1d；`chunk_gated_delta_rule_*`
+的复合/派生 → gdn（其中的 **h/dh 递归三件套** → fwd_h）；`chunk_kda_*` / `kda_*` → kda；其余
+chunk 级工具（wy_repr / kkt / cumsum / dqkwg / dv_local / recompute / solve_tri）→ chunk；
+`fast_gelu*` → fast_gelu；带原地 `state` 的 recurrent 型 → recurrent_*。
+
+每个族文件**头部都有一行 `// Owns:`**，列着它当前拥有的算子：新增算子时先读那行，放好之后
+把新名字加进去。归错族的代价只是 review 时要挪一次（不影响构建），但会让下一个人更难判断，
+所以请把这一行维护住。
+
+（为什么不合成一个文件：这 9 个族文件合计约 2.1k 行，合并后所有算子的改动都落在同一个文件上，
+并行开发会互相冲突；现在按族分开，读一个算子的改动只需要看一个文件。代价是"该放哪"需要
+规则——就是上面这张表 + 文件头 `// Owns:`。）
+
+## 3. 参数类型对照
+
+写适配时按这张表挑 holder（都在 `include/stable/exec.h`，`FLA_STABLE_EXEC` 的行参顺序必须与
+schema 形参顺序、以及 aclnn 头文件顺序一致；`op_abi_parity.py` + `op_abi_validate.py` 会查）：
+
+| schema 里怎么写 | C++ 形参 | Python 传什么 | C++ 里用哪个 holder |
+| --- | --- | --- | --- |
+| `Tensor x` | `Tensor x` | NPU 张量 | `tensor(meta_of(x))`；需要 ND / 逻辑形状时 `nd_tensor(...)`、`logical_tensor(...)` |
+| `Tensor? g` | `std::optional<Tensor> g` | `None` 或张量 | `optional_tensor(g)`；配 ND/逻辑形状用 `nd_optional_tensor`、`logical_optional_tensor` |
+| `-> Tensor` | 自己分配：`allocate_like` / `allocate_sizes` | — | 传给 aclnn 时 `out_tensor(meta_of(out))`；ND/逻辑形状用 `nd_out_tensor`、`logical_out_tensor` |
+| `-> (Tensor, Tensor, Tensor?)` | `std::tuple<Tensor, Tensor, std::optional<Tensor>>` | — | 缺席的输出槽传 `TensorMeta()`（null aclTensor）；`boxed.h` 会打成 boxed optional（**不能传裸 handle**） |
+| `int chunk_size`、`float scale`、`bool use_exp2` | `int64_t` / `double` / `bool` | Python int / float / bool（`None` 在 wrapper 里给默认值） | `scalar(...)` |
+| `int layout`（枚举） | `int64_t layout` | **字符串**，wrapper 用 `_char_code("<op>", "layout", layout)` 转 code | `cstr(k<Op>LayoutNames, layout)`，名表顺序要与 `_stable._ENUM` 一致 |
+| host int 数组（`query_start_loc_cpu` 等） | `std::optional<Tensor>`（host 侧） | `_host_ints(seq)`，或直接给 CPU int64 tensor | `int_array(x)`；要在 C++ 里取用值时 `int_values(x)` |
+| `Tensor(a!) state`（原地写） | 不走宏（读 `AtenTensorHandle` 自己 launch） | 调用方直接传被改写的张量 | 见 §7 的 pre-macro 说明 |
+| `int stream` | `int64_t stream` | `_current_stream_ptr()`（**每次现取，不缓存**） | `FLA_STABLE_EXEC` 的第三个实参 |
+
+三条硬限制：**没有字符串类型**（字符串一律"名表 + int code"）；**`int[]` 只收 host 的 int64 CPU
+tensor**；**返回的 `Tensor?` 槽必须走 boxed optional**。
+
+## 4. 模板
+
+### 4.1 简单形态：`npu_kda_gate_cumsum`（24 行）
 
 ```cpp
 constexpr const char* kSchema_kda_gate_cumsum =
@@ -60,7 +108,7 @@ def npu_kda_gate_cumsum(g, chunk_size, *, A_log=None, dt_bias=None,
 
 要点：`FLA_STABLE_EXEC` 的第一个参数是 aclnn 符号前缀，第二个是 workspace 的设备来源（取第一个 NPU 输入的 meta），第三个是 stream；之后**严格按 aclnn 头文件顺序**。
 
-### 2.2 条件输出：`npu_chunk_fwd_h`
+### 4.2 条件输出：`npu_chunk_fwd_h`
 
 ```cpp
 constexpr const char* kSchema_chunk_fwd_h =
@@ -78,7 +126,7 @@ constexpr const char* kSchema_chunk_fwd_h =
 
 要点：schema 里的 `Tensor?` 返回槽必须由 `boxed.h::pack` 打成 boxed optional（`from(std::optional<Tensor>)`），写成裸 handle 会段错误。
 
-### 2.3 字符串参数：名表 + code
+### 4.3 字符串参数：名表 + code
 
 ```cpp
 constexpr const char* kChunkKdaFwdLayoutNames[] = {"BSND", "BNSD", "TND", "NTD"};
@@ -92,7 +140,7 @@ cstr(kChunkKdaFwdLayoutNames, layout)     // int code → const char*
 
 顺序必须与 `_stable._ENUM` 一致；layout 统一用 `BSND, BNSD, TND, NTD`，并用 `stable/layout_math.h` 算 token/head/dim/chunk。
 
-### 2.4 需要本地策略的算子
+### 4.4 需要本地策略的算子
 
 `npu_chunk_kda_bwd` 这类带设备相关 workaround 的算子，C++ 适配只做**一次 launch**，多调用/切分/补齐的逻辑留在 Python wrapper（它决定发几次调用），例如：
 
@@ -101,7 +149,7 @@ cstr(kChunkKdaFwdLayoutNames, layout)     // int code → const char*
         ... 逐序列 dense 调用后按 token 轴拼接、标量梯度求和
 ```
 
-## 3. 落地步骤
+## 5. 落地步骤
 
 ```bash
 # 1. 写适配（上面的 1-3），登记（4）
@@ -123,7 +171,7 @@ FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
     python tests/stable_abi/customer_switch_compat.py
 ```
 
-## 4. 新增场景的最低矩阵（T2）
+## 6. 新增场景的最低矩阵（T2）
 
 按算子形态取轴，不要求一次全给，但基线里的场景集合**只能增不能减**：
 
@@ -136,15 +184,15 @@ FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
 - **边界**：T=1、chunk_size 最小、batch=1、单 chunk、空 tensor 与 `None`；
 - **错误路径**：device/dtype/shape/枚举 code/int[] dtype 非法时两侧都拒绝（错误类型允许不同型）。
 
-## 5. 常见坑
+## 7. 常见坑
 
 - `int[]` 只能是 **host** int32/int64 tensor：写 `_host_ints(...)`，device tensor 会被 C++ 侧拒绝。
 - 原地写参数的算子必须登记 `MUTATED_ARGUMENTS`，否则 autograd 看到的是被改过的输入却没有版本号。
 - workspace 的设备从**第一个 NPU 输入的 meta** 取；拿错设备会在别的卡上分配。
 - stream 每次调用现取（`_current_stream_ptr()`），**不要缓存**：vLLM 是多线程多 stream，缓存过的 pointer 会把 kernel 发到别的线程的 stream 上。
-- 输出 shape 规则要照抄 ctypes 参考实现（`_aclnn_ctypes.py` 同名函数），包括 dtype（例如 `o` 跟 `v`、state 跟 `q`）和可选输出的存在条件。没有 ctypes 参考时，照抄的是算子自己的文档/内核接口（见 §6）。
+- 输出 shape 规则要照抄 ctypes 参考实现（`_aclnn_ctypes.py` 同名函数），包括 dtype（例如 `o` 跟 `v`、state 跟 `q`）和可选输出的存在条件。没有 ctypes 参考时，照抄的是算子自己的文档/内核接口（见 §8）。
 
-## 6. 没有 ctypes 参考的算子
+## 8. 没有 ctypes 参考的算子
 
 新算子不必先写一份 ctypes 适配。ctypes 在这套里只是**参考实现**；算子没有它时，要做的是把"参考"换成别的，并把这件事写下来。
 

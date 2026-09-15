@@ -47,15 +47,33 @@ import os
 import sys
 import threading
 
-import torch
-import torch_npu  # noqa: F401
-
-torch.npu.config.allow_internal_format = False
-torch.npu.set_compile_mode(jit_compile=False)
-
-from fla_npu.ops.ascendc import _stable  # noqa: E402
-
 STABLE_LIB = os.environ.get("FLA_NPU_STABLE_LIB", "")
+
+# This file is collected by name (`test_*.py`), so a machine without the NPU
+# stack must end up with a *skip*, not a collection error: the checks below need
+# a device and a launcher, and reporting that as a failure would be wrong.
+_SKIP_REASON: str | None
+try:
+    import torch
+    import torch_npu  # noqa: F401
+
+    torch.npu.config.allow_internal_format = False
+    torch.npu.set_compile_mode(jit_compile=False)
+
+    from fla_npu.ops.ascendc import _stable  # noqa: E402
+except Exception as exc:  # noqa: BLE001 - the reason is reported, not raised
+    _SKIP_REASON = f"{type(exc).__name__}: {exc}"
+else:
+    _SKIP_REASON = None
+
+if _SKIP_REASON is not None:
+    try:
+        import pytest
+    except ImportError:
+        pass
+    else:
+        pytest.skip(f"needs the NPU stack ({_SKIP_REASON})",
+                    allow_module_level=True)
 
 # Per-thread recording: a worker installs a list, every stream read made by that
 # thread appends to it, and the worker reads it back after its calls.
@@ -223,14 +241,22 @@ def main() -> int:
     parser.add_argument("--rounds", type=int, default=3)
     args = parser.parse_args()
 
+    if _SKIP_REASON is not None:
+        print(f"SKIP test_stable_stream_interleaving: needs the NPU stack "
+              f"({_SKIP_REASON})")
+        return 0
     torch.npu.set_device(0)
     if not STABLE_LIB:
         print("note: FLA_NPU_STABLE_LIB is unset; relying on the bundled "
               "libfla_npu_stable.so next to the package")
     if not _stable.available():
-        raise SystemExit(
-            "no Stable-ABI launcher: set FLA_NPU_STABLE_LIB to a built "
-            "libfla_npu_stable.so, or install a wheel that bundles one")
+        # A script run without the launcher is a missing prerequisite, not a
+        # failed check: say so and exit clean, the way the rest of the suite
+        # records "not run here".
+        print("SKIP test_stable_stream_interleaving: no Stable-ABI launcher "
+              "(set FLA_NPU_STABLE_LIB to a built libfla_npu_stable.so, or "
+              "install a wheel that bundles one)")
+        return 0
 
     # Built on this thread: the tensors must be identical for every worker, and
     # the device RNG is a single global sequence.

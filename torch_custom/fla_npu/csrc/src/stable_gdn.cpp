@@ -1,19 +1,20 @@
-// Stable-ABI adapters: npu_causal_conv1d_bwd, npu_chunk_fwd_o,
-// npu_chunk_gdn_bwd_intra.
+// Stable-ABI adapters: npu_chunk_fwd_o and npu_chunk_gdn_bwd_intra.
 //
-// All three allocate several outputs whose shapes come from more than one
-// input, which is the only thing that separates them from the batch in
+// Both allocate several outputs whose shapes come from more than one input,
+// which is the only thing that separates them from the batch in
 // stable_chunk.cpp:
 //
-//   * causal_conv1d_bwd sizes its d(initial_state) output from the segment
-//     count, so the query_start_loc values are taken once with `int_values`
-//     and the same vector is handed to the call.
 //   * chunk_fwd_o's output shape depends on the layout string, so the enum name
 //     is resolved once and used both for the allocation and for aclnn.
 //   * chunk_gdn_bwd_intra mixes an output shaped from q and v with two that
 //     copy v.
 //
 // Included by stable_ops.cpp (single TU); registration lives there.
+
+// Owns the gated-delta-rule composites and their pieces:
+// npu_chunk_gated_delta_rule_fwd/_bwd/_bwd_finalize/_fwd_prepare,
+// npu_chunk_fwd_o, npu_chunk_gdn_bwd_intra.  The h/dh recurrence of the
+// same family lives in stable_fwd_h.cpp.
 
 #include "stable/at_facade.h"
 #include "stable/boxed.h"
@@ -56,58 +57,8 @@ namespace layout_math = fla_npu_stable::stable::layout_math;
 // Every layout name table in this file uses the code order
 // stable/layout_math.h documents (BSND, BNSD, TND, NTD); the Python side
 // carries the same table in _stable.py's _ENUM.
-constexpr const char* kCausalConv1dBwdInputLayoutNames[] = {"BSND", "BNSD",
-                                                            "TND", "NTD"};
 constexpr const char* kChunkFwdOOutputLayoutNames[] = {"BSND", "BNSD", "TND",
                                                        "NTD"};
-
-// ---------------------------------------------------------------------------
-// npu_causal_conv1d_bwd
-// ---------------------------------------------------------------------------
-
-constexpr const char* kSchema_causal_conv1d_bwd =
-    "npu_causal_conv1d_bwd(Tensor x, Tensor? y, Tensor weight, Tensor dy, "
-    "Tensor? initial_state, Tensor? dht, Tensor? query_start_loc, "
-    "int activation, int input_layout, int stream) "
-    "-> (Tensor, Tensor, Tensor, Tensor)";
-
-std::tuple<Tensor, Tensor, Tensor, Tensor> run_npu_causal_conv1d_bwd(
-    Tensor x, std::optional<Tensor> y, Tensor weight, Tensor dy,
-    std::optional<Tensor> initial_state, std::optional<Tensor> dht,
-    std::optional<Tensor> query_start_loc, int64_t activation,
-    int64_t input_layout, int64_t stream) {
-  const TensorMeta x_meta = meta_of(x);
-  const TensorMeta weight_meta = meta_of(weight);
-  const char* layout =
-      enum_name(kCausalConv1dBwdInputLayoutNames, input_layout);
-  const std::vector<int64_t> qsl = int_values(query_start_loc);
-
-  // TND/NTD carry one initial state per segment; the other layouts carry one
-  // per batch row.
-  const bool per_segment =
-      std::strcmp(layout, "TND") == 0 || std::strcmp(layout, "NTD") == 0;
-  const int64_t state_rows =
-      per_segment ? (qsl.empty() ? 0 : static_cast<int64_t>(qsl.size()) - 1)
-                  : size_of(x_meta, 0);
-
-  Tensor out_dx = allocate_like(x_meta);
-  Tensor out_dw = allocate_sizes(
-      {size_of(weight_meta, 0), size_of(weight_meta, 1)},
-      weight_meta.scalar_type, weight_meta);
-  Tensor out_db = allocate_sizes({size_of(weight_meta, 1)},
-                                 weight_meta.scalar_type, weight_meta);
-  Tensor out_dinit = allocate_sizes(
-      {state_rows, size_of(weight_meta, 0), size_of(weight_meta, 1)},
-      x_meta.scalar_type, x_meta);
-
-  FLA_STABLE_EXEC("aclnnCausalConv1dBwd", x_meta, stream, tensor(x_meta),
-                  optional_tensor(y), tensor(weight_meta), tensor(meta_of(dy)),
-                  optional_tensor(initial_state), optional_tensor(dht),
-                  int_array(qsl), scalar(activation), CStrArg(layout),
-                  out_tensor(meta_of(out_dx)), out_tensor(meta_of(out_dw)),
-                  out_tensor(meta_of(out_db)), out_tensor(meta_of(out_dinit)));
-  return std::make_tuple(out_dx, out_dw, out_db, out_dinit);
-}
 
 // ---------------------------------------------------------------------------
 // npu_chunk_fwd_o

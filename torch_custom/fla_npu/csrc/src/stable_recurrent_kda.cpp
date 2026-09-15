@@ -3,6 +3,9 @@
 // Only torch/csrc/stable/* plus the shared acl_meta helper: no ATen/c10, no
 // libtorch C++ ABI.  `layout` is an int code because the stable value
 // conversions have no std::string support (0 = BSND, 1 = TND); Python maps it.
+// Owns: npu_recurrent_kda.  Pre-macro for the same reason as
+// stable_recurrent_gdr.cpp.
+
 #include <torch/csrc/stable/library.h>
 #include <torch/csrc/stable/stableivalue_conversions.h>
 #include <torch/csrc/stable/tensor.h>

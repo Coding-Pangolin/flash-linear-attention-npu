@@ -15,6 +15,12 @@
 //
 // Included by stable_ops.cpp (single TU); registration lives there.
 
+// Owns the chunk-level helpers both families use: npu_prepare_wy_repr,
+// npu_prepare_wy_repr_bwd, npu_prepare_wy_repr_bwd_da,
+// npu_prepare_wy_repr_bwd_full, npu_chunk_scaled_dot_kkt,
+// npu_chunk_local_cumsum, npu_chunk_bwd_dqkwg, npu_chunk_bwd_dv_local,
+// npu_recompute_w_u_fwd, npu_solve_tri.
+
 #include "stable/at_facade.h"
 #include "stable/boxed.h"
 #include "stable/exec.h"

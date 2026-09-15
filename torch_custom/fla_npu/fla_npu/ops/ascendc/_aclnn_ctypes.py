@@ -30,6 +30,7 @@ from ._runtime import (
     acl_format as _acl_format,
     call_aclnn as _runtime_call_aclnn,
     chunk_num as _chunk_num,
+    conv_state_needs_dense_copy,
     empty as _empty,
     empty_like as _empty_like,
     optional_bool as _optional_bool,
@@ -2103,31 +2104,13 @@ NULL_BLOCK_ID = 0
 def _causal_conv1d_state_needs_dense_copy(conv_states) -> bool:
     """Whether ``conv_states`` cannot be handed to aclnnCausalConv1d as-is.
 
-    ``aclnnCausalConv1d`` never receives the conv_state strides.  Its tiling
-    asks for them with ``context->GetInputStride(CONV_STATES_INDEX)`` and falls
-    back to the dense ``(stateLen * dim, dim, 1)`` strides when that returns
-    nothing -- which is always: the generated aclnn wrapper registers the
-    optional ``convStates`` input without view information (measured on NPU:
-    the op logs ``isview=0 / stride_null=1`` even for a tensor whose innermost
-    stride is not 1, which its own validation would otherwise reject).
-
-    The identical descriptor is what ``RecurrentGatedDeltaRule`` gets, and there
-    the framework does mark the input as a view (``isview=1``, four valid
-    strides), so this is an op/framework-boundary gap for this operator rather
-    than a descriptor bug.  Until it is fixed upstream, a caller that passes a
-    paged (block-strided) conv_state would silently be computed against the
-    wrong memory, and the state write-back would land in the gaps.  Run such
-    calls on a dense copy and copy the updated state back.
+    The rule lives in ``_runtime.conv_state_needs_dense_copy`` so that this
+    reference and the stable adapter cannot disagree about it; the measured
+    boundary behind the runtime verdict is in
+    ``_runtime.conv1d_view_state_supported``.
     """
 
-    if conv_states is None or conv_states.numel() == 0:
-        return False
-    try:
-        contiguous = conv_states.is_contiguous()
-        offset = int(conv_states.storage_offset())
-    except AttributeError:
-        return False
-    return (not contiguous) or offset != 0
+    return conv_state_needs_dense_copy(conv_states)
 
 
 
@@ -2156,9 +2139,9 @@ def _launch_causal_conv1d(
 ):
     """Build the single aclnnCausalConv1d ABI shared by all Python APIs."""
 
-    # See ``_causal_conv1d_state_needs_dense_copy``.  Non-dense conv states are
-    # staged through a dense copy; the updated state is copied back so the
-    # in-place contract every caller relies on is preserved.
+    # See ``_causal_conv1d_state_needs_dense_copy``.  A state the runtime can
+    # address goes over as it is; a refused one is staged through a dense copy
+    # and copied back so the in-place contract every caller relies on holds.
     conv_state_restore = None
     if _causal_conv1d_state_needs_dense_copy(conv_states):
         conv_state_restore = conv_states

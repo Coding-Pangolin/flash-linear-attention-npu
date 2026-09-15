@@ -39,7 +39,7 @@
 3. **`char*` 跨边界用 int code**：schema 里写 `int`，Python 侧 `_char_code(op, arg, value)` 查 `_stable._ENUM`，C++ 侧 `cstr(k<Op><Arg>Names, code)` 查名表并做边界检查。**名表顺序必须与 `_ENUM` 一致**，由 `stable_coverage.py` 检查。所有 layout 参数统一用 `BSND=0, BNSD=1, TND=2, NTD=3`（`layout_math.h` 的 `layout::Code`）。
 4. **可选输出**：schema 写 `Tensor?`，缺席时 C++ 返回 `std::nullopt`；`boxed.h` 的 `pack` 会把它写成 **boxed optional**——直接塞 tensor handle 会让 dispatcher 当指针解引用（`chunk_fwd_h` 段错误就是这么来的）。
 5. **原地修改**：在 `__init__.py` 的 `MUTATED_ARGUMENTS` 登记参数名；写入与否取决于参数值时再登记 `MUTATION_FLAGS`（例如 `npu_recurrent_kda` 的 `inplace_final_state`）。
-6. **描述符**：`AclTensorView` 对连续张量用逻辑 shape 作 storage shape（与 `nd_tensor` 一致），非连续退化为 `(numel,)`。OPP 侧 `isview=0` 时该字段不可观测；`isview=1` 的算子（如 `RecurrentGatedDeltaRule`）必须与参考一致——这是 `npu_recurrent_gated_delta_rule` 的 state 走 stride 的关键。
+6. **描述符**：`AclTensorView` 对连续张量用逻辑 shape 作 storage shape（与 `nd_tensor` 一致），非连续退化为 `(numel,)`。OPP 侧 `isview=0` 时该字段不可观测；`isview=1` 的算子（如 `RecurrentGatedDeltaRule`）必须与参考一致——这是 `npu_recurrent_gated_delta_rule` 的 state 走 stride 的关键。`isview` 不是算子属性而是 runtime 行为：同一份 OPP 下 CANN 9.1.0 的 `CausalConv1d` 拿不到 `convStates` 的 stride、9.2.0 拿得到（见 `stable-abi-host-cost.md` 的 CANN 版本一节），所以 `_dense_conv_state` 只对拿不到的那一档保留 dense staging。
 
 ## 4. 构建戳
 

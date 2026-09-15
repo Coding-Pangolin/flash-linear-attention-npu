@@ -1297,6 +1297,40 @@ def scenario_chunk_gated_delta_rule_bwd():
                 *args, **dict(kw, **extra)),
             lambda extra=extra: _launcher.npu_chunk_gated_delta_rule_bwd(
                 *args, **dict(kw, **extra)))
+    # The operator's other three declared spellings.  It accepts the TND/NTD
+    # *names* but still reads a rank-4 tensor (layout_math::tokens4), so only the
+    # token axis moves -- BSND/TND put it on dim 1, BNSD/NTD on dim 2 -- and the
+    # two packed names additionally take cu_seqlens with a physical batch of 1.
+    #
+    # Two contract details the reference spells out (and rejected the first
+    # version of these cases for): `A` stays BNSD-shaped whatever the layout says
+    # ("A must have BNSD shape [B, HV, T, chunk_size]"), and a packed spelling
+    # needs cu_seqlens *and* chunk_indices together.
+    def token_major(tensor):
+        return (tensor.transpose(1, 2).contiguous()
+                if tensor.dim() >= 3 else tensor)
+
+    # q, k, v, g, beta and d_o follow the layout; A does not (args[5]).
+    bsnd = (tuple(token_major(tensor) for tensor in args[:5])
+            + (args[5], token_major(args[6])))
+    kw_bsnd = dict(kw, layout="BSND")
+    parity_or_domain_skip(
+        "chunk_gated_delta_rule_bwd(dense BSND)",
+        lambda: ct.npu_chunk_gated_delta_rule_bwd(*bsnd, **kw_bsnd),
+        lambda: _launcher.npu_chunk_gated_delta_rule_bwd(*bsnd, **kw_bsnd))
+    # One sequence of T tokens, chunk_size tokens per chunk: the canonical
+    # (sequence, chunk) pairs the reference asks for.
+    chunk_indices = [pair for chunk in range(T // cs) for pair in (0, chunk)]
+    for layout, spelled in (("TND", bsnd), ("NTD", args)):
+        packed = tuple(tensor[:1].contiguous() for tensor in spelled)
+        kw_packed = dict(kw, layout=layout, cu_seqlens=[0, T],
+                         chunk_indices=chunk_indices)
+        parity_or_domain_skip(
+            f"chunk_gated_delta_rule_bwd(varlen {layout})",
+            lambda s=packed, k=kw_packed: ct.npu_chunk_gated_delta_rule_bwd(
+                *s, **k),
+            lambda s=packed, k=kw_packed: _launcher
+            .npu_chunk_gated_delta_rule_bwd(*s, **k))
 
 
 def scenario_dqkwg():
@@ -1423,39 +1457,44 @@ def scenario_solve_tri_dense():
             f"solve_tri(bnsd_{suffix})",
             ct.npu_solve_tri(a_bnsd, layout="bnsd"),
             _launcher.npu_solve_tri(a_bnsd, layout="bnsd"))
-        # tnd and ntd are broken upstream on this OPP: tnd kills the process on
-        # *both* backends (measured with and without cu_seqlens), ntd returns
-        # zeros.  The wrapper refuses tnd with a message instead of crashing,
-        # which is checked in scenario_solve_tri_guards below.
+        # The two packed spellings are broken upstream on this OPP -- both kill
+        # the process, measured with and without cu_seqlens -- so neither can be
+        # a parity case; the wrappers refuse them instead, which
+        # scenario_solve_tri_guards below records.
 
 
 def scenario_solve_tri_guards():
-    """The launcher must refuse the upstream-broken spelling, not crash.
+    """The launcher must refuse the upstream-broken spellings, not crash.
 
-    Measured first, then encoded: ``layout="tnd"`` kills the process on the
-    ctypes reference *and* on the launcher, with and without cu_seqlens, so it
-    is not a legal domain on this OPP.  Refusing it with a message is the
-    documented contract ("illegal input errors, and does not have to error the
-    same way"); matching the reference by crashing would not be.
+    Measured first, then encoded: both packed spellings kill the process on the
+    ctypes reference *and* on the launcher, with and without cu_seqlens, so
+    neither is a legal domain on this OPP.  ``ntd`` was measured when the
+    scenario for the declared spellings was added -- an earlier note claiming it
+    returns zeros was wrong, it segfaults exactly like ``tnd``.  Refusing them
+    with a message is the documented contract ("illegal input errors, and does
+    not have to error the same way"); matching the reference by crashing would
+    not be.
     """
 
     a = (torch.randn(64, 4, 64) * 0.1).to(torch.float16).npu()
     torch.npu.synchronize()
-    for backend, label in ((ct.npu_solve_tri, "ctypes"),
-                           (_launcher.npu_solve_tri, "stable")):
-        try:
-            backend(a, layout="tnd")
-        except RuntimeError as exc:
-            assert "tnd" in str(exc), f"{label}: unexpected message {exc}"
-            # A refusal is coverage too: recorded with its reason so the
-            # scenario set shrinks visibly if the guard is ever dropped.
-            SKIPPED[f"solve_tri(tnd refused by {label})"] = (
-                "layout='tnd' is refused because the operator crashes the "
-                "process for that spelling")
-            print(f"SKIP solve_tri(tnd refused by {label}) "
-                  f"({SKIPPED[f'solve_tri(tnd refused by {label})']})")
-        else:
-            raise AssertionError(f"{label} accepted the crashing tnd spelling")
+    for layout in ("tnd", "ntd"):
+        for backend, label in ((ct.npu_solve_tri, "ctypes"),
+                               (_launcher.npu_solve_tri, "stable")):
+            name = f"solve_tri({layout} refused by {label})"
+            try:
+                backend(a, layout=layout)
+            except RuntimeError as exc:
+                assert layout in str(exc), f"{label}: unexpected message {exc}"
+                # A refusal is coverage too: recorded with its reason so the
+                # scenario set shrinks visibly if the guard is ever dropped.
+                SKIPPED[name] = (
+                    f"layout='{layout}' is refused because the operator "
+                    "crashes the process for that spelling")
+                print(f"SKIP {name} ({SKIPPED[name]})")
+            else:
+                raise AssertionError(
+                    f"{label} accepted the crashing {layout} spelling")
 
 
 def scenario_kda_gate_cumsum():

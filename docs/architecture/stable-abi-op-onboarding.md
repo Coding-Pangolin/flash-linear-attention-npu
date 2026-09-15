@@ -6,8 +6,8 @@
 
 | # | 位置 | 内容 | 必改 |
 | --- | --- | --- | --- |
-| 1 | `csrc_stable/src/stable_<family>.cpp` | `kSchema_<op>` + `run_<op>`（申请输出 + 一条 `FLA_STABLE_EXEC`） | ✅ |
-| 2 | `csrc_stable/src/stable_ops.cpp` | `m.def(kSchema_<op>);` + `m.impl("<op>", &boxed_adapter<run_<op>>);` | ✅ |
+| 1 | `csrc/src/stable_<family>.cpp` | `kSchema_<op>` + `run_<op>`（申请输出 + 一条 `FLA_STABLE_EXEC`） | ✅ |
+| 2 | `csrc/src/stable_ops.cpp` | `m.def(kSchema_<op>);` + `m.impl("<op>", &boxed_adapter<run_<op>>);` | ✅ |
 | 3 | `fla_npu/ops/ascendc/_stable.py` | 一个真签名 wrapper（`_op("<op>")(...)`） | ✅ |
 | 4 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子原地写参数：`MUTATED_ARGUMENTS` 加一行（必要时 `MUTATION_FLAGS`） | 视情况 |
 | 5 | `tests/stable_abi/regression_ops.py` | 一个 parity 场景（ctypes vs launcher 逐位）+ 在场景列表登记 | ✅ |
@@ -115,7 +115,7 @@ python -m unittest tests.test_stable_gates                    # 门禁自测
 python torch_custom/fla_npu/tools/op_abi_validate.py \
     --opp-include <opp>/op_api/include/aclnnop <cann>/include/aclnnop
 # 4. 编 .so 并跑 parity
-python csrc_stable/build_stable.py --out /path/libfla_npu_stable.so --no-debug-probe
+python csrc/build_stable.py --out /path/libfla_npu_stable.so --no-debug-probe
 FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
     python tests/stable_abi/regression_stable_full.py
 # 5. 客户视角：同一段调用脚本分别走 ctypes 与 launcher，逐项一致且确实换了后端

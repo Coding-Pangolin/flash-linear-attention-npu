@@ -22,7 +22,7 @@ and/or CANN Software, and requires recipients to receive a copy of the license
 and retained notices.
 
 This repository also contains a verbatim copy of PyTorch's Stable-ABI headers,
-at torch_custom/fla_npu/csrc_stable/include/torch_stable_abi, taken from
+at torch_custom/fla_npu/csrc/include/torch_stable_abi, taken from
 PyTorch 2.9.0 (https://github.com/pytorch/pytorch). Those files are the work of
 the PyTorch contributors and are provided under the BSD 3-Clause License:
 
@@ -39,7 +39,7 @@ the PyTorch contributors and are provided under the BSD 3-Clause License:
                         Bengio, Johnny Mariethoz)
 
 The full license text ships with the copy
-(torch_custom/fla_npu/csrc_stable/include/torch_stable_abi/LICENSE), and
+(torch_custom/fla_npu/csrc/include/torch_stable_abi/LICENSE), and
 MANIFEST.sha256 next to it records the digests of that revision, so the copy is
 verifiable and is not modified in place.
 

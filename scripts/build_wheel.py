@@ -54,7 +54,7 @@ def _prepare_abi_free_launcher() -> None:
     if os.getenv("FLA_NPU_BUILD_STABLE_ABI", "TRUE").upper() in {
             "0", "FALSE", "NO", "OFF"}:
         return
-    builder = (REPO_ROOT / "torch_custom" / "fla_npu" / "csrc_stable"
+    builder = (REPO_ROOT / "torch_custom" / "fla_npu" / "csrc"
                / "build_stable.py")
     target = package_dir / "libfla_npu_stable.so"
     subprocess.run([sys.executable, str(builder), "--no-debug-probe",

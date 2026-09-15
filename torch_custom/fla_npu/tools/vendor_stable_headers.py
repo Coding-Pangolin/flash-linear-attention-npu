@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Refresh or verify the vendored torch Stable-ABI header closure.
 
-The launcher is compiled against ``csrc_stable/include/torch_stable_abi`` rather
+The launcher is compiled against ``csrc/include/torch_stable_abi`` rather
 than the installed torch, because the header that decides the runtime floor is
 also the one that moves: from 2.10 on ``library.h`` registers through
 ``torch_library_impl``, which 2.7.1 -- 2.9 do not export.  See the tree's
@@ -45,7 +45,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]        # torch_custom/fla_npu
-CSRC = ROOT / "csrc_stable"
+CSRC = ROOT / "csrc"
 VENDOR = CSRC / "include" / "torch_stable_abi"
 MANIFEST_NAME = "MANIFEST.sha256"
 

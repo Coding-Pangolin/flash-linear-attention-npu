@@ -8,7 +8,7 @@
 
 1. 一个装好 OPP 的 `fla_npu` 包（wheel 安装态，或源码树加
    `ASCEND_CUSTOM_OPP_PATH` 指向 `fla_npu/opp/vendors/fla_npu_transformer`）；
-2. 编译好的 launcher：`python csrc_stable/build_stable.py --out <path>`，
+2. 编译好的 launcher：`python csrc/build_stable.py --out <path>`，
    然后用 `FLA_NPU_STABLE_LIB=<path>` 指过去（wheel 安装态会自动用包里那份）；
 3. 一张可用的卡：`ASCEND_RT_VISIBLE_DEVICES=<n>`。
 

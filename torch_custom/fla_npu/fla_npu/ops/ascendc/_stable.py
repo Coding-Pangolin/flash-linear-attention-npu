@@ -35,6 +35,11 @@ _raw_stream_fn = None
 # int[] argument cache: value tuple -> host int64 tensor (see _host_ints).
 _INT_CACHE: dict[tuple, object] = {}
 _INT_CACHE_MAX = 64
+# What the launcher's `stream` slot gets when the launcher can resolve the
+# stream itself; see _current_stream_ptr.
+_STREAM_SENTINEL = -1
+# None until the question has been asked of the loaded library.
+_launcher_resolves_stream: bool | None = None
 
 # The stable value conversions have no std::string support, so string enum
 # arguments travel as int codes.  Every layout argument uses the same order --
@@ -68,9 +73,51 @@ def _lib_path() -> str:
         f"{_LIB_ENV} is not set and no bundled libfla_npu_stable.so was found")
 
 
-def _current_stream_ptr() -> int:
-    """Raw NPU stream of the calling thread (no cached stream pointer)."""
+def _resolves_stream() -> bool:
+    """Whether the loaded launcher can find the current NPU stream itself.
 
+    Asked once, through ctypes, because the answer decides what every later call
+    passes in its ``stream`` slot.  The launcher then *queries* the stream on
+    each call through torch_npu's ``aoti_torch_get_current_npu_stream`` -- the
+    same handle ``_npu_getCurrentRawStream`` returns, for ~1us instead of the
+    ~19us Python round trip.  Nothing is cached: a process-global stream pointer
+    is what sent kernels to another thread's stream in the vLLM run.
+    """
+
+    global _launcher_resolves_stream
+    if _launcher_resolves_stream is None:
+        requested = (os.environ.get("FLA_NPU_STABLE_STREAM") or "").strip().lower()
+        value = False
+        if requested not in ("", "launcher"):
+            # Escape hatch for bisecting a stream problem in the field: with
+            # "python" the glue reads the stream through torch_npu's accessor
+            # exactly as it did before the launcher learned to resolve it.
+            _launcher_resolves_stream = False
+            return False
+        try:
+            # A wrapper may ask for the stream before it has touched an op
+            # handle (`npu_recurrent_kda` builds its argument list first), so
+            # the library has to be loaded before it can be interrogated.
+            load()
+            import ctypes
+
+            lib = ctypes.CDLL(_loaded_path)
+            probe = lib.fla_npu_stable_stream_resolver_available
+            probe.restype = ctypes.c_int32
+            value = bool(probe())
+        except Exception:
+            # No library loaded yet, or one built before the launcher learned
+            # to resolve streams: fall back to reading it here.
+            value = False
+        _launcher_resolves_stream = value
+    return _launcher_resolves_stream
+
+
+def _current_stream_ptr() -> int:
+    """The launcher's ``stream`` argument (never a cached stream pointer)."""
+
+    if _resolves_stream():
+        return _STREAM_SENTINEL
     global _raw_stream_fn
     torch = _modules()[0]
     if _raw_stream_fn is not None:
@@ -700,6 +747,12 @@ def _dense_conv_state(conv_state):
     copied back, so the in-place contract holds either way.
     """
 
+    # This runs once per decode step, so ask the one question that settles the
+    # common case first: a contiguous state is the dense case by definition.
+    # (The gate below also looks at the strides and at what the CANN runtime
+    # does with a view, which is what a paged state needs.)
+    if conv_state is None or conv_state.is_contiguous():
+        return conv_state, None
     if not conv_state_needs_dense_copy(conv_state):
         return conv_state, None
     return conv_state.contiguous(), conv_state
@@ -719,11 +772,16 @@ def npu_causal_conv1d_fn(x, weight, bias, conv_states=None,
                          head_num=0):
     """Prefill: convolve ``x`` and roll its tail into ``conv_states``."""
 
-    _reject_conv1d_scheduling(
-        block_idx_first_scheduled_token=block_idx_first_scheduled_token,
-        block_idx_last_scheduled_token=block_idx_last_scheduled_token,
-        initial_state_idx=initial_state_idx,
-        num_computed_tokens=num_computed_tokens, metadata=metadata)
+    if (block_idx_first_scheduled_token is not None
+            or block_idx_last_scheduled_token is not None
+            or initial_state_idx is not None
+            or num_computed_tokens is not None
+            or metadata is not None):
+        _reject_conv1d_scheduling(
+            block_idx_first_scheduled_token=block_idx_first_scheduled_token,
+            block_idx_last_scheduled_token=block_idx_last_scheduled_token,
+            initial_state_idx=initial_state_idx,
+            num_computed_tokens=num_computed_tokens, metadata=metadata)
     if block_size_to_align not in (0, None):
         raise NotImplementedError(
             "CausalConv1d block_size_to_align is not supported by the Ascend "
@@ -757,9 +815,11 @@ def npu_causal_conv1d_update(x, conv_state, weight, bias=None, activation=None,
                              query_start_loc_cpu=None):
     """Decode: one token per sequence, mutating ``conv_state`` in place."""
 
-    _reject_conv1d_scheduling(
-        block_idx_last_scheduled_token=block_idx_last_scheduled_token,
-        initial_state_idx=initial_state_idx)
+    if (block_idx_last_scheduled_token is not None
+            or initial_state_idx is not None):
+        _reject_conv1d_scheduling(
+            block_idx_last_scheduled_token=block_idx_last_scheduled_token,
+            initial_state_idx=initial_state_idx)
     state_arg, restore = _dense_conv_state(conv_state)
     result = _bound_op("npu_causal_conv1d_update")(
         x, state_arg, weight, bias, _conv1d_activation_code(activation),

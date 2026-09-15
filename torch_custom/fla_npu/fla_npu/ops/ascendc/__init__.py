@@ -117,22 +117,36 @@ def _mutation_plan(name: str, signature: inspect.Signature):
     signature: hashing a 20-argument ``inspect.Signature`` costs ~30us, which
     would land on every call and dwarf everything this avoids.
 
-    Returns ``(mutated_names, mutated_positions, min_args, flag_name,
-    flag_default, flag_position)``.
+    Returns ``(mutated_args, flag)``, each entry ``(name, position, default)``:
+    ``position`` is the index a positional call puts the argument at, or None
+    for an argument that can only be passed by keyword, and ``default`` is what
+    the signature supplies when the call omits it.  Reading a call this way
+    replaces ``Signature.bind(..., apply_defaults=True)``, which cost ~12us on
+    a decode operator's fifteen parameters and ran on every call: a decode step
+    reaches these wrappers a few dozen times.
     """
 
-    mutated_names = tuple(MUTATED_ARGUMENTS.get(name, ()))
     positional_names = [
         parameter.name for parameter in signature.parameters.values()
         if parameter.kind in _POSITIONAL_KINDS
     ]
-    mutated_positions = tuple(
-        positional_names.index(argument) for argument in mutated_names
-        if argument in positional_names
-    )
-    flag_name = None
-    flag_default = False
-    flag_position = None
+
+    def reader(argument: str):
+        parameter = signature.parameters.get(argument)
+        if parameter is None:
+            raise RuntimeError(
+                f"{name}: {argument!r} is not an argument of this operator")
+        position = None
+        if parameter.kind in _POSITIONAL_KINDS:
+            position = positional_names.index(parameter.name)
+        default = parameter.default
+        return (argument, position,
+                None if default is inspect.Parameter.empty else default)
+
+    mutated_args = tuple(reader(argument)
+                         for argument in MUTATED_ARGUMENTS.get(name, ()))
+
+    flag = None
     declared = MUTATION_FLAGS.get(name)
     if declared is not None:
         flag_name, flag_default = declared
@@ -146,44 +160,42 @@ def _mutation_plan(name: str, signature: inspect.Signature):
                 f"{name}: MUTATION_FLAGS[{flag_name!r}] default "
                 f"{flag_default!r} disagrees with the operator signature "
                 f"default {parameter.default!r}")
-        if flag_name in positional_names:
-            flag_position = positional_names.index(flag_name)
-    min_args = (max(mutated_positions) + 1) if mutated_positions else 0
-    return (mutated_names, mutated_positions, min_args, flag_name,
-            bool(flag_default), flag_position)
+        flag = reader(flag_name)
+    return mutated_args, flag
+
+
+def _argument_value(reader, args, kwargs):
+    """One declared argument's value, with the signature's default filled in."""
+
+    name, position, default = reader
+    if position is not None and len(args) > position:
+        return args[position]
+    if name in kwargs:
+        return kwargs[name]
+    return default
 
 
 def _resolve_mutation(plan, signature, predicate, args, kwargs):
     """Return ``(mutated_tensors, used_fast_path)`` for one call.
 
-    The fast path reads the mutated tensor and the declared flag straight out
-    of the caller's arguments; the slow path is the previous
-    ``signature.bind``-based reference used for ops that still need a lambda
-    predicate.
+    The mutated tensors and the declared flag are read straight out of the
+    caller's arguments, in every call form (positional, keyword or mixed), so a
+    decode step never pays for a full ``signature.bind``.  The bind remains the
+    reference for the operators that still need a lambda predicate, which is
+    the only case that has to see every argument's default at once.
     """
 
-    (mutated_names, mutated_positions, min_args, flag_name, flag_default,
-     flag_position) = plan
-    if (min_args and len(args) >= min_args
-            and kwargs.keys().isdisjoint(mutated_names)):
-        if flag_name is not None:
-            if flag_position is not None and len(args) > flag_position:
-                flag_value = args[flag_position]
-            else:
-                flag_value = kwargs.get(flag_name, flag_default)
-            if not flag_value:
-                return [], True
-        return [args[position] for position in mutated_positions], True
-
+    mutated_args, flag = plan
+    if flag is not None and not _argument_value(flag, args, kwargs):
+        return [], True
+    if predicate is None:
+        return ([_argument_value(reader, args, kwargs)
+                 for reader in mutated_args], True)
     bound = signature.bind(*args, **kwargs)
     bound.apply_defaults()
-    active = mutated_names
-    if flag_name is not None:
-        if not bound.arguments[flag_name]:
-            active = ()
-    elif predicate is not None and not predicate(bound.arguments):
-        active = ()
-    return [bound.arguments[argument] for argument in active], False
+    if not predicate(bound.arguments):
+        return [], False
+    return [bound.arguments[argument] for argument, _, _ in mutated_args], False
 
 _LEGACY_TORCH_OPS_WARNING = (
     "torch.ops.npu.{name} is a legacy FLA NPU compatibility API. This call path "
@@ -404,6 +416,38 @@ def _get_stable_op(name: str):
     return getattr(_stable, name, None)
 
 
+# Both of these are module handles and plain functions, so caching them is
+# safe; the wrapper used to `import torch` and walk
+# `torch.autograd.graph.increment_version` on every call, and a decode step
+# reaches these wrappers a few dozen times.
+_TORCH = None
+_INCREMENT_VERSION = None
+
+
+def _torch_runtime():
+    """The torch module, imported once."""
+
+    global _TORCH
+    if _TORCH is None:
+        try:
+            import torch
+        except Exception as exc:
+            raise RuntimeError(
+                "Mutable Ascend C operators require the torch Python runtime."
+            ) from exc
+        _TORCH = torch
+    return _TORCH
+
+
+def _increment_version():
+    """``torch.autograd.graph.increment_version``, resolved once."""
+
+    global _INCREMENT_VERSION
+    if _INCREMENT_VERSION is None:
+        _INCREMENT_VERSION = _torch_runtime().autograd.graph.increment_version
+    return _INCREMENT_VERSION
+
+
 def _wrap_mutable_direct_op(name: str, op: Callable) -> Callable:
     mutated_names = MUTATED_ARGUMENTS.get(name, ())
     if not mutated_names:
@@ -416,10 +460,7 @@ def _wrap_mutable_direct_op(name: str, op: Callable) -> Callable:
 
     @functools.wraps(op)
     def wrapper(*args, **kwargs):
-        try:
-            import torch
-        except Exception as exc:
-            raise RuntimeError("Mutable Ascend C operators require the torch Python runtime.") from exc
+        torch = _torch_runtime()
 
         raw_mutated, _used_fast_path = _resolve_mutation(
             plan, signature, predicate, args, kwargs)
@@ -427,18 +468,16 @@ def _wrap_mutable_direct_op(name: str, op: Callable) -> Callable:
         mutated_tensors = [
             tensor for tensor in raw_mutated if isinstance(tensor, torch.Tensor)
         ]
-        requiring_grad = [
-            tensor for tensor in mutated_tensors if tensor.requires_grad
-        ]
-        if requiring_grad:
-            raise RuntimeError(
-                f"{name} mutates state tensors in place. Mutable state tensors "
-                "must not require gradients; use a functional state API for training."
-            )
+        for tensor in mutated_tensors:
+            if tensor.requires_grad:
+                raise RuntimeError(
+                    f"{name} mutates state tensors in place. Mutable state tensors "
+                    "must not require gradients; use a functional state API for training."
+                )
 
         result = op(*args, **kwargs)
         if mutated_tensors:
-            torch.autograd.graph.increment_version(mutated_tensors)
+            _increment_version()(mutated_tensors)
         return result
 
     return wrapper

@@ -83,21 +83,29 @@ Ascend950（A5）的现状：`--group a5` 在 950 上跑 `regression_950_ops.py`
 - **recurrent 家族仍是 pre-macro 写法**：`npu_recurrent_gated_delta_rule` 与
   `npu_recurrent_kda`（`csrc/src/stable_recurrent_gdr.cpp` /
   `stable_recurrent_kda.cpp`）不经过 `FLA_STABLE_EXEC` + `boxed_adapter`，而是自己
-  调 `get_ws`/`launch`、自己拆栈。原因是宏的拆栈会**夺走参数 handle 的所有权**：
-  torch 的 `torch::stable::Tensor(AtenTensorHandle)` 把 handle 包进带删除器的
-  `shared_ptr`（`tensor_struct.h:80-83`），`to<Tensor>` 明确写明
-  "steals ownership of the input's underlying AtenTensorHandle"
-  （`stableivalue_conversions.h:622-624`）。recurrent 的 `state`/`initial_state` 正是
-  `Tensor(a!)` 这种被调用方别名的参数，所以这两个适配器保留了 handle 形式。
+  调 `get_ws`/`launch`、自己拆栈：它们要把描述符作为一个 bundle 交队列
+  （`detail::enqueue_launch`），宏里没有这个位置。**与参数所有权无关**——
+  `Tensor(a!)` 走类型化拆栈是安全的，而且证据就是这两个适配器自己：它们现在正是
+  用 `to<Tensor>` 拆 `Tensor(a!) state` / `initial_state`，FRESH 归零、服务级 32/32。
+  （全库带 `Tensor(a!)` 的只有这两个 op；conv1d 的 `conv_state` 是普通 `Tensor`，
+  所以它不能拿来当反例。）
+  历史教训：两个适配器最初用 `to<AtenTensorHandle>` 读必选槽——那是 catch-all
+  的 memcpy，**既不消费也不释放**，于是每次调用、每个新鲜输入都漏一份引用。
+  910B3 实测：decode 形状、每次新建 q/k/v 的 2000 次调用让 caching allocator 涨
+  191 MiB（≈100 KiB/次），conc32 服务涨到 8.2 GiB 后 OOM；改成一槽一个
+  owning `Tensor` 后 FRESH 组归零、常驻 allocated 从 103.1 MiB 降到 4.6 MiB。
+  可选槽仍用 `to<std::optional<Tensor>>`：它自己消费内层 handle 并 `delete` 掉
+  dispatcher 分配的那个 box；换成 `to<Tensor>` 会把 box 指针当成张量 handle
+  包起来、再当张量删除，直接破坏堆。
   代价与现状：
   * 它们自己复制了 workspace/launch 那一段（各约 50 行）；
   * `op_abi_parity.py` 需要知道 `AtenTensorHandle` 与 `Tensor` 等价，并允许
     适配函数末尾带 `Tensor*`/`bool*` 这类内部输出参数；
   * `op_abi_validate.py` 原先只看 `FLA_STABLE_EXEC`，看不到它们的 aclnn 参数表——
     现已补上（`hand_written_calls`），并额外做适配↔ctypes 表的一对一对拍。
-  收敛方向（待设备验证）：让 `boxed.h` 支持"以借用的 `AtenTensorHandle` 拆栈"的
-  第二种拆栈方式，或在设备上证明类型化拆栈对 `Tensor(a!)` 安全后整体转换。
-  两个方案都必须先过 parity + vLLM 单请求（现任实现是唯一在真实服务里验证过的）。
+  收敛方向：把"描述符 bundle 交队列"这件事做进宏（`boxed.h` 多一个入口），
+  两个适配器即可整体转成宏写法；转换前必须先过 parity + 多线程多 stream +
+  vLLM 单请求。
 - **`solve_tri` 的 `tnd`**：该 OPP 上 kernel 直接杀进程（ctypes/launcher 都一样），薄层包装里显式拒绝，避免把非法输入变成崩溃。
 - **conv1d FN + `has_initial_state`**：初态序列的输出行在 kernel 里不可复现（同一 ctypes 调用两次结果差 260，第三次是 0），回归里按 kernel 级记录并只对 `has_initial_state=False` 的区间断言 parity。
 - **`int[]` 只能是 host int32/int64 tensor**：device tensor 会被 `int_values` 拒绝（否则按 host 指针读 device 内存）。

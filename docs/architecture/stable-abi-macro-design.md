@@ -85,8 +85,10 @@ Ascend950（A5）的现状：`--group a5` 在 950 上跑 `regression_950_ops.py`
   `stable_recurrent_kda.cpp`）不经过 `FLA_STABLE_EXEC` + `boxed_adapter`，而是自己
   调 `get_ws`/`launch`、自己拆栈：它们要把描述符作为一个 bundle 交队列
   （`detail::enqueue_launch`），宏里没有这个位置。**与参数所有权无关**——
-  `Tensor(a!)` 走类型化拆栈是安全的（conv1d_update 的 `conv_states` 就是
-  `Tensor(a!)`，一直走宏且线上正常）。
+  `Tensor(a!)` 走类型化拆栈是安全的，而且证据就是这两个适配器自己：它们现在正是
+  用 `to<Tensor>` 拆 `Tensor(a!) state` / `initial_state`，FRESH 归零、服务级 32/32。
+  （全库带 `Tensor(a!)` 的只有这两个 op；conv1d 的 `conv_state` 是普通 `Tensor`，
+  所以它不能拿来当反例。）
   **手写拆栈必须遵守 boxed kernel 的契约**（`library.h:69`：*fn is responsible
   for stealing the memory of the inputs, in effect "popping" them off the
   stack*）：每个**必选** Tensor 槽用 `to<Tensor>` 消费那一份

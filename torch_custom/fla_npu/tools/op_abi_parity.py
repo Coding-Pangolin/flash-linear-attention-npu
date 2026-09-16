@@ -60,8 +60,10 @@ _SCHEMA_RE = re.compile(
  # created for the caller is never released and the tensor outlives its use
  # (measured: ~100 KiB leaked per recurrent call, 8.2 GiB before the conc32
  # service OOMed).  Optional slots use to<std::optional<Tensor>>, which
- # consumes the inner handle and frees its box; neither pattern may appear as a
- # raw handle read.
+ # consumes the inner handle and frees its box.  A *present* optional puts that
+ # box pointer in the slot, so reading it with to<Tensor> would wrap the pointer
+ # as an AtenTensorHandle and delete it as a tensor.  Neither pattern may appear
+ # as a raw handle read.
 _OWNERSHIP_VIOLATION_RE = re.compile(
     r"to<\s*AtenTensorHandle\s*>\(\s*stack\s*\[")
 _OWNERSHIP_CONSUME_RE = re.compile(r"to<\s*Tensor\s*>\(\s*stack\s*\[")

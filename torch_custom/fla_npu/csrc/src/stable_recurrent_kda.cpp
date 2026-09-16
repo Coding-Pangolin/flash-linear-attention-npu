@@ -190,8 +190,14 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
 
 void boxed_recurrent_kda(StableIValue* stack, uint64_t num_inputs,
                          uint64_t num_outputs) {
-  (void)num_inputs;
-  (void)num_outputs;
+  // Slots are read positionally: a schema that gained or lost a parameter would
+  // shift every following one instead of failing to build.
+  if (num_inputs != 23 || num_outputs != 2) {
+    throw std::runtime_error(
+        "fla_npu(stable): npu_recurrent_kda takes 23 inputs and 2 outputs, "
+        "the stack declares " + std::to_string(num_inputs) + " and " +
+        std::to_string(num_outputs));
+  }
   // Same contract as stable_recurrent_gdr.cpp: the stack hands the kernel
   // ownership of every argument it reads, so each required slot is unboxed
   // into an owning Tensor and released when this function returns.  The raw

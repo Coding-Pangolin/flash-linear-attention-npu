@@ -52,6 +52,20 @@ _RENAMES = {"do": "d_o"}
 _SCHEMA_RE = re.compile(
     r'constexpr const char\* (kSchema\w*)\s*=\s*((?:"[^"]*"\s*)+);', re.S)
 
+ # A hand-written boxed entry point reads the stack itself.  library.h says the
+ # kernel is responsible for stealing the memory of its inputs, so every required
+ # tensor slot has to go through to<Tensor>, which takes ownership of the handle
+ # and releases it when the entry point returns.  to<AtenTensorHandle> is the
+ # catch-all memcpy -- it consumes nothing, so the reference the dispatcher
+ # created for the caller is never released and the tensor outlives its use
+ # (measured: ~100 KiB leaked per recurrent call, 8.2 GiB before the conc32
+ # service OOMed).  Optional slots use to<std::optional<Tensor>>, which
+ # consumes the inner handle and frees its box; neither pattern may appear as a
+ # raw handle read.
+_OWNERSHIP_VIOLATION_RE = re.compile(
+    r"to<\s*AtenTensorHandle\s*>\(\s*stack\s*\[")
+_OWNERSHIP_CONSUME_RE = re.compile(r"to<\s*Tensor\s*>\(\s*stack\s*\[")
+
 
 def split_params(text: str) -> list[str]:
     parts: list[str] = []
@@ -136,8 +150,16 @@ def adapter_signatures(text: str) -> dict[str, list[tuple[str, str]]]:
 def evaluate() -> dict:
     problems: list[str] = []
     checked = 0
+    owned_slots = 0
     for source in sorted(SRC_DIR.glob("stable_*.cpp")):
         text = source.read_text(encoding="utf-8")
+        for match in _OWNERSHIP_VIOLATION_RE.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            problems.append(
+                f"{source.name}:{line}: to<AtenTensorHandle>(stack[...]) "
+                "does not consume the stack's reference to that tensor; "
+                "unbox the slot with to<Tensor>")
+        owned_slots += len(_OWNERSHIP_CONSUME_RE.findall(text))
         signatures = adapter_signatures(text)
         for call in schema_calls(text):
             if not call["inputs"]:
@@ -183,7 +205,8 @@ def evaluate() -> dict:
                     problems.append(
                         f"{op}: '{schema_name}' is {schema_type} in the schema "
                         f"but {declared} in {name}")
-    return {"checked": checked, "problems": problems}
+    return {"checked": checked, "owned_slots": owned_slots,
+            "problems": problems}
 
 
 def main() -> int:
@@ -197,6 +220,7 @@ def main() -> int:
     for problem in report["problems"]:
         print(f"MISMATCH {problem}")
     print(f"{report['checked']} adapter(s) checked, "
+          f"{report['owned_slots']} stack slot(s) consumed, "
           f"{len(report['problems'])} mismatch(es)")
     print("ABI MATCH: every schema describes the arguments its adapter takes"
           if not report["problems"] else "ABI MISMATCH")

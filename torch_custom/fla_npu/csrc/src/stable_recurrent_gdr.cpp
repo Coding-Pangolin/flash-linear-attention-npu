@@ -2,11 +2,11 @@
 //
 // Included by stable_ops.cpp (single TU).  Only torch/csrc/stable/* plus the
 // shared acl_meta helper: no ATen/c10, no libtorch C++ ABI.
-// Owns: npu_recurrent_gated_delta_rule.  Pre-macro on purpose: its state
-// is an in-place argument, and the macro's typed unboxing would steal the
-// handle (see stable-abi-macro-design.md).  Building the argument list by hand
-// also means submitting by hand: the descriptors travel to the queue as one
-// bundle (see detail::enqueue_launch) instead of in the macro's tuple.
+// Owns: npu_recurrent_gated_delta_rule.  Pre-macro on purpose: it builds the
+// argument list and submits the launch by hand, so the descriptors travel to
+// the queue as one bundle (see detail::enqueue_launch) instead of in the
+// macro's tuple.  The boxed entry point below still consumes each required
+// argument's stack reference, exactly like the macro's typed unboxing.
 
 #include <torch/csrc/stable/library.h>
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
@@ -136,21 +136,43 @@ Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
   return out;
 }
 
-// Boxed entry point: required tensors unbox straight to handles (never through
-// the ownership-stealing Tensor(AtenTensorHandle) constructor), optionals keep
-// the Tensor form so their liveness is explicit.
+// Boxed entry point: every required tensor is unboxed into an owning Tensor, so
+// the reference the dispatcher handed us is consumed exactly once and released
+// when this function returns.  Optionals keep the std::optional<Tensor> form,
+// which consumes the inner handle itself.
 void boxed_recurrent_gated_delta_rule(StableIValue* stack,
                                       uint64_t num_inputs,
                                       uint64_t num_outputs) {
   (void)num_inputs;
   (void)num_outputs;
-  const AtenTensorHandle query = to<AtenTensorHandle>(stack[0]);
-  const AtenTensorHandle key = to<AtenTensorHandle>(stack[1]);
-  const AtenTensorHandle value = to<AtenTensorHandle>(stack[2]);
-  const AtenTensorHandle state = to<AtenTensorHandle>(stack[3]);
-  const AtenTensorHandle beta = to<AtenTensorHandle>(stack[4]);
-  const AtenTensorHandle actual_seq_lengths = to<AtenTensorHandle>(stack[5]);
-  const AtenTensorHandle ssm_state_indices = to<AtenTensorHandle>(stack[6]);
+  // The boxed stack hands the kernel ownership of every argument it reads:
+  // library.h says fn is responsible for stealing the memory of the inputs,
+  // in effect "popping" them off the stack.  Reading a required slot with
+  // to<AtenTensorHandle> consumes nothing, so the reference the dispatcher
+  // created for the caller was never released.  Measured on 910B3: 2000
+  // decode-shaped calls with a fresh q/k/v grew the caching allocator by
+  // 191 MiB (~99 KiB a call: three 32 KiB tensors plus beta/asl/idx at the
+  // 512 B block floor), and the conc32 service grew 8.2 GiB until it OOMd.
+  // One owning Tensor per required slot consumes exactly that reference and
+  // releases it when this function returns; the handle the descriptors see
+  // is borrowed from it.  Optional slots keep the to<std::optional<Tensor>>
+  // form: it consumes the inner handle and frees the box the dispatcher allocated
+  // for it, whereas a missing optional arrives as a null handle that to<Tensor>
+  // would turn into an empty tensor.
+  const Tensor t_query = to<Tensor>(stack[0]);
+  const Tensor t_key = to<Tensor>(stack[1]);
+  const Tensor t_value = to<Tensor>(stack[2]);
+  const Tensor t_state = to<Tensor>(stack[3]);
+  const Tensor t_beta = to<Tensor>(stack[4]);
+  const Tensor t_actual_seq_lengths = to<Tensor>(stack[5]);
+  const Tensor t_ssm_state_indices = to<Tensor>(stack[6]);
+  const AtenTensorHandle query = t_query.get();
+  const AtenTensorHandle key = t_key.get();
+  const AtenTensorHandle value = t_value.get();
+  const AtenTensorHandle state = t_state.get();
+  const AtenTensorHandle beta = t_beta.get();
+  const AtenTensorHandle actual_seq_lengths = t_actual_seq_lengths.get();
+  const AtenTensorHandle ssm_state_indices = t_ssm_state_indices.get();
   const auto num_accepted_tokens = to<std::optional<Tensor>>(stack[7]);
   const auto g = to<std::optional<Tensor>>(stack[8]);
   const auto gk = to<std::optional<Tensor>>(stack[9]);

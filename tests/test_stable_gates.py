@@ -207,6 +207,10 @@ class AbiParityGateTest(unittest.TestCase):
         report = self.tool.evaluate()
         self.assertEqual(report["problems"], [])
         self.assertGreater(report["checked"], 25)
+        # The two hand-written recurrent entry points consume 13 required
+        # tensor slots between them; a drop here means a slot stopped being
+        # unboxed into an owning Tensor and is leaking again.
+        self.assertGreaterEqual(report["owned_slots"], 13)
 
     def test_parameter_reorder_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -232,6 +236,31 @@ class AbiParityGateTest(unittest.TestCase):
                 report = self.tool.evaluate()
             self.assertTrue(any("chunk_size" in item for item in report["problems"]),
                             report["problems"])
+
+    def test_unconsumed_stack_slot_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src"
+            src.mkdir()
+            for path in SRC_DIR.glob("stable_*.cpp"):
+                (src / path.name).write_text(path.read_text(encoding="utf-8"),
+                                             encoding="utf-8")
+            target = src / "stable_recurrent_gdr.cpp"
+            text = target.read_text(encoding="utf-8")
+            # The leak that OOMed the conc32 service: reading a required tensor
+            # slot as a raw handle consumes nothing (library.h expects the kernel
+            # to steal it).
+            changed = text.replace(
+                "const Tensor t_query = to<Tensor>(stack[0]);",
+                "const AtenTensorHandle query = "
+                "to<AtenTensorHandle>(stack[0]);")
+            self.assertNotEqual(changed, text, "test setup did not apply")
+            target.write_text(changed, encoding="utf-8")
+            with mock.patch.object(self.tool, "SRC_DIR", src):
+                report = self.tool.evaluate()
+            self.assertTrue(
+                any("AtenTensorHandle" in item for item in report["problems"]),
+                report["problems"])
+            self.assertEqual(report["owned_slots"], 12)
 
 
 class FallbackGateTest(unittest.TestCase):

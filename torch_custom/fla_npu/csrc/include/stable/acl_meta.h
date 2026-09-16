@@ -139,8 +139,11 @@ struct TensorMeta {
 
 // Fills `meta` from a raw handle.  Deliberately does not construct a
 // torch::stable::Tensor: that constructor *steals* ownership, so a temporary
-// would release the dispatcher's own tensor and the process crashes later.
-// (That was the root cause of the first two handle-unboxing attempts.)
+// would release a reference this layer does not own -- the boxed entry point
+// already consumed the stack's reference to every input, and the output
+// handles are still owned by whoever created them.
+// (Stealing one of them a second time was the root cause of the first two
+// handle-unboxing attempts.)
 inline void fill_meta(AtenTensorHandle handle, TensorMeta* meta) {
   // A missing optional arrives as a null handle; short-circuiting keeps the
   // needed aoti_torch_* set inside what older libtorch builds export.

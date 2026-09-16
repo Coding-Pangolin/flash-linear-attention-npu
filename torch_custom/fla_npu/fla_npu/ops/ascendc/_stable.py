@@ -379,15 +379,36 @@ def load() -> None:
     try:
         torch.ops.load_library(path)
     except Exception as exc:  # symbol resolution happens here, not at dlopen
-        # The launcher resolves aoti_torch_* at load; an older torch fails with
-        # "undefined symbol" a long way from the cause, so say what is wrong.
+        # The launcher resolves aoti_torch_* at load; a missing one otherwise
+        # surfaces as a bare "undefined symbol" a long way from the cause.
         raise RuntimeError(
             f"fla_npu: cannot load the Stable-ABI launcher {path} against "
-            f"torch {torch.__version__}. It needs torch >= {_MIN_TORCH} (the "
-            f"aoti_torch_* runtime symbols it resolves were added over 2.7.x). "
+            f"torch {torch.__version__}. {_load_failure_hint(path, exc)} "
             f"Original error: {exc}") from exc
     _check_build_stamp(path)
     _loaded_path = path
+
+
+def _load_failure_hint(path: str, exc: Exception) -> str:
+    """Name the missing runtime symbol instead of blaming the torch floor.
+
+    A launcher built against a torch newer than its declared floor fails with
+    "undefined symbol: <aoti_torch_...>", which is a different problem from an
+    old runtime: the fix is to rebuild, not to upgrade torch.
+    """
+
+    marker = "undefined symbol: "
+    detail = str(exc)
+    if marker in detail:
+        symbol = detail.split(marker, 1)[1].split()[0].strip("'\"")
+        return (
+            f"The runtime symbol {symbol!r} does not exist in this torch, so "
+            f"this launcher was built against a newer one than the "
+            f">= {_MIN_TORCH} it declares; rebuild it with "
+            f"`python csrc/build_stable.py --out {path} --no-debug-probe`.")
+    return (
+        f"It needs torch >= {_MIN_TORCH} (the aoti_torch_* runtime symbols it "
+        f"resolves were added over 2.7.x).")
 
 
 def _check_build_stamp(path: str) -> None:
@@ -467,7 +488,12 @@ def _bound_op(name: str):
 
 
 def stream_probe(device_index: int) -> tuple[int, int]:
-    """Return (raw backend stream ptr, stable Stream::id()) for comparison."""
+    """Return (raw backend stream ptr, stable Stream::id()) for comparison.
+
+    Both values are -3 when the runtime has no stream shims (torch < 2.9), -1
+    when no stream handle came back, and -2 when the shim refused to report an
+    id.  -3 is informational: every operator still runs through the launcher.
+    """
 
     load()
     import torch

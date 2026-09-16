@@ -106,6 +106,15 @@ Ascend950（A5）的现状：`--group a5` 在 950 上跑 `regression_950_ops.py`
   收敛方向：把"描述符 bundle 交队列"这件事做进宏（`boxed.h` 多一个入口），
   两个适配器即可整体转成宏写法；转换前必须先过 parity + 多线程多 stream +
   vLLM 单请求。
+- **conv1d_update 的 `conv_state` 没写 `Tensor(a!)`**：它和两个 recurrent 入口一样是
+  in/out ref（schema 只写成 `Tensor conv_state`），契约靠 Python 侧
+  `MUTATED_ARGUMENTS` 兜底（拒绝 requires_grad + 手动 bump version counter），eager
+  路径行为正确。补上标注也不会改变结果——单独编一个只改 schema 的库，conv1d 组
+  28/28 与基准逐位一致——但它**不是**编译模式的修复：recurrent 的
+  `state`/`initial_state` 同样是 in/out ref 且不在返回值里，功能化执行下 mutation
+  要靠返回值承载。今天 vLLM-Ascend 的服务路径是 eager（`--enforce-eager` 关掉了
+  torch.compile 与 CUDAGraph），所以这条不构成本次发布风险；要支持图模式时，把
+  state 放进返回值才是完整改法，两个 recurrent 入口一起改。
 - **`solve_tri` 的 `tnd`**：该 OPP 上 kernel 直接杀进程（ctypes/launcher 都一样），薄层包装里显式拒绝，避免把非法输入变成崩溃。
 - **conv1d FN + `has_initial_state`**：初态序列的输出行在 kernel 里不可复现（同一 ctypes 调用两次结果差 260，第三次是 0），回归里按 kernel 级记录并只对 `has_initial_state=False` 的区间断言 parity。
 - **`int[]` 只能是 host int32/int64 tensor**：device tensor 会被 `int_values` 拒绝（否则按 host 指针读 device 内存）。

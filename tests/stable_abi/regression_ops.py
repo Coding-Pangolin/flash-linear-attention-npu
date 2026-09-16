@@ -782,9 +782,9 @@ def scenario_conv1d_update_paged_state():
     be wrong: the tiling asked an optional input for its strides, was answered
     with nothing on a runtime that drops the view description, and addressed
     dense rows -- the state write-back landed in the gaps and the caller kept
-    reading its stale rows.  It is still wrong to hand such a state over on such
-    a runtime, which is why the adapter stages it there
-    (``_runtime.conv1d_view_state_supported``).
+    reading its stale rows.  Getting the strides is the operator's job: the
+    adapter hands the view over as-is, and this scenario pins the result against
+    a dense reference.
     """
 
     lines, state_len, dim, gap = 5, 3, 16, 48

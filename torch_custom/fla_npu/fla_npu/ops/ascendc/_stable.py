@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import os
 
-from ._runtime import conv_state_needs_dense_copy
-
 
 _LIB_ENV = "FLA_NPU_STABLE_LIB"
 # Lowest torch whose stable runtime symbols the launcher was verified against.
@@ -852,11 +850,10 @@ def npu_chunk_fwd_o(q, k, v, h, scale, *, g=None, g_gamma=None,
 # One aclnn entry point, three published entry points; the run mode is baked
 # into which adapter is called rather than travelling as an argument.  What
 # stays here is the part the adapter cannot express: refusing the scheduling
-# parameters the operator does not implement, translating the activation name,
-# and pruning a conv_state the runtime cannot address directly.  A state it can
-# address crosses the boundary as the descriptor's own view -- strides and
-# storage offset included -- which is what `_runtime.conv1d_view_state_supported`
-# pins down; nothing has to be declared alongside it.
+# parameters the operator does not implement and translating the activation
+# name.  The conv_state crosses the boundary as the descriptor's own view --
+# strides and storage offset included -- and what the operator does with that
+# view is the operator's business, not the adapter's.
 
 _PAD_SLOT_ID = -1
 _NULL_BLOCK_ID = 0
@@ -880,31 +877,6 @@ def _reject_conv1d_scheduling(**values):
         raise NotImplementedError(
             "CausalConv1d APC/block-cache scheduling is not supported by the "
             "Ascend operator: " + ", ".join(enabled))
-
-
-def _dense_conv_state(conv_state):
-    """(argument to pass, tensor to copy back into) for a paged conv_state.
-
-    A state the runtime can address where the caller keeps it goes over as it
-    is: the dense case always, and a block-strided view whenever the runtime
-    hands the operator's tiling the descriptor's view description -- see
-    `_runtime.conv_state_needs_dense_copy` for the rule and
-    `_runtime.conv1d_view_state_supported` for the measured boundary (9.1.0
-    addresses such a state densely and writes into the gaps;
-    `scenario_conv1d_update_paged_state` checks the addressed case against a
-    dense reference).  Everything else is staged through a dense copy that is
-    copied back, so the in-place contract holds either way.
-    """
-
-    # This runs once per decode step, so ask the one question that settles the
-    # common case first: a contiguous state is the dense case by definition.
-    # (The gate below also looks at the strides and at what the CANN runtime
-    # does with a view, which is what a paged state needs.)
-    if conv_state is None or conv_state.is_contiguous():
-        return conv_state, None
-    if not conv_state_needs_dense_copy(conv_state):
-        return conv_state, None
-    return conv_state.contiguous(), conv_state
 
 
 def npu_causal_conv1d_fn(x, weight, bias, conv_states=None,
@@ -939,11 +911,6 @@ def npu_causal_conv1d_fn(x, weight, bias, conv_states=None,
     # once and call no helper on the way in.  See the note above `_INC_VERSION`.
     if conv_states is not None and conv_states.requires_grad:
         _refuse_grad_state("npu_causal_conv1d_fn", conv_states)
-    if conv_states is None or conv_states.is_contiguous():
-        state_arg = conv_states
-        restore = None
-    else:
-        state_arg, restore = _dense_conv_state(conv_states)
     code = _CONV1D_ACTIVATION_CODES.get(
         "none" if activation is None else str(activation))
     if code is None:
@@ -953,7 +920,7 @@ def npu_causal_conv1d_fn(x, weight, bias, conv_states=None,
     if op is None:
         op = _op("npu_causal_conv1d_fn")
     result = op(
-        x, weight, bias, state_arg,
+        x, weight, bias, conv_states,
         query_start_loc, cache_indices, has_initial_state,
         None if query_start_loc_cpu is None else _host_ints(
             query_start_loc_cpu),
@@ -965,8 +932,6 @@ def npu_causal_conv1d_fn(x, weight, bias, conv_states=None,
         _NULL_BLOCK_ID if null_block_id is None else null_block_id,
         head_num, stream,
     )
-    if restore is not None:
-        restore.copy_(state_arg)
     if conv_states is not None:
         bump = _INC_VERSION
         if bump is None:
@@ -994,11 +959,6 @@ def npu_causal_conv1d_update(x, conv_state, weight, bias=None, activation=None,
             initial_state_idx=initial_state_idx)
     if conv_state is not None and conv_state.requires_grad:
         _refuse_grad_state("npu_causal_conv1d_update", conv_state)
-    if conv_state is None or conv_state.is_contiguous():
-        state_arg = conv_state
-        restore = None
-    else:
-        state_arg, restore = _dense_conv_state(conv_state)
     code = _CONV1D_ACTIVATION_CODES.get(
         "none" if activation is None else str(activation))
     if code is None:
@@ -1008,7 +968,7 @@ def npu_causal_conv1d_update(x, conv_state, weight, bias=None, activation=None,
     if op is None:
         op = _op("npu_causal_conv1d_update")
     result = op(
-        x, state_arg, weight, bias, code,
+        x, conv_state, weight, bias, code,
         conv_state_indices, num_accepted_tokens, query_start_loc,
         max_query_len,
         _NULL_BLOCK_ID if null_block_id is None else null_block_id,
@@ -1020,8 +980,6 @@ def npu_causal_conv1d_update(x, conv_state, weight, bias=None, activation=None,
             query_start_loc_cpu),
         out, stream,
     )
-    if restore is not None:
-        restore.copy_(state_arg)
     if conv_state is not None:
         bump = _INC_VERSION
         if bump is None:
@@ -1056,17 +1014,13 @@ def npu_causal_conv1d(x, weight, bias=None, conv_states=None, *,
     if activation_mode not in (0, 1):
         raise ValueError(
             f"activation_mode only supports 0/1, got {activation_mode}")
-    state_arg, restore = (None, None) if conv_states is None else (
-        _dense_conv_state(conv_states))
     result = _op("npu_causal_conv1d")(
-        x, weight, bias, state_arg,
+        x, weight, bias, conv_states,
         _host_ints(query_start_loc), _host_ints(cache_indices),
         _host_ints(initial_state_mode), _host_ints(num_accepted_tokens),
         _CONV1D_ACTIVATION_CODES["silu" if activation_mode == 1 else "none"],
         pad_slot_id, run_mode, head_num, _current_stream_ptr(),
     )
-    if restore is not None:
-        restore.copy_(state_arg)
     return result
 
 

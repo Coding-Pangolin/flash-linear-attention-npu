@@ -143,8 +143,14 @@ Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
 void boxed_recurrent_gated_delta_rule(StableIValue* stack,
                                       uint64_t num_inputs,
                                       uint64_t num_outputs) {
-  (void)num_inputs;
-  (void)num_outputs;
+  // Slots are read positionally: a schema that gained or lost a parameter would
+  // shift every following one instead of failing to build.
+  if (num_inputs != 12 || num_outputs != 1) {
+    throw std::runtime_error(
+        "fla_npu(stable): npu_recurrent_gated_delta_rule takes 12 inputs "
+        "and 1 output, the stack declares " + std::to_string(num_inputs) +
+        " and " + std::to_string(num_outputs));
+  }
   // The boxed stack hands the kernel ownership of every argument it reads:
   // library.h says fn is responsible for stealing the memory of the inputs,
   // in effect "popping" them off the stack.  Reading a required slot with
@@ -156,9 +162,12 @@ void boxed_recurrent_gated_delta_rule(StableIValue* stack,
   // One owning Tensor per required slot consumes exactly that reference and
   // releases it when this function returns; the handle the descriptors see
   // is borrowed from it.  Optional slots keep the to<std::optional<Tensor>>
-  // form: it consumes the inner handle and frees the box the dispatcher allocated
-  // for it, whereas a missing optional arrives as a null handle that to<Tensor>
-  // would turn into an empty tensor.
+  // form: it consumes the inner handle and frees the box the dispatcher
+  // allocated for it, and it is the only safe reader here.  A *present*
+  // optional puts a pointer to that heap box in the slot, so to<Tensor> would
+  // wrap the box pointer as an AtenTensorHandle and delete it as a tensor --
+  // the heap corruption the first two handle-unboxing attempts hit; a None
+  // arrives as a null handle instead.
   const Tensor t_query = to<Tensor>(stack[0]);
   const Tensor t_key = to<Tensor>(stack[1]);
   const Tensor t_value = to<Tensor>(stack[2]);

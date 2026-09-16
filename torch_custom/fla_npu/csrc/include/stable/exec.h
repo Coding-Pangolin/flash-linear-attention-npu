@@ -24,6 +24,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -264,11 +266,144 @@ inline int call_get_workspace(void* address, Tuple& args,
   return fn(std::get<I>(args).get()..., workspace, executor);
 }
 
+// A launch that runs on torch_npu's task queue returns to no caller, so its
+// status cannot be thrown where the caller could catch it.  The code is left
+// here instead and raised by the next operator call, on whichever thread makes
+// it.  Errors that a caller can act on (a rejected shape, a bad dtype) come out
+// of GetWorkspaceSize synchronously; this covers what is left.
+inline std::mutex& async_failure_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+inline std::string& async_failure_message() {
+  static std::string message;
+  return message;
+}
+
+inline void report_async_failure(const std::string& api, int code) {
+  std::lock_guard<std::mutex> guard(async_failure_mutex());
+  if (async_failure_message().empty()) {
+    async_failure_message() =
+        api + " failed asynchronously: " + std::to_string(code);
+  }
+}
+
+inline void check_async_failure() {
+  std::string message;
+  {
+    std::lock_guard<std::mutex> guard(async_failure_mutex());
+    if (async_failure_message().empty()) {
+      return;
+    }
+    message.swap(async_failure_message());
+  }
+  throw std::runtime_error("fla_npu(stable): " + message);
+}
+
+// The argument tuple the macro builds is a tuple of references to holders, so
+// it cannot be handed to the task queue as it stands: the queue runs the launch
+// after the calling full-expression is gone.  These turn it into a tuple of
+// values (the holders are movable) that the queue entry owns.
+template <class Tuple>
+struct ValueTuple;
+
+template <class... Elements>
+struct ValueTuple<std::tuple<Elements...>> {
+  using type = std::tuple<std::remove_reference_t<Elements>...>;
+};
+
+template <class Held, class Tuple, size_t... I>
+inline Held hold_args(Tuple& args, std::index_sequence<I...>) {
+  return Held(std::move(std::get<I>(args))...);
+}
+
+// What a queue entry owns while it waits its turn: the descriptors (the launch
+// reads them) and the workspace (its storage must not go back to the caching
+// allocator before the launch is submitted).
+template <class Held>
+struct QueuedLaunch {
+  std::optional<Held> held;
+  std::optional<torch::stable::Tensor> workspace;
+
+  void release() {
+    workspace.reset();
+    held.reset();
+  }
+};
+
+// Hand one launch to torch_npu's task queue, and say whether it went there.
+//
+// Both the macro and the two hand-written recurrent adapters submit through
+// here, so "queued" means the same thing in every adapter: the entry owns the
+// descriptors and the workspace until the launch has been submitted, and the
+// ordering the caller gave up by not taking the queue's barrier now comes from
+// the queue itself.
+//
+// `held` and `workspace` are borrowed, not consumed: on a refusal they are
+// handed back untouched, so the caller can still launch inline.  That refusal
+// is not hypothetical -- `enCurrentNPUStream` rejects an *external* stream
+// ("External NPU stream is not supported by task queue enqueue") before it
+// submits anything, and a launcher that dropped the descriptors there would
+// turn "this stream is not queueable" into a dangling one.
+//
+// Returns false when the caller has to submit inline: this host has no queue
+// entry point, or torch_npu refused the enqueue for this stream.  An inline
+// submission needs a stream read that first drains the queue -- the
+// barrier-taking accessor -- because it would otherwise overtake whatever the
+// host enqueued before it.  The Python glue picks the non-flushing accessor
+// exactly when this function reports that it did queue (see
+// _stable._current_stream_ptr), so the two decisions cannot disagree.
+template <class Held>
+inline bool enqueue_launch(Runtime& runtime, const char* api, LaunchFn launch,
+                           int64_t stream, void* workspace_ptr,
+                           uint64_t workspace_size, aclOpExecutor* executor,
+                           torch::stable::Tensor& workspace, Held& held) {
+  if (!runtime.enqueue_enabled()) {
+    return false;
+  }
+  auto state = std::make_shared<QueuedLaunch<std::remove_reference_t<Held>>>();
+  state->held.emplace(std::move(held));
+  if (workspace_size != 0) {
+    state->workspace.emplace(std::move(workspace));
+  }
+  // `api` is a literal in every caller, so the pointer is enough to capture and
+  // costs nothing per call.
+  auto call = [state, launch, workspace_ptr, workspace_size, executor, api,
+               stream]() -> int {
+    const int ret = launch(workspace_ptr, workspace_size, executor,
+                           reinterpret_cast<void*>(stream));
+    if (ret != 0) {
+      report_async_failure(api, ret);
+    }
+    // The descriptors and the workspace have done their job once the launch has
+    // been submitted.
+    state->release();
+    return ret;
+  };
+  // The queue entry moves the callable out of `call`, so its state (and with it
+  // every descriptor) lives exactly as long as the entry does.
+  try {
+    runtime.enqueue(api, call);
+  } catch (const std::exception&) {
+    // The enqueue was refused before it wrote to the queue, so nothing has been
+    // submitted: hand the caller back its arguments and let it take the inline
+    // path, which is how this stream was served before the queue existed.
+    held = std::move(*state->held);
+    if (state->workspace.has_value()) {
+      workspace = std::move(*state->workspace);
+    }
+    state->release();
+    return false;
+  }
+  return true;
+}
+
 }  // namespace detail
 
 // `FLA_NPU_STABLE_TRACE=1` prints one line per operator the first time each one
-// runs: how much workspace its tiling asked for and which side resolved the
-// stream.  The environment is read once, so a traced build costs the same as an
+// runs: how much workspace its tiling asked for and which stream the glue read
+// for it.  The environment is read once, so a traced build costs the same as an
 // untraced one on the hot path.
 inline bool trace_enabled() {
   static const bool enabled = std::getenv("FLA_NPU_STABLE_TRACE") != nullptr;
@@ -276,7 +411,7 @@ inline bool trace_enabled() {
 }
 
 inline void trace_once(const char* api, uint64_t workspace_size,
-                       bool stream_from_launcher) {
+                       int64_t stream) {
   static std::mutex mutex;
   static std::set<std::string> seen;
   std::lock_guard<std::mutex> guard(mutex);
@@ -284,45 +419,28 @@ inline void trace_once(const char* api, uint64_t workspace_size,
     return;
   }
   std::fprintf(stderr,
-               "[fla_npu(stable)] %s workspace=%llu bytes stream=%s\n", api,
+               "[fla_npu(stable)] %s workspace=%llu bytes stream=%#llx\n", api,
                static_cast<unsigned long long>(workspace_size),
-               stream_from_launcher ? "launcher" : "caller");
+               static_cast<unsigned long long>(stream));
 }
 
 // `Tuple` is whatever the macro's std::forward_as_tuple produced; the holders
 // inside it live until the end of the calling full-expression, which is what
 // keeps every descriptor alive across both aclnn calls.
 //
-// A negative `stream` is the "ask the launcher" sentinel: the Python glue sends
-// it whenever this library can look the stream up itself, which keeps
-// torch_npu's Python accessor off the hot path.  It stays a real query on every
-// call, never a cache -- a cached stream is what sent kernels to another
-// thread's stream in the vLLM run.  The device comes from the operator's own
-// input, i.e. the device the kernel runs on.
+// `stream` is read by the Python glue on every call -- never cached, because a
+// cached stream pointer is what sent kernels to another thread's stream in the
+// vLLM run.  Which accessor it may use depends on how the launch is submitted:
+// see enqueue_launch below, and _stable._current_stream_ptr on the other side
+// of the boundary.
 //
-// Adapters that build their argument list by hand (the two recurrent ones,
-// whose `state` is in-place and would be stolen by the macro's typed unboxing)
-// must resolve through here too.  Forwarding the sentinel raw hands the device
-// `(void*)-1`, which faults as soon as anything is queued behind it.
-//
-// The value that came out is kept per thread (see
-// fla_npu_stable_last_resolved_stream) so a test can read back *which* stream a
-// call ran on.  That matters now that the decision is made here rather than in
-// the Python glue: the multi-stream regression used to observe the wrapper's
-// argument, and with the launcher resolving it the argument is only a sentinel.
-inline thread_local int64_t t_last_resolved_stream = -1;
+// The value is kept per thread (see fla_npu_stable_last_launch_stream) so a test
+// can read back *which* stream a call ran on, from the thread that made it.
+inline thread_local int64_t t_last_launch_stream = -1;
 
-inline int64_t resolve_stream(int64_t stream, const TensorMeta& meta) {
-  const int64_t resolved =
-      stream >= 0 ? stream
-                  : Runtime::instance().current_stream(meta.device_index);
-  t_last_resolved_stream = resolved;
-  return resolved;
-}
-
-// The same, in the form aclnn takes it.
-inline void* launch_stream(int64_t stream, const TensorMeta& meta) {
-  return reinterpret_cast<void*>(resolve_stream(stream, meta));
+// Remember which stream this call is about to launch on.
+inline void note_launch_stream(int64_t stream) {
+  t_last_launch_stream = stream;
 }
 
 template <class Tuple>
@@ -334,8 +452,8 @@ inline void exec(const char* api, const TensorMeta& workspace_meta,
   void* get_workspace = runtime.symbol(base + "GetWorkspaceSize");
   auto launch = reinterpret_cast<LaunchFn>(runtime.symbol(base));
 
-  const bool stream_from_launcher = stream < 0;
-  stream = resolve_stream(stream, workspace_meta);
+  note_launch_stream(stream);
+  detail::check_async_failure();
 
   uint64_t workspace_size = 0;
   aclOpExecutor* executor = nullptr;
@@ -350,7 +468,7 @@ inline void exec(const char* api, const TensorMeta& workspace_meta,
                              std::to_string(get_ret));
   }
   if (trace_enabled()) {
-    trace_once(api, workspace_size, stream_from_launcher);
+    trace_once(api, workspace_size, stream);
   }
 
   torch::stable::Tensor workspace;
@@ -362,6 +480,28 @@ inline void exec(const char* api, const TensorMeta& workspace_meta,
                                workspace_meta);
     TORCH_ERROR_CODE_CHECK(
         aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
+  }
+
+  // Two ways to submit, picked by what the host's torch_npu offers.
+  //
+  // Enqueue: hand the launch to torch_npu's task queue, where it runs on the
+  // consumer thread in queue order -- the same path vLLM's EXEC_NPU_CMD takes.
+  // Ordering then comes from the queue, so the stream does not have to be read
+  // through the barrier-taking accessor, and on a busy worker that barrier is
+  // the difference between ~0.25 ms and ~1.2 ms per call.
+  //
+  // Inline: submit directly on the host thread.  Correct only together with a
+  // stream read that first drains the queue -- the accessor the glue picks when
+  // the launcher reports no queue entry point -- because a direct submission
+  // would otherwise overtake work the host enqueued before it.  This is the
+  // fallback for a torch_npu without that entry point.
+  using Held = typename detail::ValueTuple<Elements>::type;
+  auto held = detail::hold_args<Held>(
+      args, std::make_index_sequence<std::tuple_size<Held>::value>{});
+  if (detail::enqueue_launch(runtime, api, launch, stream, workspace_ptr,
+                             workspace_size, executor, workspace,
+                             held)) {
+    return;
   }
 
   const int launch_ret = launch(workspace_ptr, workspace_size, executor,

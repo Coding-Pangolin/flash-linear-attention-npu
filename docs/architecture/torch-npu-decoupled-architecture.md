@@ -331,7 +331,8 @@ wrapper 必须明确选择以下一种语义：
 1. 从非空输出 tensor 确定目标 NPU device。
 2. 所有输入和输出必须位于同一 device；不隐式跨卡拷贝。
 3. 在 `torch.npu.device(target_index)` guard 内创建 descriptor、分配 workspace 和 launch。
-4. 使用 `torch.npu.current_stream(target_index)`，不使用调用方当前 device 的 stream。
+4. 取目标 device 的 current stream，不使用调用方当前 device 的 stream（ctypes 路径走 `torch.npu.current_stream(target_index)`；
+   stable 路径见 §5.3 末尾的说明）。
 5. 退出 guard 后恢复调用方原 device。
 
 因此，即使线程当前 device 是 `npu:0`，只要输入输出在 `npu:2`，算子也会在 `npu:2` 的 current stream 上执行。跨卡输入必须由调用方提前搬运。
@@ -346,6 +347,14 @@ stream_ptr = int(stream.npu_stream)
 ```
 
 外部 executor 需要在调用 fla_npu 前，把自己的 ACL stream 设置为目标 device 的 current stream。之后 fla_npu 会把 aclnn kernel enqueue 到同一 stream。
+
+> **stable 路径的差异**：上面对应 ctypes 路径。stable/launcher 路径不再在 Python 里读
+> `current_stream().npu_stream`，而是把 stream 当普通参数交给 launcher，并由 `_stable.py` 按
+> **下发方式**选 accessor：launch 交给 torch_npu task queue 时用 `_npu_getCurrentRawStreamNoWait`
+> （不排空队列，顺序由队列保证），内联直投时退回 `_npu_getCurrentRawStream`（先排空队列，保证
+> 内联 kernel 不掉到已入队任务前面）。两者的 stream 语义相同，差别只在要不要等待队列排空——
+> 用错只是性能问题（vLLM 下 +40~80 ms/step），不会改变 stream 归属。详见
+> `stable-abi-op-onboarding.md` §7。
 
 数据依赖分两种情况：
 

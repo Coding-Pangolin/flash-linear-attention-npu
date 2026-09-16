@@ -114,7 +114,7 @@ stride 支持是算子/runtime 的能力，不是适配层的策略；而且"读
 paged 布局的正确性由 `scenario_conv1d_update_paged_state` /
 `scenario_conv1d_prefill_paged_state` 对 dense 参考验收。
 
-## 为什么 stream 查询曾经留在 Python（2026-09-16 已被推翻，见下一节）
+## 为什么 stream 查询曾经留在 Python（2026-09-16 已被推翻，见下面两节）
 
 把"取当前 stream"下沉进 C++ 是**不可行**的，三条路都验过：
 
@@ -131,15 +131,51 @@ paged 布局的正确性由 `scenario_conv1d_update_paged_state` /
 > 下面三条只对 `aoti_torch_get_current_stream` 成立：它返回的是 `Stream::id()`，
 > 在 torch_npu 上不是底层句柄。这也正是当时判"下沉不可行"的原因——找错了符号。
 
-## 2026-09-16：stream 已经下沉进 launcher
+## 2026-09-16：stream 回到 Python，按"下发方式"选 accessor
 
-torch_npu 自己用的是**另一个**稳定 ABI 符号：`aoti_torch_get_current_npu_stream`，
-它返回的正是 `_npu_getCurrentRawStream` 的原始指针。`runtime.cpp` 现在
-`dlsym(RTLD_DEFAULT)` 找它（找不到再 `dlopen("libtorch_npu.so")`），**每次调用真查、
-不缓存**，Python 侧确认符号可用后一律传哨兵 `-1`。`FLA_NPU_STABLE_STREAM=python`
-是留给现场二分定位的逃生阀，强制回到 Python 取 stream。
+先前的"下沉进 launcher"只看了一半。`aoti_torch_get_current_npu_stream` 确实返回同一个
+原始指针，但它走的是 `NPUStream::stream()` 的**无参**重载：任务队列非空时先
+`MakeSureQueueEmpty()` 把队列排空。空队列上这次查询看着免费（~1 µs），vLLM 的 worker
+上队列几乎不空，实测**每次调用 0.85–1.2 ms**（分步 profile：`resolve_stream` 占
+conv1d 总耗时 82.6%、recurrent 77.9%）。
 
-同一次运行内的空队列分层（batch 100、dim 4096、910B3，臂之间轮转）：
+现在取流回到 Python，**选哪把 accessor 由"下发方式"决定**：
+
+- launcher 能解析到 `at_npu::native::OpCommand::RunOpApiV2`（vLLM `EXEC_NPU_CMD` 走的
+  那条）时，下发**入队**执行（`detail::enqueue_launch`，宏与两个手写 recurrent 适配器
+  共用），顺序由队列保证，取流用 `_npu_getCurrentRawStreamNoWait`。这个配对是 torch_npu
+  自己写明的：`torch_npu/csrc/npu/Module.cpp` 在 `_npu_getCurrentRawStreamNoWait` 上方
+  注明它**不清空任务队列**、只能与队列下发二选一，它的 inductor codegen 也正是这么用的。
+- 解析不到队列入口（或 `FLA_NPU_STABLE_LAUNCH=inline`）时，下发是**直投**，必须先排空
+  队列，取流用会 flush 的 `_npu_getCurrentRawStream`：慢，但在任何 host 上都正确。
+
+还有第三种可能：入口能解析到，但 torch_npu **拒绝**这一次入队。`enCurrentNPUStream` 对
+外部 stream 直接 `TORCH_CHECK`（`External NPU stream is not supported by task queue
+enqueue`），而拒绝发生在写入队列之前。`detail::enqueue_launch` 因此把描述符与 workspace
+原样交回调用方、返回 false，改走直投——就是这个 stream 在队列存在之前的老路径。公开行为
+不变：不会因为"这条 stream 不能入队"而报错，也不会让描述符提前析构。
+
+能力由库自己回答（`fla_npu_stable_queue_enqueue_available()`），Python 问一次后决定
+每次调用传什么；`FLA_NPU_STABLE_STREAM=accessor`（旧名 `python` / `python-tensor` 同义，
+报文里会提示未知取值）是现场二分用的逃生阀，强制走会 flush 的那把。**任何情况下都不缓存
+stream 指针**——缓存正是 512 崩溃的根因。
+
+两种下发的同形状 parity：221 上 `causal_conv1d_update` 与
+`recurrent_gated_delta_rule` 的 output/state digest 在 inline 与 queue 之间**逐位一致**
+（batch 100 的 decode 形状，两把 accessor 返回同一个指针）。host P50（910B3，机器上还有
+别人的任务，绝对值只用于同一次运行内的对比）：
+
+| 臂 | `causal_conv1d_update` | `recurrent_gated_delta_rule` |
+| --- | --- | --- |
+| idle + inline（会 flush，但队列空） | 65–87 µs | 83–111 µs |
+| idle + queue（入队） | 90–134 µs | 106–151 µs |
+
+空队列上入队比 flush 贵约 25 µs——那是跨线程交接的成本；flush 的代价只在队列非空时
+出现，而那正是服务的常态。一个 decode step 走 30 次这两个算子，flush 口径的代价是
+**+40–80 ms/step**。
+
+空队列上重新做一次分层，是为了确认 stream 这一段现在回到"≈0"（batch 100、
+dim 4096、910B3，臂之间轮转）：
 
 | 层 | host P50 |
 | --- | --- |
@@ -152,8 +188,8 @@ torch_npu 自己用的是**另一个**稳定 ABI 符号：`aoti_torch_get_curren
 
 三点修正：
 
-- stream 解析在 raw 层已经≈0：raw+sentinel（0.0462）与 raw+调用方 stream（0.0445）
-  同值，说明省下的是 Python 取 stream 的那一段；
+- "raw 层 stream 已经≈0"这条要加前提：0.0462 / 0.0445 那组对比是在**空队列**上做的，
+  此时 flush 本来就免费；队列非空时同一段代码要 0.85–1.2 ms（见上一节）；
 - boxed 拆栈不是瓶颈：0.0041 对 `aten` 0.0034，参数从 1 个涨到 13 个只多约 5 µs；
 - 剩下的开销是 **mutation wrapper ~10 µs + kwargs 调用形态 ~4 µs**，
   而不是 stream 查询。

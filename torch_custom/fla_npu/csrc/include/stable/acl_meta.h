@@ -307,6 +307,25 @@ class AclTensorView {
   AclTensorView(const AclTensorView&) = delete;
   AclTensorView& operator=(const AclTensorView&) = delete;
 
+  // Movable so that an argument tuple can be handed to torch_npu's task queue
+  // (see exec.h): the descriptor keeps exactly one owner, and the source is
+  // left empty so its destructor cannot destroy the same descriptor twice.
+  AclTensorView(AclTensorView&& other) noexcept
+      : ptr_(other.ptr_), format_(other.format_) {
+    other.ptr_ = nullptr;
+  }
+  AclTensorView& operator=(AclTensorView&& other) noexcept {
+    if (this != &other) {
+      if (ptr_ != nullptr) {
+        acl_destroy_tensor()(ptr_);
+      }
+      ptr_ = other.ptr_;
+      format_ = other.format_;
+      other.ptr_ = nullptr;
+    }
+    return *this;
+  }
+
   aclTensor* get() const { return ptr_; }
 
  private:
@@ -422,6 +441,24 @@ class AclIntArrayView {
 
   AclIntArrayView(const AclIntArrayView&) = delete;
   AclIntArrayView& operator=(const AclIntArrayView&) = delete;
+
+  // Movable for the same reason as AclTensorView.  `owned_` moves with the
+  // handle because the aclIntArray points at the vector's buffer.
+  AclIntArrayView(AclIntArrayView&& other) noexcept
+      : owned_(std::move(other.owned_)), ptr_(other.ptr_) {
+    other.ptr_ = nullptr;
+  }
+  AclIntArrayView& operator=(AclIntArrayView&& other) noexcept {
+    if (this != &other) {
+      if (ptr_ != nullptr) {
+        acl_destroy_int_array()(ptr_);
+      }
+      owned_ = std::move(other.owned_);
+      ptr_ = other.ptr_;
+      other.ptr_ = nullptr;
+    }
+    return *this;
+  }
 
   aclIntArray* get() const { return ptr_; }
 

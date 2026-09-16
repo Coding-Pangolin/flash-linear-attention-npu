@@ -5,8 +5,8 @@
 // Owns: npu_recurrent_gated_delta_rule.  Pre-macro on purpose: its state
 // is an in-place argument, and the macro's typed unboxing would steal the
 // handle (see stable-abi-macro-design.md).  Building the argument list by hand
-// also means building the launch call by hand, so the stream sentinel has to be
-// resolved explicitly -- see launch_stream.
+// also means submitting by hand: the descriptors travel to the queue as one
+// bundle (see detail::enqueue_launch) instead of in the macro's tuple.
 
 #include <torch/csrc/stable/library.h>
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
@@ -16,7 +16,7 @@
 #include <torch/csrc/stable/tensor.h>
 
 #include "stable/acl_meta.h"
-// Only for launch_stream: the sentinel resolution the macro applies for free.
+// For detail::enqueue_launch: the submission the macro applies for free.
 #include "stable/exec.h"
 
 #include <cstdint>
@@ -36,7 +36,9 @@ using fla_npu_stable::stable::meta_of;
 using fla_npu_stable::stable::meta_of_handle;
 using fla_npu_stable::stable::meta_optional_handle;
 using fla_npu_stable::stable::kAclFormatNd;
-using fla_npu_stable::stable::launch_stream;
+using fla_npu_stable::stable::note_launch_stream;
+using fla_npu_stable::stable::detail::check_async_failure;
+using fla_npu_stable::stable::detail::enqueue_launch;
 
 // Prefixed per op: everything lives in one TU (see stable_ops.cpp), so shared
 // local names would collide.
@@ -71,6 +73,9 @@ Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
       rt.symbol("aclnnRecurrentGatedDeltaRuleGetWorkspaceSize"));
   auto launch =
       reinterpret_cast<LaunchFn>(rt.symbol("aclnnRecurrentGatedDeltaRule"));
+  // A queued launch reports its failure where no caller can catch it: the next
+  // operator call on this thread raises it instead.
+  check_async_failure();
 
   const TensorMeta value_meta = meta_of_handle(value);
   Tensor out = allocate_like(value_meta);
@@ -107,9 +112,23 @@ Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
     TORCH_ERROR_CODE_CHECK(
         aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
   }
+
+  note_launch_stream(stream);
+  // Named, not a temporary: a refused enqueue hands the descriptors back so
+  // this call can still launch inline (see detail::enqueue_launch).
+  auto held = std::make_tuple(
+      std::move(v_query), std::move(v_key), std::move(v_value),
+      std::move(v_beta), std::move(v_state), std::move(v_seq),
+      std::move(v_idx), std::move(v_g), std::move(v_gk),
+      std::move(v_accepted), std::move(v_out));
+  if (enqueue_launch(rt, "aclnnRecurrentGatedDeltaRule", launch, stream,
+                     workspace_ptr, workspace_size, executor, workspace,
+                     held)) {
+    return out;
+  }
   const int launch_ret =
       launch(workspace_ptr, workspace_size, executor,
-             launch_stream(stream, value_meta));
+             reinterpret_cast<void*>(stream));
   if (launch_ret != 0) {
     throw std::runtime_error(
         "fla_npu(stable): aclnnRecurrentGatedDeltaRule failed: " +

@@ -62,7 +62,7 @@ schema 形参顺序、以及 aclnn 头文件顺序一致；`op_abi_parity.py` + 
 | `int layout`（枚举） | `int64_t layout` | **字符串**，wrapper 用 `_char_code("<op>", "layout", layout)` 转 code | `cstr(k<Op>LayoutNames, layout)`，名表顺序要与 `_stable._ENUM` 一致 |
 | host int 数组（`query_start_loc_cpu` 等） | `std::optional<Tensor>`（host 侧） | `_host_ints(seq)`，或直接给 CPU int64 tensor | `int_array(x)`；要在 C++ 里取用值时 `int_values(x)` |
 | `Tensor(a!) state`（原地写） | 不走宏（读 `AtenTensorHandle` 自己 launch） | 调用方直接传被改写的张量 | 见 §7 的 pre-macro 说明 |
-| `int stream` | `int64_t stream` | `_current_stream_ptr()`（**每次现取，不缓存**） | `FLA_STABLE_EXEC` 的第三个实参 |
+| `int stream` | `int64_t stream` | `_current_stream_ptr()`（**每次现取，不缓存**；按下发方式选 accessor，见 §7） | `FLA_STABLE_EXEC` 的第三个实参 |
 
 三条硬限制：**没有字符串类型**（字符串一律"名表 + int code"）；**`int[]` 只收 host 的 int64 CPU
 tensor**；**返回的 `Tensor?` 槽必须走 boxed optional**。
@@ -190,6 +190,17 @@ FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
 - 原地写参数的算子必须登记 `MUTATED_ARGUMENTS`，否则 autograd 看到的是被改过的输入却没有版本号。
 - workspace 的设备从**第一个 NPU 输入的 meta** 取；拿错设备会在别的卡上分配。
 - stream 每次调用现取（`_current_stream_ptr()`），**不要缓存**：vLLM 是多线程多 stream，缓存过的 pointer 会把 kernel 发到别的线程的 stream 上。
+- 取 stream 有**两种** accessor，配错会把 host 开销付成毫秒级（vLLM 场景下 +40~80 ms/step）：
+  - 入队（`FLA_STABLE_EXEC` 把 descriptor + workspace 交给 torch_npu 的 task queue，
+    `fla_npu_stable_queue_enqueue_available` 为真）→ 用 `_npu_getCurrentRawStreamNoWait`，
+    **不排空队列**；顺序由队列自己保证，此时排空纯属白等。
+  - 内联直投（队列不可用、或 `FLA_NPU_STABLE_LAUNCH=inline`）→ 用 `_npu_getCurrentRawStream`，
+    它会把 host 已经入队的任务排空后再给 stream，这正是内联 kernel 不掉队的原因。
+  - 两条 accessor 都不在时兜底 `torch.npu.current_stream().npu_stream`（等价于后者）。
+  这三档由 `_stable.py` 的 `_current_stream_ptr()` 内部决定，**算子适配不要自己取 stream**，
+  也不要自己判断该用哪一条：`op_abi_parity.py` 只认 `_op(..., _current_stream_ptr())`。
+- 想现场验证"这次调用究竟落在哪个 stream"，用 `fla_npu.ops.ascendc._stable.last_launch_stream()`
+  （读的是 C++ 侧本线程最后一次 launch 的真实 stream），不要去读 Python 层的中间变量。
 - 输出 shape 规则要照抄 ctypes 参考实现（`_aclnn_ctypes.py` 同名函数），包括 dtype（例如 `o` 跟 `v`、state 跟 `q`）和可选输出的存在条件。没有 ctypes 参考时，照抄的是算子自己的文档/内核接口（见 §8）。
 
 ## 8. 没有 ctypes 参考的算子

@@ -52,9 +52,9 @@ contiguous view，`scenario_conv1d_update_offset_state` 覆盖的就是它）：
 - `out=` 路径 / vLLM = **1.42×**（host）/ **1.36×**（device）；原地路径 = 2.4× / 2.1×。
   这个差值就是"原地语义必须多一次输出回写"的代价。
 - FLA / ctypes = **0.2–0.3×**（快 3.3–5 倍）。
-- 去掉的两处拷贝：（1）`_dense_conv_state` 的 dense staging + 回写 —— 现在只留给
-  runtime 无法寻址的 state（见下一节）：带 storage offset 的 contiguous view 和
-  分块（paged）view 都直接交描述符，实测逐位一致；
+- 去掉的两处拷贝：（1）conv_state 的 dense staging + 回写 —— 已整段删除：state
+  一律按描述符自己的 view 交出去（strides 与 storage offset 都带上），非连续 state
+  怎么寻址由算子决定（见「conv_state 的非连续能力归算子」）；
   （2）`out=` 情况下适配层自分配输出、wrapper 再 `copy_` 回写 —— 现在把调用方的
   `out` 直接当 aclnn 的输出（`out` 必须是 x 的 shape/dtype/device，否则 C++ 侧拒绝）。
   原地路径的这次回写**去不掉**：kernel 边读 x 边写输出，把输出别名到 x 会让
@@ -71,8 +71,8 @@ block stride 589824 元素；同一个环境里三臂对照（host P50 / device 
 | 臂 | FLA 原地 | FLA `out=` | vLLM-Ascend custom |
 | --- | --- | --- | --- |
 | method 1（state 直接交 view） | 0.1977 / 0.2748 | **0.1399 / 0.2163** | 0.0829 / 0.1442 |
-| 强制 staging（`FLA_NPU_CONV1D_VIEW_STATE=0`） | 0.2723 / 0.3635 | 0.2413 / 0.3256 | 0.0767 / 0.1334 |
-| CANN 9.1.0（只能 staging） | 0.2565 / 0.3411 | 0.2332 / 0.3219 | 0.0772 / 0.1119 |
+| 强制 staging（当时用 `FLA_NPU_CONV1D_VIEW_STATE=0`，该开关已删除） | 0.2723 / 0.3635 | 0.2413 / 0.3256 | 0.0767 / 0.1334 |
+| CANN 9.1.0（当时只能 staging） | 0.2565 / 0.3411 | 0.2332 / 0.3219 | 0.0772 / 0.1119 |
 
 - 去掉 staging 的收益（`out=` 是与 custom 同形的那条路）：0.2413 → 0.1399，即
   **−0.10 ms/次（−42%）**；原地 0.2723 → 0.1977（−0.075 ms/次）。device 侧同步降
@@ -85,28 +85,34 @@ block stride 589824 元素；同一个环境里三臂对照（host P50 / device 
   NPU tensor + host int[]，custom 只传 host int[]），tiling 因此选了不同的配置。
   空载机器上这个比值更低（前一次记录 `out=` 为 1.42× / 1.36×）。
 
-## conv_state 的非连续能力由 CANN 版本决定
+## conv_state 的非连续能力归算子
 
-同一份 OPP（同一份源码、同一个 toolkit 编出来的）、只换 `ASCEND_HOME_PATH`：
+`aclnnCausalConv1d` 的 tiling 自己读 `context->GetInputStride(convStates)`
+(`causal_conv1d_tiling_validation.h`)：拿得到就用真实 stride，拿不到就按 dense stride
+处理。适配层不参与这个判断——它只把张量如实建成描述符（strides 与 storage offset 都
+带上），state 怎么寻址是算子的事。
+
+同一份 OPP、只换 `ASCEND_HOME_PATH` 的实测留档：
 
 | conv_state 布局 | CANN 9.1.0-beta.1 | CANN 9.2.0-beta.1 |
 | --- | --- | --- |
-| dense，或带 storage offset 的 contiguous view | ✅ | ✅ | 
+| dense，或带 storage offset 的 contiguous view | ✅ | ✅ |
 | 分块（paged，stride=(576,64,1)） | ❌ 错值，回写还落进块间 gap | ✅ 与 dense 逐位一致 |
 | dim 内 stride≠1（转置） | ❌ 不报错、静默错值 | ✅ 被算子拒绝（561002） |
 
-算子自己在 tiling 里读 `context->GetInputStride(convStates)` 并优先用它
-(`causal_conv1d_tiling_validation.h`)，但 9.1.0 的 aclnn 单算子路径不把描述符的
-view 信息交给 tiling（算子日志 `isview=0 / stride_null=1`），于是回退到 dense
-stride。所以 `_runtime.conv1d_view_state_supported()` 按 toolkit 版本判定：
-≥ 9.2.0 直接交 view，更老或读不到版本的 runtime 仍走 dense staging + 回写，
-两种情况下正确性都由上述探针（`conv1d_state_layout_parity.py`）验收。
-`FLA_NPU_CONV1D_VIEW_STATE=1/0` 可覆盖判定。
+早期版本把这当成适配层的责任：按 toolkit 版本判定，必要时做 dense staging
+（`cann_version()`、`conv1d_view_state_supported()`、`FLA_NPU_CONV1D_VIEW_STATE`、
+`_dense_conv_state`、`_causal_conv1d_state_needs_dense_copy`）。这一整套已删除——
+stride 支持是算子/runtime 的能力，不是适配层的策略；而且"读环境里的 version.info 去
+猜运行时行为"本身就容易判错（`ASCEND_HOME_PATH` 指向的 toolkit 不一定是真正被加载的
+那一个）。
 
-这道门禁是承重的，两个方向都验过：9.1.0 + `=1`（强制 view）在 outer-gap /
-inner-gap 上算错（out maxdiff 1.2e5 / 1.4e5，且有 192 个 padding 元素被写进
-buffer）；9.2.0 + `=0`（强制 staging）仍然逐位正确。所以"直接交 view"只在
-≥ 9.2.0 成立，更老的 runtime 必须留着 staging。
+**已知限制**：在不提供该 stride 接口的 CANN 上，非连续（分块）conv_state 会被算子按
+连续处理，结果不可信——写回会落进块间 gap（实测 out maxdiff 1.2e5 / 1.4e5，另有 192
+个 padding 元素被写进 buffer）。适配层不再拦截、也不再 staging：转测请使用官方建议的
+版本（接口在 9.1.0 商发之后提供，具体下限由算子侧确认），算子侧会对这种情况给出提示。
+paged 布局的正确性由 `scenario_conv1d_update_paged_state` /
+`scenario_conv1d_prefill_paged_state` 对 dense 参考验收。
 
 ## 为什么 stream 查询曾经留在 Python（2026-09-16 已被推翻，见下一节）
 

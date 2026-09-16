@@ -30,7 +30,6 @@ from ._runtime import (
     acl_format as _acl_format,
     call_aclnn as _runtime_call_aclnn,
     chunk_num as _chunk_num,
-    conv_state_needs_dense_copy,
     empty as _empty,
     empty_like as _empty_like,
     optional_bool as _optional_bool,
@@ -2137,23 +2136,6 @@ def _validate_causal_conv1d_data_tensors(
 PAD_SLOT_ID = -1
 NULL_BLOCK_ID = 0
 
-
-
-def _causal_conv1d_state_needs_dense_copy(conv_states) -> bool:
-    """Whether ``conv_states`` cannot be handed to aclnnCausalConv1d as-is.
-
-    The rule lives in ``_runtime.conv_state_needs_dense_copy`` so that this
-    reference and the stable adapter cannot disagree about it; the measured
-    boundary behind the runtime verdict is in
-    ``_runtime.conv1d_view_state_supported``.
-    """
-
-    return conv_state_needs_dense_copy(conv_states)
-
-
-
-
-
 def _launch_causal_conv1d(
     x,
     weight,
@@ -2176,14 +2158,6 @@ def _launch_causal_conv1d(
     max_query_len=-1,
 ):
     """Build the single aclnnCausalConv1d ABI shared by all Python APIs."""
-
-    # See ``_causal_conv1d_state_needs_dense_copy``.  A state the runtime can
-    # address goes over as it is; a refused one is staged through a dense copy
-    # and copied back so the in-place contract every caller relies on holds.
-    conv_state_restore = None
-    if _causal_conv1d_state_needs_dense_copy(conv_states):
-        conv_state_restore = conv_states
-        conv_states = conv_states.contiguous()
 
     # This is the ctypes reference: it validates in Python, normalises the
     # metadata and builds the aclnn call, descriptors included.  The stable path
@@ -2216,8 +2190,6 @@ def _launch_causal_conv1d(
         ],
         out,
     )
-    if conv_state_restore is not None:
-        conv_state_restore.copy_(conv_states)
     return result
 
 

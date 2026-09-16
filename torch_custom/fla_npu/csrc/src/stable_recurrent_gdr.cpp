@@ -137,21 +137,43 @@ Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
   return out;
 }
 
-// Boxed entry point: required tensors unbox straight to handles (never through
-// the ownership-stealing Tensor(AtenTensorHandle) constructor), optionals keep
-// the Tensor form so their liveness is explicit.
+// Boxed entry point: every required tensor is unboxed into an owning Tensor, so
+// the reference the dispatcher handed us is consumed exactly once and released
+// when this function returns.  Optionals keep the std::optional<Tensor> form,
+// which consumes the inner handle itself.
 void boxed_recurrent_gated_delta_rule(StableIValue* stack,
                                       uint64_t num_inputs,
                                       uint64_t num_outputs) {
-  (void)num_inputs;
-  (void)num_outputs;
-  const AtenTensorHandle query = to<AtenTensorHandle>(stack[0]);
-  const AtenTensorHandle key = to<AtenTensorHandle>(stack[1]);
-  const AtenTensorHandle value = to<AtenTensorHandle>(stack[2]);
-  const AtenTensorHandle state = to<AtenTensorHandle>(stack[3]);
-  const AtenTensorHandle beta = to<AtenTensorHandle>(stack[4]);
-  const AtenTensorHandle actual_seq_lengths = to<AtenTensorHandle>(stack[5]);
-  const AtenTensorHandle ssm_state_indices = to<AtenTensorHandle>(stack[6]);
+  // Slots are read positionally: a schema that gained or lost a parameter would
+  // shift every following one instead of failing to build.
+  if (num_inputs != 12 || num_outputs != 1) {
+    throw std::runtime_error(
+        "fla_npu(stable): npu_recurrent_gated_delta_rule takes 12 inputs "
+        "and 1 output, the stack declares " + std::to_string(num_inputs) +
+        " and " + std::to_string(num_outputs));
+  }
+  // library.h: a boxed kernel steals the memory of its inputs, "popping" them
+  // off the stack.  to<AtenTensorHandle> is the catch-all memcpy and consumes
+  // nothing, so reading these slots that way retained every fresh input for the
+  // life of the process (910B3: +191 MiB over 2000 decode-shaped calls with a
+  // fresh q/k/v, and the conc32 service climbed to 8.2 GiB before it OOMed).
+  // Optional slots keep to<std::optional<Tensor>>: it consumes the inner handle
+  // and frees the box; to<Tensor> would wrap that box pointer as an
+  // AtenTensorHandle and delete it as a tensor.
+  const Tensor t_query = to<Tensor>(stack[0]);
+  const Tensor t_key = to<Tensor>(stack[1]);
+  const Tensor t_value = to<Tensor>(stack[2]);
+  const Tensor t_state = to<Tensor>(stack[3]);
+  const Tensor t_beta = to<Tensor>(stack[4]);
+  const Tensor t_actual_seq_lengths = to<Tensor>(stack[5]);
+  const Tensor t_ssm_state_indices = to<Tensor>(stack[6]);
+  const AtenTensorHandle query = t_query.get();
+  const AtenTensorHandle key = t_key.get();
+  const AtenTensorHandle value = t_value.get();
+  const AtenTensorHandle state = t_state.get();
+  const AtenTensorHandle beta = t_beta.get();
+  const AtenTensorHandle actual_seq_lengths = t_actual_seq_lengths.get();
+  const AtenTensorHandle ssm_state_indices = t_ssm_state_indices.get();
   const auto num_accepted_tokens = to<std::optional<Tensor>>(stack[7]);
   const auto g = to<std::optional<Tensor>>(stack[8]);
   const auto gk = to<std::optional<Tensor>>(stack[9]);

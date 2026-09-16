@@ -190,14 +190,32 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
 
 void boxed_recurrent_kda(StableIValue* stack, uint64_t num_inputs,
                          uint64_t num_outputs) {
-  (void)num_inputs;
-  (void)num_outputs;
-  const AtenTensorHandle q = to<AtenTensorHandle>(stack[0]);
-  const AtenTensorHandle k = to<AtenTensorHandle>(stack[1]);
-  const AtenTensorHandle v = to<AtenTensorHandle>(stack[2]);
-  const AtenTensorHandle g = to<AtenTensorHandle>(stack[3]);
-  const AtenTensorHandle beta = to<AtenTensorHandle>(stack[4]);
-  const AtenTensorHandle initial_state = to<AtenTensorHandle>(stack[5]);
+  // Slots are read positionally: a schema that gained or lost a parameter would
+  // shift every following one instead of failing to build.
+  if (num_inputs != 23 || num_outputs != 2) {
+    throw std::runtime_error(
+        "fla_npu(stable): npu_recurrent_kda takes 23 inputs and 2 outputs, "
+        "the stack declares " + std::to_string(num_inputs) + " and " +
+        std::to_string(num_outputs));
+  }
+  // Same contract as stable_recurrent_gdr.cpp: the stack hands the kernel
+  // ownership of every argument it reads, so each required slot is unboxed into
+  // an owning Tensor and released when this function returns.  Optional slots
+  // keep to<std::optional<Tensor>>, which consumes the inner handle and frees
+  // its box -- a *present* optional puts that box pointer in the slot, so
+  // to<Tensor> would wrap it as an AtenTensorHandle and delete it as a tensor.
+  const Tensor t_q = to<Tensor>(stack[0]);
+  const Tensor t_k = to<Tensor>(stack[1]);
+  const Tensor t_v = to<Tensor>(stack[2]);
+  const Tensor t_g = to<Tensor>(stack[3]);
+  const Tensor t_beta = to<Tensor>(stack[4]);
+  const Tensor t_initial_state = to<Tensor>(stack[5]);
+  const AtenTensorHandle q = t_q.get();
+  const AtenTensorHandle k = t_k.get();
+  const AtenTensorHandle v = t_v.get();
+  const AtenTensorHandle g = t_g.get();
+  const AtenTensorHandle beta = t_beta.get();
+  const AtenTensorHandle initial_state = t_initial_state.get();
   const auto cu_seqlens = to<std::optional<Tensor>>(stack[6]);
   const auto ssm_state_indices = to<std::optional<Tensor>>(stack[7]);
   const auto a_log = to<std::optional<Tensor>>(stack[8]);

@@ -10,10 +10,21 @@ namespace fla_npu_stable {
 
 namespace {
 
-// torch_npu's AOTI shim for "the stream this thread is currently on", the NPU
-// twin of aoti_torch_get_current_cuda_stream.  It lives in libtorch_npu.so,
-// which is not on the launcher's link line, so it is resolved by name.
-constexpr const char* kStreamResolver = "aoti_torch_get_current_npu_stream";
+// torch_npu's entry point for "run this callable on the task queue", the same
+// one its own inductor and mstx paths use.  Two spellings because the newer
+// overload takes the callable by const reference and keeps the full operator
+// name, while the older one takes it by value.
+//
+// This is what makes a submission that does not wait for the queue to drain
+// ordering-safe: the callable runs on the queue's consumer thread, in queue
+// order, so it is the queue -- not a host-side barrier -- that keeps our
+// kernel behind everything the host enqueued before us.
+constexpr const char* kQueueEnqueueV2 =
+    "_ZN6at_npu6native9OpCommand10RunOpApiV2ERKNSt7__cxx1112basic_"
+    "stringIcSt11char_traitsIcESaIcEEERKSt8functionIFivEEb";
+constexpr const char* kQueueEnqueueV1 =
+    "_ZN6at_npu6native9OpCommand8RunOpApiERKNSt7__cxx1112basic_"
+    "stringIcSt11char_traitsIcESaIcEEESt8functionIFivEEb";
 
 void* dlopen_required(const std::string& path, const char* what) {
   void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
@@ -25,21 +36,21 @@ void* dlopen_required(const std::string& path, const char* what) {
 }
 
 // torch_npu is loaded by the time an operator runs (fla_npu imports it first),
-// so the global namespace normally has the shim.  The dlopen fallback covers a
-// host that loaded the extension with RTLD_LOCAL instead.
-void* find_stream_resolver() {
-  if (void* address = dlsym(RTLD_DEFAULT, kStreamResolver)) {
+// so the global namespace normally has the symbol.  The dlopen fallback covers
+// a host that loaded the extension with RTLD_LOCAL instead.
+void* find_exported(const char* name) {
+  if (void* address = dlsym(RTLD_DEFAULT, name)) {
     return address;
   }
   static const char* const kLibraries[] = {"libtorch_npu.so",
                                            "libtorch_npu.so.2",
                                            "libtorch_npu.so.1"};
-  for (const char* name : kLibraries) {
-    void* handle = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+  for (const char* library : kLibraries) {
+    void* handle = dlopen(library, RTLD_NOW | RTLD_LOCAL);
     if (handle == nullptr) {
       continue;
     }
-    if (void* address = dlsym(handle, kStreamResolver)) {
+    if (void* address = dlsym(handle, name)) {
       return address;
     }
   }
@@ -54,6 +65,7 @@ Runtime& Runtime::instance() {
 }
 
 void Runtime::init(const std::string& custom_lib_path) {
+  std::lock_guard<std::mutex> guard(mutex_);
   if (initialized_) {
     return;
   }
@@ -80,6 +92,7 @@ void* Runtime::open_custom_library(const std::string& path) {
 
 void* Runtime::symbol(const std::string& name) {
   init();
+  std::lock_guard<std::mutex> guard(mutex_);
   auto it = cache_.find(name);
   if (it != cache_.end()) {
     return it->second;
@@ -98,34 +111,49 @@ void* Runtime::symbol(const std::string& name) {
   return addr;
 }
 
-void* Runtime::stream_resolver() {
-  if (!stream_resolver_looked_up_) {
-    stream_resolver_ = find_stream_resolver();
-    stream_resolver_looked_up_ = true;
+void* Runtime::queue_enqueue() {
+  if (!queue_enqueue_looked_up_) {
+    queue_enqueue_ = find_exported(kQueueEnqueueV2);
+    if (queue_enqueue_ != nullptr) {
+      queue_enqueue_takes_value_ = false;
+    } else {
+      queue_enqueue_ = find_exported(kQueueEnqueueV1);
+      queue_enqueue_takes_value_ = queue_enqueue_ != nullptr;
+    }
+    queue_enqueue_looked_up_ = true;
   }
-  return stream_resolver_;
+  return queue_enqueue_;
 }
 
-bool Runtime::has_stream_resolver() { return stream_resolver() != nullptr; }
+bool Runtime::enqueue_enabled() {
+  // Read once per process: the answer decides which stream accessor the Python
+  // glue uses, so it must not change between two calls of the same shape.
+  static const bool enabled = []() -> bool {
+    const char* requested = std::getenv("FLA_NPU_STABLE_LAUNCH");
+    if (requested != nullptr && std::string(requested) == "inline") {
+      return false;
+    }
+    return Runtime::instance().queue_enqueue() != nullptr;
+  }();
+  return enabled;
+}
 
-int64_t Runtime::current_stream(int32_t device_index) {
-  using CurrentStreamFn = int32_t (*)(int32_t, void**);
-  auto fn = reinterpret_cast<CurrentStreamFn>(stream_resolver());
-  if (fn == nullptr) {
+void Runtime::enqueue(const std::string& name, const std::function<int()>& fn) {
+  void* entry = queue_enqueue();
+  if (entry == nullptr) {
     throw std::runtime_error(
-        "stable launcher: torch_npu's aoti_torch_get_current_npu_stream is not "
-        "available, so the launcher cannot resolve the NPU stream itself; "
-        "import torch_npu (fla_npu does this for you) or pass the stream "
-        "explicitly");
+        "stable launcher: torch_npu's task queue entry point is not available");
   }
-  void* stream = nullptr;
-  const int32_t status = fn(device_index, &stream);
-  if (status != 0) {
-    throw std::runtime_error(
-        "stable launcher: aoti_torch_get_current_npu_stream failed: " +
-        std::to_string(status));
+  if (queue_enqueue_takes_value_) {
+    using EnqueueByValueFn = void (*)(const std::string&, std::function<int()>,
+                                      bool);
+    std::function<int()> copy = fn;  // the callee moves out of this one
+    reinterpret_cast<EnqueueByValueFn>(entry)(name, std::move(copy), false);
+    return;
   }
-  return reinterpret_cast<int64_t>(stream);
+  using EnqueueFn = void (*)(const std::string&, const std::function<int()>&,
+                             bool);
+  reinterpret_cast<EnqueueFn>(entry)(name, fn, false);
 }
 
 }  // namespace fla_npu_stable

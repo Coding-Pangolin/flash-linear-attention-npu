@@ -4,7 +4,7 @@
 // libtorch C++ ABI.  `layout` is an int code because the stable value
 // conversions have no std::string support (0 = BSND, 1 = TND); Python maps it.
 // Owns: npu_recurrent_kda.  Pre-macro for the same reason as
-// stable_recurrent_gdr.cpp, and it resolves the stream sentinel the same way.
+// stable_recurrent_gdr.cpp, and it submits the same way.
 
 #include <torch/csrc/stable/library.h>
 #include <torch/csrc/stable/stableivalue_conversions.h>
@@ -13,7 +13,7 @@
 #include "stable/acl_meta.h"
 // Only for the enum-table helper: this adapter builds its argument list by
 // hand (see the boxed entry point below), so it does not use FLA_STABLE_EXEC --
-// which also means it must call launch_stream itself.
+// which also means it submits the launch itself.
 #include "stable/exec.h"
 
 #include <cstdint>
@@ -31,7 +31,9 @@ using fla_npu_stable::stable::meta_of;
 using fla_npu_stable::stable::meta_of_handle;
 using fla_npu_stable::stable::meta_optional_handle;
 using fla_npu_stable::stable::kAclFormatNd;
-using fla_npu_stable::stable::launch_stream;
+using fla_npu_stable::stable::note_launch_stream;
+using fla_npu_stable::stable::detail::check_async_failure;
+using fla_npu_stable::stable::detail::enqueue_launch;
 
 using fla_npu_stable::stable::aclOpExecutor;
 using fla_npu_stable::stable::aclTensor;
@@ -86,6 +88,9 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
   auto get_ws = reinterpret_cast<KdaGetWorkspaceFn>(
       rt.symbol("aclnnRecurrentKdaGetWorkspaceSize"));
   auto launch = reinterpret_cast<LaunchFn>(rt.symbol("aclnnRecurrentKda"));
+  // A queued launch reports its failure where no caller can catch it: the next
+  // operator call on this thread raises it instead.
+  check_async_failure();
 
   const TensorMeta v_meta = meta_of_handle(v);
   *out = allocate_like(v_meta);
@@ -137,9 +142,23 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
     TORCH_ERROR_CODE_CHECK(
         aoti_torch_get_data_ptr(workspace.get(), &workspace_ptr));
   }
+
+  note_launch_stream(stream);
+  // Named, not a temporary: a refused enqueue hands the descriptors back so
+  // this call can still launch inline (see detail::enqueue_launch).
+  auto held = std::make_tuple(
+      std::move(v_q), std::move(v_k), std::move(v_v), std::move(v_g),
+      std::move(v_beta), std::move(v_state), std::move(v_cu),
+      std::move(v_idx), std::move(v_alog), std::move(v_dtb),
+      std::move(v_accepted), std::move(v_out), std::move(v_final));
+  if (enqueue_launch(rt, "aclnnRecurrentKda", launch, stream, workspace_ptr,
+                     workspace_size, executor, workspace,
+                     held)) {
+    return;
+  }
   const int launch_ret =
       launch(workspace_ptr, workspace_size, executor,
-             launch_stream(stream, v_meta));
+             reinterpret_cast<void*>(stream));
   if (launch_ret != 0) {
     throw std::runtime_error(
         "fla_npu(stable): aclnnRecurrentKda failed: " +

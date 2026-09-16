@@ -14,6 +14,7 @@ backend it picks.
 from __future__ import annotations
 
 import os
+import sys
 
 
 _LIB_ENV = "FLA_NPU_STABLE_LIB"
@@ -35,11 +36,21 @@ _raw_stream_fn = None
 # int[] argument cache: value tuple -> host int64 tensor (see _host_ints).
 _INT_CACHE: dict[tuple, object] = {}
 _INT_CACHE_MAX = 64
-# What the launcher's `stream` slot gets when the launcher can resolve the
-# stream itself; see _current_stream_ptr.
-_STREAM_SENTINEL = -1
-# None until the question has been asked of the loaded library.
-_launcher_resolves_stream: bool | None = None
+# Whether the loaded launcher hands its launches to torch_npu's task queue
+# (see _enqueues_launch): that is what makes the non-flushing stream read legal.
+_launcher_enqueues: bool | None = None
+# None until the escape hatch has been read (see _nowait_allowed).
+_nowait_ok: bool | None = None
+# Values of FLA_NPU_STABLE_STREAM that mean "read the stream without draining
+# the task queue" and "drain it first".  The older spellings stay accepted: the
+# field harnesses and the released wheels set them, and both questions they
+# encoded -- does the launcher queue the launch, may the read skip the drain --
+# have one answer each in this design.
+_NOWAIT_STREAM_VALUES = ("", "nowait", "launcher")
+_BARRIER_STREAM_VALUES = ("accessor", "python", "python-tensor")
+# The two stream accessors, resolved on first use (see _nowait_stream_fn and
+# _barrier_stream_fn).
+_nowait_stream = None
 # torch.autograd.graph.increment_version, resolved on first use (see
 # _bump_state): the hot wrappers bump a mutated state in their own frame.
 _INCREMENT_VERSION = None
@@ -79,44 +90,66 @@ def _lib_path() -> str:
         f"{_LIB_ENV} is not set and no bundled libfla_npu_stable.so was found")
 
 
-def _resolves_stream() -> bool:
-    """Whether the loaded launcher can find the current NPU stream itself.
+def _capability(name: str) -> bool:
+    """Ask the loaded launcher a yes/no question, once.
 
-    Asked once, through ctypes, because the answer decides what every later call
-    passes in its ``stream`` slot.  The launcher then *queries* the stream on
-    each call through torch_npu's ``aoti_torch_get_current_npu_stream`` -- the
-    same handle ``_npu_getCurrentRawStream`` returns, for ~1us instead of the
-    ~19us Python round trip.  Nothing is cached: a process-global stream pointer
-    is what sent kernels to another thread's stream in the vLLM run.
+    Asked through ctypes because the answer decides what every later call puts
+    in its ``stream`` slot, and asked *of the library* so that this glue and the
+    launcher cannot disagree about it.
     """
 
-    global _launcher_resolves_stream
-    if _launcher_resolves_stream is None:
-        requested = (os.environ.get("FLA_NPU_STABLE_STREAM") or "").strip().lower()
-        value = False
-        if requested not in ("", "launcher"):
-            # Escape hatch for bisecting a stream problem in the field: with
-            # "python" the glue reads the stream through torch_npu's accessor
-            # exactly as it did before the launcher learned to resolve it.
-            _launcher_resolves_stream = False
-            return False
-        try:
-            # A wrapper may ask for the stream before it has touched an op
-            # handle (`npu_recurrent_kda` builds its argument list first), so
-            # the library has to be loaded before it can be interrogated.
-            load()
-            import ctypes
+    try:
+        # A wrapper may ask before it has touched an op handle
+        # (`npu_recurrent_kda` builds its argument list first), so the library
+        # has to be loaded before it can be interrogated.
+        load()
+        import ctypes
 
-            lib = ctypes.CDLL(_loaded_path)
-            probe = lib.fla_npu_stable_stream_resolver_available
-            probe.restype = ctypes.c_int32
-            value = bool(probe())
+        lib = ctypes.CDLL(_loaded_path)
+        probe = getattr(lib, name, None)
+        if probe is None:
+            return False
+        probe.restype = ctypes.c_int32
+        return bool(probe())
+    except Exception:
+        return False
+
+
+def _enqueues_launch() -> bool:
+    """Whether the loaded launcher hands its launches to torch_npu's queue.
+
+    When it does, ordering comes from the queue itself, so the stream may be
+    read through the non-flushing accessor -- which is the whole point: on a
+    busy vLLM worker the flushing one waits for the model's pending launches to
+    be submitted, and that is ~1 ms per call.
+    """
+
+    global _launcher_enqueues
+    if _launcher_enqueues is None:
+        _launcher_enqueues = _capability(
+            "fla_npu_stable_queue_enqueue_available")
+    return _launcher_enqueues
+
+
+def _nowait_stream_fn():
+    """torch_npu's non-flushing raw-stream accessor, or None when absent.
+
+    ``_npu_getCurrentRawStream`` drains torch_npu's task queue before handing
+    the stream back; this spelling skips that, and is therefore only usable
+    when the launch itself is queue-ordered (see _enqueues_launch).
+    """
+
+    global _nowait_stream
+    if _nowait_stream is None:
+        try:
+            torch_npu = _modules()[1]
+            if not torch_npu:
+                raise AttributeError("torch_npu is not importable")
+            _nowait_stream = getattr(torch_npu._C,
+                                     "_npu_getCurrentRawStreamNoWait")
         except Exception:
-            # No library loaded yet, or one built before the launcher learned
-            # to resolve streams: fall back to reading it here.
-            value = False
-        _launcher_resolves_stream = value
-    return _launcher_resolves_stream
+            _nowait_stream = False
+    return _nowait_stream or None
 
 
 def _launcher_lib():
@@ -138,7 +171,54 @@ def _launcher_lib():
     return _lib_handle or None
 
 
-def _last_resolved_stream() -> int | None:
+def _barrier_stream_fn():
+    """torch_npu's raw-stream accessor, or None when it is not reachable.
+
+    This is the spelling that drains torch_npu's task queue before it hands the
+    stream over -- the one a *direct* submission has to use, because it is what
+    keeps the launch behind everything the host enqueued before it.
+    """
+
+    global _raw_stream_fn
+    if _raw_stream_fn is None:
+        try:
+            torch_npu = _modules()[1]
+            if not torch_npu:
+                raise AttributeError("torch_npu is not importable")
+            _raw_stream_fn = getattr(torch_npu._C, "_npu_getCurrentRawStream")
+        except Exception:
+            _raw_stream_fn = False  # look the slow way from now on
+    return _raw_stream_fn or None
+
+
+def _nowait_allowed() -> bool:
+    """Whether the stream may be read without draining the task queue.
+
+    Only a queue-ordered launch may skip that drain (see _current_stream_ptr).
+    ``FLA_NPU_STABLE_STREAM=accessor`` (or the older ``python`` and
+    ``python-tensor``) is the field escape hatch that turns the skip off:
+    slower on a busy worker, but it puts the draining accessor back on the
+    path.  Read once, because it decides what every later call passes in its
+    ``stream`` slot.
+    """
+
+    global _nowait_ok
+    if _nowait_ok is None:
+        requested = (os.environ.get("FLA_NPU_STABLE_STREAM")
+                     or "").strip().lower()
+        if requested in _NOWAIT_STREAM_VALUES:
+            _nowait_ok = True
+        elif requested in _BARRIER_STREAM_VALUES:
+            _nowait_ok = False
+        else:
+            print(f"fla_npu: unknown FLA_NPU_STABLE_STREAM={requested!r}; "
+                  "reading the stream without draining the task queue",
+                  file=sys.stderr)
+            _nowait_ok = True
+    return _nowait_ok
+
+
+def _last_launch_stream() -> int | None:
     """The stream the launcher used for the last call on this thread.
 
     ``None`` when no launcher is loaded or it predates the readback symbol.  The
@@ -150,7 +230,7 @@ def _last_resolved_stream() -> int | None:
     if lib is None:
         return None
     try:
-        readback = lib.fla_npu_stable_last_resolved_stream
+        readback = lib.fla_npu_stable_last_launch_stream
     except AttributeError:
         return None
     import ctypes
@@ -160,24 +240,30 @@ def _last_resolved_stream() -> int | None:
 
 
 def _current_stream_ptr() -> int:
-    """The launcher's ``stream`` argument (never a cached stream pointer)."""
+    """The launcher's ``stream`` argument (never a cached stream pointer).
 
-    if _resolves_stream():
-        return _STREAM_SENTINEL
-    global _raw_stream_fn
+    Read on every call: a process-global stream pointer is what sent kernels to
+    another thread's stream in the vLLM run.
+
+    Which accessor is legal depends on how the launcher submits.  A queued
+    launch is ordered by torch_npu's task queue, so its stream may come from the
+    non-flushing accessor -- the pairing torch_npu documents for a queue
+    dispatch, and the one its own inductor codegen uses.  The other accessor
+    drains the queue first, which is what a direct submission needs and what
+    costs ~1 ms per call on a busy vLLM worker, against ~2 us for the plain
+    read.  The launcher, not this file, decides which one is used.
+    """
+
     torch = _modules()[0]
-    if _raw_stream_fn is not None:
-        return int(_raw_stream_fn(torch.npu.current_device()))
-    try:
-        torch_npu = _modules()[1]
-        if not torch_npu:
-            raise AttributeError("torch_npu is not importable")
-        _raw_stream_fn = getattr(torch_npu._C, "_npu_getCurrentRawStream")
-    except Exception:
-        _raw_stream_fn = False  # look the slow way from now on
-    if not _raw_stream_fn:
-        return int(torch.npu.current_stream().npu_stream)
-    return int(_raw_stream_fn(torch.npu.current_device()))
+    device = torch.npu.current_device()
+    if _enqueues_launch() and _nowait_allowed():
+        nowait = _nowait_stream_fn()
+        if nowait is not None:
+            return int(nowait(device))
+    barrier = _barrier_stream_fn()
+    if barrier is not None:
+        return int(barrier(device))
+    return int(torch.npu.current_stream().npu_stream)
 
 
 # --- the in-place contract, applied in the wrapper's own frame --------------

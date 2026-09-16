@@ -31,24 +31,24 @@ const char* fla_npu_stable_source_hash() {
   return FLA_STABLE_SOURCE_HASH;
 }
 
-// Whether this library can resolve the current NPU stream on its own (see
-// Runtime::has_stream_resolver).  The Python glue asks once per loaded library
-// and then passes the negative "ask the launcher" sentinel in every `stream`
-// slot, which is what removes torch_npu's Python accessor from the hot path;
-// an older launcher without this symbol simply keeps receiving real pointers.
+// Whether this library hands its launches to torch_npu's task queue.  The
+// Python glue asks this before it reads the stream: a queue-ordered launch may
+// use torch_npu's non-flushing accessor, an inline launch may not, and asking
+// the library instead of re-deriving the answer in Python is what keeps the two
+// sides from disagreeing about it.
 extern "C" __attribute__((visibility("default")))
-int32_t fla_npu_stable_stream_resolver_available() {
-  return fla_npu_stable::Runtime::instance().has_stream_resolver() ? 1 : 0;
+int32_t fla_npu_stable_queue_enqueue_available() {
+  return fla_npu_stable::Runtime::instance().enqueue_enabled() ? 1 : 0;
 }
 
-// The stream the most recent operator call on the calling thread launched on,
-// resolved by the launcher or handed in by the caller (see resolve_stream).
-// The multi-stream regression reads it back after every call: it is the only
-// way to see a stream the launcher decided, and the value is per thread, which
-// is exactly the property that has to hold when vLLM interleaves workers.
+// The stream the most recent operator call on the calling thread launched on
+// (see note_launch_stream).  The multi-stream regression reads it back after
+// every call: it is the only way to see *which* stream a call used, and the
+// value is per thread, which is exactly the property that has to hold when vLLM
+// interleaves workers.
 extern "C" __attribute__((visibility("default")))
-int64_t fla_npu_stable_last_resolved_stream() {
-  return fla_npu_stable::stable::t_last_resolved_stream;
+int64_t fla_npu_stable_last_launch_stream() {
+  return fla_npu_stable::stable::t_last_launch_stream;
 }
 
 // Exactly one library-definition block and one implementation block per

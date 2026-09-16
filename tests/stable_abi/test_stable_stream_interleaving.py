@@ -27,13 +27,11 @@ What is checked instead
 
 Two values per operator call, both read from the calling thread:
 
-* what the wrapper passed (``_stable._current_stream_ptr()``) -- either the
-  launcher-resolve sentinel or this thread's own raw stream, never another
-  thread's;
-* what the launcher launched on (``_stable._last_resolved_stream()``) -- it has
-  to be this thread's own raw stream.  The launcher resolves the stream in C++
-  now, so this readback of a per-thread value it stores on every call is the
-  only place the decision is observable.
+* what the wrapper passed (``_stable._current_stream_ptr()``) -- this thread's
+  own raw stream, never another thread's;
+* what the launcher launched on (``_stable._last_launch_stream()``) -- the same
+  value.  The launcher records the stream slot it was handed, per thread, and
+  that readback is the only place the launch is observable.
 
 ``negative_control`` hands the wrapper a foreign stream on purpose and requires
 the readback to report *that* stream.  That is what makes the check evidence
@@ -168,12 +166,12 @@ def run_pair(case, observed=None):
         ssm_state_indices=case["ssm_state_indices"],
         num_accepted_tokens=None, g=case["g"])
     if observed is not None:
-        observed.append(_stable._last_resolved_stream())
+        observed.append(_stable._last_launch_stream())
     conv = _stable.npu_causal_conv1d_update(
         case["conv_x"], case["conv_state"], case["weight"], case["bias"],
         activation="silu", conv_state_indices=case["conv_indices"])
     if observed is not None:
-        observed.append(_stable._last_resolved_stream())
+        observed.append(_stable._last_launch_stream())
     return recurrent, conv
 
 
@@ -217,10 +215,9 @@ def worker(index, templates, golden, rounds, barrier, errors, notes) -> None:
         if any(value is None for value in observed):
             raise AssertionError(
                 "the loaded launcher does not export "
-                "fla_npu_stable_last_resolved_stream, so a stream it resolves "
-                "cannot be observed")
-        wrong = sorted({value for value in passed
-                        if value not in (expected, _stable._STREAM_SENTINEL)})
+                "fla_npu_stable_last_launch_stream, so the stream a call "
+                "launched on cannot be observed")
+        wrong = sorted({value for value in passed if value != expected})
         if wrong:
             raise AssertionError(
                 f"a call passed stream {wrong} instead of this thread's "
@@ -254,7 +251,7 @@ def negative_control(templates) -> tuple[bool, int | None, int]:
             expected = raw_stream_ptr()
             run_pair(make_case(templates))
             torch.npu.synchronize()
-            saw = _stable._last_resolved_stream()
+            saw = _stable._last_launch_stream()
     finally:
         _stable._current_stream_ptr = original
     return saw == frozen and saw != expected, saw, expected

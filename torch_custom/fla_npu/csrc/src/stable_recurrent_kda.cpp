@@ -4,7 +4,8 @@
 // libtorch C++ ABI.  `layout` is an int code because the stable value
 // conversions have no std::string support (0 = BSND, 1 = TND); Python maps it.
 // Owns: npu_recurrent_kda.  Pre-macro for the same reason as
-// stable_recurrent_gdr.cpp, and it submits the same way.
+// stable_recurrent_gdr.cpp, and it submits the same way: the boxed entry
+// point below consumes each required argument's stack reference.
 
 #include <torch/csrc/stable/library.h>
 #include <torch/csrc/stable/stableivalue_conversions.h>
@@ -152,8 +153,7 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
       std::move(v_idx), std::move(v_alog), std::move(v_dtb),
       std::move(v_accepted), std::move(v_out), std::move(v_final));
   if (enqueue_launch(rt, "aclnnRecurrentKda", launch, stream, workspace_ptr,
-                     workspace_size, executor, workspace,
-                     held)) {
+                     workspace_size, executor, held)) {
     return;
   }
   const int launch_ret =
@@ -199,11 +199,10 @@ void boxed_recurrent_kda(StableIValue* stack, uint64_t num_inputs,
         std::to_string(num_outputs));
   }
   // Same contract as stable_recurrent_gdr.cpp: the stack hands the kernel
-  // ownership of every argument it reads, so each required slot is unboxed into
-  // an owning Tensor and released when this function returns.  Optional slots
-  // keep to<std::optional<Tensor>>, which consumes the inner handle and frees
-  // its box -- a *present* optional puts that box pointer in the slot, so
-  // to<Tensor> would wrap it as an AtenTensorHandle and delete it as a tensor.
+  // ownership of every argument it reads, so each required slot is unboxed
+  // into an owning Tensor and released when this function returns.  The raw
+  // to<AtenTensorHandle> read consumed nothing, which retained every fresh
+  // input for the life of the process.
   const Tensor t_q = to<Tensor>(stack[0]);
   const Tensor t_k = to<Tensor>(stack[1]);
   const Tensor t_v = to<Tensor>(stack[2]);

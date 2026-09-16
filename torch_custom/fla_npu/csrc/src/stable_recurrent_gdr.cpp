@@ -2,11 +2,11 @@
 //
 // Included by stable_ops.cpp (single TU).  Only torch/csrc/stable/* plus the
 // shared acl_meta helper: no ATen/c10, no libtorch C++ ABI.
-// Owns: npu_recurrent_gated_delta_rule.  Pre-macro on purpose: its state
-// is an in-place argument, and the macro's typed unboxing would steal the
-// handle (see stable-abi-macro-design.md).  Building the argument list by hand
-// also means submitting by hand: the descriptors travel to the queue as one
-// bundle (see detail::enqueue_launch) instead of in the macro's tuple.
+// Owns: npu_recurrent_gated_delta_rule.  Pre-macro on purpose: it builds the
+// argument list and submits the launch by hand, so the descriptors travel to
+// the queue as one bundle (see detail::enqueue_launch) instead of in the
+// macro's tuple.  The boxed entry point below still consumes each required
+// argument's stack reference, exactly like the macro's typed unboxing.
 
 #include <torch/csrc/stable/library.h>
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
@@ -122,8 +122,7 @@ Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
       std::move(v_idx), std::move(v_g), std::move(v_gk),
       std::move(v_accepted), std::move(v_out));
   if (enqueue_launch(rt, "aclnnRecurrentGatedDeltaRule", launch, stream,
-                     workspace_ptr, workspace_size, executor, workspace,
-                     held)) {
+                     workspace_ptr, workspace_size, executor, held)) {
     return out;
   }
   const int launch_ret =
@@ -152,14 +151,23 @@ void boxed_recurrent_gated_delta_rule(StableIValue* stack,
         "and 1 output, the stack declares " + std::to_string(num_inputs) +
         " and " + std::to_string(num_outputs));
   }
-  // library.h: a boxed kernel steals the memory of its inputs, "popping" them
-  // off the stack.  to<AtenTensorHandle> is the catch-all memcpy and consumes
-  // nothing, so reading these slots that way retained every fresh input for the
-  // life of the process (910B3: +191 MiB over 2000 decode-shaped calls with a
-  // fresh q/k/v, and the conc32 service climbed to 8.2 GiB before it OOMed).
-  // Optional slots keep to<std::optional<Tensor>>: it consumes the inner handle
-  // and frees the box; to<Tensor> would wrap that box pointer as an
-  // AtenTensorHandle and delete it as a tensor.
+  // The boxed stack hands the kernel ownership of every argument it reads:
+  // library.h says fn is responsible for stealing the memory of the inputs,
+  // in effect "popping" them off the stack.  Reading a required slot with
+  // to<AtenTensorHandle> consumes nothing, so the reference the dispatcher
+  // created for the caller was never released.  Measured on 910B3: 2000
+  // decode-shaped calls with a fresh q/k/v grew the caching allocator by
+  // 191 MiB (~99 KiB a call: three 32 KiB tensors plus beta/asl/idx at the
+  // 512 B block floor), and the conc32 service grew 8.2 GiB until it OOMd.
+  // One owning Tensor per required slot consumes exactly that reference and
+  // releases it when this function returns; the handle the descriptors see
+  // is borrowed from it.  Optional slots keep the to<std::optional<Tensor>>
+  // form: it consumes the inner handle and frees the box the dispatcher
+  // allocated for it, and it is the only safe reader here.  A *present*
+  // optional puts a pointer to that heap box in the slot, so to<Tensor> would
+  // wrap the box pointer as an AtenTensorHandle and delete it as a tensor --
+  // the heap corruption the first two handle-unboxing attempts hit; a None
+  // arrives as a null handle instead.
   const Tensor t_query = to<Tensor>(stack[0]);
   const Tensor t_key = to<Tensor>(stack[1]);
   const Tensor t_value = to<Tensor>(stack[2]);

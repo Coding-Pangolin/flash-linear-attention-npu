@@ -318,31 +318,36 @@ inline Held hold_args(Tuple& args, std::index_sequence<I...>) {
   return Held(std::move(std::get<I>(args))...);
 }
 
-// What a queue entry owns while it waits its turn: the descriptors (the launch
-// reads them) and the workspace (its storage must not go back to the caching
-// allocator before the launch is submitted).
+// What a queue entry owns while it waits its turn: the descriptors, which the
+// launch reads when the consumer thread reaches it.
+//
+// The workspace is deliberately not owned here.  vLLM's EXEC_NPU_CMD allocates
+// it as a local `at::Tensor` that dies on the calling thread as soon as the
+// enqueue returns; keeping it in the entry instead moves that free onto the
+// consumer thread, and on 910B that is what grew the caching allocator's
+// reserved bytes by ~0.8 MiB per call (2000 decode-shaped recurrent calls:
+// +1530 MiB, against 0 for the same calls submitted inline) until the service
+// OOM'd.  Freeing on the calling thread costs no ordering: the launch joins the
+// queue that every later operator on this stream also joins, so nothing can be
+// submitted ahead of it.
 template <class Held>
 struct QueuedLaunch {
   std::optional<Held> held;
-  std::optional<torch::stable::Tensor> workspace;
 
-  void release() {
-    workspace.reset();
-    held.reset();
-  }
+  void release() { held.reset(); }
 };
 
 // Hand one launch to torch_npu's task queue, and say whether it went there.
 //
 // Both the macro and the two hand-written recurrent adapters submit through
 // here, so "queued" means the same thing in every adapter: the entry owns the
-// descriptors and the workspace until the launch has been submitted, and the
-// ordering the caller gave up by not taking the queue's barrier now comes from
-// the queue itself.
+// descriptors until the launch has been submitted, and the ordering the caller
+// gave up by not taking the queue's barrier now comes from the queue itself.
 //
-// `held` and `workspace` are borrowed, not consumed: on a refusal they are
-// handed back untouched, so the caller can still launch inline.  That refusal
-// is not hypothetical -- `enCurrentNPUStream` rejects an *external* stream
+// `held` is borrowed, not consumed: on a refusal it is handed back untouched,
+// so the caller can still launch inline.  The workspace is not passed in at all
+// -- it stays owned by the caller's frame (see QueuedLaunch).  That refusal is
+// not hypothetical -- `enCurrentNPUStream` rejects an *external* stream
 // ("External NPU stream is not supported by task queue enqueue") before it
 // submits anything, and a launcher that dropped the descriptors there would
 // turn "this stream is not queueable" into a dangling one.
@@ -358,15 +363,12 @@ template <class Held>
 inline bool enqueue_launch(Runtime& runtime, const char* api, LaunchFn launch,
                            int64_t stream, void* workspace_ptr,
                            uint64_t workspace_size, aclOpExecutor* executor,
-                           torch::stable::Tensor& workspace, Held& held) {
+                           Held& held) {
   if (!runtime.enqueue_enabled()) {
     return false;
   }
   auto state = std::make_shared<QueuedLaunch<std::remove_reference_t<Held>>>();
   state->held.emplace(std::move(held));
-  if (workspace_size != 0) {
-    state->workspace.emplace(std::move(workspace));
-  }
   // `api` is a literal in every caller, so the pointer is enough to capture and
   // costs nothing per call.
   auto call = [state, launch, workspace_ptr, workspace_size, executor, api,
@@ -376,8 +378,7 @@ inline bool enqueue_launch(Runtime& runtime, const char* api, LaunchFn launch,
     if (ret != 0) {
       report_async_failure(api, ret);
     }
-    // The descriptors and the workspace have done their job once the launch has
-    // been submitted.
+    // The descriptors have done their job once the launch has been submitted.
     state->release();
     return ret;
   };
@@ -390,9 +391,6 @@ inline bool enqueue_launch(Runtime& runtime, const char* api, LaunchFn launch,
     // submitted: hand the caller back its arguments and let it take the inline
     // path, which is how this stream was served before the queue existed.
     held = std::move(*state->held);
-    if (state->workspace.has_value()) {
-      workspace = std::move(*state->workspace);
-    }
     state->release();
     return false;
   }
@@ -476,6 +474,9 @@ inline void exec(const char* api, const TensorMeta& workspace_meta,
   if (workspace_size != 0) {
     // The workspace must be allocated on the operator's device, which is why
     // the caller passes a meta rather than letting this guess.
+    // It is also this frame's, i.e. the calling thread's, exactly like the
+    // local `at::Tensor` in vLLM's EXEC_NPU_CMD: see QueuedLaunch for why it
+    // must not outlive the enqueue.
     workspace = allocate_bytes(static_cast<int64_t>(workspace_size),
                                workspace_meta);
     TORCH_ERROR_CODE_CHECK(
@@ -499,8 +500,7 @@ inline void exec(const char* api, const TensorMeta& workspace_meta,
   auto held = detail::hold_args<Held>(
       args, std::make_index_sequence<std::tuple_size<Held>::value>{});
   if (detail::enqueue_launch(runtime, api, launch, stream, workspace_ptr,
-                             workspace_size, executor, workspace,
-                             held)) {
+                             workspace_size, executor, held)) {
     return;
   }
 

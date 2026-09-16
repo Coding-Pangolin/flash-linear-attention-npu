@@ -122,8 +122,7 @@ Tensor run_recurrent_gated_delta_rule(AtenTensorHandle query,
       std::move(v_idx), std::move(v_g), std::move(v_gk),
       std::move(v_accepted), std::move(v_out));
   if (enqueue_launch(rt, "aclnnRecurrentGatedDeltaRule", launch, stream,
-                     workspace_ptr, workspace_size, executor, workspace,
-                     held)) {
+                     workspace_ptr, workspace_size, executor, held)) {
     return out;
   }
   const int launch_ret =

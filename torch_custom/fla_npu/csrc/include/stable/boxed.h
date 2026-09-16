@@ -111,10 +111,18 @@ struct FunctionTraits<R (*)(A...)> {
 template <auto RunFn>
 void boxed_adapter(StableIValue* stack, uint64_t num_inputs,
                    uint64_t num_outputs) {
-  (void)num_inputs;
   using Traits = FunctionTraits<decltype(RunFn)>;
   using Args = typename Traits::Args;
   using Return = typename Traits::Return;
+
+  // The stack is read positionally, so a schema that gained or lost a parameter
+  // would shift every following argument instead of failing to compile.
+  constexpr uint64_t kInputs = std::tuple_size<Args>::value;
+  if (num_inputs != kInputs) {
+    throw std::runtime_error(
+        "fla_npu(stable): boxed adapter takes " + std::to_string(kInputs) +
+        " inputs but the schema declares " + std::to_string(num_inputs));
+  }
 
   Args args = unbox_all<Args>(
       stack, std::make_index_sequence<std::tuple_size<Args>::value>{});

@@ -30,7 +30,7 @@ BASELINE_WRITE = os.environ.get("FLA_NPU_BASELINE_WRITE", "").strip().lower() in
     "1", "true", "yes", "on"}
 
 
-def check_baseline(device: str, suite) -> int:
+def check_baseline(device: str, suite, subset: bool = False) -> int:
     """Compare this run's scenario set against the checked-in record.
 
     The point is the *set*, not the numbers: a scenario that disappears (a
@@ -52,6 +52,14 @@ def check_baseline(device: str, suite) -> int:
         print(f"baseline written for {device}: "
               f"{len(observed['passed'])} passed, "
               f"{len(observed['skipped'])} skipped -> {BASELINE}")
+        return 0
+    if subset:
+        # A --group run executes a slice of the scenario library by design, so
+        # every scenario outside the slice would look "lost".  The bitwise
+        # assertion still applies to the ones that ran; only the set check is
+        # meaningful for a full run.
+        print(f"baseline comparison skipped for a subset run "
+              f"({len(observed['passed'])} scenario(s) executed)")
         return 0
     if device not in data:
         print(f"no baseline recorded for {device}; run once with "
@@ -225,7 +233,7 @@ def main() -> int:
     if shim.missing:
         print(f"MISSING ADAPTERS: {sorted(set(shim.missing))}")
         return 1
-    status = check_baseline(device, suite)
+    status = check_baseline(device, suite, subset=bool(args.group))
     if status != 0:
         return status
     if isinstance(shim, PublicShim):

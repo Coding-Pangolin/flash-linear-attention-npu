@@ -152,8 +152,7 @@ void run_recurrent_kda(AtenTensorHandle q, AtenTensorHandle k,
       std::move(v_idx), std::move(v_alog), std::move(v_dtb),
       std::move(v_accepted), std::move(v_out), std::move(v_final));
   if (enqueue_launch(rt, "aclnnRecurrentKda", launch, stream, workspace_ptr,
-                     workspace_size, executor, workspace,
-                     held)) {
+                     workspace_size, executor, held)) {
     return;
   }
   const int launch_ret =

@@ -69,12 +69,13 @@ jobs:
     env:
       FLA_NPU_PYPI: "TRUE"
       FLA_NPU_DISABLE_LOCAL_VERSION: "TRUE"
-      FLA_NPU_BUILD_OFFLINE_BUNDLE: "TRUE"
       FLA_NPU_SOC: ${{ matrix.soc }}
       FLA_NPU_ARCH: ${{ matrix.arch }}
       CI_IMAGE: ${{ matrix.image }}
-      # Same warm cache the NPU CI uses, so the embedded offline bundle is built
-      # from a seeded third_party tree instead of a network fetch.
+      # Same warm cache the NPU CI uses, so the OPP build resolves third_party
+      # from a seeded tree instead of a network fetch.  (The embedded offline
+      # recompile bundle is a main-only feature -- #372 -- so this branch neither
+      # builds nor requires it.)
       CI_CACHE_ROOT: ${{ vars.FLA_NPU_CI_CACHE_ROOT || '/workspace/flash-linear-attention-npu-ci/cache' }}
     steps:
       - name: Checkout
@@ -91,7 +92,7 @@ jobs:
             -v "$PWD:/workspace/repo" \
             -v "$third_party_cache:/workspace/repo/third_party" \
             -w /workspace/repo \
-            -e FLA_NPU_PYPI -e FLA_NPU_DISABLE_LOCAL_VERSION -e FLA_NPU_BUILD_OFFLINE_BUNDLE \
+            -e FLA_NPU_PYPI -e FLA_NPU_DISABLE_LOCAL_VERSION \
             -e FLA_NPU_SOC -e FLA_NPU_ARCH -e FLA_NPU_EXPECT_TIER \
             "$CI_IMAGE" bash -lc '
               set -euo pipefail
@@ -104,8 +105,7 @@ jobs:
               python scripts/build_wheel.py
               python scripts/check_pypi_wheel.py dist/*.whl \
                 --expect-tier "$FLA_NPU_EXPECT_TIER" \
-                --expect-arch "$FLA_NPU_ARCH" \
-                --require-offline-bundle
+                --expect-arch "$FLA_NPU_ARCH"
             '
 
       - name: Upload wheel

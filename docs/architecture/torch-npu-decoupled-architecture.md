@@ -474,6 +474,33 @@ runtime 会缓存两个局部 CDLL 句柄和已解析符号，并使用 `RTLD_NO
 - 不得按 torch patch 版本散落条件分支；能力差异应集中在 runtime provider 或 adapter。
 - 修改 device guard、stream、异步保活、format、mutation 或 autograd 行为时，必须同步本文和对应测试。
 
+### 6.5 发布 wheel 的水位约束（glibc / libstdc++）
+
+PyPI 上的 `manylinux_<glibc>_<arch>` 标签是对外承诺"目标机 glibc ≥ 该版本就能加载"，
+所以两条水位轴在发版时从"看看而已"变成硬约束：标签写高了会挡住本来能装的机器，写低了
+等于发一个装上去加载失败的包。
+
+**实测（26.9.0，构建镜像 cann:9.1.0-*-ubuntu22.04，glibc 2.35）**，逐文件取包内最大值：
+
+| 产物 | GLIBC 上限 | 来源 |
+| --- | --- | --- |
+| `libfla_npu_stable.so`（适配层） | **2.34** | `dlopen` / `dlsym` / `dlerror`（glibc 2.34 起并入 libc）+ `__libc_single_threaded`（2.32） |
+| OPP `liboptiling.so`、`libcust_opmaster_rt2.0.so`、`libcust_opsproto_rt2.0.so` | **2.34** | 同一容器编译 |
+| OPP `libcust_opapi.so`、`libes_transformer_cust.so` | 2.32 | 同一容器编译 |
+
+结论：整包 glibc 下限是 **2.34**，所以平台标签是 `manylinux_2_34_<arch>`（单一常量
+`scripts/fla_npu_artifacts.WHEEL_PLATFORM_TAG`，本仓 CI 镜像就是 22.04 基线）。要真的降到
+`manylinux_2_28`（CentOS 7 / glibc 2.28 的存量机器）需要同时改两处，都属于独立于发布流程的
+构建改造：适配层用 `.symver` 把 `dlopen` / `dlsym` / `dlerror` 钉回 `GLIBC_2.2.5`（x86_64）/
+`GLIBC_2.17`（aarch64）并去掉 `__libc_single_threaded` 引用；OPP 在 glibc ≤ 2.28 的镜像里
+编译（CANN 9.1 目前只在 22.04 基线上验证过）。
+
+libstdc++ 那条轴同样按"整包取最大值"看：当前产物需要 `GLIBCXX_3.4.29`，也就是目标机的
+libstdc++ 要来自 GCC 11 及以上的发行版（Ubuntu 22.04+）。这条线比 glibc 更容易漏：客户机上
+`libstdc++` 由发行版或 conda 提供，同一台机器换个 python 入口结论就可能不同。
+
+发布门禁：`scripts/check_pypi_wheel.py` 上传前逐个 `.so` 断言 glibc 与 GLIBCXX 都不超过标签
+水位，超出即失败；`tools/stable_abi_audit.py --lib` 是同一套判据的构建期版本。
 ## 7. 常见问题
 
 ### 是否完全不依赖 torch？

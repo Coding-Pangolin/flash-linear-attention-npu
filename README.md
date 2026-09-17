@@ -93,8 +93,8 @@ wheel 既不依赖 CPython ABI 也不依赖 libtorch C++ ABI，所以 `Requires-
 加速），**不会中断导入**。平台水位方面：wheel 的 glibc 下限是 `2.34`（与
 `manylinux_2_34_<arch>` 标签一致，等于构建镜像的实测水位），`libstdc++` 需要提供到
 `GLIBCXX_3.4.29`（Ubuntu 22.04+ / GCC 11+）；低于这两条的目标机装得上但加载会
-失败。离线或受控环境用 `--no-deps` 安装，避免 pip 按 PyPI 上的 torch_npu 版本触发
-升级。
+失败。`triton-ascend` 需与 CANN 版本匹配（CANN 9.x 即 9.0.0+ 需要 ≥ 3.2.1）。离线或受控
+环境用 `--no-deps` 安装，避免 pip 按 PyPI 上的 torch_npu 版本触发升级。
 
 本地自编的 wheel 与 PyPI 档位包**同名同平台标签**
 （`flash_linear_attention_npu_a2-<版本>-py3-none-manylinux_2_34_<arch>.whl`），两者互为

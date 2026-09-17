@@ -163,6 +163,20 @@ def _metadata(archive: zipfile.ZipFile) -> dict[str, list[str]]:
     return fields
 
 
+def _install_path(name: str) -> str:
+    """Map a wheel member onto the path it occupies once installed.
+
+    ``setup.py`` marks the wheel ``Root-Is-Purelib: false`` (the payload is a
+    host launcher plus the OPP it loads) while the ``build_py`` output stays
+    pure, so setuptools stages the package under ``<dist>.data/purelib/``.  pip
+    maps that directory back onto the purelib scheme -- the same
+    ``site-packages/fla_npu`` a top-level member lands in -- so the structural
+    checks look through the prefix instead of demanding members at the root.
+    """
+    match = re.fullmatch(r"[\w.+-]+\.data/(?:purelib|platlib)/(.+)", name)
+    return match.group(1) if match else name
+
+
 def check_wheel(
     wheel: Path,
     *,
@@ -228,6 +242,12 @@ def check_wheel(
     soc = TIER_SOC[tier]
     with zipfile.ZipFile(wheel) as archive:
         names = [name for name in archive.namelist() if not name.endswith("/")]
+        # Members read/verified below stay keyed by their real archive name so
+        # archive.read() and the extraction keep working; only the matching is
+        # done on the installed path.
+        installed = {_install_path(name): name for name in names}
+        if any(installed_path != name for installed_path, name in installed.items()):
+            notes.append("payload staged under .data/purelib/ (pip installs it to site-packages)")
         fields = _metadata(archive)
         if _normalize(fields["Name"][0]) != _normalize(expected_distribution):
             raise CheckFailure(
@@ -258,7 +278,11 @@ def check_wheel(
 
         def find(pattern: str) -> list[str]:
             regex = re.compile(pattern)
-            return [name for name in names if regex.search(name)]
+            return [
+                original
+                for installed_path, original in installed.items()
+                if regex.search(installed_path)
+            ]
 
         def require(pattern: str, what: str) -> list[str]:
             found = find(pattern)
@@ -353,12 +377,22 @@ def check_wheel(
                         f"(max {max_glibcxx}); rebuild it with the pinned toolchain"
                     )
             notes.append(f"{len(shared_objects)} shared objects verified for {arch}")
-            host_lib = root / (
+            host_lib_rel = (
                 f"fla_npu/opp/vendors/{VENDOR}/op_impl/ai_core/tbe/op_tiling/"
                 f"lib/linux/{OPP_HOST_LIB_ARCH[arch]}"
             )
-            if not host_lib.is_dir():
-                notes.append(f"note: {host_lib.relative_to(root)} is absent")
+            host_lib = next(
+                (
+                    root / original
+                    for installed_path, original in installed.items()
+                    if installed_path.startswith(f"{host_lib_rel}/")
+                ),
+                None,
+            )
+            if host_lib is None:
+                notes.append(f"note: {host_lib_rel} is absent")
+            else:
+                notes.append(f"{OPP_HOST_LIB_ARCH[arch]} host libraries present")
     return notes
 
 

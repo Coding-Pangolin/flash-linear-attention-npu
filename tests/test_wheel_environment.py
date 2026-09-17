@@ -338,7 +338,8 @@ class WheelEnvironmentTest(unittest.TestCase):
             compat_py.unlink(missing_ok=True)
 
     def _write_release_wheel(self, path: Path, *, tier: str, soc: str,
-                             declared_tier: str | None = None) -> None:
+                             declared_tier: str | None = None,
+                             prefix: str = "") -> None:
         """A minimal wheel with the file name, metadata and payload the gate reads."""
 
         info = f"flash_linear_attention_npu_{tier}-26.9.0.dist-info"
@@ -361,7 +362,7 @@ class WheelEnvironmentTest(unittest.TestCase):
                 "Requires-Dist: torch>=2.7.1\n"
                 "Requires-Dist: torch_npu>=2.7.1\n"))
             for name, payload in entries.items():
-                archive.writestr(name, payload)
+                archive.writestr(f"{prefix}{name}", payload)
             archive.writestr(f"{info}/RECORD",
                              f"{info}/METADATA,,\n{info}/RECORD,,\n")
 
@@ -410,6 +411,39 @@ class WheelEnvironmentTest(unittest.TestCase):
             with mock.patch("shutil.which", return_value=None):
                 with self.assertRaisesRegex(gate["CheckFailure"], "kernels"):
                     run_gate(wheel)
+
+    def test_release_gate_accepts_wheels_staged_under_data_purelib(self) -> None:
+        """The layout setup.py really produces has to pass the gate.
+
+        FlaNpuBdistWheel.finalize_options forces root_is_pure = False while the
+        staged payload stays pure Python plus the launcher, so setuptools writes
+        every member under ``<dist>.data/purelib/``.  Matching only top-level
+        members would fail every real wheel even though pip installs it into
+        site-packages just the same.
+        """
+
+        gate = runpy.run_path(str(REPO_ROOT / "scripts" / "check_pypi_wheel.py"))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wheel = Path(temp_dir) / (
+                "flash_linear_attention_npu_a2-26.9.0-py3-none-"
+                "manylinux_2_28_aarch64.whl")
+            self._write_release_wheel(
+                wheel, tier="a2", soc="ascend910b",
+                prefix="flash_linear_attention_npu_a2-26.9.0.data/purelib/")
+            with mock.patch("shutil.which", return_value=None):
+                notes = gate["check_wheel"](
+                    wheel,
+                    expect_tier="a2",
+                    expect_arch="aarch64",
+                    expect_version="26.9.0",
+                    require_offline_bundle=False,
+                    require_launcher=True,
+                    max_glibc="2.28",
+                    max_glibcxx="3.4.29",
+                    allow_missing_readelf=True,
+                )
+        self.assertTrue(any("kernel" in note for note in notes), notes)
+        self.assertTrue(any("purelib" in note for note in notes), notes)
 
     def test_pure_ctypes_wheel_is_not_required_to_carry_the_launcher(self) -> None:
         gate = runpy.run_path(str(REPO_ROOT / "scripts" / "check_pypi_wheel.py"))

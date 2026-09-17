@@ -93,7 +93,7 @@
 | npu_chunk_fwd_o | ✅（v3） | ✅ | 0.0（仅 BNSD 合法域） | 0.56 → 0.097 ms |
 | npu_chunk_gated_delta_rule_bwd_dhu | ✅（v3） | ✅ | 0.0（canonical ≥2 序列；单序列 dense 两条路径同 NaN，内核边界） | 0.71 → 0.139 ms |
 | npu_recurrent_kda | ✅ | ✅ | 0.0（BSND B2/T2/H2/HV4 dense、state_v_first、inplace + final_state；Ascend950PR） | 0.085 → 0.011 ms（950） |
-| npu_chunk_gated_delta_rule_fwd | ✅（cpp_only 标量 + return_code + layout/varlen helpers；需上游 #495 的 op_api/ctypes 修正） | ✅ | **全域名**：dense + varlen（physical B=1、canonical chunk_indices）；layout BNSD/BSND/NTD/TND；A2 legacy 路径与 A5 新路径（`use_exp2`/`use_qk_l2norm`/`state_v_first`/`return_intermediate_states` 的 `h`）；GVA、chunk 64/128、`initial_state` fp32/bf16、`output_final_state` 均覆盖。实测：A2（910b）21 场景全绿含 varlen；A5（950）BSND+exp2+l2norm、+state_v_first、+return_h、TND varlen、legacy BNSD 全部 parity 0.0，且 cp312/torch2.9 与 cp310/torch2.7.1(fzy) 两套环境结果一致。A5 专属输出（q_hat/k_hat/rstd/beta_eff）与 ctypes 一样传 null；BSND 不带 exp2、V=256 在当前 build 双方同样报错（169104/161002） | 待补 |
+| npu_chunk_gated_delta_rule_fwd | ✅（cpp_only 标量 + return_code + layout/varlen helpers；需上游 #495 的 op_api/ctypes 修正） | ✅ | **全域名**：dense + varlen（physical B=1、canonical chunk_indices）；layout BNSD/BSND/NTD/TND；A2 legacy 路径与 A5 新路径（`use_exp2`/`use_qk_l2norm`/`state_v_first`/`return_intermediate_states` 的 `h`）；GVA、chunk 64/128、`initial_state` fp32/bf16、`output_final_state` 均覆盖。实测：A2（910b）21 场景全绿含 varlen；A5（950）BSND+exp2+l2norm、+state_v_first、+return_h、TND varlen、legacy BNSD 全部 parity 0.0，且 cp312/torch2.9 与 cp310/torch2.7.1(fzy) 两套环境结果一致。正向恒为十个输出槽、语义与 ctypes 逐槽一致（#593 之后）：`use_qk_l2norm_in_kernel` 打开时 `q_hat/k_hat` 分配并导出、`q_rstd/k_rstd` 为 `[B,HK,T]` fp32；关闭时 `q_hat/k_hat` 就是调用方的 q/k、两个 rstd 为 None。`use_gate_in_kernel=True` 与 `a_log/dt_bias` 非空按参考的同一口径在 wrapper 拒绝；BSND 不带 exp2、V=256 在当前 build 双方同样报错（169104/161002） | 待补 |
 | npu_chunk_gated_delta_rule_fwd_prepare | ✅ | ✅ | 0.0（9 输出；Ascend950PR）＋放宽域：`use_beta_sigmoid=False`（返回 `beta.to(fp32)`）、`output_a=False`、varlen 均已 0.0；仅 `a_log`/`dt_bias` 非空时 stable 报 161002（1-D 描述符待查）→ 保持回退 ctypes | 0.144 → 0.030 ms（950） |
 | npu_chunk_gated_delta_rule_bwd_finalize | ✅ | ✅ | 0.0（5 输出；Ascend950PR，g/beta fp32、G=2 域）＋放宽域：`use_qk_l2_norm_in_kernel=False`/`use_beta_sigmoid_in_kernel=False`（不传 q_rstd/k_rstd/beta_raw）、`state_v_first=True` 均已 0.0 | 0.167 → 0.023 ms（950） |
 | npu_causal_conv1d_bwd | ✅ | ✅（按文档签名） | 0.0（BNSD 域）；BSH/TND 两路径同 NaN（该构建 kernel 边界待查） | 0.58 → 0.084 ms |
@@ -116,11 +116,21 @@
    扩到全域名——引入 layout-aware helpers、varlen 的 seq/chunk 数推导、
    A5 路径的 `h` 输出与 `return_code`，并修了两处：`use_gate_in_kernel`/
    `use_beta_sigmoid_in_kernel` 必须是 `cpp_only`（否则 `when` 引用未声明符号），
-   A5 专属输出必须像 ctypes 一样传 null（否则 A5 报 161002）。实测 A2 21 场景
-   全绿，A5（950）A5 场景全绿，且在 torch 2.9/cp312 与 torch 2.7.1/cp310(fzy)
-   两套环境结果一致。注意：T 非 chunk 整数倍时 `A` 的尾块 padding 行两侧都是
-   未初始化内存（valid 区域仍 0.0）；只给 `cu_seqlens` 时 stable 会自动派生
-   canonical `chunk_indices`（ctypes 要求成对提供，属 stable 的超集）。
+   输出槽的顺序与个数必须与参考逐一对应。实测 A2 21 场景
+  全绿，A5（950）A5 场景全绿，且在 torch 2.9/cp312 与 torch 2.7.1/cp310(fzy)
+  两套环境结果一致。注意：T 非 chunk 整数倍时 `A` 的尾块 padding 行两侧都是
+  未初始化内存（valid 区域仍 0.0）；只给 `cu_seqlens` 时 stable 会自动派生
+  canonical `chunk_indices`（ctypes 要求成对提供，属 stable 的超集）。
+
+   ⚠️ rebase 到 `main@733114b9` 之后这条又变了，适配层已按新契约同步：main 的
+   #593 把正向改成**恒返回十个值**并在 `use_qk_l2norm_in_kernel` 打开时导出
+   `q_hat/k_hat/q_rstd/k_rstd`（关闭时前两者别名输入、后两者为 None），
+   `use_gate_in_kernel=True` 与 `a_log`/`dt_bias` 非空改为在 Python 侧直接拒绝；
+   `_bwd` 的公开签名对齐（新增 `allow_neg_eigval`、`chunk_size` 变关键字、
+   `use_exp2`/`layout` 默认值改为 `False`/`BNSD`），`_bwd` 与
+   `_fwd_prepare`/`_bwd_finalize` 去掉 `use_exp2`（以及 prepare 的
+   `use_qk_l2norm_in_kernel`）必须为 True 的拒绝。三方门禁
+   （`tools/op_abi_parity.py`、`tools/op_api_parity.py`）均为 0 drift。
 4. `npu_solve_tri`：bsnd/bnsd dense 已原生 stable 并 0.0；`tnd` 被拒绝（段错误）；
    **`ntd` 与 `tnd` 表现相同（段错误），但按"与参考实现保持一致"的要求不拦截**，
    只把实测记录在案（6 种拼写全无结果），是否拦由算子责任人决定。

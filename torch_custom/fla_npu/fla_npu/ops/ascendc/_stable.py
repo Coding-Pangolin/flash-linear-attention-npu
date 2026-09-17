@@ -1289,34 +1289,41 @@ def npu_chunk_gated_delta_rule_fwd(q, k, v, g, beta, *, initial_state=None,
                                    allow_neg_eigval=False,
                                    disable_recompute=True,
                                    return_intermediate_states=False,
-                                   state_v_first=False, layout="BNSD"):
+                                   state_v_first=False, a_log=None,
+                                   dt_bias=None, layout="BNSD"):
     """Fused GDN forward: `o` plus the intermediates the backward consumes.
 
-    The public tuple grows with the flags -- `(g_cumsum, A)` appear with
-    ``disable_recompute`` and ``h`` with ``return_intermediate_states`` -- while
-    the operator itself always has those slots, so the filtering happens here.
+    The tuple is fixed at ten slots -- `(o, final_state, g_cumsum, A, beta_eff,
+    h, q_hat, k_hat, q_rstd, k_rstd)` -- carrying `None` in the slots the flags
+    switch off, exactly like the reference.  `q_hat`/`k_hat` are the caller's
+    own q/k when the kernel is not asked to normalise them.
     """
 
+    # Gate-in-kernel is unsupported by this kernel build, and the reference
+    # refuses the flag together with a_log/dt_bias before the launch.  Dropping
+    # them here instead would turn a rejected call into a silently different
+    # one, so the refusal is repeated.
+    if use_gate_in_kernel:
+        raise RuntimeError(
+            "npu_chunk_gated_delta_rule_fwd: use_gate_in_kernel=True is not "
+            "supported.")
+    if a_log is not None or dt_bias is not None:
+        raise RuntimeError(
+            "npu_chunk_gated_delta_rule_fwd: a_log and dt_bias must be None "
+            "while gate-in-kernel is unsupported.")
     if scale is None:
         scale = float(k.shape[-1]) ** -0.5
-    result = _op("npu_chunk_gated_delta_rule_fwd")(
+    return _op("npu_chunk_gated_delta_rule_fwd")(
         q, k, v, g, beta, initial_state,
         _host_ints(cu_seqlens), _host_ints(chunk_indices),
         _char_code("npu_chunk_gated_delta_rule_fwd", "layout", layout),
         float(scale), chunk_size, bool(use_exp2),
-        bool(use_qk_l2norm_in_kernel), bool(use_gate_in_kernel),
+        bool(use_qk_l2norm_in_kernel),
         bool(use_beta_sigmoid_in_kernel), bool(allow_neg_eigval),
         bool(disable_recompute), bool(output_final_state),
         bool(return_intermediate_states), bool(state_v_first),
         _current_stream_ptr(),
     )
-    o, final_state, g_cumsum, a, h = result
-    public = [o, final_state]
-    if disable_recompute:
-        public.extend((g_cumsum, a))
-    if return_intermediate_states:
-        public.append(h)
-    return tuple(public)
 
 
 def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
@@ -1363,20 +1370,13 @@ def npu_chunk_gated_delta_rule_fwd_prepare(
     same conversion happens here.
     """
 
-    # The kernel implements exactly these spellings; the reference refuses the
-    # others, and the allocations below assume them.
-    if not use_qk_l2norm_in_kernel:
-        raise RuntimeError(
-            "npu_chunk_gated_delta_rule_fwd_prepare: "
-            "use_qk_l2norm_in_kernel currently only supports True.")
+    # Gate-in-kernel is the only spelling left that the reference refuses; with
+    # ``use_qk_l2norm_in_kernel`` off the hats are the caller's own q/k and both
+    # rstd slots stay null, which the adapter below already handles.
     if use_gate_in_kernel:
         raise RuntimeError(
             "npu_chunk_gated_delta_rule_fwd_prepare: use_gate_in_kernel "
             "currently only supports False.")
-    if not use_exp2:
-        raise RuntimeError(
-            "npu_chunk_gated_delta_rule_fwd_prepare: use_exp2 currently only "
-            "supports True.")
     if cu_seqlens and not chunk_indices:
         chunk_indices = _canonical_chunk_indices(cu_seqlens, chunk_size)
     (q_hat, k_hat, q_rstd, k_rstd, beta_out, g_cumsum, w, u, a) = _op(
@@ -1423,10 +1423,6 @@ def npu_chunk_gated_delta_rule_bwd_finalize(
         raise RuntimeError(
             "npu_chunk_gated_delta_rule_bwd_finalize: use_gate_in_kernel only "
             "supports False.")
-    if not use_exp2:
-        raise RuntimeError(
-            "npu_chunk_gated_delta_rule_bwd_finalize: use_exp2 only supports "
-            "True.")
     if scale is None:
         scale = 1.0 / (128.0 ** 0.5)
     return _op("npu_chunk_gated_delta_rule_bwd_finalize")(
@@ -1441,25 +1437,26 @@ def npu_chunk_gated_delta_rule_bwd_finalize(
 
 
 def npu_chunk_gated_delta_rule_bwd(
-        q, k, v, g, beta, A, d_o, scale, chunk_size, *, layout="BSND",
-        initial_state=None, dht=None, q_rstd=None, k_rstd=None, beta_raw=None,
-        a_log=None, dt_bias=None, use_exp2=True, use_gate_in_kernel=False,
-        use_qk_l2norm_in_kernel=False, use_beta_sigmoid_in_kernel=False,
-        state_v_first=False, cu_seqlens=None, chunk_indices=None,
-        return_intermediate_states=False):
+        q, k, v, g, beta, A, d_o, scale, *, chunk_size=64, cu_seqlens=None,
+        chunk_indices=None, initial_state=None, dht=None, q_rstd=None,
+        k_rstd=None, beta_raw=None, use_exp2=False,
+        use_qk_l2norm_in_kernel=False, use_gate_in_kernel=False,
+        use_beta_sigmoid_in_kernel=False, allow_neg_eigval=False,
+        return_intermediate_states=False, state_v_first=False, a_log=None,
+        dt_bias=None, layout="BNSD"):
     """The composite GDN backward, in one aclnn call.
 
     Returns `(dq, dk, dv, d_beta, d_g, dh0, d_a_log, d_dt_bias)`; the last two
     are reserved slots the operator does not fill yet and come back as None,
     exactly like the reference.  `return_intermediate_states` is accepted for
-    ABI compatibility and has no effect, again like the reference.
+    ABI compatibility and has no effect, again like the reference -- and so is
+    `allow_neg_eigval`, which the reference keeps in its public signature for
+    the same reason without forwarding it to the kernel.
     """
 
-    # The composite backward implements neither of these, and it receives the
-    # values, so the reference's refusal has to be repeated here.
-    if not use_exp2:
-        raise RuntimeError(
-            "npu_chunk_gated_delta_rule_bwd: use_exp2=False is not supported.")
+    # Gate-in-kernel is the one spelling the composite backward still does not
+    # implement, and it receives the value, so the reference's refusal has to
+    # be repeated here.
     if use_gate_in_kernel:
         raise RuntimeError(
             "npu_chunk_gated_delta_rule_bwd: use_gate_in_kernel=True is not "

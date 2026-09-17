@@ -69,6 +69,45 @@ python -m pip install --force-reinstall --no-cache-dir --no-deps dist/<wheel文�
 
 需要单独编译一个或多个算子 run 包的开发者场景见[开发者指南](docs/开发者指南.md) 场景 1。
 
+#### 2.4 【可选】直接安装已发布的 wheel
+
+官方 wheel 按产品档位发布到 PyPI，按机器芯片选对应包名安装（CANN、`torch` / `torch_npu` /
+`triton-ascend` 仍需按 Step 1 自行准备；wheel 内嵌预编译 OPP 与离线编译 bundle，但
+**不打包**这些运行时依赖）：
+
+| 芯片 | 产品档位 | PyPI 包名 | 本期发布的架构 |
+| --- | --- | --- | --- |
+| 910B（A2，`ascend910b`） | a2 | `python -m pip install flash-linear-attention-npu-a2` | `manylinux_2_34_aarch64` |
+| A3（`ascend910_93`） | a3 | `python -m pip install flash-linear-attention-npu-a3` | `manylinux_2_34_aarch64` |
+| 950（A5，`ascend950`） | a5 | `python -m pip install flash-linear-attention-npu-a5` | `manylinux_2_34_x86_64` |
+
+档位写在包名里，架构写在 wheel 标签里（`manylinux_2_34_<arch>`），pip 只挑本机架构那一个。
+**同一架构下的不同档位必须按芯片选包**：本项目不做运行期芯片识别（设备名到档位的映射在
+不同硬件代际上不可靠），装错档位会在调用算子时报错；档位是三个独立项目，互不覆盖。
+上表只列出本期已具备构建机的组合，同档位的另一架构会在对应构建机接入后随版本补发，包名不变。
+
+wheel 既不依赖 CPython ABI 也不依赖 libtorch C++ ABI，所以 `Requires-Python` 只有下限
+`>=3.9`，不必按 Python / torch 小版本各发一份。wheel 声明的依赖下限
+（`torch>=2.7.1` / `torch_npu>=2.7.1`）来自 Stable-ABI 适配层的符号需求：低于该下限时
+适配层加载失败，`import fla_npu` 会告警并自动回退 ctypes 参考实现（结果正确，只少 host 侧
+加速），**不会中断导入**。建议 `libstdc++` 提供到 `GLIBCXX_3.4.29`（即 Ubuntu 22.04+ /
+GCC 11+）。离线或受控环境用 `--no-deps` 安装，避免 pip 按 PyPI 上的 torch_npu 版本
+触发升级。
+
+本地自编的 wheel 与 PyPI 档位包**同名同平台标签**
+（`flash_linear_attention_npu_a2-<版本>-py3-none-manylinux_2_34_<arch>.whl`），两者互为
+升级路径，不会在同一个环境里留下两份互不知晓的 `fla_npu/`。唯一按分支区分的是版本号：
+`main` 分支的开发构建追加 `+main.<commit>`，可以覆盖已装的正式包；从发布分支构建则与正式包
+版本号相同，此时必须带 `--force-reinstall`（见 2.3）。
+
+不再使用时按 distribution 名卸载，例如
+`python -m pip uninstall -y flash-linear-attention-npu-a2`。从旧命名
+（`flash-linear-attention-npu`）升级过来的环境，先用同名命令清掉旧发行名，否则两个名字会
+同时拥有 `fla_npu/`，卸载其中一个会留下另一个的文件。
+
+运行期开关（`FLA_NPU_STABLE_ABI` / `FLA_NPU_STABLE_VALIDATE` / `FLA_NPU_STABLE_TRACE`）
+见[适配层设计](docs/architecture/适配层设计.md)与[兼容与迁移指南](docs/兼容与迁移指南.md)。
+
 ### Step 3. 验证与测试
 
 ```sh

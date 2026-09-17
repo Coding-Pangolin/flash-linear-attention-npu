@@ -75,6 +75,16 @@ target_link_options(intf_pub
             -Wl,-z,relro
             -Wl,-z,now
             -Wl,-z,noexecstack
+            # Host 侧产物（cust_opapi / cust_opmaster / opsproto）要装到比构建机更老的
+            # 发行版上：动态链接 libstdc++ 会把构建镜像的 GCC 版本变成产品下限
+            # （Ubuntu 22.04 / GCC 11 -> GLIBCXX_3.4.29，而 openEuler 22.03 / GCC 10
+            # 只到 3.4.28，import 时会报 GLIBCXX_3.4.29 not found）。
+            # 静态链接后产物对 GLIBCXX 没有任何版本引用，这条下限与 GCC 版本解耦。
+            # --exclude-libs 必须点名 libstdc++.a / libsupc++.a：用 ALL 会连带隐藏
+            # 我们自己的静态库（aclnn* 入口会静默消失）。
+            -static-libstdc++
+            -Wl,--exclude-libs,libstdc++.a
+            -Wl,--exclude-libs,libsupc++.a
             $<$<BOOL:${ENABLE_GCOV}>:-fprofile-arcs -ftest-coverage>
 
 )
@@ -102,6 +112,11 @@ target_link_options(intf_pub_cxx14 INTERFACE
   -Wl,-z,noexecstack
   $<$<CONFIG:Release>:-s>
   $<$<CONFIG:Release>:-Wl,--build-id=none>
+  # 与 intf_pub 一致：host 侧静态链接 libstdc++，去掉 GLIBCXX 版本下限
+  # （es_transformer_cust 等 c++17 产物走的是这个接口）。
+  -static-libstdc++
+  -Wl,--exclude-libs,libstdc++.a
+  -Wl,--exclude-libs,libsupc++.a
   $<$<BOOL:${ENABLE_GCOV}>:-fprofile-arcs -ftest-coverage>
 )
 target_link_directories(intf_pub_cxx14 INTERFACE)
@@ -131,6 +146,10 @@ target_link_options(intf_pub_cxx17 INTERFACE
     -Wl,-z,noexecstack
     $<$<CONFIG:Release>:-s>
     $<$<CONFIG:Release>:-Wl,--build-id=none>
+    # 与 intf_pub 一致：host 侧静态链接 libstdc++，去掉 GLIBCXX 版本下限
+    -static-libstdc++
+    -Wl,--exclude-libs,libstdc++.a
+    -Wl,--exclude-libs,libsupc++.a
     $<$<BOOL:${ENABLE_GCOV}>:-fprofile-arcs -ftest-coverage>
   )
 target_link_directories(intf_pub_cxx17 INTERFACE)
@@ -160,6 +179,10 @@ target_link_options(intf_pub_aicpu INTERFACE
   -Wl,-z,now
   -Wl,-z,noexecstack
   $<$<CONFIG:Release>:-Wl,--build-id=none>
+  # 与 intf_pub 一致：host 侧静态链接 libstdc++，去掉 GLIBCXX 版本下限
+  -static-libstdc++
+  -Wl,--exclude-libs,libstdc++.a
+  -Wl,--exclude-libs,libsupc++.a
   $<$<BOOL:${ENABLE_GCOV}>:-fprofile-arcs -ftest-coverage>
 )
 target_link_directories(intf_pub_aicpu INTERFACE)

@@ -159,7 +159,7 @@ aarch64 上的 A5）会在相应构建机注册后随版本补发，届时包名
 | `torch` / `torch_npu` | 2.7.1 | torch_npu 从 Ascend 发布安装，PyPI 上的版本通常不可用 |
 | `triton-ascend` | 3.2.0；CANN 9.x（9.0.0+）需 ≥ 3.2.1 | 需与 CANN 版本匹配 |
 | `glibc` | 2.34 | wheel 标签即 `manylinux_2_34_<arch>`，等于构建镜像（Ubuntu 22.04）的实测水位 |
-| `libstdc++` | GLIBCXX 3.4.29 | 即 Ubuntu 22.04+ / GCC 11+ |
+| `libstdc++` | 无要求 | OPP 里的 host 库静态链接 libstdc++，产物不引用任何 `GLIBCXX_<x.y.z>`；openEuler 22.03 / GCC 10（上限 `3.4.28`）这类机器可直接使用，不需要 `LD_LIBRARY_PATH` 绕行 |
 
 运行期开关（默认已是 Stable-ABI 薄层，未知开关一律按默认处理）：
 

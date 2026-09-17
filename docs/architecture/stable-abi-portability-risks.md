@@ -19,7 +19,7 @@
 
 | 编号 | 风险 | 触发场景 | 严重度 | 现有防护 | 缺口 |
 | --- | --- | --- | --- | --- | --- |
-| A1 | libstdc++（GLIBCXX）下限被构建机抬高 | A | 高 | `stable_abi_audit.py --lib` 断言 `max_glibcxx` | 未挂 CI；发版容器未固定 |
+| A1 | libstdc++（GLIBCXX）下限被构建机抬高 | A | 高 | OPP host 侧静态链接 libstdc++ + `check_pypi_wheel.py` 断言包内无 `GLIBCXX` | 已闭环（见 A1 节；launcher 单独由 `stable_abi_audit.py --lib` 断言） |
 | A2 | glibc（`GLIBC_x.y`）下限被构建机抬高 | A | 中 | `check_pypi_wheel.py` 逐个 `.so` 断言 ≤ 标签水位 | 已覆盖（实测 2.34，见 A2 节；降到 2.28 需改构建链） |
 | A3 | 注册入口 / 新增运行时符号 | A | 低 | `--lib` 断言入口符号 + 符号白名单 | 已覆盖 |
 | A4 | torch 版本范围 | A | 低 | wheel 声明 `torch>=2.7.1`；加载失败有清晰报错 | 2.8 / 2.10 / 2.11 运行时未跑 |
@@ -104,13 +104,12 @@ fla_npu/opp/.../op_proto/lib/linux/aarch64/libcust_opsproto_rt2.0.so     3.4.18
 ```
 
 也就是说：这条轴在客户手里**已经存在至少一个发布周期**，且没有触发过问题——反过来可以推断
-**实际部署的机器都在 3.4.29 之上**（等价于 Ubuntu 22.04+ / GCC 11+）。
-所以它的定位不是"今天会不会炸"，而是两件事：
-
-1. **防止下限继续上漂**：本次在 Ubuntu 24.04 上编 launcher 就得到了 3.4.32；如果哪天有人用
-   GCC 14 / 24.04 的镜像重建 OPP，下限会抬到 3.4.33 之上，Ubuntu 22.04 就开始出问题。
-2. **把支持矩阵写实**：本包要求 `libstdc++ ≥ 3.4.29`，即 Ubuntu 22.04+ / openEuler 22.03+ /
-   GCC 11+；CANN 9.1 自己的库只需要 ≤ 3.4.26，所以顶着这条线的是我们的 OPP，不是 CANN。
+**实际部署的机器大多在 3.4.29 之上**（等价于 Ubuntu 22.04+ / GCC 11+）。
+2026-09 在 A3 客户机（openEuler 22.03 / GCC 10.3，libstdc++ 上限 `3.4.28`）上第一次触发了它：
+`import fla_npu` 在加载 `opp/.../op_api/lib/libcust_opapi.so` 时报
+`version 'GLIBCXX_3.4.29' not found`；把 `LD_LIBRARY_PATH` 指到带新 libstdc++ 的 conda 目录
+（或 `LD_PRELOAD` 那份 `libstdc++.so.6`）可临时绕过。**glibc 那条轴这台机器是够的**
+（2.34 = 2.34），差的只有 GLIBCXX 这一级。
 
 顺带一个判断依据：这类失败是**硬报错**（OPP 加载不了会直接报 aclnn 加载失败），不会被静默吞掉，
 所以"没遇到过"在这里是相当强的证据，而不只是"没人注意"。
@@ -119,12 +118,44 @@ fla_npu/opp/.../op_proto/lib/linux/aarch64/libcust_opsproto_rt2.0.so     3.4.18
 而客户用 conda python 时进程里也是 conda 自带的 `libstdc++ 6.0.34`（提供到 `3.4.34`），也可能恰好不报；
 换成系统 python 或更老的镜像就报。**同一台机器、同一个包，换个 python 入口结论就变。**
 
-**防护**：`tools/stable_abi_audit.py --lib` 断言 `GLIBCXX` 上限（阈值在 `tools/stable_abi_symbols.json` 的 `max_glibcxx`）。
-**缺口**：
+**修法（已落地）：host 侧静态链接 libstdc++**
 
-- 该断言只看**一个** launcher，不看包内其余 `.so`——而真正顶着下限的是 OPP 的那三个文件，需要把"取包内最大值"作为判据；
-- 未挂 CI；`max_glibcxx` 现在写 3.4.21（launcher 的水位），与"整包下限 3.4.29"不是一回事，两者要对齐；
-- 发版容器没有写进流程（`ci/Dockerfile` 已经是 22.04，但"不要用更新的机器编产物"目前只是口头约定）。
+- **落点**：`cmake/intf_pub.cmake` 的 `target_link_options(intf_pub INTERFACE ...)` 增加
+  `-static-libstdc++ -Wl,--exclude-libs,libstdc++.a -Wl,--exclude-libs,libsupc++.a`；
+  `cmake/intf_pub_linux.cmake` 里同名的 `intf_pub` 块同步修改，使两条构建路径一致。
+- **覆盖范围**：`cust_opapi` / `cust_proto` / `cust_opmaster` 三个 host target 从 `intf_pub`
+  取链接参数，`es_transformer_cust` 走的是 `intf_pub_cxx17`（见 `cmake/custom_build.cmake`），
+  所以 `intf_pub` 与 `intf_pub_cxx14` / `intf_pub_cxx17` / `intf_pub_aicpu` 四个链接口都加了
+  同样三个开关，wheel 内 5 个 OPP `.so` 全部覆盖（`op_tiling/liboptiling.so` 是
+  `cust_opmaster` 的 compat 拷贝，sha256 相同）。
+- **实测**（用现成目标文件重链 `cust_opapi` 的 `link.txt`）：`GLIBCXX` 引用 `3.4.29` → **0 条**，
+  导出符号 408 → 408，`aclnn*` 入口 61 → 61，`NEEDED` 中的 `libstdc++.so.6` 消失，
+  体积 1.33 MB → 2.66 MB。
+- **不能用 `-Wl,--exclude-libs,ALL`**：它会连带隐藏我们自己的静态库，
+  `aclnnCausalConv1d`、`aclnnChunkScaledDotKkt` 等 9 个入口直接消失（61 → 52），
+  是会静默废掉算子的坑；必须点名 `libstdc++.a` / `libsupc++.a`。
+- **代价**：静态进来的 libstdc++ 对象把 `libcust_opapi.so` 的 glibc 水位从 2.32 抬到 2.34，
+  但整包本来就是 2.34（见 A2），包级下限不变；`-Wl,-z,now` 会把全部符号压到加载期解析，
+  体积翻倍、加载略慢，host 侧可接受。
+- **不把"换更老的构建基座（GCC ≤10）"作为主修**：那只是把水位从 3.4.29 挪到 3.4.28，
+  下次换镜像又漂回去；静态化是把这条失效模式整条删掉，且验证面只有"符号面不变 + GLIBCXX 归零"。
+  只有将来要把支持矩阵下探到 glibc < 2.34（EulerOS 2.10 / Kylin V10 / CentOS 7）时才必须换基座。
+- **目标机侧不再需要兜底**：`import fla_npu` 走正常 dlopen，静态化后产物不解析任何
+  `GLIBCXX_*` 版本符号，因此不需要 `LD_LIBRARY_PATH` / `LD_PRELOAD` 之类的绕法
+  （在 import 期预加载 libstdc++ 的兜底方案也一并放弃：真正的雷是 CANN 框架自己 dlopen
+  的 tiling 库，用兜底只会把报错推迟到跑第一个算子时）。
+
+**防护**：`scripts/check_pypi_wheel.py` 在发版前逐个 `.so` 断言两条线：
+
+- 包内**所有** `.so` 的 `max(GLIBC)` ≤ wheel 标签声明的 `manylinux_2_34`（A2）；
+- `fla_npu/opp/**` 下的 `.so` **不得有任何 `GLIBCXX` 引用**——静态化之后任何一条都是回归信号，
+  包括"哪天有人用 Ubuntu 24.04 / GCC 13 的机器重建 OPP"这个最容易发生的漂移；
+  唯一的例外是 launcher（`libfla_npu_stable.so`，仍是动态链接，`GLIBCXX ≤ 3.4.21`），
+  它由 `tools/stable_abi_audit.py --lib`（阈值在 `tools/stable_abi_symbols.json` 的
+  `max_glibcxx`）单独断言。
+
+门禁挂在发版 workflow（`.github/workflows/pypi.yml`）里，随每个 wheel 执行；本地可用
+`python scripts/check_pypi_wheel.py dist/*.whl --expect-tier a3 --expect-arch aarch64` 复现。
 
 ### A2. glibc 下限
 
@@ -335,12 +366,17 @@ FLA_NPU_STABLE_TRACE=1 python -c "import fla_npu, torch; print(fla_npu.ops.ascen
 
 1. torch 2.8 / 2.10 / 2.11 的**运行时**验证（目前只有编译）。
 2. Python 3.9 / 3.12 / 3.13 的实测。
-3. `GLIBC_`（C 库）上限断言。
-4. **包内 `.so` 的 GLIBCXX 上限断言**：现在只查 launcher，OPP 的三个 3.4.29 文件没有门禁覆盖；
-   判据应当是"包内所有 `.so` 的最大值 ≤ 目标机水位"，而不是单个文件。
+3. ~~`GLIBC_`（C 库）上限断言。~~ **已闭环**：`scripts/check_pypi_wheel.py` 逐个 `.so` 断言
+   `max(GLIBC)` ≤ wheel 标签水位，随发版 workflow 执行。
+4. ~~**包内 `.so` 的 GLIBCXX 上限断言**~~ **已闭环**：OPP host 侧静态链接 libstdc++ 后，
+   `check_pypi_wheel.py` 断言 `fla_npu/opp/**` 下的 `.so` 没有任何 `GLIBCXX` 引用
+   （含回归漂移），launcher 仍由 `stable_abi_audit.py --lib` 断言 ≤ 3.4.21。
 5. 六版本产物的 6×6 交叉矩阵（X 编 → Y 跑）。
-6. 发版容器的固定，以及 CI 里挂上 audit（`--lib` 那条会与容器绑定）。
+6. 发版容器仍未写进流程（`ci/Dockerfile` 已是 22.04，但"不要用更新的机器编产物"目前只是
+   约定）；`stable_abi_audit.py` 的 `--lib` 断言也还没挂进 CI（发版 workflow 里跑的是
+   `check_pypi_wheel.py`）。
 7. SoC 与包标签的运行期校验。
 8. torch_npu 补丁级版本的运行期校验（或明确它已不相关）。
-9. 在真正的老 libstdc++ 环境上复现一次客户侧的加载失败，把报错形态钉死。
+9. ~~在真正的老 libstdc++ 环境上复现一次客户侧的加载失败~~ **已复现**（openEuler 22.03 /
+   `GLIBCXX_3.4.28`，见 A1 节）；静态化后的包在同一台机器上待复测。
 10. 非 conda 的系统 python 加载"要求 3.4.32 的产物"的实测。

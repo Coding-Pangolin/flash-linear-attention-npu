@@ -10,8 +10,10 @@ would otherwise hit first:
 * the payload carries the Stable-ABI launcher, its build stamp, the OPP host
   libraries and the kernels of the SoC the wheel claims;
 * every shared object matches the platform tag's architecture;
-* no shared object asks for a newer glibc/libstdc++ than ``manylinux_2_34``
-  promises (the tag asserts the *lower* bound; the upper bound is what breaks).
+* no shared object asks for a newer glibc than ``manylinux_2_34`` promises (the
+  tag asserts the *lower* bound; the upper bound is what breaks), and no OPP host
+  library asks for *any* ``GLIBCXX_<x.y.z>`` (they are statically linked against
+  libstdc++, so the wheel cannot inherit the build image's GCC version).
 
 The per-object watermark rule is the fix for A1/A2 and section 7 items 3-4 of
 docs/architecture/stable-abi-portability-risks.md: the floor has to be judged on
@@ -41,10 +43,20 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Measured on the release build image: glibc 2.34 is what the launcher
 # (dlopen/dlsym/dlerror) and the OPP host libraries need under the pinned Ubuntu
-# 22.04 toolchain, and the C++ ABI watermark is the one GCC 11 stamps.
-# scripts/fla_npu_artifacts.WHEEL_PLATFORM_TAG must claim the same glibc.
+# 22.04 toolchain.  scripts/fla_npu_artifacts.WHEEL_PLATFORM_TAG must claim the
+# same glibc.
 DEFAULT_MAX_GLIBC = "2.34"
-DEFAULT_MAX_GLIBCXX = "3.4.29"
+# The OPP host libraries carry no GLIBCXX reference at all: cmake/intf_pub.cmake
+# links them with ``-static-libstdc++``.  That is what keeps the wheel installable
+# on hosts whose libstdc++ is older than the build image's (openEuler 22.03 / GCC
+# 10 = GLIBCXX_3.4.28, the A3 customer baseline).  The ceiling below therefore
+# exists only for the launcher, which is still dynamically linked and uses
+# GLIBCXX_3.4.21 (GCC 4.9, older than every supported distribution).
+DEFAULT_MAX_GLIBCXX = "3.4.21"
+
+# The payload root of the prebuilt OPP; everything under it is built by us and
+# must stay GLIBCXX-free.
+OPP_PAYLOAD_PREFIX = "fla_npu/opp/"
 
 # Kept beside ``DEFAULT_MAX_GLIBC`` so a bare checkout can check a wheel without
 # importing the build helper; tests assert the two stay in step.
@@ -377,6 +389,14 @@ def check_wheel(
                         "it would fail "
                         "on a host with the promised glibc"
                     )
+                if name.startswith(OPP_PAYLOAD_PREFIX) and glibcxx:
+                    raise CheckFailure(
+                        f"{wheel.name}: {name} requires "
+                        f"GLIBCXX_{'.'.join(str(p) for p in glibcxx)}, but the OPP host "
+                        "libraries must stay GLIBCXX-free (cmake/intf_pub.cmake links "
+                        "them with -static-libstdc++); otherwise the wheel inherits the "
+                        "build image's GCC version and stops loading on older hosts"
+                    )
                 if glibcxx > _version_tuple(max_glibcxx, 3):
                     raise CheckFailure(
                         f"{wheel.name}: {name} requires "
@@ -403,6 +423,29 @@ def check_wheel(
     return notes
 
 
+def release_version_problem(version: str | None) -> str | None:
+    """Explain why ``version`` may not be uploaded to the release index.
+
+    One branch feeds several build machines, so the version always comes from the
+    tree (``fla/__init__.py``), and a release upload has to carry a released
+    version.  Upstream bumps it on the release line (v26.6.0 -> ``"26.6.0"``),
+    while ``main`` keeps ``<next>.dev0`` -- that one may only go to TestPyPI.
+    """
+
+    if not version:
+        return (
+            "cannot determine the release version; pass --expect-version or set "
+            "__version__ in fla/__init__.py"
+        )
+    if ".dev" in version or "+" in version:
+        return (
+            f"refusing to publish {version!r} to the release index: it is a "
+            "development version. Bump __version__ in fla/__init__.py on the "
+            'release branch (for example "26.9.1") before dispatching the release.'
+        )
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("wheels", nargs="+", type=Path)
@@ -414,6 +457,12 @@ def main() -> int:
         help="expected version; defaults to __version__ in fla/__init__.py",
     )
     parser.add_argument("--require-offline-bundle", action="store_true")
+    parser.add_argument(
+        "--require-release-version",
+        action="store_true",
+        help="refuse a development/local version: only a prepared release line "
+             "may upload to the release index",
+    )
     parser.add_argument(
         "--without-launcher",
         action="store_true",
@@ -434,6 +483,12 @@ def main() -> int:
                 re.MULTILINE,
             )
             expect_version = match.group(1) if match else None
+
+    if args.require_release_version:
+        problem = release_version_problem(expect_version)
+        if problem:
+            print(f"[FAIL] {problem}", file=sys.stderr)
+            return 1
 
     failures = []
     for wheel in args.wheels:

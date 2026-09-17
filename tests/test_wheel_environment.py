@@ -427,6 +427,68 @@ class WheelEnvironmentTest(unittest.TestCase):
                 with self.assertRaisesRegex(gate["CheckFailure"], "kernels"):
                     run_gate(wheel)
 
+    def test_opp_host_libraries_must_not_require_glibcxx(self) -> None:
+        """A dynamically linked OPP re-introduces the build image's GCC version.
+
+        The OPP host libraries are linked with ``-static-libstdc++`` (see
+        cmake/intf_pub.cmake) so the wheel stays installable on hosts whose
+        libstdc++ is older than the build image's: openEuler 22.03 / GCC 10 stops
+        at GLIBCXX_3.4.28, while the pinned Ubuntu 22.04 image stamps 3.4.29.  The
+        gate has to fail on a regression in those files, not on the launcher,
+        which is still dynamically linked and only needs GLIBCXX_3.4.21.
+        """
+
+        gate = runpy.run_path(str(REPO_ROOT / "scripts" / "check_pypi_wheel.py"))
+        self.assertEqual(gate["DEFAULT_MAX_GLIBCXX"], "3.4.21")
+
+        def symbol_versions(path: Path):
+            if "/opp/" in path.as_posix():
+                return (2, 34), (3, 4, 29)
+            return (2, 34), (3, 4, 21)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wheel = Path(temp_dir) / (
+                "flash_linear_attention_npu_a2-26.9.0-py3-none-"
+                "manylinux_2_34_aarch64.whl")
+            self._write_release_wheel(wheel, tier="a2", soc="ascend910b")
+            # runpy hands back a copy of the namespace, so the ELF readers have to
+            # be replaced in the module globals the function really uses.
+            elfs = mock.patch.dict(gate["check_wheel"].__globals__, {
+                "_elf_machine": lambda path: "AArch64",
+                "_elf_class": lambda path: "ELF64",
+                "_symbol_versions": symbol_versions,
+            })
+            with elfs, mock.patch("shutil.which", return_value="/usr/bin/readelf"):
+                with self.assertRaisesRegex(gate["CheckFailure"], "GLIBCXX-free"):
+                    gate["check_wheel"](
+                        wheel,
+                        expect_tier="a2",
+                        expect_arch="aarch64",
+                        expect_version="26.9.0",
+                        require_offline_bundle=False,
+                        require_launcher=True,
+                        max_glibc="2.34",
+                        max_glibcxx=gate["DEFAULT_MAX_GLIBCXX"],
+                        allow_missing_readelf=False,
+                    )
+
+    def test_release_index_refuses_a_development_version(self) -> None:
+        """A release upload needs a version the release line actually carries.
+
+        The tiered wheels are built on several machines from one branch, so the
+        version comes from the tree (fla/__init__.py).  ``main`` keeps
+        ``<next>.dev0`` -- that one may only go to TestPyPI -- while the release
+        line carries the released version, as it did for v26.6.0.
+        """
+
+        gate = runpy.run_path(str(REPO_ROOT / "scripts" / "check_pypi_wheel.py"))
+        problem = gate["release_version_problem"]
+        self.assertIn("development version", problem("26.7.0.dev0"))
+        self.assertIn("development version", problem("26.9.1+local"))
+        self.assertIn("cannot determine", problem(None))
+        self.assertIsNone(problem("26.9.1"))
+        self.assertIsNone(problem("26.9.1rc1"))
+
     def test_release_gate_accepts_wheels_staged_under_data_purelib(self) -> None:
         """The layout setup.py really produces has to pass the gate.
 

@@ -20,7 +20,7 @@
 | 编号 | 风险 | 触发场景 | 严重度 | 现有防护 | 缺口 |
 | --- | --- | --- | --- | --- | --- |
 | A1 | libstdc++（GLIBCXX）下限被构建机抬高 | A | 高 | `stable_abi_audit.py --lib` 断言 `max_glibcxx` | 未挂 CI；发版容器未固定 |
-| A2 | glibc（`GLIBC_x.y`）下限被构建机抬高 | A | 中 | 无（audit 只打印） | 没有上限断言 |
+| A2 | glibc（`GLIBC_x.y`）下限被构建机抬高 | A | 中 | `check_pypi_wheel.py` 逐个 `.so` 断言 ≤ 标签水位 | 已覆盖（实测 2.34，见 A2 节；降到 2.28 需改构建链） |
 | A3 | 注册入口 / 新增运行时符号 | A | 低 | `--lib` 断言入口符号 + 符号白名单 | 已覆盖 |
 | A4 | torch 版本范围 | A | 低 | wheel 声明 `torch>=2.7.1`；加载失败有清晰报错 | 2.8 / 2.10 / 2.11 运行时未跑 |
 | A5 | torch_npu 补丁级版本 | A | 中高（正确性） | `setup.py` 有最低版本表 | 默认构建**不执行**该检查；运行期也没有校验 |
@@ -128,8 +128,32 @@ fla_npu/opp/.../op_proto/lib/linux/aarch64/libcust_opsproto_rt2.0.so     3.4.18
 
 ### A2. glibc 下限
 
-同一条逻辑，走 `GLIBC_x.y` 符号。当前产物只要 `GLIBC_2.2.5`（很老，不是问题），
-但换成更新/更旧的构建机同样可能改变它。audit 目前**只打印** NEEDED 与版本，没有对 `GLIBC_` 设上限——这是缺口。
+同一条逻辑，走 `GLIBC_x.y` 符号。**这条轴在发 PyPI 时从"看看而已"变成了硬约束**：
+wheel 的 `manylinux_<x>_<y>` 标签就是对外承诺"只要目标机 glibc ≥ x.y 就能装"，
+标签写低了等于发一个装上去加载失败的包。
+
+**实测（26.9.0，Ubuntu 22.04 / GCC 11 构建）**，逐文件取包内最大值：
+
+| 产物 | GLIBC 上限 | 来源 |
+| --- | --- | --- |
+| `libfla_npu_stable.so`（launcher） | **2.34** | `dlopen` / `dlsym` / `dlerror`（glibc 2.34 起并入 libc）+ `__libc_single_threaded`（2.32） |
+| OPP `liboptiling.so`、`libcust_opmaster_rt2.0.so`、`libcust_opsproto_rt2.0.so` | **2.34** | 同一容器编译 |
+| OPP `libcust_opapi.so`、`libes_transformer_cust.so` | 2.32 | 同一容器编译 |
+
+结论：**整包 glibc 下限是 2.34，不是 2.28**。`ci/Dockerfile` 的基础镜像是
+`cann:9.1.0-910b-ubuntu22.04-py3.12-devel`（glibc 2.35），所以 CI 编出来的产物同样是这条水位——
+这不是某台机器编坏了，而是"用 22.04 工具链编"的固有结果。因此发布的 wheel 标
+`manylinux_2_34_<arch>`（见 `scripts/fla_npu_artifacts.WHEEL_PLATFORM_TAG`），
+`scripts/check_pypi_wheel.py` 会在上传前逐个 `.so` 断言这条线，超出即失败。
+
+要真正降到 `manylinux_2_28`（例如为了 CentOS 7 / glibc 2.28 的存量机器），需要同时改两处，
+都属于独立于发布流程的构建改造：
+
+1. launcher：用 `.symver` 把 `dlopen`/`dlsym`/`dlerror` 钉到 `GLIBC_2.2.5`（x86_64）/ `GLIBC_2.17`（aarch64），
+   并去掉 `__libc_single_threaded` 引用；
+2. OPP：在 glibc ≤ 2.28 的镜像里编译（CANN 9.1 目前只在 22.04 基线上验证过，需要先确认可用）。
+
+在那之前，把标签写到 2.34 是唯一诚实的写法。
 
 ### A3. 注册入口与新增运行时符号（已覆盖）
 

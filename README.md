@@ -121,6 +121,51 @@ WHEEL_PATH="dist/<准确wheel文件名>.whl"
 python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
 ```
 
+#### 【可选】直接安装已发布的 wheel
+
+官方 wheel 按产品档位发布到 PyPI，按机器芯片选择对应包名安装即可（仍需先按 Step 1 /
+Step 2 准备 CANN 与 `torch` / `torch_npu` / `triton-ascend`；wheel 内嵌预编译 OPP 与
+离线编译 bundle，但**不打包**这些运行时依赖）：
+
+| 芯片 | 产品档位 | PyPI 包名 |
+| --- | --- | --- |
+| 910B（A2，`ascend910b`） | a2 | `python -m pip install flash-linear-attention-npu-a2` |
+| A3（`ascend910_93`） | a3 | `python -m pip install flash-linear-attention-npu-a3` |
+| 950（A5，`ascend950`） | a5 | `python -m pip install flash-linear-attention-npu-a5` |
+
+档位写在包名里，架构写在 wheel 标签里（pip 自动选择 `manylinux_2_28_aarch64` /
+`manylinux_2_28_x86_64`）。**同一架构下的不同档位必须按芯片选包**：本项目不做运行期芯片
+识别（设备名到档位的映射在不同硬件代际上不可靠），装错档位会在调用算子时报错。各档位是
+独立项目，互不覆盖，可并排安装在不同环境中。
+
+同一份 wheel 既不依赖 CPython ABI 也不依赖 libtorch C++ ABI，所以 `Requires-Python` 只有
+下限 `>=3.9`，不必按 Python/torch 小版本各发一份。wheel 声明的依赖下限
+（`torch>=2.7.1` / `torch_npu>=2.7.1`）来自 Stable-ABI 薄层的符号需求：低于该版本时薄层
+无法加载，`import fla_npu` 会告警并自动回退 ctypes 实现（结果正确，仅损失 host 侧加速），
+**不会中断导入**。离线或受控环境可用 `--no-deps` 安装，避免 pip 按 PyPI 上的 torch_npu
+版本触发升级。
+
+前置依赖下限（低于下限仍可 import，只给 RuntimeWarning；能否正常运行以实际环境为准）：
+
+| 项 | 最低版本 | 说明 |
+| --- | --- | --- |
+| CANN（a2 / a3 档位） | 8.5.2 | |
+| CANN（a5 档位） | 9.0.0 | 950 的 CANN 基线更高 |
+| `torch` / `torch_npu` | 2.7.1 | torch_npu 从 Ascend 发布安装，PyPI 上的版本通常不可用 |
+| `triton-ascend` | 3.2.0；CANN 9.x（9.0.0+）需 ≥ 3.2.1 | 需与 CANN 版本匹配 |
+| `libstdc++` | GLIBCXX 3.4.29 | 即 Ubuntu 22.04+ / GCC 11+，与 `manylinux_2_28` 标签一致 |
+
+运行期开关（默认已是 Stable-ABI 薄层，未知开关一律按默认处理）：
+
+| 环境变量 | 取值 | 作用 |
+| --- | --- | --- |
+| `FLA_NPU_STABLE_ABI` | `ctypes` | 强制使用 ctypes 参考实现（默认优先薄层，加载失败自动回退并告警一次） |
+| `FLA_NPU_STABLE_VALIDATE` | `1` | 用 ctypes 参考实现做完整入参校验，结果与默认通路逐位一致 |
+| `FLA_NPU_STABLE_TRACE` | `1` | 在 stderr 打印每个算子实际由哪个后端服务 |
+
+wheel 内嵌离线编译 bundle，需要从源码（重）编译的场景可用它还原 third-party，见
+[开发者指南](docs/开发者指南.md)。
+
 > 重新构建的 wheel 版本号与已安装的旧 wheel 可能相同。版本号相同时，不带 `--force-reinstall` 的 `pip install` 会认为"已是最新版本"而跳过，导致实际仍是旧代码。上面的命令已带 `--force-reinstall` 强制覆盖；若想先清理再装，可先执行 `python -m pip uninstall -y flash-linear-attention-npu`。
 
 wheel 不安装或执行 shell 环境钩子。无论使用系统 Python、Conda、venv
@@ -133,9 +178,11 @@ wheel 内嵌 OPP；wheel 通过绝对路径加载 `libcust_opapi.so`，不会再
 `import fla_npu` 会定位 OPP 并加载 `libcust_opapi.so`。执行前必须先 source CANN
 的 `set_env.sh`；CANN 环境未初始化、OPP 不完整或动态库加载失败时，import 会直接
 报错。该过程不会自动导入 `torch` / `torch_npu`，也不会注册 `torch.ops.npu`。
-默认 wheel 通过 Python ctypes 直调 aclnn/opapi，推荐使用 `fla_npu.ops.ascendc`；
-只有用 `FLA_NPU_BUILD_LEGACY_EXTENSION=1` 额外编出 legacy 扩展时，才可显式调用
-`fla_npu.load_legacy_torch_ops()` 兼容旧 `torch.ops.npu.*`。
+默认 wheel 通过 ABI-free 的 Stable-ABI 薄层（`libfla_npu_stable.so`）直调 aclnn/opapi，
+薄层不可用时自动回退到 ctypes 参考实现（上表 `FLA_NPU_STABLE_ABI=ctypes` 可强制回退），
+两条通路都推荐使用 `fla_npu.ops.ascendc`；只有用 `FLA_NPU_BUILD_LEGACY_EXTENSION=1`
+额外编出 legacy 扩展时，才可显式调用 `fla_npu.load_legacy_torch_ops()` 兼容旧
+`torch.ops.npu.*`。
 
 `fla_npu.ops.ascendc` 只使用当前 wheel 内嵌的 custom OPP，不从 `FLA_NPU_OPP_PATH`、`ASCEND_CUSTOM_OPP_PATH`、`ASCEND_OPP_PATH` 或 CANN 的 `vendors` 目录回退查找其他 `libcust_opapi.so`。外部 OPP 仅用于 CANN 侧的 host、tiling 与 kernel 发现，不再作为 Python runtime 加载 `libcust_opapi.so` 的来源。单独构建的 run 包应使用默认 `--install` / `--full` 流程覆盖当前 wheel 内的 OPP（见[开发者指南](docs/开发者指南.md) 场景 1）。
 
@@ -156,7 +203,8 @@ python scripts/check_packaged_wheel_api.py
 
 `torch.ops.npu.*` / `torch_npu.ops.*` 是旧版本（v26.6.0 及更早）的调用方式，**v26.6.0 之后不再维护旧版本兼容接口**，新代码请使用 `fla_npu.ops.ascendc` 下的稳定 Python 入口。迁移期如需临时兼容（`install_torch_npu_ops_compat()` / `load_legacy_torch_ops()`）及其注意事项（如 `hasattr(torch_npu.ops, ...)` 的版本差异），见[兼容与迁移指南](docs/兼容与迁移指南.md)。
 
-不再使用时，按 distribution 名卸载：
+不再使用时，按 distribution 名卸载（安装 PyPI 档位包时换成对应包名，例如
+`flash-linear-attention-npu-a2`）：
 
 ```sh
 python -m pip uninstall -y flash-linear-attention-npu

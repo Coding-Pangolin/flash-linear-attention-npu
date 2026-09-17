@@ -98,14 +98,27 @@ def get_arch() -> str:
     return _compact_tag(arch) or "unknown"
 
 
+# PEP 600 watermark every published wheel claims.  It is the highest GLIBC_x.y
+# any shared object in the payload needs, measured on the release build image;
+# scripts/check_pypi_wheel.py fails the release if a wheel asks for more.
+WHEEL_PLATFORM_TAG = "manylinux_2_34"
+
+
 def get_wheel_platform_tag() -> str:
     """PyPI-compatible wheel platform tag for the current arch.
 
     PyPI only accepts PEP 600 tags, so a published wheel must say
-    ``manylinux_2_28_<arch>``: the plain ``linux_<arch>`` tag bdist_wheel
+    ``manylinux_<glibc>_<arch>``: the plain ``linux_<arch>`` tag bdist_wheel
     derives from sysconfig is rejected on upload.
+
+    The glibc watermark is the measured one, not a wish.  The pinned build image
+    (``ci/Dockerfile`` -> ``cann:9.1.0-*-ubuntu22.04``, glibc 2.35) stamps the
+    launcher's ``dlopen``/``dlsym``/``dlerror`` at GLIBC_2.34, and the OPP host
+    libraries land on 2.34 as well, so a ``manylinux_2_28`` label would promise
+    hosts the payload cannot load on.  Lower it only together with a build image
+    whose glibc is that old (and a re-measured gate run).
     """
-    return f"manylinux_2_28_{get_arch()}"
+    return f"{WHEEL_PLATFORM_TAG}_{get_arch()}"
 
 
 def get_tier(soc: str | None = None) -> str:

@@ -261,7 +261,7 @@ class WheelEnvironmentTest(unittest.TestCase):
                     self.assertEqual(
                         artifacts["get_wheel_filename"](REPO_ROOT),
                         f"flash_linear_attention_npu_{tier}-{version}-py3-none-"
-                        f"manylinux_2_28_{arch}.whl")
+                        f"manylinux_2_34_{arch}.whl")
 
     def test_pypi_wheel_keeps_the_base_name_outside_pypi_mode(self) -> None:
         artifacts = self._artifacts_globals()
@@ -301,10 +301,25 @@ class WheelEnvironmentTest(unittest.TestCase):
                 self.assertEqual((python, abi), ("py3", "none"))
                 # PyPI accepts PEP 600 tags only, so this must not be
                 # linux_<arch> (the sysconfig spelling).
-                self.assertEqual(platform, f"manylinux_2_28_{arch}")
+                self.assertEqual(platform, f"manylinux_2_34_{arch}")
                 self.assertTrue(
                     artifacts["get_wheel_filename"](REPO_ROOT).endswith(
                         f"-{platform}.whl"))
+
+    def test_release_gate_and_pypi_helper_claim_the_same_glibc(self) -> None:
+        """The tag the build writes and the watermark the gate asserts are one.
+
+        A mismatch publishes a wheel labelled for an older glibc than its
+        payload can load on, or blocks a release that is actually fine.
+        """
+
+        artifacts = self._artifacts_globals()
+        gate = runpy.run_path(str(REPO_ROOT / "scripts" / "check_pypi_wheel.py"))
+        self.assertEqual(gate["EXPECTED_PLATFORM_PREFIX"],
+                         artifacts["WHEEL_PLATFORM_TAG"])
+        self.assertEqual(
+            gate["DEFAULT_MAX_GLIBC"],
+            artifacts["WHEEL_PLATFORM_TAG"].removeprefix("manylinux_").replace("_", "."))
 
     def test_tier_metadata_is_generated_for_pypi_wheels_only(self) -> None:
         """The wheel records its tier, and a local build carries no marker.
@@ -391,7 +406,7 @@ class WheelEnvironmentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             wheel = Path(temp_dir) / (
                 "flash_linear_attention_npu_a2-26.9.0-py3-none-"
-                "manylinux_2_28_aarch64.whl")
+                "manylinux_2_34_aarch64.whl")
             self._write_release_wheel(wheel, tier="a2", soc="ascend910b")
             with mock.patch("shutil.which", return_value=None):
                 notes = run_gate(wheel)
@@ -426,7 +441,7 @@ class WheelEnvironmentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             wheel = Path(temp_dir) / (
                 "flash_linear_attention_npu_a2-26.9.0-py3-none-"
-                "manylinux_2_28_aarch64.whl")
+                "manylinux_2_34_aarch64.whl")
             self._write_release_wheel(
                 wheel, tier="a2", soc="ascend910b",
                 prefix="flash_linear_attention_npu_a2-26.9.0.data/purelib/")
@@ -438,7 +453,7 @@ class WheelEnvironmentTest(unittest.TestCase):
                     expect_version="26.9.0",
                     require_offline_bundle=False,
                     require_launcher=True,
-                    max_glibc="2.28",
+                    max_glibc="2.34",
                     max_glibcxx="3.4.29",
                     allow_missing_readelf=True,
                 )
@@ -450,7 +465,7 @@ class WheelEnvironmentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             wheel = Path(temp_dir) / (
                 "flash_linear_attention_npu_a5-26.9.0-py3-none-"
-                "manylinux_2_28_x86_64.whl")
+                "manylinux_2_34_x86_64.whl")
             self._write_release_wheel(wheel, tier="a5", soc="ascend950")
             with zipfile.ZipFile(wheel) as archive:
                 payload = {i.filename: archive.read(i.filename)
@@ -468,7 +483,7 @@ class WheelEnvironmentTest(unittest.TestCase):
                     expect_version="26.9.0",
                     require_offline_bundle=False,
                     require_launcher=False,
-                    max_glibc="2.28",
+                    max_glibc="2.34",
                     max_glibcxx="3.4.29",
                     allow_missing_readelf=True,
                 )

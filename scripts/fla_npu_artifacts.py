@@ -98,6 +98,49 @@ def get_arch() -> str:
     return _compact_tag(arch) or "unknown"
 
 
+def get_wheel_platform_tag() -> str:
+    """PyPI-compatible wheel platform tag for the current arch.
+
+    PyPI only accepts PEP 600 tags, so a published wheel must say
+    ``manylinux_2_28_<arch>``: the plain ``linux_<arch>`` tag bdist_wheel
+    derives from sysconfig is rejected on upload.
+    """
+    return f"manylinux_2_28_{get_arch()}"
+
+
+def get_tier(soc: str | None = None) -> str:
+    """Map FLA_NPU_SOC to the published product tier (a2/a3/a5)."""
+    soc_tag = _compact_tag(soc or get_soc())
+    if soc_tag in {"910b", "ascend910b"}:
+        return "a2"
+    if soc_tag in {"a3", "91093", "ascend91093"}:
+        return "a3"
+    if soc_tag in {"950", "ascend950"}:
+        return "a5"
+    raise ValueError(
+        f"FLA_NPU_SOC={soc or get_soc()!r} has no published product tier; "
+        "expected ascend910b / ascend910_93 / ascend950"
+    )
+
+
+def get_distribution_name() -> str:
+    """Distribution (PyPI project) name for the current build.
+
+    A published wheel carries a prebuilt OPP for exactly one SoC, and pip
+    cannot pick a chip-specific payload out of one project name, so each
+    product tier publishes its own project (flash-linear-attention-npu-a2/a3/a5,
+    derived from FLA_NPU_SOC). Non-PyPI builds keep the base name for local and
+    GitHub Release artifacts.
+    """
+    if env_flag("FLA_NPU_PYPI"):
+        return f"{PACKAGE_NAME}-{get_tier()}"
+    return PACKAGE_NAME
+
+
+def get_wheel_dist_name() -> str:
+    return get_distribution_name().replace("-", "_")
+
+
 def get_vendor_name() -> str:
     return DEFAULT_VENDOR_NAME
 
@@ -144,6 +187,10 @@ def get_wheel_build_tag(repo_root: Path, public_version: str | None = None) -> s
         if build_tag and not build_tag[0].isdigit():
             return f"1{build_tag}"
         return build_tag
+    if env_flag("FLA_NPU_PYPI"):
+        # The tier is encoded in the distribution name (a2/a3/a5) and the arch
+        # in the platform tag, so a published wheel needs no SoC build tag.
+        return ""
     if env_flag("FLA_NPU_DISABLE_LOCAL_VERSION"):
         return ""
 
@@ -163,7 +210,7 @@ def get_local_version(repo_root: Path, public_version: str | None = None) -> str
     explicit = os.getenv("FLA_NPU_LOCAL_VERSION", "").strip()
     if explicit:
         return _normalize_local_version(explicit)
-    if env_flag("FLA_NPU_DISABLE_LOCAL_VERSION"):
+    if env_flag("FLA_NPU_PYPI") or env_flag("FLA_NPU_DISABLE_LOCAL_VERSION"):
         return ""
 
     if get_branch_name(repo_root) != "main":
@@ -185,13 +232,14 @@ def get_wheel_filename(repo_root: Path) -> str:
     public_version = read_public_version(repo_root)
     package_version = get_package_version(repo_root)
     build_tag = get_wheel_build_tag(repo_root, public_version)
+    platform_tag = get_wheel_platform_tag() if env_flag("FLA_NPU_PYPI") else get_platform_name()
+    dist_name = get_wheel_dist_name()
     # The wheel is not pure Python (it carries a host launcher and the OPP) but
     # it is not CPython-versioned either, so only the platform tag is filled in.
-    platform_tag = get_platform_name()
     if build_tag:
-        return (f"{WHEEL_DIST_NAME}-{package_version}-{build_tag}-"
+        return (f"{dist_name}-{package_version}-{build_tag}-"
                 f"py3-none-{platform_tag}.whl")
-    return f"{WHEEL_DIST_NAME}-{package_version}-py3-none-{platform_tag}.whl"
+    return f"{dist_name}-{package_version}-py3-none-{platform_tag}.whl"
 
 
 def get_platform_name() -> str:
@@ -199,7 +247,9 @@ def get_platform_name() -> str:
     if override:
         return override
     if sys.platform.startswith("linux"):
-        return f"linux_{platform.uname().machine}"
+        # Normalize through get_arch(): platform.machine() reports arm64/AMD64
+        # on some hosts, which would not match the wheel tags pip looks for.
+        return f"linux_{get_arch()}"
     raise RuntimeError(f"Unsupported platform for run package build: {sys.platform}")
 
 
@@ -221,6 +271,9 @@ def main() -> int:
             "package-version",
             "commit-id",
             "wheel-build-tag",
+            "tier",
+            "distribution-name",
+            "wheel-dist-name",
             "wheel-filename",
             "run-filename",
         ],
@@ -239,6 +292,12 @@ def main() -> int:
         value = get_commit_id(repo_root)
     elif args.field == "wheel-build-tag":
         value = get_wheel_build_tag(repo_root)
+    elif args.field == "tier":
+        value = get_tier()
+    elif args.field == "distribution-name":
+        value = get_distribution_name()
+    elif args.field == "wheel-dist-name":
+        value = get_wheel_dist_name()
     elif args.field == "wheel-filename":
         value = get_wheel_filename(repo_root)
     else:

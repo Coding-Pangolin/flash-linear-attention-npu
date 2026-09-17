@@ -133,8 +133,8 @@ Step 2 准备 CANN 与 `torch` / `torch_npu` / `triton-ascend`；wheel 内嵌预
 | A3（`ascend910_93`） | a3 | `python -m pip install flash-linear-attention-npu-a3` |
 | 950（A5，`ascend950`） | a5 | `python -m pip install flash-linear-attention-npu-a5` |
 
-档位写在包名里，架构写在 wheel 标签里（pip 自动选择 `manylinux_2_28_aarch64` /
-`manylinux_2_28_x86_64`）。**同一架构下的不同档位必须按芯片选包**：本项目不做运行期芯片
+档位写在包名里，架构写在 wheel 标签里（pip 自动选择 `manylinux_2_34_aarch64` /
+`manylinux_2_34_x86_64`）。**同一架构下的不同档位必须按芯片选包**：本项目不做运行期芯片
 识别（设备名到档位的映射在不同硬件代际上不可靠），装错档位会在调用算子时报错。各档位是
 独立项目，互不覆盖，可并排安装在不同环境中。
 
@@ -153,7 +153,8 @@ Step 2 准备 CANN 与 `torch` / `torch_npu` / `triton-ascend`；wheel 内嵌预
 | CANN（a5 档位） | 9.0.0 | 950 的 CANN 基线更高 |
 | `torch` / `torch_npu` | 2.7.1 | torch_npu 从 Ascend 发布安装，PyPI 上的版本通常不可用 |
 | `triton-ascend` | 3.2.0；CANN 9.x（9.0.0+）需 ≥ 3.2.1 | 需与 CANN 版本匹配 |
-| `libstdc++` | GLIBCXX 3.4.29 | 即 Ubuntu 22.04+ / GCC 11+，与 `manylinux_2_28` 标签一致 |
+| `glibc` | 2.34 | wheel 标签即 `manylinux_2_34_<arch>`，等于构建镜像（Ubuntu 22.04）的实测水位 |
+| `libstdc++` | GLIBCXX 3.4.29 | 即 Ubuntu 22.04+ / GCC 11+ |
 
 运行期开关（默认已是 Stable-ABI 薄层，未知开关一律按默认处理）：
 

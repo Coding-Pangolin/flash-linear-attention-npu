@@ -126,16 +126,21 @@ python -m pip install --force-reinstall --no-cache-dir --no-deps "$WHEEL_PATH"
 Step 2 准备 CANN 与 `torch` / `torch_npu` / `triton-ascend`；wheel 内嵌预编译 OPP，
 但**不打包**这些运行时依赖）：
 
-| 芯片 | 产品档位 | PyPI 包名 |
-| --- | --- | --- |
-| 910B（A2，`ascend910b`） | a2 | `python -m pip install flash-linear-attention-npu-a2` |
-| A3（`ascend910_93`） | a3 | `python -m pip install flash-linear-attention-npu-a3` |
-| 950（A5，`ascend950`） | a5 | `python -m pip install flash-linear-attention-npu-a5` |
+| 芯片 | 产品档位 | PyPI 包名 | 本期发布的架构 |
+| --- | --- | --- | --- |
+| 910B（A2，`ascend910b`） | a2 | `python -m pip install flash-linear-attention-npu-a2` | `manylinux_2_34_aarch64` |
+| A3（`ascend910_93`） | a3 | `python -m pip install flash-linear-attention-npu-a3` | `manylinux_2_34_aarch64` |
+| 950（A5，`ascend950`） | a5 | `python -m pip install flash-linear-attention-npu-a5` | `manylinux_2_34_x86_64` |
 
-档位写在包名里，架构写在 wheel 标签里（pip 自动选择 `manylinux_2_34_aarch64` /
-`manylinux_2_34_x86_64`）。**同一架构下的不同档位必须按芯片选包**：本项目不做运行期芯片
-识别（设备名到档位的映射在不同硬件代际上不可靠），装错档位会在调用算子时报错。各档位是
-独立项目，互不覆盖，可并排安装在不同环境中。
+档位写在包名里，架构写在 wheel 标签里：pip 只会看到与**本机架构**匹配的那个文件，架构
+不符的轮子在 `pip install` 阶段就会被拒绝（不会装上一个跑不起来的包）。但 wheel 里嵌的
+OPP host 库与 Stable-ABI 薄层是**在构建机上按架构编译的**，所以每一组（档位 × 架构）都要
+有对应架构的构建机，上表只列出本期已具备构建机的组合——其余组合（例如 x86_64 上的 A2、
+aarch64 上的 A5）会在相应构建机注册后随版本补发，届时包名不变。
+
+**同一架构下的不同档位必须按芯片选包**：本项目不做运行期芯片识别（设备名到档位的映射在
+不同硬件代际上不可靠），装错档位会在调用算子时报错。各档位是独立 PyPI 项目，互不覆盖，
+可并排安装在不同环境中。
 
 同一份 wheel 既不依赖 CPython ABI 也不依赖 libtorch C++ ABI，所以 `Requires-Python` 只有
 下限 `>=3.9`，不必按 Python/torch 小版本各发一份。wheel 声明的依赖下限

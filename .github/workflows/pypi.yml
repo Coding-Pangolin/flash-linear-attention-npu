@@ -1,8 +1,13 @@
 name: Publish to PyPI (per-tier a2/a3/a5)
 
 # Manual dispatch only: publishing is a release decision, so a tag push must not
-# upload anything by itself. Cut the release by dispatching this workflow on the
-# branch being released (v26.9.0 for the 26.9.0 line) with dry_run=false.
+# upload anything by itself.
+#
+# Cut a release by dispatching this workflow on the *release branch* (for example
+# v26.9.1) with pypi_repo=pypi and dry_run=false. That branch carries the released
+# version in fla/__init__.py -- the same convention the v26.6.0 line used -- while
+# main keeps its <next>.dev0 version, which may only be uploaded to TestPyPI
+# (--require-release-version enforces this for pypi_repo=pypi).
 on:
   workflow_dispatch:
     inputs:
@@ -83,6 +88,9 @@ jobs:
       - name: Build and verify wheel in the CI image
         env:
           FLA_NPU_EXPECT_TIER: ${{ matrix.soc == 'ascend910b' && 'a2' || matrix.soc == 'ascend910_93' && 'a3' || 'a5' }}
+          # The release index must not receive a dev version: the three tiers are
+          # built from one branch, so the version has to be the released one.
+          RELEASE_VERSION_GUARD: ${{ inputs.pypi_repo == 'pypi' && '--require-release-version' || '' }}
         run: |
           set -euo pipefail
           third_party_cache="${CI_CACHE_ROOT}/third_party"
@@ -92,7 +100,7 @@ jobs:
             -v "$third_party_cache:/workspace/repo/third_party" \
             -w /workspace/repo \
             -e FLA_NPU_PYPI -e FLA_NPU_DISABLE_LOCAL_VERSION -e FLA_NPU_BUILD_OFFLINE_BUNDLE \
-            -e FLA_NPU_SOC -e FLA_NPU_ARCH -e FLA_NPU_EXPECT_TIER \
+            -e FLA_NPU_SOC -e FLA_NPU_ARCH -e FLA_NPU_EXPECT_TIER -e RELEASE_VERSION_GUARD \
             "$CI_IMAGE" bash -lc '
               set -euo pipefail
               source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -105,7 +113,7 @@ jobs:
               python scripts/check_pypi_wheel.py dist/*.whl \
                 --expect-tier "$FLA_NPU_EXPECT_TIER" \
                 --expect-arch "$FLA_NPU_ARCH" \
-                --require-offline-bundle
+                --require-offline-bundle $RELEASE_VERSION_GUARD
             '
 
       - name: Upload wheel

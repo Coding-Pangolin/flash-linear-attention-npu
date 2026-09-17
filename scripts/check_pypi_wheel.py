@@ -13,6 +13,11 @@ would otherwise hit first:
 * no shared object asks for a newer glibc/libstdc++ than ``manylinux_2_28``
   promises (the tag asserts the *lower* bound; the upper bound is what breaks).
 
+The per-object watermark rule is the fix for A1/A2 and section 7 items 3-4 of
+docs/architecture/stable-abi-portability-risks.md: the floor has to be judged on
+every ``.so`` in the package (the OPP is the binding constraint, not the
+launcher), not on one file.
+
 Runs on Linux with binutils' ``readelf`` (the CI image has it).
 
 Usage:

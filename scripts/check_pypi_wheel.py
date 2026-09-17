@@ -10,13 +10,14 @@ would otherwise hit first:
 * the payload carries the Stable-ABI launcher, its build stamp, the OPP host
   libraries and the kernels of the SoC the wheel claims;
 * every shared object matches the platform tag's architecture;
-* no shared object asks for a newer glibc/libstdc++ than ``manylinux_2_28``
+* no shared object asks for a newer glibc/libstdc++ than ``manylinux_2_34``
   promises (the tag asserts the *lower* bound; the upper bound is what breaks).
 
 The per-object watermark rule is the fix for A1/A2 and section 7 items 3-4 of
-docs/architecture/stable-abi-portability-risks.md: the floor has to be judged on
-every ``.so`` in the package (the OPP is the binding constraint, not the
-launcher), not on one file.
+the portability risk register (``docs/architecture/stable-abi-portability-risks.md``
+on main; this maintenance branch predates that document): the floor has to be
+judged on every ``.so`` in the package (the OPP is the binding constraint, not
+the launcher), not on one file.
 
 Runs on Linux with binutils' ``readelf`` (the CI image has it).
 
@@ -39,10 +40,16 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# manylinux_2_28 == glibc 2.28; the toolchain in the CI image (Ubuntu 22.04,
-# GCC 11) also decides the C++ ABI watermark the wheel must stay within.
-DEFAULT_MAX_GLIBC = "2.28"
+# Measured on the release build image: glibc 2.34 is what the launcher
+# (dlopen/dlsym/dlerror) and the OPP host libraries need under the pinned Ubuntu
+# 22.04 toolchain, and the C++ ABI watermark is the one GCC 11 stamps.
+# scripts/fla_npu_artifacts.WHEEL_PLATFORM_TAG must claim the same glibc.
+DEFAULT_MAX_GLIBC = "2.34"
 DEFAULT_MAX_GLIBCXX = "3.4.29"
+
+# Kept beside ``DEFAULT_MAX_GLIBC`` so a bare checkout can check a wheel without
+# importing the build helper; tests assert the two stay in step.
+EXPECTED_PLATFORM_PREFIX = "manylinux_2_34"
 
 TIER_SOC = {"a2": "ascend910b", "a3": "ascend910_93", "a5": "ascend950"}
 
@@ -233,7 +240,7 @@ def check_wheel(
             f"{wheel.name}: a published wheel must not carry the build tag "
             f"{parts['build_tag']!r} (tier and arch are already in the name)"
         )
-    expected_platform = f"manylinux_2_28_{arch}"
+    expected_platform = f"{EXPECTED_PLATFORM_PREFIX}_{arch}"
     if parts["platform_tag"] != expected_platform:
         raise CheckFailure(
             f"{wheel.name}: platform tag {parts['platform_tag']!r} != {expected_platform!r}"
@@ -367,7 +374,8 @@ def check_wheel(
                 if glibc > _version_tuple(max_glibc, 2):
                     raise CheckFailure(
                         f"{wheel.name}: {name} requires GLIBC_{'.'.join(str(p) for p in glibc)}, "
-                        f"above the manylinux_2_28 promise (max {max_glibc}); it would fail "
+                        f"above the {EXPECTED_PLATFORM_PREFIX} promise (max {max_glibc}); "
+                        "it would fail "
                         "on a host with the promised glibc"
                     )
                 if glibcxx > _version_tuple(max_glibcxx, 3):

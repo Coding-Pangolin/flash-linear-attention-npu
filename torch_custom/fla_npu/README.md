@@ -1,6 +1,6 @@
 # fla_npu 适配层
 
-`torch_custom/fla_npu` 是 FLA NPU 的 Python runtime 与算子适配层：Ascend C 算子在这里变成可调用的 Python 接口。上层只认一个入口：
+`torch_custom/fla_npu` 把 Ascend C 算子变成可调用的 Python 接口。上层只认一个入口：
 
 ```python
 from fla_npu.ops import ascendc as ascendc_ops
@@ -15,69 +15,60 @@ out = chunk_fwd_o(...)
 
 ## 1. 现状
 
-### 1.1 两条后端，默认走 Stable-ABI 薄层
+**默认后端是 `csrc/` 编出的 Stable-ABI 薄层**（`libfla_npu_stable.so` + `_stable.py`），当前 31 个公开算子全部由它承载，张量走 torch dispatcher。**ctypes**（`_aclnn_ctypes.py`）退居**参考实现与回退**：怀疑薄层有问题时用 `FLA_NPU_STABLE_ABI=ctypes` 走它做对照，离线门禁也拿它当参考给薄层做逐位 parity。
 
-| | Stable-ABI 薄层（默认） | ctypes（参考实现 / 回退） |
-| --- | --- | --- |
-| 产物 | `csrc/` 编出的 `libfla_npu_stable.so` + `fla_npu/ops/ascendc/_stable.py` | `_aclnn_ctypes.py` + `_runtime.py` |
-| 接法 | 通过 torch 的 Stable ABI（`STABLE_TORCH_LIBRARY`）注册，张量走 dispatcher | 直接 `dlopen` OPP 的 `libcust_opapi.so`，自己拼 aclTensor / aclIntArray 描述符 |
-| ABI | 不绑 CPython ABI，也不绑 libtorch C++ ABI，同一个 wheel 可跨 Python / torch 版本使用（最低已验证 torch 2.7.1） | 绑当前 Python ABI 与 torch_npu 的 ctypes 布局 |
-| 角色 | 默认后端，当前 31 个公开算子全部由它承载 | 参考实现 + 回退 |
-
-选择顺序是 **stable → ctypes**，逐算子判定：薄层里有同名函数就走薄层，没有才回落 ctypes。回落不是正常状态：`fla_npu.ops.ascendc.BACKENDS` / `FALLBACKS` 记录每个算子实际用了哪条、为什么回落，`FLA_NPU_STABLE_TRACE=1` 会把结果打到 stderr，`tools/stable_ctypes_fallbacks.py` 在离线门禁里卡这条。
-
-ctypes 侧保留的价值是当**参考实现**：`tools/op_api_parity.py` 逐参数比对公开签名，`tests/stable_abi/regression_*.py` 让两边跑同一个 kernel 逐位对比 host 封装（实参顺序、dtype / shape 映射、输出分配、原地语义）。
-
-### 1.2 代码在哪
+薄层不绑 CPython ABI、也不绑 libtorch C++ ABI，一份 wheel 可跨 Python / torch 版本使用（最低已验证 torch 2.7.1）；host 开销与 vLLM-Ascend 的 custom 路径同一量级。
 
 | 路径 | 职责 |
 | --- | --- |
 | `csrc/include/stable/exec.h` | `FLA_STABLE_EXEC`：参数 holder（保活到 launch 之后）、符号解析、workspace、下发 |
 | `csrc/include/stable/boxed.h` | `boxed_adapter<run_*>`：按 `run_*` 的签名拆 boxed 栈、按返回值类型打包 |
-| `csrc/include/stable/acl_meta.h`、`runtime.h`、`layout_math.h`、`at_facade.h` | 张量元信息与输出分配、workspace / stream、layout（BSND / BNSD / TND / NTD）换算、可用的 torch C API 门面 |
-| `csrc/src/stable_<family>.cpp` | 各算子族的适配：一个算子 = 一条宏 |
+| `csrc/include/stable/{acl_meta,runtime,layout_math,at_facade}.h` | 张量元信息与输出分配、workspace / stream、layout（BSND / BNSD / TND / NTD）换算、可用的 torch C API 门面 |
+| `csrc/src/stable_<family>.cpp` | 各算子族的适配：一个算子 = 一条宏（族表见 §2.5） |
 | `csrc/src/stable_ops.cpp` | 只做注册（`m.def` + `m.impl`），并把各族文件 include 进同一个编译单元 |
-| `fla_npu/ops/ascendc/_stable.py` | 薄层的 Python wrapper（真签名）、后端选择、stream 取值 |
+| `fla_npu/ops/ascendc/_stable.py` | 薄层的 Python wrapper（真签名）、后端选择、取 stream |
 | `fla_npu/ops/ascendc/_aclnn_ctypes.py` | ctypes 参考实现 |
 | `fla_npu/ops/ascendc/__init__.py` | 公开入口、短名导出、正反向绑定、mutation 契约 |
 | `tools/*.py` | 离线门禁 |
 | `tests/stable_abi/` | 需要 NPU 的设备回归 |
 
-### 1.3 运行期开关
+运行期开关：
 
 | 环境变量 | 取值 | 作用 |
 | --- | --- | --- |
 | `FLA_NPU_STABLE_ABI` | `ctypes` | 强制走 ctypes 参考路径（对照 / 诊断） |
-| `FLA_NPU_STABLE_VALIDATE` | `1` | 整个调用改走 ctypes 参考：非法输入给出精确的 Python 报错。诊断开关，不是性能模式 |
+| `FLA_NPU_STABLE_VALIDATE` | `1` | 每次调用改走 ctypes 参考：非法输入给出精确的 Python 报错。诊断开关，不是性能模式 |
 | `FLA_NPU_STABLE_LIB` | 路径 | 指定要加载的 `libfla_npu_stable.so`；不设时用包里那份 |
 | `FLA_NPU_STABLE_TRACE` | `1` | 逐算子打印实际后端与回落原因 |
+| `FLA_NPU_STABLE_STREAM` | `accessor` | 逃生阀：强制用会排空任务队列的取流方式（见 §3） |
+| `FLA_NPU_STABLE_LAUNCH` | `inline` | 逃生阀：不走 torch_npu 任务队列，内联直投 |
 | `FLA_NPU_BUILD_STABLE_ABI` | `0` | 构建开关：产出不含薄层的纯 ctypes wheel |
 
 ## 2. 新增算子适配
 
-一次适配 = **1 个族文件 + 2 行注册 + 1 个 Python wrapper**，再加一个 parity 场景。不需要先写一份 ctypes 适配。
+一次适配 = **1 个族文件 + 2 行注册 + 1 个 Python wrapper**，再加一个 parity 场景。**不需要先写一份 ctypes 适配**。更细的规则（条件输出、字符串名表、需要 Python 侧策略的组合算子）见 [`docs/architecture/stable-abi-op-onboarding.md`](../../docs/architecture/stable-abi-op-onboarding.md)，设计取舍见 [`stable-abi-macro-design.md`](../../docs/architecture/stable-abi-macro-design.md)。
 
-### 2.1 用宏，不要写手写入口
+### 2.1 用宏，别写手写入口
 
 薄层里每个算子的 C++ 适配只有三件事：取张量、申请输出、下发一次 aclnn。这三件事与算子无关，随算子变的只有"第几个参数是什么类型"，所以宏把前三件做掉，只留参数表：
 
 - `FLA_STABLE_EXEC(aclnn 符号前缀, workspace 设备来源, stream, 按 aclnn 头文件顺序的实参...)`：解析符号、由实参推导 `GetWorkspaceSize`、建 workspace、下发，并把失败转成 C++ 异常。
 - `boxed_adapter<run_*>`：按 `run_*` 的签名拆栈、按返回值打包。有了它，`stable_ops.cpp` 里注册一个算子只要两行。
 
-手写入口要自己做这两件事，也就绕过了 boxed kernel 的输入所有权契约（`library.h`：*fn 负责偷走输入那份内存*）。历史教训就在这里：`npu_recurrent_gated_delta_rule` / `npu_recurrent_kda` 最初用手写入口、用 `to<AtenTensorHandle>` 读必选槽，每次调用漏一份引用——2000 次 decode 形状调用让 caching allocator 涨 191 MiB，服务级涨到 8.2 GiB 后 OOM。宏用 `to<Tensor>` 消费每个必选 Tensor 槽，这类错误在类型层面就写不出来。
+手写入口要自己做这两件事，也就绕过了 boxed kernel 的输入所有权契约（`torch/csrc/stable/library.h:69`：*fn is responsible for stealing the memory of the inputs, in effect "popping" them off the stack*）。历史教训就在这里：`npu_recurrent_gated_delta_rule` / `npu_recurrent_kda` 最初用手写入口、用 `to<AtenTensorHandle>` 读必选槽——那是纯重解释、不消费栈引用，于是每次调用漏一份引用：2000 次 decode 形状调用让 caching allocator 涨 191 MiB，服务级涨到 8.2 GiB 后 OOM。宏用 `to<Tensor>` 消费每个必选 Tensor 槽，这类错误在类型层面就写不出来。
 
 ### 2.2 交付件
 
 | # | 位置 | 内容 |
 | --- | --- | --- |
-| 1 | `csrc/src/stable_<family>.cpp`（已有族就加进那个文件） | `kSchema_<op>` + `run_<op>`：申请输出 + 一条 `FLA_STABLE_EXEC` |
+| 1 | `csrc/src/stable_<family>.cpp`（已有族就加进那个文件，族表见 §2.5） | `kSchema_<op>` + `run_<op>`：申请输出 + 一条 `FLA_STABLE_EXEC` |
 | 2 | `csrc/src/stable_ops.cpp` | `m.def(kSchema_<op>);` + `m.impl("<op>", &boxed_adapter<run_<op>>);` |
 | 3 | `fla_npu/ops/ascendc/_stable.py` | 一个真签名 wrapper：`_op("<op>")(...)` |
 | 4 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子原地写参数：`MUTATED_ARGUMENTS` 加一行（必要时 `MUTATION_FLAGS`） |
 | 5 | `tests/stable_abi/regression_ops.py` | 一个 ctypes ↔ 薄层的逐位 parity 场景，并登记进场景列表 |
 | 6 | `tests/stable_abi/stable_scenarios.json` | 场景基线，`FLA_NPU_BASELINE_WRITE=1` 跑一次写入 |
 
-公开名不用加白名单：`_get_stable_op(name)` 就是 `getattr(_stable, name, None)`。
+公开名不用加白名单：`_get_stable_op(name)` 就是 `getattr(_stable, name, None)`。算子**没有** ctypes 参考时，把名字加进 `__init__.py` 的 `_LAUNCHER_ONLY_OPS`，参考换成 fla 的 torch 实现或一次性录制的 golden 张量（规则见接入文档 §8）。
 
 ### 2.3 骨架
 
@@ -126,8 +117,8 @@ def npu_kda_gate_cumsum(g, chunk_size, *, A_log=None, dt_bias=None,
 | schema | C++ 形参 | C++ holder | Python 侧 |
 | --- | --- | --- | --- |
 | `Tensor x` / `Tensor? g` | `Tensor` / `std::optional<Tensor>` | `tensor(meta_of(x))` / `optional_tensor(g)`；要 ND 或逻辑形状时用 `nd_*` / `logical_*` | 张量；可选参数传 `None` |
-| `-> Tensor` | 自己分配 | 交给 aclnn 时用 `out_tensor(meta_of(out))` | — |
-| `-> (Tensor, Tensor, Tensor?)` | `std::tuple<...>` | 缺席的输出槽传 `TensorMeta()`（null aclTensor），由 `boxed.h` 打成 boxed optional | — |
+| `->` 单个 `Tensor` | 自己分配 | 交给 aclnn 时用 `out_tensor(meta_of(out))` | — |
+| `->` 多个（含 `Tensor?`） | `std::tuple<...>` | 缺席的输出槽传 `TensorMeta()`（null aclTensor），由 `boxed.h` 打成 boxed optional | — |
 | `int` / `float` / `bool` | `int64_t` / `double` / `bool` | `scalar(...)` | int / float / bool；`None` 在 wrapper 里给默认值 |
 | `int layout`（枚举） | `int64_t layout` | `cstr(k<Op>LayoutNames, layout)` | 字符串 → `_char_code(...)` 转 int code，两边名表顺序必须一致 |
 | host int 数组 | `std::optional<Tensor>`（host） | `int_array(x)`，取值用 `int_values(x)` | `_host_ints(seq)`，或直接给 CPU int64 tensor |
@@ -149,11 +140,12 @@ def npu_kda_gate_cumsum(g, chunk_size, *, A_log=None, dt_bias=None,
 | `stable_kda.cpp` | KDA 族 |
 | `stable_chunk.cpp` | 两族共用的 chunk 级工具（wy_repr / kkt / cumsum / dqkwg / dv_local / recompute_w_u_fwd / solve_tri） |
 | `stable_fast_gelu.cpp` | `npu_fast_gelu_custom` 正反向 |
-| `stable_ops.cpp` | 只有注册 |
+| `stable_recurrent_gdr.cpp` / `stable_recurrent_kda.cpp` | 两个 recurrent 适配，各自一个文件（见下） |
+| `stable_ops.cpp` | **只有注册** |
 
 每个族文件头部有一行 `// Owns ...` 注释列出它拥有的算子，新增前先读它，放好之后把新名字加进去。
 
-> 历史遗留：`stable_recurrent_gdr.cpp` / `stable_recurrent_kda.cpp` 是仅存的两个手写入口（理由原本是"描述符要作为 bundle 交给 task queue，宏里没有这个位置"；实际上 `exec.h` 的 `detail::exec` 用的是同一个入口，该理由不成立）。这两个算子会并回宏，**新算子一律用宏**。
+> 遗留：`stable_recurrent_gdr.cpp` / `stable_recurrent_kda.cpp` 是仅存的两个手写入口，会并回宏。**新算子一律用宏**。
 
 ### 2.6 门禁与场景
 
@@ -177,27 +169,15 @@ FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
 
 场景矩阵按算子形态取轴：该算子声明的每个 layout × dense / varlen / 物理 B=1 × 可选参数（全给、全不给、逐个单给）× 每个 bool 翻转（含决定条件输出的那个）× dtype × 非连续 state × 边界（T=1、batch=1、单 chunk、空 tensor / `None`）× 错误路径（device / dtype / shape / 枚举 code / `int[]` dtype 非法时两侧都拒绝）。基线里的场景**只能增不能减**。
 
-没有 ctypes 参考的算子不必为此先写一份：把名字加进 `__init__.py` 的 `_LAUNCHER_ONLY_OPS`，parity 的参考换成 fla 的 torch 实现或一次性录制的 golden 张量。代价是没有回退后端、也没有历史签名要比对（见设计文档 §8）。
+## 3. 注意事项
 
-更细的规则（条件输出、字符串名表、需要 Python 侧策略的组合算子、常见坑）见
-[`docs/architecture/stable-abi-op-onboarding.md`](../../docs/architecture/stable-abi-op-onboarding.md)；
-设计取舍与边界见 [`stable-abi-macro-design.md`](../../docs/architecture/stable-abi-macro-design.md)。
-
-## 3. 导入契约
-
-`import fla_npu` 会定位 OPP 并加载 `libcust_opapi.so`。**导入 / 构建前请先 source CANN 的 `set_env.sh`**（默认 `/usr/local/Ascend/ascend-toolkit/set_env.sh`，自定义安装替换为实际路径）；CANN 环境未初始化、OPP 不完整或动态库加载失败时 import 直接报错：
-
-```sh
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-```
-
-| 现象 | 原因 / 处理 |
-| --- | --- |
-| 找不到 `fla_npu/opp/vendors/fla_npu_transformer/libcust_opapi.so` | 装的是 standalone wheel（不内嵌 OPP）：先按 run 包默认流程（`--install` / `--full`）补齐（见[开发者指南](../../docs/开发者指南.md) 场景 1） |
-| `dlopen` 报错、找不到依赖库 | 没 source CANN `set_env.sh`，或新开 shell 后环境变量丢失 |
-| 换 run 包后调用报 ABI / 行为异常 | 已加载的 `libcust_opapi.so` 不在同一进程内热替换，需要重启 Python 进程 |
-
-FLA 自定义 op_api 只用 `libcust_opapi.so`，不要在 custom OPP 的 `op_api/lib` 下创建会遮蔽 CANN 运行库的 `libopapi.so` 别名。
+- **stream 每次现取，绝不要缓存。** 进程级缓存过一个 stream pointer，在 vLLM 的多线程多 stream 下会把 kernel 发到别的线程的 stream 上（512 那次崩溃就是这么来的）。适配代码不要自己取 stream，也不要把值存下来。
+- **取 stream 的 accessor 要和下发方式配对。** 下发走 torch_npu 任务队列（vLLM `EXEC_NPU_CMD` 同路）时用不排空队列的 accessor，顺序由队列保证；内联直投时必须用会排空队列的那把，否则 kernel 会插到已入队任务的前面。配错在空队列上看不出来，在 vLLM worker 上会变成每次调用约 1 ms。这段逻辑固定在 `_stable.py::_current_stream_ptr()` 里，两个逃生阀是 `FLA_NPU_STABLE_STREAM=accessor` 与 `FLA_NPU_STABLE_LAUNCH=inline`。
+- **launcher 的加载时机。** 由 `torch.ops.load_library()` 在 torch 初始化之后加载，`fork` 出来的子进程要重新加载。构建戳（`_stable_hash.py` 的 `SOURCE_HASH` 与 `.so` 内嵌哈希）不一致时加载直接报错——那是防"跑了旧产物还不自知"，不要绕过。
+- **`FLA_NPU_STABLE_LIB` 只用于对照。** 它优先于包内那份，长期开着指向旧 `.so` 会静默使用旧产物。
+- **非连续输入如实交出去。** 张量的 sizes / strides / storage offset 原样交给 `aclCreateTensor`，适配层不判布局能力、也不做 dense 拷贝：能不能正确寻址是算子的责任。conv1d 的 `conv_state` 能不能吃 stride 跟着 CANN 走（`CausalConv1d` 的 aclnn 接口是构建期生成的，没有手写 `op_host/op_api`）。在适配层做 staging 会白白付出约 0.1 ms/次的拷贝代价。
+- **同名包只能装一个。** `flash-linear-attention-npu` 同名互覆盖，多 SoC / 多版本并存要用独立 venv。
+- **构建机的 libstdc++ 水位会跟着产物走。** 薄层与 OPP 的 host 侧库是在构建机上编的；构建机比目标机新时，目标机会在 `import fla_npu` 时报 `GLIBCXX_3.4.x not found`——pip 的 manylinux 标签只承诺 glibc，看不出这条。发布前用 `tools/stable_abi_audit.py --lib` 查一次水位。
 
 ## 4. 构建与安装
 

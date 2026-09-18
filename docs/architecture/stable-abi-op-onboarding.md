@@ -31,21 +31,28 @@
 | `stable_kda.cpp` | KDA 族：`npu_chunk_kda_fwd`、`_bwd`、`_bwd_intra`、`_bwd_recompute`、`npu_kda_gate_cumsum` |
 | `stable_chunk.cpp` | 两族共用的 chunk 级工具：`*wy_repr*`、`chunk_scaled_dot_kkt`、`chunk_local_cumsum`、`chunk_bwd_dqkwg`、`chunk_bwd_dv_local`、`recompute_w_u_fwd`、`solve_tri` |
 | `stable_fast_gelu.cpp` | `npu_fast_gelu_custom`、`npu_fast_gelu_custom_backward` |
-| `stable_recurrent_gdr.cpp`、`stable_recurrent_kda.cpp` | 两个 **pre-macro** 适配（各自一个文件：它们的 `state` 是原地参数，不能用宏拆栈，见 §7） |
+| `stable_recurrent_gdr.cpp`、`stable_recurrent_kda.cpp` | 两个 **pre-macro** 适配，各自一个文件（见下） |
 | `stable_ops.cpp` | **只有注册**：`m.def(kSchema_<op>)` + `m.impl("<op>", &boxed_adapter<run_<op>>)`，并负责 `#include` 各族文件 |
 
 判族三十秒能定：看公开名字属于哪一段——`causal_conv1d*` → conv1d；`chunk_gated_delta_rule_*`
 的复合/派生 → gdn（其中的 **h/dh 递归三件套** → fwd_h）；`chunk_kda_*` / `kda_*` → kda；其余
 chunk 级工具（wy_repr / kkt / cumsum / dqkwg / dv_local / recompute / solve_tri）→ chunk；
-`fast_gelu*` → fast_gelu；带原地 `state` 的 recurrent 型 → recurrent_*。
+`fast_gelu*` → fast_gelu。
 
-每个族文件**头部都有一行 `// Owns:`**，列着它当前拥有的算子：新增算子时先读那行，放好之后
-把新名字加进去。归错族的代价只是 review 时要挪一次（不影响构建），但会让下一个人更难判断，
-所以请把这一行维护住。
+**原地参数不影响归族，也不影响用宏**：`Tensor(a!)` 走类型化拆栈是安全的——证据就是上面那两个
+recurrent 适配器自己，它们正是用 `to<Tensor>` 拆 `Tensor(a!) state` / `initial_state` 的。
+`stable_recurrent_gdr.cpp` / `stable_recurrent_kda.cpp` 仍是 pre-macro 只是历史遗留（当初的理由
+是"描述符要作为 bundle 交给 torch_npu 任务队列，宏里没有这个位置"，而宏路径的 `detail::exec`
+走的就是同一个 `detail::enqueue_launch`，该理由不成立），会并回宏；新增的 recurrent 型算子
+**直接写进对应族文件用宏**，不要照着这两个文件抄。
+
+每个族文件**头部都有一行 `// Owns ...` 注释**，列着它当前拥有的算子：新增算子时先读那行，
+放好之后把新名字加进去。归错族的代价只是 review 时要挪一次（不影响构建），但会让下一个人
+更难判断，所以请把这一行维护住。
 
 （为什么不合成一个文件：这 9 个族文件合计约 2.1k 行，合并后所有算子的改动都落在同一个文件上，
 并行开发会互相冲突；现在按族分开，读一个算子的改动只需要看一个文件。代价是"该放哪"需要
-规则——就是上面这张表 + 文件头 `// Owns:`。）
+规则——就是上面这张表 + 文件头 `// Owns ...`。）
 
 ## 3. 参数类型对照
 
@@ -61,7 +68,7 @@ schema 形参顺序、以及 aclnn 头文件顺序一致；`op_abi_parity.py` + 
 | `int chunk_size`、`float scale`、`bool use_exp2` | `int64_t` / `double` / `bool` | Python int / float / bool（`None` 在 wrapper 里给默认值） | `scalar(...)` |
 | `int layout`（枚举） | `int64_t layout` | **字符串**，wrapper 用 `_char_code("<op>", "layout", layout)` 转 code | `cstr(k<Op>LayoutNames, layout)`，名表顺序要与 `_stable._ENUM` 一致 |
 | host int 数组（`query_start_loc_cpu` 等） | `std::optional<Tensor>`（host 侧） | `_host_ints(seq)`，或直接给 CPU int64 tensor | `int_array(x)`；要在 C++ 里取用值时 `int_values(x)` |
-| `Tensor(a!) state`（原地写） | 不走宏（读 `AtenTensorHandle` 自己 launch） | 调用方直接传被改写的张量 | 见 §7 的 pre-macro 说明 |
+| `Tensor(a!) state`（原地写） | 照常写 `Tensor` / `std::optional<Tensor>`，宏按 `to<Tensor>` 消费槽位 | 调用方直接传被改写的张量 | 宏路径对原地参数是安全的；登记见 §7 |
 | `int stream` | `int64_t stream` | `_current_stream_ptr()`（**每次现取，不缓存**；按下发方式选 accessor，见 §7） | `FLA_STABLE_EXEC` 的第三个实参 |
 
 三条硬限制：**没有字符串类型**（字符串一律"名表 + int code"）；**`int[]` 只收 host 的 int64 CPU

@@ -39,7 +39,7 @@
 3. **`char*` 跨边界用 int code**：schema 里写 `int`，Python 侧 `_char_code(op, arg, value)` 查 `_stable._ENUM`，C++ 侧 `cstr(k<Op><Arg>Names, code)` 查名表并做边界检查。**名表顺序必须与 `_ENUM` 一致**，由 `stable_coverage.py` 检查。所有 layout 参数统一用 `BSND=0, BNSD=1, TND=2, NTD=3`（`layout_math.h` 的 `layout::Code`）。
 4. **可选输出**：schema 写 `Tensor?`，缺席时 C++ 返回 `std::nullopt`；`boxed.h` 的 `pack` 会把它写成 **boxed optional**——直接塞 tensor handle 会让 dispatcher 当指针解引用（`chunk_fwd_h` 段错误就是这么来的）。
 5. **原地修改**：在 `__init__.py` 的 `MUTATED_ARGUMENTS` 登记参数名；写入与否取决于参数值时再登记 `MUTATION_FLAGS`（例如 `npu_recurrent_kda` 的 `inplace_final_state`）。
-6. **描述符**：`AclTensorView` 把 `meta.sizes`/`meta.strides`/`meta.storage_offset` 原样交给 `aclCreateTensor`，storage shape 默认是扁平的 `numel`（`logical_storage=true` 且张量连续时改用逻辑 shape，见 `acl_meta.h` 的注释）。**适配层不判定布局能力，也不做 dense 拷贝**：非连续输入如实按 view 交出去，能不能正确寻址是算子的责任。OPP 侧 `isview=0` 时 storage shape 不可观测；`isview=1` 的算子（如 `RecurrentGatedDeltaRule`，手写 `op_host/op_api` 里显式 `CreateView`）会读 stride，`npu_recurrent_gated_delta_rule` 的 state 能走 stride 就靠这个。`CausalConv1d` 的 aclnn 接口是构建期生成的（没有 `op_host/op_api`），它理解 `convStates` stride 的能力跟着 CANN 走；在支持该接口之前的 CANN 上算子按连续处理并自行给 warning，适配层不干涉（见 `stable-abi-host-cost.md` 的对应一节）。
+6. **描述符**：`AclTensorView` 把 `meta.sizes`/`meta.strides`/`meta.storage_offset` 原样交给 `aclCreateTensor`，storage shape 默认是扁平的 `numel`（`logical_storage=true` 且张量连续时改用逻辑 shape，见 `acl_meta.h` 的注释）。**适配层不判定布局能力，也不做 dense 拷贝**：非连续输入如实按 view 交出去，能不能正确寻址是算子的责任。OPP 侧 `isview=0` 时 storage shape 不可观测；`isview=1` 的算子（如 `RecurrentGatedDeltaRule`，手写 `op_host/op_api` 里显式 `CreateView`）会读 stride，`npu_recurrent_gated_delta_rule` 的 state 能走 stride 就靠这个。`CausalConv1d` 的 aclnn 接口是构建期生成的（没有 `op_host/op_api`），它理解 `convStates` stride 的能力跟着 CANN 走；在支持该接口之前的 CANN 上算子按连续处理并自行给 warning，适配层不干涉。
 
 ## 4. 构建戳
 
@@ -83,8 +83,10 @@ Ascend950（A5）的现状：`--group a5` 在 950 上跑 `regression_950_ops.py`
 - **recurrent 家族仍是 pre-macro 写法**：`npu_recurrent_gated_delta_rule` 与
   `npu_recurrent_kda`（`csrc/src/stable_recurrent_gdr.cpp` /
   `stable_recurrent_kda.cpp`）不经过 `FLA_STABLE_EXEC` + `boxed_adapter`，而是自己
-  调 `get_ws`/`launch`、自己拆栈：它们要把描述符作为一个 bundle 交队列
-  （`detail::enqueue_launch`），宏里没有这个位置。**与参数所有权无关**——
+  调 `get_ws`/`launch`、自己拆栈。**这是历史遗留，不是宏的能力边界**：当初的理由是
+  "描述符要作为一个 bundle 交给 torch_npu 任务队列，宏里没有这个位置"，但宏路径的
+  `detail::exec` 走的就是同一个 `detail::enqueue_launch`（见 `exec.h` 的
+  `FLA_STABLE_EXEC` 实现），该理由不成立。**与参数所有权无关**——
   `Tensor(a!)` 走类型化拆栈是安全的，而且证据就是这两个适配器自己：它们现在正是
   用 `to<Tensor>` 拆 `Tensor(a!) state` / `initial_state`，FRESH 归零、服务级 32/32。
   （全库带 `Tensor(a!)` 的只有这两个 op；conv1d 的 `conv_state` 是普通 `Tensor`，
@@ -109,8 +111,9 @@ Ascend950（A5）的现状：`--group a5` 在 950 上跑 `regression_950_ops.py`
     并计数真正消费掉的槽（当前 13）——数目掉下去就是又漏了；
   * `op_abi_validate.py` 原先只看 `FLA_STABLE_EXEC`，看不到它们的 aclnn 参数表——
     现已补上（`hand_written_calls`），并额外做适配↔ctypes 表的一对一对拍。
-  收敛方向（待设备验证）：让 `boxed.h` 支持"描述符 bundle 直接交队列"后再整体转宏；
-  在那之前，手写入口按上面的契约逐个消费栈引用。
+  收敛方向：把这两个适配器直接改成 `FLA_STABLE_EXEC` + `boxed_adapter<run_*>` 即可
+  （原型已在 `side/macro-recurrent` 验证过，尚未合入）。在那之前，手写入口按上面的
+  契约逐个消费栈引用。
 - **conv1d_update 的 `conv_state` 没写 `Tensor(a!)`**：它和两个 recurrent 入口一样是
   in/out ref（schema 只写成 `Tensor conv_state`），契约靠 Python 侧
   `MUTATED_ARGUMENTS` 兜底（拒绝 requires_grad + 手动 bump version counter），eager

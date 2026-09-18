@@ -121,7 +121,7 @@ legacy `torch.ops.npu.*` 兼容路径仍可通过 `FLA_NPU_BUILD_LEGACY_EXTENSIO
 1. root import 验证 CANN 环境，只从当前 Python 包固定路径定位 custom OPP。
 2. runtime 以 `RTLD_LOCAL | RTLD_NOW | RTLD_NODELETE` 先加载 CANN `libopapi.so`，再通过绝对路径加载包内 `libcust_opapi.so`。
 3. runtime 保存 `[custom, CANN]` 两个句柄，后续逐句柄查找符号；同名 `aclnn*` 命中 custom，custom 没有的基础符号回退到 CANN。
-4. 公共入口逐算子选后端：适配层里有同名函数就走适配层，没有才回落 ctypes。当前 31 个公开算子全部走适配层；`BACKENDS` / `FALLBACKS` 记录每个算子实际用了哪条、为什么回落，`FLA_NPU_STABLE_TRACE=1` 打到 stderr，`stable_ctypes_fallbacks.py` 在离线门禁里禁止回退。
+4. 公共入口逐算子选后端：适配层里有同名函数就走适配层，没有才回落 ctypes。当前 32 个公开算子全部走适配层；`BACKENDS` / `FALLBACKS` 记录每个算子实际用了哪条、为什么回落，`FLA_NPU_STABLE_TRACE=1` 打到 stderr，`stable_ctypes_fallbacks.py` 在离线门禁里禁止回退。
 5. 适配层路径：`_stable.py` 的真签名 wrapper 把参数整理成 dispatcher 认识的形式（`_host_ints` 把 host int 数组转成 CPU int64 tensor、`_char_code` 把 layout 字符串转 int code），调用 `torch.ops.fla_npu_stable.<op>`。
 6. `boxed_adapter<run_<op>>` 按 `kSchema_<op>` 从 boxed 栈上取出每个参数（`to<Tensor>` 消费栈引用），交给 `run_<op>`。
 7. `run_<op>` 按输出 shape 规则分配输出，再由一条 `FLA_STABLE_EXEC` 完成：从第一个 NPU 输入的 meta 推出 workspace 设备、解析 `aclnn*` 符号、建 RAII holder（aclTensor / aclIntArray / 字符串 / 标量，活到 launch 之后）、调用 `<aclnnOp>GetWorkspaceSize`、在该设备上分配 workspace、调用 `<aclnnOp>(workspace, size, executor, stream)`。

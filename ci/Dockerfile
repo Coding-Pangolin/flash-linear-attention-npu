@@ -11,10 +11,26 @@ ARG TORCH_NPU_WHL=torch_npu-2.7.1.post5-cp312-cp312-manylinux_2_28_aarch64.whl
 ARG TORCH_NPU_WHL_URL=
 ARG TRITON_ASCEND_VERSION=3.2.1
 
+# Host C++ toolchain watermark.
+#
+# The wheel ships host libraries we compile ourselves (op_api, op_tiling) plus
+# the Stable-ABI launcher, so whatever GCC builds them sets the minimum
+# libstdc++ the wheel can run against.  GCC 11 headers pull
+# _ZSt28__throw_bad_array_new_lengthv@GLIBCXX_3.4.29 (the GCC 11 rewrite of
+# std::allocator's length check); hosts that run openEuler 22.03 ship
+# libstdc++ 3.4.28 and cannot satisfy it.  GCC 10 tops out at GLIBCXX_3.4.26,
+# which is exactly the watermark Huawei's own CANN toolkit libraries already
+# require, so pinning GCC 10 lowers our floor without going below CANN's.
+ARG HOST_GCC_MAJOR=10
+ARG HOST_CC=gcc-${HOST_GCC_MAJOR}
+ARG HOST_CXX=g++-${HOST_GCC_MAJOR}
+
 ENV DEBIAN_FRONTEND=noninteractive \
     ASCEND_HOME_PATH=/usr/local/Ascend/ascend-toolkit/latest \
     ASCEND_TOOLKIT_HOME=/usr/local/Ascend/ascend-toolkit/latest \
     LD_LIBRARY_PATH=/usr/local/Ascend/ascend-toolkit/latest/aarch64-linux/lib64:/usr/local/Ascend/driver/lib64:/usr/local/Ascend/driver/lib64/driver \
+    CC=${HOST_CC} \
+    CXX=${HOST_CXX} \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTORCH_VERSION=${TORCH_VERSION} \
@@ -27,11 +43,14 @@ SHELL ["/bin/bash", "-lc"]
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       bash \
+      binutils \
       ca-certificates \
       cmake \
       curl \
       g++ \
+      g++-${HOST_GCC_MAJOR} \
       gcc \
+      gcc-${HOST_GCC_MAJOR} \
       git \
       git-lfs \
       make \
@@ -46,6 +65,24 @@ RUN apt-get update && \
       valgrind && \
     rm -rf /var/lib/apt/lists/* && \
     git lfs install
+
+# Fail the image build, not the customer's `import fla_npu`, if the toolchain
+# pin ever drifts.  The probe allocates through std::allocator: GCC 11's
+# <ext/new_allocator.h> resolves that to _ZSt28__throw_bad_array_new_lengthv,
+# which libstdc++ exports only from 3.4.29 on; GCC 10 stays below.  So the
+# compiled probe is a direct, self-contained test of the promise the image
+# makes to the wheel.
+RUN set -e; \
+    "${HOST_CXX}" --version | head -1; \
+    test "$("${HOST_CXX}" -dumpversion | cut -d. -f1)" = "${HOST_GCC_MAJOR}"; \
+    test "${CC}" = "${HOST_CC}"; \
+    test "${CXX}" = "${HOST_CXX}"; \
+    printf '#include <memory>\nvoid probe(unsigned long n) { std::allocator<int> a; int *p = a.allocate(n); a.deallocate(p, n); }\n' > /tmp/fla-wm.cc; \
+    "${HOST_CXX}" -std=c++17 -O2 -fPIC -shared -o /tmp/fla-wm.so /tmp/fla-wm.cc; \
+    watermark="$(readelf --version-info /tmp/fla-wm.so | grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -1)"; \
+    echo "[ci] ${HOST_CXX} watermark: ${watermark:-none}"; \
+    test "$(printf '%s\n%s\n' "${watermark}" GLIBCXX_3.4.26 | sort -V | tail -1)" = "GLIBCXX_3.4.26"; \
+    rm -f /tmp/fla-wm.cc /tmp/fla-wm.so
 
 COPY requirements.txt /tmp/fla-ci/requirements.txt
 

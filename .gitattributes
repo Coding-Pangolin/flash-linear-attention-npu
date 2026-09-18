@@ -4,6 +4,7 @@
 *.yaml text eol=lf
 Dockerfile text eol=lf
 ci/Dockerfile text eol=lf
+ci/Dockerfile.ascend950 text eol=lf
 .gitattributes text eol=lf
 .github/CODEOWNERS text eol=lf
 

@@ -19,7 +19,7 @@
 
 | 编号 | 风险 | 触发场景 | 严重度 | 现有防护 | 缺口 |
 | --- | --- | --- | --- | --- | --- |
-| A1 | libstdc++（GLIBCXX）下限被构建机抬高 | A | 高 | `stable_abi_audit.py --lib` 断言 `max_glibcxx` | 未挂 CI；发版容器未固定 |
+| A1 | libstdc++（GLIBCXX）下限被构建机抬高 | A | 高 | `stable_abi_audit.py --lib` 断言 `max_glibcxx`；构建镜像钉 GCC 10 + 自检水位 | audit 未挂 CI；包内最大值门禁在 PyPI PR |
 | A2 | glibc（`GLIBC_x.y`）下限被构建机抬高 | A | 中 | 无（audit 只打印） | 没有上限断言 |
 | A3 | 注册入口 / 新增运行时符号 | A | 低 | `--lib` 断言入口符号 + 符号白名单 | 已覆盖 |
 | A4 | torch 版本范围 | A | 低 | wheel 声明 `torch>=2.7.1`；加载失败有清晰报错 | 2.8 / 2.10 / 2.11 运行时未跑 |
@@ -125,6 +125,50 @@ fla_npu/opp/.../op_proto/lib/linux/aarch64/libcust_opsproto_rt2.0.so     3.4.18
 - 该断言只看**一个** launcher，不看包内其余 `.so`——而真正顶着下限的是 OPP 的那三个文件，需要把"取包内最大值"作为判据；
 - 未挂 CI；`max_glibcxx` 现在写 3.4.21（launcher 的水位），与"整包下限 3.4.29"不是一回事，两者要对齐；
 - 发版容器没有写进流程（`ci/Dockerfile` 已经是 22.04，但"不要用更新的机器编产物"目前只是口头约定）。
+
+#### A1.1 已采纳的修法：把水位钉在构建基座（GCC 10），不做静态链接
+
+`ci/Dockerfile` / `ci/Dockerfile.ascend950` 现在装 `gcc-10` / `g++-10` / `libstdc++-10-dev`，
+并把 `CC` / `CXX` 钉到它们身上（`ARG HOST_GCC_MAJOR=10`）；镜像构建期会编一个触发同一 libstdc++
+面的小程序，断言 `max_glibcxx = GLIBCXX_3.4.26`，钉歪了镜像就编不出来。
+
+实测（234，aarch64，CANN 9.1.0，**同一份源码只换编译器**）：
+
+| 编译器 | `libcust_opapi.so` | `liboptiling.so` / `libcust_opmaster_rt2.0.so` | 包内上限 |
+| --- | --- | --- | --- |
+| g++ 11.4（原镜像） | 3.4.29 | 3.4.29 | **3.4.29** |
+| g++-10 10.5 | 3.4.21 | 3.4.26 | **3.4.26** |
+| g++-9 9.5 | 3.4.21 | 3.4.26 | **3.4.26**（无额外收益） |
+
+- 掉下去的那条正是 `_ZSt28__throw_bad_array_new_lengthv@GLIBCXX_3.4.29`（GCC 11 头里 `std::allocator`
+  的长度检查分支）；**包内再没有任何 3.4.29 引用**。
+- 残下的 3.4.26 是 `std::basic_ostringstream` / `std::basic_stringstream` 的默认构造（GCC 9 起改成库外定义），
+  来自我们编的 vendored opbase（`log.cpp` 等）。g++-9 与 g++-10 结果完全一致 → jammy 上 GCC 10 已是最低水位，
+  再往下要换发行版而不是换编译器。
+- **glibc 不随编译器变**：同一次实验里 `GLIBC` 上限仍是 2.34（来自 glibc ≥2.34 把 libpthread 并进 `libc.so.6`），
+  平台标签 `manylinux_2_34` 不动。
+- 换完之后这条线就是 **CANN 自己的线**：CANN 9.1.0 toolkit `lib64` 里最高的 GLIBCXX 就是
+  `libms_service_profiler.so` 的 3.4.26（glibc 上限 2.29）。也就是说"能跑 CANN 9.1 的机器"必然满足 3.4.26，
+  我们不再要求比 CANN 更高的水位。
+- **换编译器只动我们编的 host 库**：两个 a3 wheel（GCC 11 编 / GCC 10 编）逐文件比对，2835 个文件里
+  2826 个逐字节相同——包括全部 318 个算子的 kernel 产物；不同的只有 6 个 host `.so`（launcher + OPP 的
+  op_api / op_tiling / op_proto）、两个构建期生成、写入了构建目录路径的 `dynamic/*.py` 和 `RECORD`。
+  kernel 由 CANN 自己的编译器产出，所以这条改动不碰算子行为与性能。
+
+为什么不用静态链接 libstdc++：进程里会有两份 libstdc++（异常 / typeinfo / `operator new` 跨模块不匹配），
+`--exclude-libs,ALL` 还会把 aclnn 入口一起藏掉，且与 CANN 自己的动态链接实践背离。换基座没有这些代价。
+
+**验证方式（把"目标机"搬进容器）**：取 Ubuntu 20.04 的 `libstdc++`（上限 `3.4.28`，与 openEuler 22.03 /
+GCC 10.3 一致）放进 `LD_LIBRARY_PATH`，用一个**动态链接的 C** 探针（不是 python / conda——它们会先加载
+自己的 libstdc++，把水位盖掉，实测 conda 环境里映射到的是 `6.0.34`）`dlopen` 包内每个 `.so`：
+
+- GCC 11 编的包：`libcust_opapi.so` / `liboptiling.so` / `libcust_opmaster_rt2.0.so` 三个全部失败，
+  报错与客户现场逐字一致：``version `GLIBCXX_3.4.29' not found``；
+- GCC 10 编的包：五个 `.so` 全部加载通过。
+
+**仍未闭环**：镜像要重建并换 tag；`scripts/check_pypi_wheel.py` 的水位阈值（3.4.29 → 3.4.26）与 README 的
+依赖行要在 PyPI PR 里跟上；a2 / a5 两档以及 a3 的算子级回归要在**新基座**上重编重测；glibc 那条轴
+（本包 2.34，CANN 只要 2.29）要单独决策——降它必须换比 Ubuntu 22.04 更旧的基座，不在本次范围。
 
 ### A2. glibc 下限
 
@@ -312,11 +356,13 @@ FLA_NPU_STABLE_TRACE=1 python -c "import fla_npu, torch; print(fla_npu.ops.ascen
 1. torch 2.8 / 2.10 / 2.11 的**运行时**验证（目前只有编译）。
 2. Python 3.9 / 3.12 / 3.13 的实测。
 3. `GLIBC_`（C 库）上限断言。
-4. **包内 `.so` 的 GLIBCXX 上限断言**：现在只查 launcher，OPP 的三个 3.4.29 文件没有门禁覆盖；
-   判据应当是"包内所有 `.so` 的最大值 ≤ 目标机水位"，而不是单个文件。
+4. **包内 `.so` 的 GLIBCXX 上限断言**：现在只查 launcher，OPP 的三个文件没有门禁覆盖；
+   判据应当是"包内所有 `.so` 的最大值 ≤ 目标机水位"，而不是单个文件。（PyPI PR 已加包内最大值门禁；
+   基座换 GCC 10 后阈值要同步降到 3.4.26。）
 5. 六版本产物的 6×6 交叉矩阵（X 编 → Y 跑）。
-6. 发版容器的固定，以及 CI 里挂上 audit（`--lib` 那条会与容器绑定）。
+6. ~~发版容器的固定~~ —— 已固定（GCC 10 + 镜像构建期水位自检，见 A1.1）；CI 里挂 audit（`--lib`）仍未做。
 7. SoC 与包标签的运行期校验。
 8. torch_npu 补丁级版本的运行期校验（或明确它已不相关）。
-9. 在真正的老 libstdc++ 环境上复现一次客户侧的加载失败，把报错形态钉死。
+9. ~~在真正的老 libstdc++ 环境上复现一次客户侧的加载失败~~ —— 已完成（Ubuntu 20.04 的 libstdc++ 3.4.28
+   上复现，报错形态见 A1.1）。
 10. 非 conda 的系统 python 加载"要求 3.4.32 的产物"的实测。

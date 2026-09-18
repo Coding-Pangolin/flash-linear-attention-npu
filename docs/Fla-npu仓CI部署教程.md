@@ -236,8 +236,17 @@ CI 会优先尝试健康且空闲的 NPU，然后尝试空闲但健康状态异�
 
 | 平台 | 镜像 | Dockerfile | 关键版本 |
 | --- | --- | --- | --- |
-| A2 | `fla-npu-ci:9.1.0-910b` | `ci/Dockerfile` | CANN 9.1.0、Python 3.12、PyTorch 2.7.1 |
-| A5 | `fla-npu-ci:9.1.0-950` | `ci/Dockerfile.ascend950` | CANN 9.1.0、Python 3.12、PyTorch 2.12.0 |
+| A2 | `fla-npu-ci:9.1.0-910b` | `ci/Dockerfile` | CANN 9.1.0、Python 3.12、PyTorch 2.7.1、宿主 C++ 工具链 GCC 10（`CC`/`CXX` 已钉） |
+| A5 | `fla-npu-ci:9.1.0-950` | `ci/Dockerfile.ascend950` | CANN 9.1.0、Python 3.12、PyTorch 2.12.0、宿主 C++ 工具链 GCC 10（`CC`/`CXX` 已钉） |
+
+镜像把宿主 C++ 编译器钉在 GCC 10（`ARG HOST_GCC_MAJOR=10`），并在构建期自检：钉歪了镜像直接编不出来。
+原因是 wheel 里由我们编译的 host 库（OPP `op_api` / `op_tiling`、Stable-ABI launcher）会把**构建机
+libstdc++ 的水位**带进产物——GCC 11 头会引入 `GLIBCXX_3.4.29`，而 openEuler 22.03（libstdc++ 3.4.28）
+这类目标机满足不了，现场表现是 `import fla_npu` 直接报 ``version `GLIBCXX_3.4.29' not found``。
+GCC 10 把整包压到 `GLIBCXX_3.4.26`，正好等于 CANN 9.1.0 自己 `lib64` 里的水位。细节与实测见
+`docs/architecture/stable-abi-portability-risks.md` 的 A1.1。
+
+**升级镜像时必须重建并原子换 tag**：`CC`/`CXX` 是镜像层 `ENV`，仅换 tag 名而沿用旧镜像不会生效。
 
 推荐在 runner 维护窗口从受信任的默认分支构建或加载镜像，再启动 runner。构建命令如下：
 

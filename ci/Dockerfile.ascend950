@@ -14,7 +14,17 @@ ARG TORCH_NPU_WHL_SHA256=acb39467b740c9dc24165b0002f3531521615d396d9386134689ce5
 ARG TRITON_ASCEND_VERSION=3.2.1
 ARG TRITON_ASCEND_INDEX_URL=https://triton-ascend.osinfra.cn/pypi/simple
 
+# Host C++ toolchain watermark; see ci/Dockerfile for the full rationale.
+# GCC 11 headers pull GLIBCXX_3.4.29 from std::allocator's length check, which
+# the openEuler 22.03 hosts (libstdc++ 3.4.28) cannot satisfy; GCC 10 stops at
+# GLIBCXX_3.4.26, the watermark Huawei's own CANN libraries already need.
+ARG HOST_GCC_MAJOR=10
+ARG HOST_CC=gcc-${HOST_GCC_MAJOR}
+ARG HOST_CXX=g++-${HOST_GCC_MAJOR}
+
 ENV DEBIAN_FRONTEND=noninteractive \
+    CC=${HOST_CC} \
+    CXX=${HOST_CXX} \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_INDEX_URL=${PYPI_INDEX_URL} \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -29,11 +39,14 @@ RUN test "$(uname -m)" = "x86_64" && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
       bash \
+      binutils \
       ca-certificates \
       cmake \
       curl \
       g++ \
+      g++-${HOST_GCC_MAJOR} \
       gcc \
+      gcc-${HOST_GCC_MAJOR} \
       gawk \
       git \
       git-lfs \
@@ -49,6 +62,24 @@ RUN test "$(uname -m)" = "x86_64" && \
       valgrind && \
     rm -rf /var/lib/apt/lists/* && \
     git lfs install
+
+# Fail the image build, not the customer's `import fla_npu`, if the toolchain
+# pin ever drifts.  The probe allocates through std::allocator: GCC 11's
+# <ext/new_allocator.h> resolves that to _ZSt28__throw_bad_array_new_lengthv,
+# which libstdc++ exports only from 3.4.29 on; GCC 10 stays below.  So the
+# compiled probe is a direct, self-contained test of the promise the image
+# makes to the wheel.
+RUN set -e; \
+    "${HOST_CXX}" --version | head -1; \
+    test "$("${HOST_CXX}" -dumpversion | cut -d. -f1)" = "${HOST_GCC_MAJOR}"; \
+    test "${CC}" = "${HOST_CC}"; \
+    test "${CXX}" = "${HOST_CXX}"; \
+    printf '#include <memory>\nvoid probe(unsigned long n) { std::allocator<int> a; int *p = a.allocate(n); a.deallocate(p, n); }\n' > /tmp/fla-wm.cc; \
+    "${HOST_CXX}" -std=c++17 -O2 -fPIC -shared -o /tmp/fla-wm.so /tmp/fla-wm.cc; \
+    watermark="$(readelf --version-info /tmp/fla-wm.so | grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -1)"; \
+    echo "[ci] ${HOST_CXX} watermark: ${watermark:-none}"; \
+    test "$(printf '%s\n%s\n' "${watermark}" GLIBCXX_3.4.26 | sort -V | tail -1)" = "GLIBCXX_3.4.26"; \
+    rm -f /tmp/fla-wm.cc /tmp/fla-wm.so
 
 COPY requirements.txt /tmp/fla-ci/requirements.txt
 

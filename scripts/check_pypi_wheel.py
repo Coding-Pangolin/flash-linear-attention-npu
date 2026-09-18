@@ -13,10 +13,11 @@ would otherwise hit first:
 * no shared object asks for a newer glibc/libstdc++ than ``manylinux_2_34``
   promises (the tag asserts the *lower* bound; the upper bound is what breaks).
 
-The per-object watermark rule is the fix for A1/A2 and section 7 items 3-4 of
-docs/architecture/stable-abi-portability-risks.md: the floor has to be judged on
-every ``.so`` in the package (the OPP is the binding constraint, not the
-launcher), not on one file.
+The watermark rule is judged on every ``.so`` in the package (the OPP is the
+binding constraint, not the launcher), not on one file: the wheel tag is a
+promise about the whole payload.  The numbers live in ``DEFAULT_MAX_GLIBC`` /
+``DEFAULT_MAX_GLIBCXX`` beside the tag, and the build image behind them is pinned
+in ``ci/Dockerfile``; replace the image and both move together.
 
 Runs on Linux with binutils' ``readelf`` (the CI image has it).
 

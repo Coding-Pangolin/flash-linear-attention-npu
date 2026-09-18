@@ -51,7 +51,7 @@ torch_custom/fla_npu/
 §1 交付件清单、§2 族文件归属、§3 参数类型对照、§4 模板、§5 落地步骤、§6 设备回归矩阵、§7 常见坑、§8 没有 ctypes 回退的算子。
 
 「为什么必须用宏」的完整理由（boxed kernel 的引用所有权契约、手写入口漏引用导致 191 MiB 泄漏的事故）
-见 [`stable-abi-macro-design.md`](../../docs/architecture/stable-abi-macro-design.md) §6。
+见 [`适配层设计.md`](../../docs/architecture/适配层设计.md) §6。
 
 ## 2. 现状
 
@@ -72,7 +72,7 @@ torch_custom/fla_npu/
 | `tools/*.py` | 离线门禁 |
 | `tests/stable_abi/` | 需要 NPU 的设备回归 |
 
-运行期开关（后端切换 / 诊断 / 逃生阀）见[适配层设计 §7](../../docs/architecture/stable-abi-macro-design.md)：
+运行期开关（后端切换 / 诊断 / 逃生阀）见[适配层设计 §7](../../docs/architecture/适配层设计.md)：
 默认值就是推荐值，正常使用不需要设置任何一条。
 
 ## 3. 注意事项

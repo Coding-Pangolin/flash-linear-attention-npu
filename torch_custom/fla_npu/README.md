@@ -14,17 +14,17 @@ out = chunk_fwd_o(...)
 
 ## 1. 新增算子适配
 
-一次适配 = **改 1 个族文件 + 2 行注册 + 1 个 Python wrapper**。**不需要先写一份 ctypes 适配**：
-ctypes 只是回退后端，新算子默认没有它，按 `_LAUNCHER_ONLY_OPS` 声明即可（onboarding §8）。
+一次适配 = **新建 1 个算子文件 + 1 行 include + 2 行注册 + 1 个 Python wrapper**。**不需要先写一份 ctypes 适配**：
+ctypes 只是回退后端，新算子默认没有它，按 `_LAUNCHER_ONLY_OPS` 声明即可（接入指南 §8）。
 
 ### 1.1 交付件
 
 ```text
 torch_custom/fla_npu/
-├── csrc/src/stable_<family>.cpp    # 改：已有族就加进那个文件；只有开新族才新建
+├── csrc/src/stable_<op>.cpp        # 新建：文件名 = 算子名去掉 npu_，一个算子一个文件
 │   └── kSchema_<op> + run_<op>：申请输出 + 一条 FLA_STABLE_EXEC
-├── csrc/src/stable_ops.cpp         # 改：注册两行
-│   └── m.def(kSchema_<op>); m.impl("<op>", &boxed_adapter<run_<op>>);
+├── csrc/src/stable_ops.cpp         # 改：include 一行 + 注册两行
+│   └── #include "stable_<op>.cpp"; m.def(kSchema_<op>); m.impl("<op>", &boxed_adapter<run_<op>>);
 └── fla_npu/ops/ascendc/
     ├── _stable.py                  # 改：加一个真签名 wrapper
     │   └── def <op>(...): return _op("<op>")(..., _current_stream_ptr())
@@ -39,16 +39,17 @@ torch_custom/fla_npu/
 
 | 文件 | 规范 |
 | --- | --- |
-| `stable_<family>.cpp` | **用宏，不写手写入口**：`kSchema_<op>` 形参 === `run_<op>` 形参 === `FLA_STABLE_EXEC` 实参 === aclnn 头文件顺序（`stream` 固定在最后）；只有开新族时才新建文件 |
-| `stable_ops.cpp` | 只加注册两行，实现写在族文件里 |
+| `stable_<op>.cpp` | **一个算子一个文件，用宏写，不写手写入口**：`kSchema_<op>` 形参 === `run_<op>` 形参 === `FLA_STABLE_EXEC` 实参 === aclnn 头文件顺序（`stream` 固定在最后）；算子私有的名表/helper 也放这里 |
+| `stable_<组>_common.cpp` | 只放**被 ≥2 个算子共用**的 helper（当前只有 `stable_causal_conv1d_common.cpp`、`stable_fwd_h_common.cpp`）；新建时在 include 列表里排在用它的算子之前 |
+| `stable_ops.cpp` | 两件事：include 各算子文件（common 在前、其余按名字排序）+ 注册两行 |
 | `_stable.py` | 真签名 wrapper（不要 `*args` / `**kwargs`），位置参数顺序与 schema 形参一致；字符串用 `_char_code`、host 数组用 `_host_ints`、stream 用 `_current_stream_ptr()` |
 | `__init__.py` | 只在「原地写参数」或「没有 ctypes 回退」时才改，其余情形不动 |
 
 ### 1.3 完整规范在哪
 
-参数类型对照、模板、族文件归属、门禁命令、设备回归矩阵和常见坑都在
-[`docs/architecture/stable-abi-op-onboarding.md`](../../docs/architecture/stable-abi-op-onboarding.md)：
-§1 交付件清单、§2 族文件归属、§3 参数类型对照、§4 模板、§5 落地步骤、§6 设备回归矩阵、§7 常见坑、§8 没有 ctypes 回退的算子。
+参数类型对照、模板、文件划分规则、门禁命令、设备回归矩阵和常见坑都在
+[`docs/architecture/适配层接入指南.md`](../../docs/architecture/适配层接入指南.md)：
+§1 交付件清单、§2 文件划分（一算子一文件）、§3 参数类型对照、§4 模板、§5 落地步骤、§6 设备回归矩阵、§7 常见坑、§8 没有 ctypes 回退的算子。
 
 「为什么必须用宏」的完整理由（boxed kernel 的引用所有权契约、手写入口漏引用导致 191 MiB 泄漏的事故）
 见 [`适配层设计.md`](../../docs/architecture/适配层设计.md) §6。
@@ -64,8 +65,9 @@ torch_custom/fla_npu/
 | `csrc/include/stable/exec.h` | `FLA_STABLE_EXEC`：参数 holder（保活到 launch 之后）、符号解析、workspace、下发 |
 | `csrc/include/stable/boxed.h` | `boxed_adapter<run_*>`：按 `run_*` 的签名拆 boxed 栈、按返回值类型打包 |
 | `csrc/include/stable/{acl_meta,runtime,layout_math,at_facade}.h` | 张量元信息与输出分配、workspace / stream、layout（BSND / BNSD / TND / NTD）换算、可用的 torch C API 门面 |
-| `csrc/src/stable_<family>.cpp` | 各算子族的适配：一个算子 = 一条宏（族表见 [onboarding §2](../../docs/architecture/stable-abi-op-onboarding.md)） |
-| `csrc/src/stable_ops.cpp` | 只做注册（`m.def` + `m.impl`），并把各族文件 include 进同一个编译单元 |
+| `csrc/src/stable_<op>.cpp` | 一个算子一个文件：一个算子 = 一条宏（文件划分见 [接入指南 §2](../../docs/architecture/适配层接入指南.md)） |
+| `csrc/src/stable_<组>_common.cpp` | 被 ≥2 个算子共用的 helper（当前 2 个：conv1d、fwd_h） |
+| `csrc/src/stable_ops.cpp` | 只做注册（`m.def` + `m.impl`），并把各算子文件 include 进同一个编译单元 |
 | `fla_npu/ops/ascendc/_stable.py` | 适配层的 Python wrapper（真签名）、后端选择、取 stream |
 | `fla_npu/ops/ascendc/_aclnn_ctypes.py` | ctypes 参考实现 |
 | `fla_npu/ops/ascendc/__init__.py` | 公开入口、短名导出、正反向绑定、mutation 契约 |

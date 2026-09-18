@@ -499,6 +499,20 @@ libstdc++ 那条轴同样按"整包取最大值"看：当前产物需要 `GLIBCX
 libstdc++ 要来自 GCC 11 及以上的发行版（Ubuntu 22.04+）。这条线比 glibc 更容易漏：客户机上
 `libstdc++` 由发行版或 conda 提供，同一台机器换个 python 入口结论就可能不同。
 
+**客户侧复现（2026-09，A3 / openEuler 22.03，GCC 10.3，libstdc++ 上限 3.4.28）**：`import fla_npu`
+在加载 `opp/.../op_api/lib/libcust_opapi.so` 时硬报 `version 'GLIBCXX_3.4.29' not found`，算子
+跑不起来；把 `LD_LIBRARY_PATH` 指到带新 libstdc++ 的 conda 目录（或 `LD_PRELOAD` 那份
+`libstdc++.so.6`）可以临时绕过。这台机器 glibc 那条轴是够的（2.34），卡住的只有 libstdc++。
+
+候选修法三条，都还没采纳（本仓当前不改构建）：
+
+1. **维持现状 + 写实支持矩阵**：把 openEuler 22.03 从支持列表里去掉，或只给
+   `LD_LIBRARY_PATH` 绕法；
+2. **host 侧 `-static-libstdc++`**：实测能把 GLIBCXX 需求降到 0（导出符号 408→408、aclnn
+   入口 61→61 不变），代价是进程里多一份静态 libstdc++（跨库异常 / `type_info` 匹配、单库
+   体积 +1.3 MB、许可证叙述都要评估），属于独立的构建改造；
+3. **换更低水位的构建基座（GCC ≤ 10）**：不引入第二份运行时，只是把水位从 3.4.29 挪到
+   3.4.28，需要先确认 CANN devel 镜像与编译器在支持范围内，验证面最大。
 发布门禁：`scripts/check_pypi_wheel.py` 上传前逐个 `.so` 断言 glibc 与 GLIBCXX 都不超过标签
 水位，超出即失败；`tools/stable_abi_audit.py --lib` 是同一套判据的构建期版本。
 ## 7. 常见问题

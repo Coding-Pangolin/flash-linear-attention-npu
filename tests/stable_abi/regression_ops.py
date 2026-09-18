@@ -5,7 +5,7 @@
 
 每个场景对同一输入分别走 ctypes 与 stable 两条 host 路径，断言每个输出
 tensor 的逐元素差为 0（同一 OPP kernel，期望 bitwise 相同）。host P50
-仅作参考；合法域说明见 stable-abi-inventory.md。
+仅作参考；算子的合法域与回退口径见 torch_custom/fla_npu/README.md。
 """
 from __future__ import annotations
 

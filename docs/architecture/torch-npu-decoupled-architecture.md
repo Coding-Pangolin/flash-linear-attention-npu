@@ -257,13 +257,13 @@ from fla_npu.ops.ascendc import chunk_fwd_o
 from fla_npu.ops.triton import chunk_local_cumsum
 ```
 
-`fla_npu.ops.ascendc.__init__` 维护公开名字、raw op 和高层 wrapper 的映射。默认后端是 `csrc/` 编出的适配层：C++ 适配写在 `csrc/src/stable_<family>.cpp`，Python 真签名 wrapper 放在 `_stable.py`；`_aclnn_ctypes.py` 是 ctypes 参考实现，公共 device/stream/descriptor 逻辑放在 `_runtime.py`。独立算子开发者只需要写自己那一个算子的适配，公共 runtime 不用复制。
+`fla_npu.ops.ascendc.__init__` 维护公开名字、raw op 和高层 wrapper 的映射。默认后端是 `csrc/` 编出的适配层：C++ 适配一个算子一个文件，写在 `csrc/src/stable_<op>.cpp`，Python 真签名 wrapper 放在 `_stable.py`；`_aclnn_ctypes.py` 是 ctypes 参考实现，公共 device/stream/descriptor 逻辑放在 `_runtime.py`。独立算子开发者只需要写自己那一个算子的适配，公共 runtime 不用复制。
 
 ### 4.2 自动求导
 
 解耦后不使用 torch_npu derivatives 生成。高层入口通过 Python `torch.autograd.Function` 绑定 forward/backward：
 
-1. raw forward / raw backward 按 aclnn ABI 实现：默认是适配层（`csrc/src/stable_<family>.cpp` + `_stable.py`），ctypes 参考实现放在 `_aclnn_ctypes.py`。
+1. raw forward / raw backward 按 aclnn ABI 实现：默认是适配层（`csrc/src/stable_<op>.cpp` + `_stable.py`），ctypes 参考实现放在 `_aclnn_ctypes.py`。
 2. `BACKWARD_OPS` 记录 forward 与 backward 的对应关系。
 3. 高层 wrapper 根据 run mode、optional 参数和 `requires_grad` 判断是否能安全绑定。
 4. forward 使用 `save_for_backward` 保存反向真正需要的 tensor。
@@ -359,7 +359,7 @@ stream_ptr = int(stream.npu_stream)
 > （不排空队列，顺序由队列保证），内联直投时退回 `_npu_getCurrentRawStream`（先排空队列，保证
 > 内联 kernel 不掉到已入队任务前面）。两者的 stream 语义相同，差别只在要不要等待队列排空——
 > 用错只是性能问题（vLLM 下 +40~80 ms/step），不会改变 stream 归属。详见
-> `stable-abi-op-onboarding.md` §7。
+> `适配层接入指南.md` §7。
 
 数据依赖分两种情况：
 

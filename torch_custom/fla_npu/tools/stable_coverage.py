@@ -261,6 +261,21 @@ def adapter_functions() -> dict[str, str]:
     return found
 
 
+def translation_unit() -> tuple[list[str], list[str]]:
+    """(adapter sources included by stable_ops.cpp, ones that are not).
+
+    Every adapter lives in its own `stable_<op>.cpp` and is *included* into
+    `stable_ops.cpp` -- nothing here is compiled on its own.  A source nobody
+    includes is therefore dead: its operator would silently have no adapter
+    while every other check in this file (they scan the directory) stays green.
+    """
+
+    text = (SRC_DIR / "stable_ops.cpp").read_text(encoding="utf-8")
+    included = re.findall(r'#include\s+"(stable_\w+\.cpp)"', text)
+    present = {path.name for path in SRC_DIR.glob("stable_*.cpp")}
+    return included, sorted(present - set(included) - {"stable_ops.cpp"})
+
+
 def adapters() -> dict[str, dict]:
     """Per operator: schema, adapter function, registration and enum tables."""
 
@@ -411,6 +426,15 @@ def evaluate() -> dict:
 
     for name in sorted(set(adapter_info) - set(published)):
         blockers.append(f"{name}: adapter exists but is not published")
+
+    # Adapter sources are #included into stable_ops.cpp rather than compiled on
+    # their own, so a file nobody includes is never built: the operator would
+    # fall back (or fail to resolve) while every other check here -- they read
+    # the directory, not the translation unit -- still passed.
+    for orphaned in translation_unit()[1]:
+        blockers.append(
+            f"{orphaned}: adapter source is not #included by stable_ops.cpp, "
+            "so it is never compiled")
 
     # ...and the other direction: a table in Python that no adapter consumes is
     # a stale code order waiting to be used (this is how the recurrent KDA

@@ -84,6 +84,7 @@ def _launcher_only_tree(tmp: str, *, declare: bool,
         "}\n",
         encoding="utf-8")
     (src / "stable_ops.cpp").write_text(
+        '#include "stable_new.cpp"\n\n'
         "STABLE_TORCH_LIBRARY(fla_npu_stable, m) {\n"
         "  m.def(kSchema_npu_new_op);\n"
         "}\n\n"
@@ -183,7 +184,7 @@ class CoverageGateTest(unittest.TestCase):
             for path in SRC_DIR.glob("stable_*.cpp"):
                 (src / path.name).write_text(path.read_text(encoding="utf-8"),
                                              encoding="utf-8")
-            target = src / "stable_gdn.cpp"
+            target = src / "stable_chunk_gated_delta_rule_fwd.cpp"
             text = target.read_text(encoding="utf-8")
             # Swap two layout names in the C++ table only: the Python table no
             # longer agrees, which is exactly the silent-layout-change bug.
@@ -195,6 +196,24 @@ class CoverageGateTest(unittest.TestCase):
             with mock.patch.object(self.tool, "SRC_DIR", src):
                 report = self.tool.evaluate()
             self.assertTrue(any("kGdnFwdLayoutNames order" in item
+                                for item in report["blockers"]),
+                            report["blockers"])
+
+    def test_adapter_source_nobody_includes_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src"
+            src.mkdir()
+            for path in SRC_DIR.glob("stable_*.cpp"):
+                (src / path.name).write_text(path.read_text(encoding="utf-8"),
+                                             encoding="utf-8")
+            # Adapter sources are #included into stable_ops.cpp, never compiled
+            # on their own: a file nobody includes is dead code and its operator
+            # silently has no adapter, while the rest of this gate stays green.
+            (src / "stable_orphan_op.cpp").write_text("// orphaned adapter\n",
+                                                      encoding="utf-8")
+            with mock.patch.object(self.tool, "SRC_DIR", src):
+                report = self.tool.evaluate()
+            self.assertTrue(any("never compiled" in item
                                 for item in report["blockers"]),
                             report["blockers"])
 
@@ -219,7 +238,7 @@ class AbiParityGateTest(unittest.TestCase):
             for path in SRC_DIR.glob("stable_*.cpp"):
                 (src / path.name).write_text(path.read_text(encoding="utf-8"),
                                              encoding="utf-8")
-            target = src / "stable_kda.cpp"
+            target = src / "stable_kda_gate_cumsum.cpp"
             text = target.read_text(encoding="utf-8")
             changed = text.replace(
                 "run_npu_kda_gate_cumsum(Tensor g, std::optional<Tensor> A_log,\n"
@@ -244,7 +263,7 @@ class AbiParityGateTest(unittest.TestCase):
             for path in SRC_DIR.glob("stable_*.cpp"):
                 (src / path.name).write_text(path.read_text(encoding="utf-8"),
                                              encoding="utf-8")
-            target = src / "stable_recurrent_gdr.cpp"
+            target = src / "stable_recurrent_gated_delta_rule.cpp"
             text = target.read_text(encoding="utf-8")
             # The leak that OOMed the conc32 service: reading a required tensor
             # slot as a raw handle consumes nothing (library.h expects the kernel

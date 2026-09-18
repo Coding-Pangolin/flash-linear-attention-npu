@@ -1,4 +1,4 @@
-# Stable-ABI 薄层设计（共享宏 + boxed 适配）
+# Stable-ABI 适配层设计（共享宏 + boxed 适配）
 
 本文描述当前实现的结构、约定和门禁。面向两类读者：想知道"一次调用怎么走"的人，和要新增算子的人（后者直接看 [stable-abi-op-onboarding.md](stable-abi-op-onboarding.md)）。
 
@@ -70,9 +70,9 @@
 需要 NPU 的验证都在 `tests/stable_abi/`（运行方式见那里的 README）：
 `test_stable_stream_interleaving.py` 覆盖多线程多 stream，`test_input_lifetime.py`
 覆盖输入张量生命周期，`regression_mutation_contract.py` 覆盖原地更新与 autograd 契约，
-`test_stable_fallback_warning.py` 覆盖薄层加载失败时的告警。
+`test_stable_fallback_warning.py` 覆盖适配层加载失败时的告警。
 
-ctypes↔薄层的逐位 parity、场景基线（`stable_scenarios.json`）与客户可见面切换
+ctypes↔适配层的逐位 parity、场景基线（`stable_scenarios.json`）与客户可见面切换
 （`customer_switch_compat.py`）已经完成使命并删除：原有算子与 ctypes 的一致性在合入前
 验证过，此后新增算子不再要求写 ctypes 适配，`_aclnn_ctypes.py` 只作为回退后端保留。
 Ascend950 的验证在 950 主机上按同一组脚本跑。
@@ -124,7 +124,7 @@ Ascend950 的验证在 950 主机上按同一组脚本跑。
   要靠返回值承载。今天 vLLM-Ascend 的服务路径是 eager（`--enforce-eager` 关掉了
   torch.compile 与 CUDAGraph），所以这条不构成本次发布风险；要支持图模式时，把
   state 放进返回值才是完整改法，两个 recurrent 入口一起改。
-- **`solve_tri` 的 `tnd`**：该 OPP 上 kernel 直接杀进程（ctypes/launcher 都一样），薄层包装里显式拒绝，避免把非法输入变成崩溃。
+- **`solve_tri` 的 `tnd`**：该 OPP 上 kernel 直接杀进程（ctypes/launcher 都一样），适配层包装里显式拒绝，避免把非法输入变成崩溃。
 - **conv1d FN + `has_initial_state`**：初态序列的输出行在 kernel 里不可复现（同一调用两次结果差 260，第三次是 0），数值断言只做在 `has_initial_state=False` 的区间。
 - **`int[]` 只能是 host int32/int64 tensor**：device tensor 会被 `int_values` 拒绝（否则按 host 指针读 device 内存）。
 - **`char*` 只能取表内取值**：非法字符串在 Python 侧报错、非法 code 在 C++ 侧报错，与 ctypes"把任意字符串交给 kernel"不同型。

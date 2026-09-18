@@ -1,4 +1,4 @@
-# 新增算子适配（Stable-ABI 薄层）
+# 新增算子适配（Stable-ABI 适配层）
 
 一次适配 = **改 1 个族文件 + 2 行注册 + 1 个 Python wrapper**，外加验证件。**不要求写 ctypes 适配**：ctypes 只是回退后端，新算子默认没有它，按 §8 声明即可。设计背景见 [stable-abi-macro-design.md](stable-abi-macro-design.md)。
 
@@ -12,7 +12,7 @@
 | 4 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子原地写参数：`MUTATED_ARGUMENTS` 加一行（必要时 `MUTATION_FLAGS`） | 视情况 |
 | 5 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子**没有** ctypes 回退（新算子的默认情况）：名字加进 `_LAUNCHER_ONLY_OPS`（见 §8） | 视情况 |
 
-公开 API 名字不需要加到任何白名单：`__init__.py` 的 `_get_stable_op(name)` 就是 `getattr(_stable, name, None)`，有同名函数即走薄层，没有才回落 ctypes 并在 `BACKENDS` 里记一笔。
+公开 API 名字不需要加到任何白名单：`__init__.py` 的 `_get_stable_op(name)` 就是 `getattr(_stable, name, None)`，有同名函数即走适配层，没有才回落 ctypes 并在 `BACKENDS` 里记一笔。
 
 `stable_coverage.py` 的 `fallback` 列写明每个算子出问题时的回退后端：`ctypes`，或 `none`（在 `_LAUNCHER_ONLY_OPS` 里声明过，见 §8）。
 
@@ -220,7 +220,7 @@ _LAUNCHER_ONLY_OPS: tuple[str, ...] = (
 - 已发布算子既不在 ctypes 里、也不在 `_LAUNCHER_ONLY_OPS` 里 → FAIL（`published but absent from the ctypes fallback`）；
 - 在 `_LAUNCHER_ONLY_OPS` 里、但 ctypes 仍然定义它 → FAIL（声明过期）。
 
-**正确性怎么证明**。逐位 parity 对照（ctypes ↔ 薄层）已经删除，参考要自己带，二选一：
+**正确性怎么证明**。逐位 parity 对照（ctypes ↔ 适配层）已经删除，参考要自己带，二选一：
 
 - fla 的 PyTorch 实现（首选——算子本来就是为了加速它）；
 - 一次性录制的 golden 张量 + 容差（形状固定、数值稳定的算子适用）。
@@ -231,6 +231,6 @@ _LAUNCHER_ONLY_OPS: tuple[str, ...] = (
 | --- | --- | --- |
 | aclnn 实参顺序 | `op_abi_validate.py` 对着 OPP 头文件逐参对拍（两种算子同一条门禁） | 同左 |
 | host 封装正确性 | 出问题可以切 `FLA_NPU_STABLE_ABI=ctypes` 做对照 | 只能靠自带的参考实现 / golden |
-| 回退后端 | 薄层不可用时退回 ctypes | 无回退，调用会明确报错 |
+| 回退后端 | 适配层不可用时退回 ctypes | 无回退，调用会明确报错 |
 
 另外，wrapper 把参数交给 dispatcher 的姿态本来没人查（dispatcher 按位置解包，同类型参数换序是静默的）。`stable_coverage.py` 现在对每个算子核对一次：**wrapper 传给 `_op(...)` 的位置参数个数等于 schema 声明的形参个数，且最后一个是 stream**。把 launch 拆到辅助函数里的组合算子（如 `npu_chunk_kda_bwd`）跳过这条。

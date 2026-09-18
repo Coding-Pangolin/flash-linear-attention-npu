@@ -4271,7 +4271,7 @@ def npu_solve_tri(x, *, cu_seqlens=None, chunk_indices=None, layout="bsnd"):
         # kills the process inside aclnnSolveTri, with and without cu_seqlens.
         # Crashing has no defined semantics to be compatible with, so this one
         # is refused with a message instead -- see
-        # docs/architecture/stable-abi-macro-design.md.
+        # docs/architecture/适配层设计.md.
         #
         # `ntd` crashes the same way (re-measured: five of six shapes segfault,
         # the sixth is rejected 161001 -- see the inventory's known limits), and

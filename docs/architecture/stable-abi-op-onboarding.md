@@ -1,6 +1,6 @@
 # 新增算子适配（Stable-ABI 适配层）
 
-一次适配 = **改 1 个族文件 + 2 行注册 + 1 个 Python wrapper**，外加验证件。**不要求写 ctypes 适配**：ctypes 只是回退后端，新算子默认没有它，按 §8 声明即可。设计背景见 [stable-abi-macro-design.md](stable-abi-macro-design.md)。
+一次适配 = **改 1 个族文件 + 2 行注册 + 1 个 Python wrapper**，外加验证件。**不要求写 ctypes 适配**：ctypes 只是回退后端，新算子默认没有它，按 §8 声明即可。设计背景见 [适配层设计](适配层设计.md)。
 
 ## 1. 交付件清单
 

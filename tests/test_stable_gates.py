@@ -76,7 +76,7 @@ def _launcher_only_tree(tmp: str, *, declare: bool,
         "def npu_new_op(a):\n    pass\n" if ctypes_defines
         else "# no ctypes reference for this operator\n",
         encoding="utf-8")
-    (src / "stable_new.cpp").write_text(
+    (src / "stable_new_op.cpp").write_text(
         "constexpr const char* kSchema_npu_new_op =\n"
         '    "npu_new_op(Tensor a, int stream) -> Tensor";\n\n'
         "Tensor run_npu_new_op(Tensor a, int64_t stream) {\n"
@@ -84,7 +84,7 @@ def _launcher_only_tree(tmp: str, *, declare: bool,
         "}\n",
         encoding="utf-8")
     (src / "stable_ops.cpp").write_text(
-        '#include "stable_new.cpp"\n\n'
+        '#include "stable_new_op.cpp"\n\n'
         "STABLE_TORCH_LIBRARY(fla_npu_stable, m) {\n"
         "  m.def(kSchema_npu_new_op);\n"
         "}\n\n"
@@ -214,6 +214,32 @@ class CoverageGateTest(unittest.TestCase):
             with mock.patch.object(self.tool, "SRC_DIR", src):
                 report = self.tool.evaluate()
             self.assertTrue(any("never compiled" in item
+                                for item in report["blockers"]),
+                            report["blockers"])
+
+    def test_adapter_in_a_shared_file_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src"
+            src.mkdir()
+            moved = "stable_chunk_fwd_h.cpp"
+            for path in SRC_DIR.glob("stable_*.cpp"):
+                if path.name != moved:
+                    (src / path.name).write_text(
+                        path.read_text(encoding="utf-8"), encoding="utf-8")
+            # A branch that predates the split adds its adapter to the shared
+            # file it already has, so the operator's run_ lands in
+            # stable_<something else>.cpp while still being registered and
+            # included -- every other check in the gate stays green.
+            (src / "stable_chunk.cpp").write_text(
+                (SRC_DIR / moved).read_text(encoding="utf-8"),
+                encoding="utf-8")
+            (src / "stable_ops.cpp").write_text(
+                (SRC_DIR / "stable_ops.cpp").read_text(encoding="utf-8")
+                .replace(f'#include "{moved}"', '#include "stable_chunk.cpp"'),
+                encoding="utf-8")
+            with mock.patch.object(self.tool, "SRC_DIR", src):
+                report = self.tool.evaluate()
+            self.assertTrue(any("one operator per file" in item
                                 for item in report["blockers"]),
                             report["blockers"])
 

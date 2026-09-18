@@ -181,11 +181,14 @@ def _enclosing_run(text: str, position: int) -> str:
 
 _SCHEMA_RE = re.compile(
     r'constexpr const char\* (kSchema\w*)\s*=\s*((?:"[^"]*"\s*)+);', re.S)
-_IMPL_ADAPTER_RE = re.compile(
-    r'm\.impl\(\s*"([a-z0-9_]+)"\s*,\s*&[\w:]*boxed_adapter<\s*'
-    r'(run_[a-z0-9_]+)\s*>')
-_IMPL_BOXED_RE = re.compile(
-    r'm\.impl\(\s*"([a-z0-9_]+)"\s*,\s*&(boxed_[a-z0-9_]+)\)')
+# One regex, not two: both registration shapes have to come out of the file in
+# the order they were written, because ``registrations`` pairs the `m.def` and
+# `m.impl` lists positionally.
+_IMPL_RE = re.compile(
+    r'm\.impl\(\s*"([a-z0-9_]+)"\s*,\s*&[\w:]*'
+    r'(?:boxed_adapter<\s*(run_[a-z0-9_]+)\s*>'
+    r'|(boxed_[a-z0-9_]+)\))',
+    re.S)
 
 
 def schemas() -> dict[str, dict]:
@@ -242,9 +245,8 @@ def registrations() -> list[tuple[str, str]]:
 
     text = (SRC_DIR / "stable_ops.cpp").read_text(encoding="utf-8")
     defs = re.findall(r"m\.def\((kSchema\w*)\)", text)
-    impls = [match.group(1) or match.group(2)
-             for match in list(_IMPL_ADAPTER_RE.finditer(text))
-             + list(_IMPL_BOXED_RE.finditer(text))]
+    impls = [match.group(2) or match.group(3)
+             for match in _IMPL_RE.finditer(text)]
     return list(zip(defs, impls))
 
 
@@ -363,6 +365,23 @@ def load_baseline() -> dict:
     return {}
 
 
+def expected_source(op: str) -> str:
+    """The file ``op``'s adapter has to be defined in.
+
+    One operator per file: ``npu_chunk_fwd_h`` is adapted in
+    ``stable_chunk_fwd_h.cpp``.  Debug entries (``_stream_probe``) are not
+    operators and return "".
+
+    This is the invariant a *merge* breaks: a branch that predates the split
+    adds its adapter to the shared file it already has (`stable_chunk.cpp`,
+    `stable_kda.cpp`, ...), so the new operator's `run_` ends up somewhere
+    else while every other check here -- they key off the operator name --
+    stays green.
+    """
+
+    return f"stable_{op[len('npu_'):]}.cpp" if op.startswith("npu_") else ""
+
+
 def evaluate() -> dict:
     published = public_ops()
     ctypes_names = set(ctypes_ops())
@@ -394,6 +413,15 @@ def evaluate() -> dict:
         for key in ("schema", "run", "def", "impl"):
             if not row[key]:
                 blockers.append(f"{name}: adapter is missing its {key}")
+        # One operator per file: the run_ function has to live in the file
+        # named after the operator, so that a merge that adds an adapter to a
+        # shared file (the pre-split layout) is reported instead of accepted.
+        wanted = expected_source(name)
+        actual = adapter_info.get(name, {}).get("run")
+        if wanted and actual and actual != wanted:
+            blockers.append(
+                f"{name}: adapter is defined in {actual}, expected {wanted} "
+                "(one operator per file)")
         # A new operator is not required to bring a ctypes adapter any more, so
         # one that has no fallback has to say so: without the declaration the
         # backend switch would silently send a call to a function that does not

@@ -1,4 +1,4 @@
-# Stable-ABI 适配层设计（共享宏 + boxed 适配）
+# 适配层设计（Stable-ABI 共享宏 + boxed 适配）
 
 本文描述当前实现的结构、约定和门禁。面向两类读者：想知道"一次调用怎么走"的人，和要新增算子的人（后者直接看 [stable-abi-op-onboarding.md](stable-abi-op-onboarding.md)）。
 
@@ -110,8 +110,8 @@ Ascend950 的验证在 950 主机上按同一组脚本跑。
     适配函数末尾带 `Tensor*`/`bool*` 这类内部输出参数；新增的 ownership
     检查禁止手写入口再用 `to<AtenTensorHandle>(stack[...])` 读 Tensor 槽，
     并计数真正消费掉的槽（当前 13）——数目掉下去就是又漏了；
-  * `op_abi_validate.py` 原先只看 `FLA_STABLE_EXEC`，看不到它们的 aclnn 参数表——
-    现已补上（`hand_written_calls`），并额外做适配↔ctypes 表的一对一对拍。
+   * `op_abi_validate.py` 原先只看 `FLA_STABLE_EXEC`，看不到它们的 aclnn 参数表——
+    现已补上（`hand_written_calls`）。
   收敛方向：把这两个适配器直接改成 `FLA_STABLE_EXEC` + `boxed_adapter<run_*>` 即可
   （原型已在 `side/macro-recurrent` 验证过，尚未合入）。在那之前，手写入口按上面的
   契约逐个消费栈引用。
@@ -129,3 +129,17 @@ Ascend950 的验证在 950 主机上按同一组脚本跑。
 - **`int[]` 只能是 host int32/int64 tensor**：device tensor 会被 `int_values` 拒绝（否则按 host 指针读 device 内存）。
 - **`char*` 只能取表内取值**：非法字符串在 Python 侧报错、非法 code 在 C++ 侧报错，与 ctypes"把任意字符串交给 kernel"不同型。
 - **pybind 后端已删除**：`csrc_thin/`、`_thin.py`、`_C_thin` 及其测试与打包开关都不在树上了。
+
+## 7. 运行期开关
+
+下面这些环境变量都是**诊断 / 逃生阀**：默认值就是推荐值，正常使用不需要设置任何一条。
+
+| 环境变量 | 取值 | 作用 |
+| --- | --- | --- |
+| `FLA_NPU_STABLE_ABI` | `ctypes` | 强制走 ctypes 参考路径（对照 / 诊断） |
+| `FLA_NPU_STABLE_VALIDATE` | `1` | 每次调用改走 ctypes 参考：非法输入给出精确的 Python 报错。诊断开关，不是性能模式 |
+| `FLA_NPU_STABLE_LIB` | 路径 | 指定要加载的 `libfla_npu_stable.so`；不设时用包里那份。只用于对照，长期指向旧 `.so` 会静默使用旧产物 |
+| `FLA_NPU_STABLE_TRACE` | `1` | 逐算子打印实际后端与回落原因 |
+| `FLA_NPU_STABLE_STREAM` | `accessor` | 逃生阀：强制用会排空任务队列的取流方式 |
+| `FLA_NPU_STABLE_LAUNCH` | `inline` | 逃生阀：不走 torch_npu 任务队列，内联直投 |
+| `FLA_NPU_BUILD_STABLE_ABI` | `0` | 构建开关：产出不含适配层的纯 ctypes wheel |

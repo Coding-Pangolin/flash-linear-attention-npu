@@ -437,7 +437,7 @@ wrapper 的原则是“透传描述，不自行解释私有 layout”。默认�
 | 测试层 | 证明什么 | 典型检查 |
 | --- | --- | --- |
 | 纯 Python UT | wrapper 元数据、后端选择与公共 runtime 逻辑 | 后端切换、mutation 清单、version counter、错误分支 |
-| 薄层离线门禁 | 适配层与 schema、OPP 头文件自洽 | stable_coverage、op_abi_parity、op_api_parity、stable_ctypes_fallbacks、test_stable_gates（都不需要 NPU） |
+| 薄层离线门禁 | 适配层与 schema、OPP 头文件自洽 | stable_coverage、op_abi_parity、stable_ctypes_fallbacks、op_abi_validate、test_stable_gates（都不需要 NPU） |
 | 动态加载 smoke | wheel 与 OPP 自洽 | OPP 定位、CDLL、aclnn 符号 |
 | 单算子 NPU 测试 | C ABI、tiling、kernel 和状态语义 | 输出精度、cache 更新、异常输入、多卡 |
 | autograd / gradcheck | 正反向绑定和梯度 | forward/backward、梯度数量、保存上下文 |

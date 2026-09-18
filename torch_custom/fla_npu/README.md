@@ -64,11 +64,9 @@ out = chunk_fwd_o(...)
 | 1 | `csrc/src/stable_<family>.cpp`（已有族就加进那个文件，族表见 §2.5） | `kSchema_<op>` + `run_<op>`：申请输出 + 一条 `FLA_STABLE_EXEC` |
 | 2 | `csrc/src/stable_ops.cpp` | `m.def(kSchema_<op>);` + `m.impl("<op>", &boxed_adapter<run_<op>>);` |
 | 3 | `fla_npu/ops/ascendc/_stable.py` | 一个真签名 wrapper：`_op("<op>")(...)` |
-| 4 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子原地写参数：`MUTATED_ARGUMENTS` 加一行（必要时 `MUTATION_FLAGS`） |
-| 5 | `tests/stable_abi/regression_ops.py` | 一个 ctypes ↔ 薄层的逐位 parity 场景，并登记进场景列表 |
-| 6 | `tests/stable_abi/stable_scenarios.json` | 场景基线，`FLA_NPU_BASELINE_WRITE=1` 跑一次写入 |
+| 4 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子原地写参数：`MUTATED_ARGUMENTS` 加一行（必要时 `MUTATION_FLAGS`）；本算子没有 ctypes 回退时加进 `_LAUNCHER_ONLY_OPS` |
 
-公开名不用加白名单：`_get_stable_op(name)` 就是 `getattr(_stable, name, None)`。算子**没有** ctypes 参考时，把名字加进 `__init__.py` 的 `_LAUNCHER_ONLY_OPS`，参考换成 fla 的 torch 实现或一次性录制的 golden 张量（规则见接入文档 §8）。
+公开名不用加白名单：`_get_stable_op(name)` 就是 `getattr(_stable, name, None)`。**新增算子不再要求写 ctypes 适配**；本算子没有 ctypes 回退时，把名字加进 `__init__.py` 的 `_LAUNCHER_ONLY_OPS`，让后端切换明确报错，而不是去找一个不存在的函数。
 
 ### 2.3 骨架
 
@@ -147,13 +145,12 @@ def npu_kda_gate_cumsum(g, chunk_size, *, A_log=None, dt_bias=None,
 
 > 遗留：`stable_recurrent_gdr.cpp` / `stable_recurrent_kda.cpp` 是仅存的两个手写入口，会并回宏。**新算子一律用宏**。
 
-### 2.6 门禁与场景
+### 2.6 门禁与回归
 
 ```bash
 # 离线门禁
 python torch_custom/fla_npu/tools/stable_coverage.py          # 覆盖、枚举表、wrapper 位置参数个数
-python torch_custom/fla_npu/tools/op_abi_parity.py            # schema vs 适配函数 vs ctypes
-python torch_custom/fla_npu/tools/op_api_parity.py            # 公开签名 vs ctypes
+python torch_custom/fla_npu/tools/op_abi_parity.py            # schema vs 适配函数
 python torch_custom/fla_npu/tools/stable_ctypes_fallbacks.py  # 不许回退
 python -m unittest tests.test_stable_gates
 
@@ -161,13 +158,15 @@ python -m unittest tests.test_stable_gates
 python torch_custom/fla_npu/tools/op_abi_validate.py \
     --opp-include <opp>/op_api/include/aclnnop <cann>/include/aclnnop
 
-# 编 launcher 并跑设备 parity
+# 编薄层并跑设备回归
 python torch_custom/fla_npu/csrc/build_stable.py --out /path/libfla_npu_stable.so --no-debug-probe
 FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
-    python tests/stable_abi/regression_stable_full.py
+    python tests/stable_abi/test_input_lifetime.py
 ```
 
-场景矩阵按算子形态取轴：该算子声明的每个 layout × dense / varlen / 物理 B=1 × 可选参数（全给、全不给、逐个单给）× 每个 bool 翻转（含决定条件输出的那个）× dtype × 非连续 state × 边界（T=1、batch=1、单 chunk、空 tensor / `None`）× 错误路径（device / dtype / shape / 枚举 code / `int[]` dtype 非法时两侧都拒绝）。基线里的场景**只能增不能减**。
+设备回归脚本清单见 [`tests/stable_abi/README.md`](../../tests/stable_abi/README.md)：多 stream 交错、输入生命周期、mutation 契约、薄层加载告警。用例设计仍按算子形态取轴：该算子声明的每个 layout × dense / varlen / 物理 B=1 × 可选参数（全给、全不给、逐个单给）× 每个 bool 翻转（含决定条件输出的那个）× dtype × 非连续 state × 边界（T=1、batch=1、单 chunk、空 tensor / `None`）× 错误路径（device / dtype / shape / 枚举 code / `int[]` dtype 非法）。
+
+ctypes↔薄层的逐位 parity、场景基线（`stable_scenarios.json`）和客户可见面切换测试已经完成使命并删除：原有算子与 ctypes 的一致性在合并前验证过，`_aclnn_ctypes.py` 只作为回退后端保留。
 
 ## 3. 注意事项
 

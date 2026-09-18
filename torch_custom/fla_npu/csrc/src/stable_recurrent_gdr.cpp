@@ -2,11 +2,14 @@
 //
 // Included by stable_ops.cpp (single TU).  Only torch/csrc/stable/* plus the
 // shared acl_meta helper: no ATen/c10, no libtorch C++ ABI.
-// Owns: npu_recurrent_gated_delta_rule.  Pre-macro on purpose: it builds the
-// argument list and submits the launch by hand, so the descriptors travel to
-// the queue as one bundle (see detail::enqueue_launch) instead of in the
-// macro's tuple.  The boxed entry point below still consumes each required
-// argument's stack reference, exactly like the macro's typed unboxing.
+// Owns: npu_recurrent_gated_delta_rule.  Pre-macro legacy: it builds the
+// argument list and submits the launch by hand.  Do not copy this shape -- the
+// macro path (FLA_STABLE_EXEC) goes through the same detail::enqueue_launch,
+// so the "descriptors must travel to the queue as one bundle" reason this was
+// written for does not hold, and it is scheduled to fold back into
+// boxed_adapter<run_*> like every other operator.  The boxed entry point below
+// still consumes each required argument's stack reference, exactly like the
+// macro's typed unboxing.
 
 #include <torch/csrc/stable/library.h>
 #ifndef FLA_STABLE_NO_DEBUG_PROBE

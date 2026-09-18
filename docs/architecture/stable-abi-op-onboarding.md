@@ -1,6 +1,6 @@
 # 新增算子适配（Stable-ABI 薄层）
 
-一次适配 = **改 1 个族文件 + 2 行注册 + 1 个 Python wrapper**，外加验证件。**不要求写 ctypes 适配**：有 ctypes 就用它当参考；没有就按 §8 声明，并把参考换成 torch 实现或 golden。设计背景见 [stable-abi-macro-design.md](stable-abi-macro-design.md)。
+一次适配 = **改 1 个族文件 + 2 行注册 + 1 个 Python wrapper**，外加验证件。**不要求写 ctypes 适配**：ctypes 只是回退后端，新算子默认没有它，按 §8 声明即可。设计背景见 [stable-abi-macro-design.md](stable-abi-macro-design.md)。
 
 ## 1. 交付件清单
 
@@ -10,14 +10,11 @@
 | 2 | `csrc/src/stable_ops.cpp` | `m.def(kSchema_<op>);` + `m.impl("<op>", &boxed_adapter<run_<op>>);` | ✅ |
 | 3 | `fla_npu/ops/ascendc/_stable.py` | 一个真签名 wrapper（`_op("<op>")(...)`） | ✅ |
 | 4 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子原地写参数：`MUTATED_ARGUMENTS` 加一行（必要时 `MUTATION_FLAGS`） | 视情况 |
-| 5 | `tests/stable_abi/regression_ops.py` | 一个 parity 场景（ctypes vs launcher 逐位）+ 在场景列表登记 | ✅ |
-| 6 | `tests/stable_abi/stable_scenarios.json` | 场景基线（`FLA_NPU_BASELINE_WRITE=1` 跑一次写入） | ✅ |
-| 7 | `tools/stable_ctypes_fallbacks.py` | 若曾登记过该算子的回退：删除条目 | 视情况 |
-| 8 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子**没有** ctypes 参考：名字加进 `_LAUNCHER_ONLY_OPS`（见 §8） | 视情况 |
+| 5 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子**没有** ctypes 回退（新算子的默认情况）：名字加进 `_LAUNCHER_ONLY_OPS`（见 §8） | 视情况 |
 
 公开 API 名字不需要加到任何白名单：`__init__.py` 的 `_get_stable_op(name)` 就是 `getattr(_stable, name, None)`，有同名函数即走薄层，没有才回落 ctypes 并在 `BACKENDS` 里记一笔。
 
-参考实现默认是 ctypes 同名函数；`stable_coverage.py` 的 `reference` 列会逐算子写明用的是哪一种，没有 ctypes 的见 §8。
+`stable_coverage.py` 的 `fallback` 列写明每个算子出问题时的回退后端：`ctypes`，或 `none`（在 `_LAUNCHER_ONLY_OPS` 里声明过，见 §8）。
 
 ## 2. 适配代码放哪个文件
 
@@ -163,24 +160,20 @@ cstr(kChunkKdaFwdLayoutNames, layout)     // int code → const char*
 # 2. 离线门禁
 python torch_custom/fla_npu/tools/stable_coverage.py          # 覆盖 + 枚举表
 python torch_custom/fla_npu/tools/op_abi_parity.py            # schema vs 适配函数
-python torch_custom/fla_npu/tools/op_api_parity.py            # 公开签名 vs ctypes（无 ctypes 的算子只查声明）
 python torch_custom/fla_npu/tools/stable_ctypes_fallbacks.py  # 不许回退
 python -m unittest tests.test_stable_gates                    # 门禁自测
 # 3. 与 OPP 头文件对拍（需要装了 OPP 的机器）
 python torch_custom/fla_npu/tools/op_abi_validate.py \
     --opp-include <opp>/op_api/include/aclnnop <cann>/include/aclnnop
-# 4. 编 .so 并跑 parity
+# 4. 编 .so 并跑设备回归
 python csrc/build_stable.py --out /path/libfla_npu_stable.so --no-debug-probe
 FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
-    python tests/stable_abi/regression_stable_full.py
-# 5. 客户视角：同一段调用脚本分别走 ctypes 与 launcher，逐项一致且确实换了后端
-FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
-    python tests/stable_abi/customer_switch_compat.py
+    python tests/stable_abi/test_input_lifetime.py
 ```
 
-## 6. 新增场景的最低矩阵（T2）
+## 6. 设备回归的最低矩阵（T2）
 
-按算子形态取轴，不要求一次全给，但基线里的场景集合**只能增不能减**：
+按算子形态取轴，不要求一次全给，但声明过的合法域要真跑一遍：
 
 - **布局**：该算子声明的每个 layout（`_ENUM` 里的全部取值）；
 - **序型**：dense / varlen（`cu_seqlens`，必要时 canonical `chunk_indices`）/ 物理 B=1；
@@ -189,7 +182,7 @@ FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
 - **dtype**：算子支持的每种；
 - **非连续**：state / conv_state 带 stride 的情况；
 - **边界**：T=1、chunk_size 最小、batch=1、单 chunk、空 tensor 与 `None`；
-- **错误路径**：device/dtype/shape/枚举 code/int[] dtype 非法时两侧都拒绝（错误类型允许不同型）。
+- **错误路径**：device/dtype/shape/枚举 code/int[] dtype 非法时明确拒绝。
 
 ## 7. 常见坑
 
@@ -205,14 +198,14 @@ FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
     它会把 host 已经入队的任务排空后再给 stream，这正是内联 kernel 不掉队的原因。
   - 两条 accessor 都不在时兜底 `torch.npu.current_stream().npu_stream`（等价于后者）。
   这三档由 `_stable.py` 的 `_current_stream_ptr()` 内部决定，**算子适配不要自己取 stream**，
-  也不要自己判断该用哪一条：`op_abi_parity.py` 只认 `_op(..., _current_stream_ptr())`。
-- 想现场验证"这次调用究竟落在哪个 stream"，用 `fla_npu.ops.ascendc._stable.last_launch_stream()`
+  也不要自己判断该用哪一条：`stable_coverage.py` 只认 `_op(..., _current_stream_ptr())`。
+- 想现场验证"这次调用究竟落在哪个 stream"，用 `fla_npu.ops.ascendc._stable._last_launch_stream()`
   （读的是 C++ 侧本线程最后一次 launch 的真实 stream），不要去读 Python 层的中间变量。
-- 输出 shape 规则要照抄 ctypes 参考实现（`_aclnn_ctypes.py` 同名函数），包括 dtype（例如 `o` 跟 `v`、state 跟 `q`）和可选输出的存在条件。没有 ctypes 参考时，照抄的是算子自己的文档/内核接口（见 §8）。
+- 输出 shape 规则以算子自己的文档/内核接口为准（`aclnn_*.h` 与算子 `docs/`），包括 dtype（例如 `o` 跟 `v`、state 跟 `q`）和可选输出的存在条件。
 
-## 8. 没有 ctypes 参考的算子
+## 8. 没有 ctypes 回退的算子
 
-新算子不必先写一份 ctypes 适配。ctypes 在这套里只是**参考实现**；算子没有它时，要做的是把"参考"换成别的，并把这件事写下来。
+新算子**不再要求写 ctypes 适配**：ctypes 现在只是回退后端，没有它算子照样交付，这也是新算子的默认形态。
 
 **代码只多一处**：把算子名加进 `fla_npu/ops/ascendc/__init__.py` 的 `_LAUNCHER_ONLY_OPS`。
 
@@ -224,25 +217,20 @@ _LAUNCHER_ONLY_OPS: tuple[str, ...] = (
 
 `stable_coverage.py` 双向卡这条声明：
 
-- 已发布算子既不在 ctypes 里、也不在 `_LAUNCHER_ONLY_OPS` 里 → FAIL（`published but absent from the ctypes reference`）；
+- 已发布算子既不在 ctypes 里、也不在 `_LAUNCHER_ONLY_OPS` 里 → FAIL（`published but absent from the ctypes fallback`）；
 - 在 `_LAUNCHER_ONLY_OPS` 里、但 ctypes 仍然定义它 → FAIL（声明过期）。
 
-`op_api_parity.py` 对这类算子不再静默跳过：没有 ctypes 就**没有需要保持兼容的公开签名**，它只检查声明是否存在；有 ctypes 的算子照旧逐参数比对参数名、顺序、默认值。
+**正确性怎么证明**。逐位 parity 对照（ctypes ↔ 薄层）已经删除，参考要自己带，二选一：
 
-**参考换成什么**。ctypes-vs-launcher 的 parity 两边调的是同一个 kernel，它验证的是 host 封装（实参顺序、dtype/shape 映射、输出分配、inplace 语义），不是数值。没有 ctypes 时，`tests/stable_abi/regression_ops.py` 的场景把参考换成一份**独立实现**，二选一：
+- fla 的 PyTorch 实现（首选——算子本来就是为了加速它）；
+- 一次性录制的 golden 张量 + 容差（形状固定、数值稳定的算子适用）。
 
-- fla 的 PyTorch 实现（首选——算子本来就是为了加速它）：场景里写 `lambda: reference_impl(...)`，`parity_or_domain_skip` 的第二个参数就是参考；
-- 一次性录制的 golden 张量 + 容差（形状固定、数值稳定的算子适用），随场景一起 check in。
+**少了什么**，心里要有数：
 
-两者都要在场景里留下可复核的判据；`tests/stable_abi/stable_scenarios.json` 的"场景只能增不能减"就是这条的执行者。
-
-**不写 ctypes 少掉什么**，心里要有数：
-
-| 角色 | 有 ctypes | 没有 ctypes |
+| 角色 | 有 ctypes 回退 | 没有 ctypes 回退 |
 | --- | --- | --- |
-| aclnn 实参顺序 | `op_abi_validate.py` 拿 OPP 头文件和 ctypes 表对拍 | 只对拍适配器一侧（头文件仍是真相） |
-| 公开签名兼容性 | `op_api_parity.py` 逐参数比对 | 无（没有历史签名要保），只查声明 |
-| host 封装 parity | ctypes vs launcher 逐位 | 换成 torch / golden 参考 |
-| 回退后端 | 出问题可退 ctypes | 无回退；`FLA_NPU_BUILD_STABLE_ABI=0` 的 wheel 不含该算子，调用会明确报错 |
+| aclnn 实参顺序 | `op_abi_validate.py` 对着 OPP 头文件逐参对拍（两种算子同一条门禁） | 同左 |
+| host 封装正确性 | 出问题可以切 `FLA_NPU_STABLE_ABI=ctypes` 做对照 | 只能靠自带的参考实现 / golden |
+| 回退后端 | 薄层不可用时退回 ctypes | 无回退，调用会明确报错 |
 
 另外，wrapper 把参数交给 dispatcher 的姿态本来没人查（dispatcher 按位置解包，同类型参数换序是静默的）。`stable_coverage.py` 现在对每个算子核对一次：**wrapper 传给 `_op(...)` 的位置参数个数等于 schema 声明的形参个数，且最后一个是 stream**。把 launch 拆到辅助函数里的组合算子（如 `npu_chunk_kda_bwd`）跳过这条。

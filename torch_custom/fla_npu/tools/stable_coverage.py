@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Offline coverage gate for the Stable-ABI backend (no NPU, no torch).
 
-What this answers is not "did a test pass" but "is every operator the ctypes
-layer publishes carried by the launcher, and is every adapter wired all the way
-through".  Everything is read from files in the tree:
+What this answers is not "did a test pass" but "is every published operator
+carried by the thin layer, and is every adapter wired all the way through".
+Everything is read from files in the tree:
 
 1. **Adapter coverage** -- each ``npu_*`` operator in the published list has a
    wrapper in ``_stable.py`` and an adapter in ``csrc/src`` (schema +
@@ -52,6 +52,13 @@ def public_ops() -> list[str]:
 
 
 def ctypes_ops() -> list[str]:
+    """Operators the ctypes fallback still defines.
+
+    This is the *fallback* surface, not a parity reference: an operator that has
+    no entry here can only be reached through the thin layer, so it has to be
+    declared in ``_LAUNCHER_ONLY_OPS`` (see ``evaluate``).
+    """
+
     text = (OPS_DIR / "_aclnn_ctypes.py").read_text(encoding="utf-8")
     return sorted(set(re.findall(r"^def (npu_[a-z0-9_]+)\(", text, re.M)))
 
@@ -273,8 +280,7 @@ def adapters() -> dict[str, dict]:
         entry["run"] = functions.get(function)
         # The declared domain of this operator, as far as the tree can tell:
         # enum tables give the string-valued axes, the parameter list gives the
-        # varlen axis and the boolean flags.  coverage_gap_report.py compares
-        # these against the scenario names that actually ran.
+        # varlen axis and the boolean flags.
         axes: dict[str, list] = {}
         params = schema.get("params", [])
         # Only string-valued axes are put in `axes`: the report matches them
@@ -365,7 +371,7 @@ def evaluate() -> dict:
             "enums": sorted(adapter_info.get(name, {}).get("enums", {})),
             "axes": adapter_info.get(name, {}).get("axes", {}),
             "flags": adapter_info.get(name, {}).get("flags", []),
-            "reference": "launcher-only" if name in launcher_only else "ctypes",
+            "fallback": "none" if name in launcher_only else "ctypes",
         }
         rows.append(row)
         if name not in wrapper_lines:
@@ -373,18 +379,19 @@ def evaluate() -> dict:
         for key in ("schema", "run", "def", "impl"):
             if not row[key]:
                 blockers.append(f"{name}: adapter is missing its {key}")
-        # A new operator with no ctypes wrapper has to say so.  Without a
-        # same-kernel reference its parity scenario must bring its own, and that
-        # is a decision a reader has to be able to find; declaring one that
-        # ctypes still defines is the other half of the same invariant.
+        # A new operator is not required to bring a ctypes adapter any more, so
+        # one that has no fallback has to say so: without the declaration the
+        # backend switch would silently send a call to a function that does not
+        # exist.  Declaring an operator that ctypes still defines is the other
+        # half of the same invariant.
         if name not in ctypes_names and name not in launcher_only:
             blockers.append(
-                f"{name}: published but absent from the ctypes reference "
-                "(add the reference, or declare it in _LAUNCHER_ONLY_OPS)")
+                f"{name}: published but absent from the ctypes fallback "
+                "(declare it in _LAUNCHER_ONLY_OPS)")
         if name in launcher_only and name in ctypes_names:
             blockers.append(
                 f"{name}: declared in _LAUNCHER_ONLY_OPS but the ctypes "
-                "reference still defines it")
+                "fallback still defines it")
         for dispatch in dispatches.get(name, []):
             if dispatch["op"] == name:
                 blockers.extend(
@@ -429,11 +436,11 @@ def evaluate() -> dict:
 def render(report: dict, strict: bool, baseline: dict) -> tuple[str, bool]:
     known = {} if strict else baseline.get("known_gaps", {})
     lines = ["%-42s %-8s %-8s %-8s %-11s %s" % (
-        "operator", "wrapper", "schema", "run", "registered", "reference")]
+        "operator", "wrapper", "schema", "run", "registered", "fallback")]
     for row in report["rows"]:
         lines.append("%-42s %-8s %-8s %-8s %-11s %s" % (
             row["op"], row["wrapper"], row["schema"], row["run"],
-            row["def"] and row["impl"], row.get("reference", "ctypes")))
+            row["def"] and row["impl"], row.get("fallback", "ctypes")))
     unexplained = [b for b in report["blockers"]
                    if b.split(":", 1)[0] not in known]
     if unexplained:

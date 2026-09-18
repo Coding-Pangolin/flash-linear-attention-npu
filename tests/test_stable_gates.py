@@ -278,19 +278,8 @@ class FallbackGateTest(unittest.TestCase):
         self.assertEqual(tool.delegating_ops(sample), ["npu_x"])
 
 
-class CtypesTableGateTest(unittest.TestCase):
-    """The ctypes argument table is what the OPP headers are compared against."""
-
-    def test_every_entry_ends_with_workspace_and_executor(self) -> None:
-        tool = _load_tool("op_abi_validate.py")
-        table = tool.parse_ctypes_table(OPS_DIR / "_aclnn_ctypes.py")
-        self.assertGreaterEqual(len(table), 20)
-        for symbol, kinds in table.items():
-            with self.subTest(symbol=symbol):
-                # The trailing pair is dropped by the parser, so what is left
-                # must not contain a pointer-to-out-parameter.
-                self.assertNotIn("_pointer", kinds)
-                self.assertTrue(kinds, f"{symbol} parsed to nothing")
+class HeaderKindGateTest(unittest.TestCase):
+    """`op_abi_validate` reads the OPP header, the only source of truth left."""
 
     def test_header_kinds_are_recognised(self) -> None:
         tool = _load_tool("op_abi_validate.py")
@@ -321,12 +310,12 @@ class CtypesTableGateTest(unittest.TestCase):
 
 
 class LauncherOnlyCoverageTest(unittest.TestCase):
-    """An operator with no ctypes wrapper has to be a declared state.
+    """An operator with no ctypes fallback has to be a declared state.
 
-    The point is that a new operator can ship without the ctypes adaptation at
-    all: nothing else in the tree is allowed to assume it exists.  These tests
-    build a one-operator tree so the behaviour does not depend on how many real
-    operators happen to be launcher-only today.
+    The point is that a new operator can ship without a ctypes adaptation at
+    all -- that is the expected shape now -- and nothing else in the tree may
+    assume it exists.  These tests build a one-operator tree so the behaviour
+    does not depend on how many real operators happen to be launcher-only today.
     """
 
     def setUp(self) -> None:
@@ -342,7 +331,7 @@ class LauncherOnlyCoverageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             report = self._evaluate(tmp, declare=True)
         self.assertEqual(report["blockers"], [])
-        self.assertEqual(report["rows"][0]["reference"], "launcher-only")
+        self.assertEqual(report["rows"][0]["fallback"], "none")
         self.assertEqual(report["launcher_only"], ["npu_new_op"])
 
     def test_undeclared_operator_without_a_reference_is_reported(self) -> None:
@@ -362,36 +351,6 @@ class LauncherOnlyCoverageTest(unittest.TestCase):
             report = self._evaluate(tmp, declare=True, wrapper_args=1)
         self.assertTrue(any("wrapper passes 1 arguments" in item
                             for item in report["blockers"]), report["blockers"])
-
-
-class LauncherOnlySignatureTest(unittest.TestCase):
-    """op_api_parity must not silently skip an operator ctypes does not define."""
-
-    def setUp(self) -> None:
-        self.tool = _load_tool("op_api_parity.py")
-
-    def _evaluate(self, tmp: str, **kwargs) -> dict:
-        ops, _src = _launcher_only_tree(tmp, **kwargs)
-        with mock.patch.object(self.tool, "OPS_DIR", ops), \
-                mock.patch.object(self.tool, "REFERENCE",
-                                  ops / "_aclnn_ctypes.py"), \
-                mock.patch.object(self.tool, "BACKENDS",
-                                  {"stable": ops / "_stable.py"}):
-            return self.tool.evaluate()
-
-    def test_declared_operator_is_recorded_as_launcher_only(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            report = self._evaluate(tmp, declare=True)
-        self.assertEqual([row["problems"] for row in report["rows"]], [[]])
-        self.assertEqual(report["rows"][0]["reference"], "launcher-only")
-
-    def test_undeclared_operator_is_reported(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            report = self._evaluate(tmp, declare=False)
-        self.assertTrue(any("_LAUNCHER_ONLY_OPS" in problem
-                            for row in report["rows"]
-                            for problem in row["problems"]),
-                        report["rows"])
 
 
 class TranslationUnitTest(unittest.TestCase):

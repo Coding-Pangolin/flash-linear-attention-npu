@@ -86,7 +86,7 @@ INSTALL_ROOT="${REPO}/fla_npu_opp"
 mkdir -p "$INSTALL_ROOT"
 bash "$RUN_PKG" --cann --quiet --install-for-all --install-path="$INSTALL_ROOT"
 
-# 同步到 Python overlay，ctypes 从这里加载 libcust_opapi.so
+# 同步到 Python overlay：薄层与 ctypes 参考都从这里加载 libcust_opapi.so
 rsync -a "${INSTALL_ROOT}/" "${REPO}/torch_custom/fla_npu/fla_npu/opp/"
 ```
 

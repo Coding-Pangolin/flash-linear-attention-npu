@@ -119,6 +119,22 @@ fla_npu/opp/.../op_proto/lib/linux/aarch64/libcust_opsproto_rt2.0.so     3.4.18
 而客户用 conda python 时进程里也是 conda 自带的 `libstdc++ 6.0.34`（提供到 `3.4.34`），也可能恰好不报；
 换成系统 python 或更老的镜像就报。**同一台机器、同一个包，换个 python 入口结论就变。**
 
+**2026-09 客户侧复现（修法尚未采纳）**：A3 机器（openEuler 22.03 / GCC 10.3，libstdc++ 上限
+`3.4.28`）上 `import fla_npu` 会在加载 `opp/.../op_api/lib/libcust_opapi.so` 时硬报
+`version 'GLIBCXX_3.4.29' not found`，算子跑不起来；把 `LD_LIBRARY_PATH` 指到带新 libstdc++ 的
+conda 目录（或 `LD_PRELOAD` 那份 `libstdc++.so.6`）可临时绕过。也就是说支持矩阵里
+"libstdc++ ≥ 3.4.29" 这条线在 openEuler 22.03 上不成立——glibc 那条轴（2.34）它是够的。
+
+候选修法三条，都还没采纳，本 PR 不动构建：
+
+1. **维持现状 + 写实支持矩阵**：把 openEuler 22.03 从支持列表里去掉，或只给
+   `LD_LIBRARY_PATH` 绕法；
+2. **host 侧 `-static-libstdc++`**：实测能把 GLIBCXX 需求降到 0（导出符号 408→408、
+   aclnn 入口 61→61 不变），代价是进程里多一份静态 libstdc++（跨库异常 / type_info 匹配、
+   单库体积 +1.3 MB、许可证叙述都需要评估），属于独立的构建改造；
+3. **换更低水位的构建基座（GCC ≤10）**：不引入第二份运行时，只是把水位从 3.4.29 挪到 3.4.28，
+   需要先确认 CANN devel 镜像与编译器是否在支持范围内，验证面最大。
+
 **防护**：`tools/stable_abi_audit.py --lib` 断言 `GLIBCXX` 上限（阈值在 `tools/stable_abi_symbols.json` 的 `max_glibcxx`）。
 **缺口**：
 
@@ -342,5 +358,7 @@ FLA_NPU_STABLE_TRACE=1 python -c "import fla_npu, torch; print(fla_npu.ops.ascen
 6. 发版容器的固定，以及 CI 里挂上 audit（`--lib` 那条会与容器绑定）。
 7. SoC 与包标签的运行期校验。
 8. torch_npu 补丁级版本的运行期校验（或明确它已不相关）。
-9. 在真正的老 libstdc++ 环境上复现一次客户侧的加载失败，把报错形态钉死。
+9. ~~在真正的老 libstdc++ 环境上复现一次客户侧的加载失败~~ **已复现**（A3 机器，openEuler
+   22.03 / `GLIBCXX_3.4.28`，报错形态见 A1 节）；**修法未定**，三条候选也列在 A1 节，需要在
+   "维持现状 + 写实矩阵 / host 侧静态链接 / 换低水位构建基座"之间做选择。
 10. 非 conda 的系统 python 加载"要求 3.4.32 的产物"的实测。

@@ -79,11 +79,40 @@ python -c "from fla_npu.ops import ascendc; print(hasattr(ascendc, 'chunk_fwd_o'
 python scripts/check_packaged_wheel_api.py
 ```
 
-单算子测试（更多算子见 [ATK 说明](tests/atk/README.md)，ATK 安装见 [Ascend/ATK](https://gitcode.com/Ascend/ATK)）：
+单算子测试（ATK 安装见 [Ascend/ATK](https://gitcode.com/Ascend/ATK)，用法见 [ATK 说明](tests/atk/README.md)）：
 
 ```sh
-bash tests/atk/run_test_cpu.sh -op=chunk_fwd_o -npu_device_id=0
+bash tests/atk/run_test_cpu.sh -op=<算子名> -npu_device_id=0
 ```
+
+`-op` 可选值（即 `tests/atk` 下的算子目录名）：
+
+- `causal_conv1d`
+- `causal_conv1d_bwd`
+- `chunk_bwd_dqkwg`
+- `chunk_bwd_dv_local`
+- `chunk_fwd_h`
+- `chunk_fwd_o`
+- `chunk_gated_delta_rule_bwd`
+- `chunk_gated_delta_rule_bwd_dhu`
+- `chunk_gated_delta_rule_bwd_finalize`
+- `chunk_gated_delta_rule_fwd`
+- `chunk_gated_delta_rule_fwd_h`
+- `chunk_gated_delta_rule_fwd_prepare`
+- `chunk_gdn_bwd_intra`
+- `chunk_kda_bwd_recompute`
+- `chunk_kda_fwd`
+- `chunk_kda_fwd_finalize`
+- `chunk_kda_fwd_prepare`
+- `chunk_local_cumsum`
+- `chunk_scaled_dot_kkt`
+- `prepare_wy_repr_bwd`
+- `prepare_wy_repr_bwd_da`
+- `prepare_wy_repr_bwd_full`
+- `recompute_w_u_fwd`
+- `recurrent_gated_delta_rule`
+- `recurrent_kda`
+- `solve_tri`
 
 ## 开发者指引
 

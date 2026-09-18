@@ -1,12 +1,15 @@
-# Stable-ABI 薄层设计（手写适配 + 共享宏）
+# Stable-ABI 薄层设计（共享宏 + boxed 适配）
 
 本文描述当前实现的结构、约定和门禁。面向两类读者：想知道"一次调用怎么走"的人，和要新增算子的人（后者直接看 [stable-abi-op-onboarding.md](stable-abi-op-onboarding.md)）。
+
+叙述的主线只有一条：**新算子一律用宏**——`kSchema_<op>` + `run_<op>` + `FLA_STABLE_EXEC` + `boxed_adapter<run_<op>>`，注册两行。树里还留着两个手写入口（两个 recurrent 适配），那是历史遗留、会并回宏，**不是可以照着写的模板**（来龙去脉见 §6）。
 
 ## 1. 目标与约束
 
 - **无 ABI 依赖**：不依赖 CPython ABI（不是扩展模块），不依赖 torch_npu 的 C++ ABI（只用 `torch/csrc/stable` 的 `aoti_torch_*` C 面）。因此同一个 `.so` 可以在不同 torch/torch_npu/Python 之间复用。
 - **host 开销与 vLLM 同量级**：调用路径上不建 Python 对象（无逐次 `ctypes` 描述符、无 `getattr` 链、无 `inspect.signature`）。
-- **可读、可审计**：一个算子 = 一个 C++ 适配 + 一个 Python 包装，参数顺序在三处（schema、适配函数、aclnn）一致，并由离线门禁检查。
+- **新算子只用宏**：`FLA_STABLE_EXEC` + `boxed_adapter` 覆盖全部参数形态，包括原地参数（`Tensor(a!)` 走类型化拆栈是安全的）。算子适配因此只剩一张参数表，不再有逐算子重复的 workspace/launch/拆栈代码。
+- **可读、可审计**：一个算子 = 一条宏 + 一个 Python 包装，参数顺序在三处（schema、适配函数、aclnn）一致，并由离线门禁检查。
 
 ## 2. 层次
 
@@ -34,6 +37,8 @@
 
 ## 3. 书写约定（门禁依赖这些）
 
+以下约定全部围绕宏这条主线；手写入口（§6 的两个遗留适配器）要自己保证同样的性质，属于例外而不是另一种写法。
+
 1. **参数顺序三处一致**：`kSchema_<op>` 的形参顺序 = `run_<op>` 的形参顺序 = `FLA_STABLE_EXEC` 转发给 aclnn 的顺序（schema 里仅用于控制输出的布尔参数不转发，例如 `output_final_state`）。由 `tools/op_abi_parity.py` 检查前两者，`tools/op_abi_validate.py` 检查 aclnn 那一侧（对 OPP 头文件）。
 2. **`int[]` 跨边界用 host int64 tensor**：schema 里写 `Tensor?`，Python 侧 `_host_ints(...)`，C++ 侧 `int_array(...)` 读 host 指针并 `aclCreateIntArray`。device 元数据（vLLM 的 `query_start_loc` 等）走 `optional_tensor(...)`，两者语义不同但 schema 类型相同，区别在调用点。
 3. **`char*` 跨边界用 int code**：schema 里写 `int`，Python 侧 `_char_code(op, arg, value)` 查 `_stable._ENUM`，C++ 侧 `cstr(k<Op><Arg>Names, code)` 查名表并做边界检查。**名表顺序必须与 `_ENUM` 一致**，由 `stable_coverage.py` 检查。所有 layout 参数统一用 `BSND=0, BNSD=1, TND=2, NTD=3`（`layout_math.h` 的 `layout::Code`）。
@@ -60,7 +65,7 @@
 | `tools/op_abi_parity.py` | schema 形参 vs 适配函数形参（名字与类型） | 位置型拆栈会静默错位 |
 | `tools/op_api_parity.py` | `_stable` 对 ctypes 的公开签名（参数名、顺序、默认值） | 调用方换后端会 TypeError |
 | `tools/stable_ctypes_fallbacks.py` | 没有适配层回退到 ctypes | 回退会带上描述符森林的开销 |
-| `tools/op_abi_validate.py` | ctypes 参数表与每个 `FLA_STABLE_EXEC` 对 **OPP 头文件** | aclnn 形参变了（例如 `stateVFirst`）而调用点没跟 |
+| `tools/op_abi_validate.py` | ctypes 参数表与每个 `FLA_STABLE_EXEC`（外加两个遗留手写入口的 `hand_written_calls`）对 **OPP 头文件** | aclnn 形参变了（例如 `stateVFirst`）而调用点没跟 |
 | `tools/op_abi_validate.py`（同一次运行） | 调用点与 ctypes 表**互相对拍**（不需要 OPP） | 两条实现路径的参数顺序/类型漂移 |
 | `tools/op_abi_validate.py --json` | 同上，产出报告 | — |
 
@@ -80,7 +85,7 @@ Ascend950（A5）的现状：`--group a5` 在 950 上跑 `regression_950_ops.py`
 
 ## 6. 已知边界（记录，不隐藏）
 
-- **recurrent 家族仍是 pre-macro 写法**：`npu_recurrent_gated_delta_rule` 与
+- **遗留：两个 recurrent 适配仍是 pre-macro 写法，新算子不要照抄**：`npu_recurrent_gated_delta_rule` 与
   `npu_recurrent_kda`（`csrc/src/stable_recurrent_gdr.cpp` /
   `stable_recurrent_kda.cpp`）不经过 `FLA_STABLE_EXEC` + `boxed_adapter`，而是自己
   调 `get_ws`/`launch`、自己拆栈。**这是历史遗留，不是宏的能力边界**：当初的理由是
@@ -91,7 +96,8 @@ Ascend950（A5）的现状：`--group a5` 在 950 上跑 `regression_950_ops.py`
   用 `to<Tensor>` 拆 `Tensor(a!) state` / `initial_state`，FRESH 归零、服务级 32/32。
   （全库带 `Tensor(a!)` 的只有这两个 op；conv1d 的 `conv_state` 是普通 `Tensor`，
   所以它不能拿来当反例。）
-  **手写拆栈必须遵守 boxed kernel 的契约**（`library.h:69`：*fn is responsible
+  **手写入口绕过了 boxed kernel 的输入所有权契约**，所以这两个遗留适配器只能自己把
+  契约补回来（`library.h:69`：*fn is responsible
   for stealing the memory of the inputs, in effect "popping" them off the
   stack*）：每个**必选** Tensor 槽用 `to<Tensor>` 消费那一份
   （`tensor_struct.h` 的 `Tensor(AtenTensorHandle)` 把 handle 包进带删除器的
@@ -103,7 +109,8 @@ Ascend950（A5）的现状：`--group a5` 在 950 上跑 `regression_950_ops.py`
   910B3 实测：decode 形状、每次新建 q/k/v 的 2000 次调用让 caching allocator
   涨 191 MiB（≈100 KiB/次），conc32 服务涨到 8.2 GiB 后 OOM；改成一槽一个
   owning `Tensor` 后 FRESH 组归零、常驻 allocated 从 103.1 MiB 降到 4.6 MiB。
-  代价与现状：
+  **宏路径没有这个风险**：`boxed.h` 的 `unbox<Tensor>` 就是 `to<Tensor>`，用宏就写不出
+  上面这类错误。这两个遗留适配器要额外维护的东西：
   * 它们自己复制了 workspace/launch 那一段（各约 50 行）；
   * `op_abi_parity.py` 需要知道 `AtenTensorHandle` 与 `Tensor` 等价，并允许
     适配函数末尾带 `Tensor*`/`bool*` 这类内部输出参数；新增的 ownership
@@ -127,4 +134,4 @@ Ascend950（A5）的现状：`--group a5` 在 950 上跑 `regression_950_ops.py`
 - **conv1d FN + `has_initial_state`**：初态序列的输出行在 kernel 里不可复现（同一 ctypes 调用两次结果差 260，第三次是 0），回归里按 kernel 级记录并只对 `has_initial_state=False` 的区间断言 parity。
 - **`int[]` 只能是 host int32/int64 tensor**：device tensor 会被 `int_values` 拒绝（否则按 host 指针读 device 内存）。
 - **`char*` 只能取表内取值**：非法字符串在 Python 侧报错、非法 code 在 C++ 侧报错，与 ctypes"把任意字符串交给 kernel"不同型。
-- **pybind 后端已删除**（`csrc_thin/`、`_thin.py`、`_C_thin` 及其测试、打包开关）。原计划的删除前置条件是 launcher 通过真实 vLLM 服务验证（plan 的 R20）；本次按要求先跳过该验证直接移除，vLLM 服务级回归需在删除后补跑。
+- **pybind 后端已删除**：`csrc_thin/`、`_thin.py`、`_C_thin` 及其测试与打包开关都不在树上了，客户可见面由 `customer_switch_compat.py` 看护。

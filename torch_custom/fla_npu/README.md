@@ -12,8 +12,8 @@ out = chunk_fwd_o(...)
 ## 1. 新增算子适配
 
 一次适配 = **新建 1 个算子文件 + 1 行 include + 2 行注册 + 1 个 Python wrapper**。
-**不需要先写一份 ctypes 适配**：ctypes 只是回退后端，新算子默认没有它，按 `_LAUNCHER_ONLY_OPS`
-声明即可（[接入指南 §8](../../docs/architecture/适配层接入指南.md)）。
+**不需要先写一份 ctypes 适配**：ctypes 只是回退后端，没有它算子照样交付，这也是新算子的默认
+形态（[接入指南 §8](../../docs/architecture/适配层接入指南.md)）。
 
 ### 1.1 交付件
 
@@ -22,11 +22,13 @@ torch_custom/fla_npu/
 ├── csrc/src/stable_<op>.cpp          # 新建：文件名 = 算子名去掉 npu_
 ├── csrc/src/stable_ops.cpp           # 改：include 一行 + 注册两行
 └── fla_npu/ops/ascendc/
-    ├── _stable.py                    # 改：一个真签名 wrapper
-    └── __init__.py                   # 按需：原地写参数 / 没有 ctypes 回退
+    ├── _stable.py                    # 改：加一个真签名 wrapper
+    └── __init__.py                   # 改：public 名加一行
 ```
 
-公开名不需要加白名单：`_get_stable_op(name)` 就是 `getattr(_stable, name, None)`，有同名函数即走适配层。
+public 名要和 schema 里的算子名一致，推荐这样写：`_stable.py` 里定义 `def npu_<op>(...)`，
+`__init__.py` 的 `_ASCENDC_OPS` 里加 `"npu_<op>"`。之后 `from fla_npu.ops.ascendc import <op>`
+就能调用（短名自动去掉 `npu_` 前缀），不需要在别处登记。
 
 ### 1.2 交付件内容规范
 
@@ -36,7 +38,7 @@ torch_custom/fla_npu/
 | `stable_<前缀>_common.cpp` | 只放**被 ≥2 个算子共用**的 helper，文件名带共享前缀（当前是 `stable_causal_conv1d_common.cpp`、`stable_fwd_h_common.cpp`）；在 include 列表里排在用它的算子之前 |
 | `stable_ops.cpp` | 两件事：include 各算子文件（共享文件在前、其余按算子名排序）+ `m.def(kSchema_<op>)`、`m.impl("<op>", &boxed_adapter<run_<op>>)` 两行注册 |
 | `_stable.py` | 真签名 wrapper（不要 `*args` / `**kwargs`），位置参数顺序与 schema 形参一致；字符串用 `_char_code`、host 数组用 `_host_ints`、stream 用 `_current_stream_ptr()` |
-| `__init__.py` | 只在「原地写参数」（`MUTATED_ARGUMENTS` 加一行，必要时 `MUTATION_FLAGS`）或「没有 ctypes 回退」（名字加进 `_LAUNCHER_ONLY_OPS`）时才改，其余情形不动 |
+| `__init__.py` | `_ASCENDC_OPS` 加一行 public 名；算子会原地写参数时再登记 `MUTATED_ARGUMENTS`（必要时 `MUTATION_FLAGS`）。没有 ctypes 回退不用声明任何东西 |
 
 参数类型对照、模板、门禁命令、设备回归矩阵和常见坑见
 [适配层接入指南](../../docs/architecture/适配层接入指南.md)；「为什么必须用宏」（boxed kernel 的

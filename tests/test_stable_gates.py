@@ -43,7 +43,7 @@ def _load_module(name: str, path: Path):
     return module
 
 
-def _launcher_only_tree(tmp: str, *, declare: bool,
+def _launcher_only_tree(tmp: str, *, hand_written_list: bool = False,
                         ctypes_defines: bool = False,
                         wrapper_args: int = 2):
     """A minimal tree holding one operator that has no ctypes wrapper.
@@ -57,10 +57,14 @@ def _launcher_only_tree(tmp: str, *, declare: bool,
     src = Path(tmp) / "src"
     ops.mkdir()
     src.mkdir()
-    declaration = ('_LAUNCHER_ONLY_OPS: tuple[str, ...] = ("npu_new_op",)'
-                   if declare else "_LAUNCHER_ONLY_OPS: tuple[str, ...] = ()")
+    declaration = (
+        '_LAUNCHER_ONLY_OPS: tuple[str, ...] = ("npu_new_op",)\n'
+        if hand_written_list else
+        "_LAUNCHER_ONLY_OPS: tuple[str, ...] = tuple(\n"
+        "    name for name in _ASCENDC_OPS if name not in ASCENDC_CTYPES_OPS\n"
+        ")\n")
     (ops / "__init__.py").write_text(
-        '_ASCENDC_OPS = (\n    "npu_new_op",\n)\n\n' + declaration + "\n",
+        '_ASCENDC_OPS = (\n    "npu_new_op",\n)\n\n' + declaration,
         encoding="utf-8")
     dispatch = ('    return _op("npu_new_op")(a, _current_stream_ptr())\n'
                 if wrapper_args == 2 else '    return _op("npu_new_op")(a)\n')
@@ -372,28 +376,29 @@ class LauncherOnlyCoverageTest(unittest.TestCase):
                 mock.patch.object(self.tool, "SRC_DIR", src):
             return self.tool.evaluate()
 
-    def test_declared_launcher_only_operator_is_accepted(self) -> None:
+    def test_operator_without_a_reference_needs_no_declaration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            report = self._evaluate(tmp, declare=True)
+            report = self._evaluate(tmp)
         self.assertEqual(report["blockers"], [])
         self.assertEqual(report["rows"][0]["fallback"], "none")
         self.assertEqual(report["launcher_only"], ["npu_new_op"])
 
-    def test_undeclared_operator_without_a_reference_is_reported(self) -> None:
+    def test_operator_ctypes_still_defines_is_not_launcher_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            report = self._evaluate(tmp, declare=False)
-        self.assertTrue(any("_LAUNCHER_ONLY_OPS" in item
-                            for item in report["blockers"]), report["blockers"])
+            report = self._evaluate(tmp, ctypes_defines=True)
+        self.assertEqual(report["blockers"], [])
+        self.assertEqual(report["rows"][0]["fallback"], "ctypes")
+        self.assertEqual(report["launcher_only"], [])
 
-    def test_stale_declaration_is_reported(self) -> None:
+    def test_hand_written_list_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            report = self._evaluate(tmp, declare=True, ctypes_defines=True)
-        self.assertTrue(any("still defines it" in item
+            report = self._evaluate(tmp, hand_written_list=True)
+        self.assertTrue(any("_LAUNCHER_ONLY_OPS" in item
                             for item in report["blockers"]), report["blockers"])
 
     def test_wrapper_argument_count_drift_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            report = self._evaluate(tmp, declare=True, wrapper_args=1)
+            report = self._evaluate(tmp, wrapper_args=1)
         self.assertTrue(any("wrapper passes 1 arguments" in item
                             for item in report["blockers"]), report["blockers"])
 

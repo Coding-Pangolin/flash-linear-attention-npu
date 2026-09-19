@@ -54,9 +54,8 @@ def public_ops() -> list[str]:
 def ctypes_ops() -> list[str]:
     """Operators the ctypes fallback still defines.
 
-    This is the *fallback* surface, not a parity reference: an operator that has
-    no entry here can only be reached through the thin layer, so it has to be
-    declared in ``_LAUNCHER_ONLY_OPS`` (see ``evaluate``).
+    This is the *fallback* surface, not a parity reference: an operator with no
+    entry here can only be reached through the adapter layer.
     """
 
     text = (OPS_DIR / "_aclnn_ctypes.py").read_text(encoding="utf-8")
@@ -64,13 +63,30 @@ def ctypes_ops() -> list[str]:
 
 
 def launcher_only_ops() -> list[str]:
-    """Operators declared as having no ctypes reference to compare against."""
+    """Operators only the adapter layer can serve: published minus ctypes.
+
+    A new operator is not expected to bring a ctypes adapter any more, so the
+    fallback backend is *derived* here exactly the way ``__init__.py`` derives
+    it -- ``_ASCENDC_OPS`` minus what ``_aclnn_ctypes`` defines.  Nothing is
+    declared, so nothing can drift or go stale.
+    """
+
+    return sorted(set(public_ops()) - set(ctypes_ops()))
+
+
+_HAND_WRITTEN_LAUNCHER_ONLY = re.compile(
+    r"_LAUNCHER_ONLY_OPS[^=\n]*=\s*\(")
+
+
+def hand_written_launcher_only() -> bool:
+    """True when ``__init__.py`` lists launcher-only operators by hand again.
+
+    The declaration is what new operators would have to remember, so the only
+    way to get the derivation wrong is to bypass it.
+    """
 
     text = (OPS_DIR / "__init__.py").read_text(encoding="utf-8")
-    match = re.search(r"_LAUNCHER_ONLY_OPS[^=]*=\s*\((.*?)\)", text, re.S)
-    if match is None:
-        return []
-    return re.findall(r'"([a-z0-9_]+)"', match.group(1))
+    return _HAND_WRITTEN_LAUNCHER_ONLY.search(text) is not None
 
 
 def wrappers() -> dict[str, int]:
@@ -384,7 +400,6 @@ def expected_source(op: str) -> str:
 
 def evaluate() -> dict:
     published = public_ops()
-    ctypes_names = set(ctypes_ops())
     launcher_only = set(launcher_only_ops())
     wrapper_lines = wrappers()
     dispatches = wrapper_dispatches()
@@ -422,19 +437,6 @@ def evaluate() -> dict:
             blockers.append(
                 f"{name}: adapter is defined in {actual}, expected {wanted} "
                 "(one operator per file)")
-        # A new operator is not required to bring a ctypes adapter any more, so
-        # one that has no fallback has to say so: without the declaration the
-        # backend switch would silently send a call to a function that does not
-        # exist.  Declaring an operator that ctypes still defines is the other
-        # half of the same invariant.
-        if name not in ctypes_names and name not in launcher_only:
-            blockers.append(
-                f"{name}: published but absent from the ctypes fallback "
-                "(declare it in _LAUNCHER_ONLY_OPS)")
-        if name in launcher_only and name in ctypes_names:
-            blockers.append(
-                f"{name}: declared in _LAUNCHER_ONLY_OPS but the ctypes "
-                "fallback still defines it")
         for dispatch in dispatches.get(name, []):
             if dispatch["op"] == name:
                 blockers.extend(
@@ -454,6 +456,16 @@ def evaluate() -> dict:
 
     for name in sorted(set(adapter_info) - set(published)):
         blockers.append(f"{name}: adapter exists but is not published")
+
+    # Having no ctypes fallback is the default shape for a new operator, so the
+    # fallback set is derived (published minus ctypes) instead of declared --
+    # nothing for an author to remember.  A hand-written tuple would bring the
+    # declaration back and drift from the ctypes inventory.
+    if hand_written_launcher_only():
+        blockers.append(
+            "_LAUNCHER_ONLY_OPS must stay derived from _ASCENDC_OPS and "
+            "ASCENDC_CTYPES_OPS; listing operators by hand reintroduces the "
+            "declaration new operators no longer need")
 
     # Adapter sources are #included into stable_ops.cpp rather than compiled on
     # their own, so a file nobody includes is never built: the operator would

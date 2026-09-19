@@ -67,8 +67,6 @@ FLA_NPU_OPS=chunk_fwd_o,chunk_bwd_dv_local FLA_NPU_SOC=ascend910b python scripts
 python -m pip install --force-reinstall --no-cache-dir --no-deps dist/<wheel文件名>.whl
 ```
 
-不想编译时，可直接安装 [Release v26.6.0](https://github.com/flashserve/flash-linear-attention-npu/releases/tag/v26.6.0) 官方 wheel，把安装命令中的 wheel 路径换成下载文件的路径。
-
 需要单独编译一个或多个算子 run 包的开发者场景见[开发者指南](docs/开发者指南.md) 场景 1。
 
 ### Step 3. 验证与测试

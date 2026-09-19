@@ -11,7 +11,7 @@ out = chunk_fwd_o(...)
 
 ## 1. 新增算子适配
 
-一次适配 = **新建 1 个算子文件 + 1 行 include + 2 行注册 + 1 个 Python wrapper**。
+一次适配 = **新建 1 个算子文件 + 1 行 include + 2 行注册 + 1 个 Python wrapper + 1 行 public 名**。
 **不需要先写一份 ctypes 适配**：ctypes 只是回退后端，没有它算子照样交付，这也是新算子的默认
 形态（[接入指南 §8](../../docs/architecture/适配层接入指南.md)）。
 
@@ -26,9 +26,21 @@ torch_custom/fla_npu/
     └── __init__.py                   # 改：public 名加一行
 ```
 
-public 名要和 schema 里的算子名一致，推荐这样写：`_stable.py` 里定义 `def npu_<op>(...)`，
-`__init__.py` 的 `_ASCENDC_OPS` 里加 `"npu_<op>"`。之后 `from fla_npu.ops.ascendc import <op>`
-就能调用（短名自动去掉 `npu_` 前缀），不需要在别处登记。
+public 名要和 schema 里的算子名一致，只改两个地方：
+
+```python
+# fla_npu/ops/ascendc/_stable.py
+def npu_<op>(...):                      # 函数名 = schema 里的算子名
+    ...
+
+# fla_npu/ops/ascendc/__init__.py
+_ASCENDC_OPS = (
+    ...,
+    "npu_<op>",                         # 加一行，公开名和短名都跟着导出
+)
+```
+
+这样 `from fla_npu.ops.ascendc import <op>` 与 `npu_<op>` 都能用（短名自动去掉 `npu_` 前缀）。
 
 ### 1.2 交付件内容规范
 

@@ -25,6 +25,7 @@ using fla_npu_stable::stable::TensorMeta;
 using fla_npu_stable::stable::at_shim::kFloat;
 using fla_npu_stable::stable::allocate_like;
 using fla_npu_stable::stable::allocate_sizes;
+using fla_npu_stable::stable::cstr;
 using fla_npu_stable::stable::enum_name;
 using fla_npu_stable::stable::int_array;
 using fla_npu_stable::stable::int_values;

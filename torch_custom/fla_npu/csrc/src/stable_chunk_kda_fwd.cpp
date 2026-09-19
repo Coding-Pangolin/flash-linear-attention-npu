@@ -203,9 +203,7 @@ run_npu_chunk_kda_fwd(
       optional_tensor(initial_state), int_array(cu), int_array(ci),
       cstr(kChunkKdaFwdLayoutNames, layout), scalar(scale),
       scalar(chunk_size), scalar(safe_gate), scalar(lower_bound),
-      scalar(use_gate_in_kernel), scalar(state_v_first), scalar(epsilon),
-      scalar(use_qk_l2norm_in_kernel), scalar(use_beta_sigmoid_in_kernel),
-      scalar(allow_neg_eigval), scalar(use_exp2),
+      scalar(use_gate_in_kernel), scalar(state_v_first),
       out_tensor(meta_of(out_attn)),
       out_tensor(out_final_state.has_value() ? meta_of(*out_final_state)
                                              : TensorMeta()),

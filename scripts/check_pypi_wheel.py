@@ -1,4 +1,4 @@
-"""Gate a built wheel before it is uploaded to PyPI.
+"""Gate a built wheel before it is delivered, uploaded to PyPI included.
 
 ``python -m pip install`` trusts the wheel tag for its platform decision, so a
 wheel that lies about its architecture installs cleanly and then fails at import
@@ -20,6 +20,10 @@ promise about the whole payload.  The numbers live in ``DEFAULT_MAX_GLIBC`` /
 in ``ci/Dockerfile``; replace the image and both move together.
 
 Runs on Linux with binutils' ``readelf`` (the CI image has it).
+
+Every build -- local, GitHub Release or PyPI -- produces the same distribution
+name, platform tag and tier metadata this gate expects, so a developer can run
+this on a wheel they built themselves before it becomes a release.
 
 Usage:
     python scripts/check_pypi_wheel.py dist/*.whl \

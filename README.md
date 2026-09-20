@@ -65,6 +65,9 @@ FLA_NPU_OPS=chunk_fwd_o,chunk_bwd_dv_local FLA_NPU_SOC=ascend910b python scripts
 不同版本、不同档位的 wheel，安装时必须传入本轮构建输出的准确文件名，不要用通配符。其余与
 构建、发布相关的环境变量见[开发者指南](docs/开发者指南.md) 场景 1 / 场景 6。
 
+表外取值（例如拼错的芯片名）会让构建直接失败，不会产出一个名字对不上的包。需要给一次性产物
+打标记时用 `FLA_NPU_WHEEL_BUILD_TAG`，它会把标签写进文件名；发布门禁会拒绝带 build tag 的产物。
+
 #### 2.3 安装
 
 ```sh

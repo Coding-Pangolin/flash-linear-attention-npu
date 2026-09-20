@@ -29,8 +29,10 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 
-DIST_INFO_GLOB = "flash_linear_attention_npu-*.dist-info"
-DIST_NAME = "flash-linear-attention-npu"
+# The wheel is published per product tier (flash-linear-attention-npu-a2/a3/a5)
+# and a local build carries the same name, so match the family instead of the
+# old base name.  The concrete name is read back from the installed dist-info.
+DIST_INFO_GLOB = "flash_linear_attention_npu*.dist-info"
 VENDOR_DIR = "fla_npu_transformer"
 # PEP 427 lets a wheel keep its payload under ``<dist>-<version>.data/<scheme>/``
 # instead of the archive root.  ``bdist_wheel`` builds exactly that layout when a
@@ -38,6 +40,12 @@ VENDOR_DIR = "fla_npu_transformer"
 # installed tree and the archive no longer share entry names while pip still maps
 # both ``purelib`` and ``platlib`` onto the environment site root.
 WHEEL_PAYLOAD_SCHEMES = ("purelib", "platlib")
+
+
+def _dist_name(dist_info: Path) -> str:
+    """Project name of an installed wheel, from its dist-info directory name."""
+
+    return dist_info.name[: -len(".dist-info")]
 
 
 def _run(command: list[str], *, env: dict[str, str], cwd: Path) -> None:
@@ -383,7 +391,7 @@ def _uninstall_and_assert_clean(
         recorded_paths = [site_root / row[0] for row in csv.reader(handle) if row]
 
     _run(
-        [str(python), "-m", "pip", "uninstall", "-y", DIST_NAME],
+        [str(python), "-m", "pip", "uninstall", "-y", _dist_name(dist_infos[0])],
         env=env,
         cwd=cwd,
     )
@@ -399,7 +407,7 @@ def _uninstall_and_assert_clean(
         residual_package_entries.insert(0, str(package_dir))
     if residual_record_paths or residual_dist_infos or residual_package_entries:
         raise AssertionError(
-            "pip uninstall left flash-linear-attention-npu files behind: "
+            f"pip uninstall left {_dist_name(dist_infos[0])} files behind: "
             f"record={residual_record_paths}, dist_info={residual_dist_infos}, "
             f"package={residual_package_entries}"
         )
@@ -418,11 +426,10 @@ if spec is not None and spec.origin is not None:
     origin = Path(spec.origin).resolve()
     if origin == site_root or site_root in origin.parents:
         raise AssertionError(f"fla_npu remains importable from the test venv: {origin}")
-try:
-    distribution = importlib.metadata.distribution("flash-linear-attention-npu")
-except importlib.metadata.PackageNotFoundError:
-    pass
-else:
+for distribution in importlib.metadata.distributions():
+    name = distribution.metadata["Name"] or ""
+    if not name.replace("_", "-").startswith("flash-linear-attention-npu"):
+        continue
     metadata_path = Path(distribution._path).resolve()
     if metadata_path == site_root or site_root in metadata_path.parents:
         raise AssertionError(

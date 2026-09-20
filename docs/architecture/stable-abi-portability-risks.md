@@ -37,7 +37,7 @@
 | B4 | OPP 来源混用（本地编 vs 包内） | B | 中高 | `op_abi_parity.py`、`op_abi_validate.py` | 需要人主动跑 |
 | B5 | `_stable_hash.py` 与 `.so` 不同步 | B | 低 | 加载时比对并报错 | 已覆盖 |
 | B6 | `FLA_NPU_STABLE_LIB` 泄漏 | B | 中 | 无 | 会静默使用旧产物 |
-| C1 | 同名包只能装一个 | A、B | 中 | — | 多 SoC 并存要独立 venv |
+| C1 | 同档位同名包只能装一个 | A、B | 中 | 每个档位独立项目名（a2/a3/a5），跨档位可并存 | 同档位多版本并存仍要独立 venv |
 | C2 | launcher 与 ctypes 必须位级一致 | A、B | 高 | `regression_stable_full.py` + 双机基线 | 基线要按 SoC 分别维护 |
 | C3 | 多流 / 多线程 | A、B | 已收敛 | `test_stable_stream_interleaving.py` | — |
 
@@ -236,7 +236,11 @@ launcher 加载失败时，所有算子回退到 ctypes 参考实现：结果正
 ### A12. wheel 命名变更
 
 `flash_linear_attention_npu-<ver>-<buildtag>-py3-none-any.whl` →
-`flash_linear_attention_npu-<ver>-<buildtag>-py3-none-<platform>.whl`。
+`flash_linear_attention_npu-<ver>-<buildtag>-py3-none-<platform>.whl` →
+`flash_linear_attention_npu_<tier>-<ver>-py3-none-manylinux_2_34_<arch>.whl`。
+最后一步把每条产物路径（本地、GitHub Release、PyPI）收敛到同一个发行名与同一个平台标签：
+档位来自 `FLA_NPU_SOC`（`a2`/`a3`/`a5`），架构来自平台标签，build tag 不再使用（要打标可用
+`FLA_NPU_WHEEL_BUILD_TAG`，但发布门禁会拒绝带 build tag 的产物）。
 仓内的名字预测脚本已同步（`scripts/fla_npu_artifacts.py wheel-filename`），流水线与安装文档需要一并核对。
 
 ---
@@ -292,7 +296,9 @@ launcher 加载失败时，所有算子回退到 ctypes 参考实现：结果正
 
 ## 4. 两种场景共有
 
-**C1 同名包只能装一个。** `flash-linear-attention-npu` 同名互覆盖，多 SoC / 多版本并存必须用独立 venv。
+**C1 同档位同名包只能装一个。** 每个档位是独立的发行名（`flash-linear-attention-npu-a2/a3/a5`），
+本地自编产物用同一个名字，所以跨档位可以并排安装、本地包与 PyPI 包互为升级路径；但同档位的多个
+版本仍互相覆盖，并存必须用独立 venv。
 
 **C2 launcher 与 ctypes 必须位级一致。** 否则"客户 A 走 launcher、客户 B 因加载失败走 ctypes"会得到不同结果。
 基线 `tests/stable_abi/stable_scenarios.json` 按 SoC 分开（`Ascend910B3`、`Ascend950PR_9579`），改动场景集必须两台都重录。

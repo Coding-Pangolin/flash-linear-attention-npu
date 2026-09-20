@@ -1,4 +1,4 @@
-"""Gate a built wheel before it is uploaded to PyPI.
+"""Gate a built wheel before it is delivered, uploaded to PyPI included.
 
 ``python -m pip install`` trusts the wheel tag for its platform decision, so a
 wheel that lies about its architecture installs cleanly and then fails at import
@@ -19,6 +19,10 @@ every ``.so`` in the package (the OPP is the binding constraint, not the
 launcher), not on one file.
 
 Runs on Linux with binutils' ``readelf`` (the CI image has it).
+
+Every build -- local, GitHub Release or PyPI -- produces the same distribution
+name, platform tag and tier metadata this gate expects, so a developer can run
+this on a wheel they built themselves before it becomes a release.
 
 Usage:
     python scripts/check_pypi_wheel.py dist/*.whl \

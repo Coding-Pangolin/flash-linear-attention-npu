@@ -91,18 +91,19 @@ wheel 的绝对路径和可直接复制执行的强制覆盖安装命令。可�
 FLA_NPU_SOC=ascend910b python scripts/build_wheel.py
 ```
 
-构建完成后，wheel 仍统一输出到 `dist/`。该目录可能同时存在不同版本或构建标签
-的 wheel，因此安装时必须传入本轮构建生成的准确文件名，并使用 Step 3 的强制覆盖
+构建完成后，wheel 仍统一输出到 `dist/`。该目录可能同时存在不同版本、不同档位的
+wheel，因此安装时必须传入本轮构建生成的准确文件名，并使用 Step 3 的强制覆盖
 命令，避免通配符选中旧产物。
 
 编译可用环境变量：
 
 | 环境变量                          | 可选范围                                          | 作用 / 建议                                                                                                                        | 默认           |
 | --------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| `FLA_NPU_SOC`                   | `ascend910b` / `ascend910_93` / `ascend950` | 目标芯片；按实际运行机器选择                                                                                                       | `ascend910b` |
+| `FLA_NPU_SOC`                   | `ascend910b` / `ascend910_93` / `ascend950` | 目标芯片，同时决定发行名档位（a2 / a3 / a5）；按实际运行机器选择。不在表内的取值会让构建直接失败，不会产出一个名字对不上的包 | `ascend910b` |
 | `FLA_NPU_OPS`                   | 算子名，逗号分隔（如 `chunk_fwd_o,chunk_bwd_dv_local`） | 只构建指定算子的 wheel；适合已安装完整 wheel 后快速替换少量算子的 Ascend C 产物，未设置则全量构建 | 空（全量） |
 | `FLA_NPU_BUILD_OFFLINE_BUNDLE` | `TRUE` / `FALSE` | 是否在 wheel 内嵌离线 third-party bundle 供离线二次编译；需 `third_party/` 缓存完整，否则打包阶段报错 | `FALSE` |
 | `FLA_NPU_DISABLE_LOCAL_VERSION` | `TRUE` / `FALSE`                              | wheel 版本号不追加 SOC/torch/ABI 本地版本；内部统一发版需要固定版本号时可设`TRUE`，日常构建建议保持 `FALSE` 以区分产物兼容范围 | `FALSE`      |
+| `FLA_NPU_WHEEL_BUILD_TAG`       | 任意标签                                      | 在文件名里附加 build tag，仅用于给一次性产物打标记（例如区分同一版本的两轮实验构建）；发布门禁会拒绝带 build tag 的产物 | 空（不附加） |
 
 布尔变量设为 `TRUE` 时也接受 `1`、`YES`、`ON`；未设置或其他值按 `FALSE` 处理。
 
@@ -139,6 +140,14 @@ OPP host 库与 Stable-ABI 薄层是**在构建机上按架构编译的**，所�
 有对应架构的构建机，上表只列出本期已具备构建机的组合——其余组合（例如 x86_64 上的 A2、
 aarch64 上的 A5）会在相应构建机注册后随版本补发，届时包名不变。
 
+**本地自编产物与 PyPI 包同名同标签**：在 910B 上执行 `FLA_NPU_SOC=ascend910b python
+scripts/build_wheel.py`，得到的文件名与直接 `pip install flash-linear-attention-npu-a2`
+装到的是同一个发行名、同一个平台标签（`flash_linear_attention_npu_a2-<版本>-py3-none-
+manylinux_2_34_aarch64.whl`），两者互为升级路径，不会在一个环境里留下两份互不知晓的
+`fla_npu/`。唯一按分支区分的是版本号：`main` 分支的开发构建追加 `+main.<commit>`，让它排在
+同版本正式包之上，`pip install .` 才能覆盖已装的正式包；从发布分支构建则与正式包版本号相同
+（此时必须带 `--force-reinstall`，见 Step 3 的说明）。
+
 **同一架构下的不同档位必须按芯片选包**：本项目不做运行期芯片识别（设备名到档位的映射在
 不同硬件代际上不可靠），装错档位会在调用算子时报错。各档位是独立 PyPI 项目，互不覆盖，
 可并排安装在不同环境中。
@@ -172,7 +181,7 @@ aarch64 上的 A5）会在相应构建机注册后随版本补发，届时包名
 wheel 内嵌离线编译 bundle，需要从源码（重）编译的场景可用它还原 third-party，见
 [开发者指南](docs/开发者指南.md)。
 
-> 重新构建的 wheel 版本号与已安装的旧 wheel 可能相同。版本号相同时，不带 `--force-reinstall` 的 `pip install` 会认为"已是最新版本"而跳过，导致实际仍是旧代码。上面的命令已带 `--force-reinstall` 强制覆盖；若想先清理再装，可先执行 `python -m pip uninstall -y flash-linear-attention-npu`。
+> 重新构建的 wheel 版本号与已安装的旧 wheel 可能相同（尤其从发布分支构建时）。版本号相同时，不带 `--force-reinstall` 的 `pip install` 会认为"已是最新版本"而跳过，导致实际仍是旧代码。上面的命令已带 `--force-reinstall` 强制覆盖；若想先清理再装，可先执行 `python -m pip uninstall -y flash-linear-attention-npu-a2`（把 `a2` 换成机器对应的档位）。
 
 wheel 不安装或执行 shell 环境钩子。无论使用系统 Python、Conda、venv
 还是 Docker，每次进入新的 shell 后都需要先按 Step 1 手工 source CANN 的
@@ -209,12 +218,18 @@ python scripts/check_packaged_wheel_api.py
 
 `torch.ops.npu.*` / `torch_npu.ops.*` 是旧版本（v26.6.0 及更早）的调用方式，**v26.6.0 之后不再维护旧版本兼容接口**，新代码请使用 `fla_npu.ops.ascendc` 下的稳定 Python 入口。迁移期如需临时兼容（`install_torch_npu_ops_compat()` / `load_legacy_torch_ops()`）及其注意事项（如 `hasattr(torch_npu.ops, ...)` 的版本差异），见[兼容与迁移指南](docs/兼容与迁移指南.md)。
 
-不再使用时，按 distribution 名卸载（安装 PyPI 档位包时换成对应包名，例如
-`flash-linear-attention-npu-a2`）：
+不再使用时按 distribution 名卸载。发行名带档位，按机器芯片选一个（910B → `a2`、
+A3 → `a3`、950 → `a5`）：
 
 ```sh
-python -m pip uninstall -y flash-linear-attention-npu
+python -m pip uninstall -y flash-linear-attention-npu-a2   # 910B
+python -m pip uninstall -y flash-linear-attention-npu-a3   # A3
+python -m pip uninstall -y flash-linear-attention-npu-a5   # 950
 ```
+
+> 从旧命名（不带档位的 `flash-linear-attention-npu`）升级过来的环境，请先执行一次
+> `python -m pip uninstall -y flash-linear-attention-npu` 清掉旧发行名，否则新旧两个名字会
+> 同时拥有 `fla_npu/`，卸载其中一个会留下另一个的文件。
 
 ### 测试单算子
 

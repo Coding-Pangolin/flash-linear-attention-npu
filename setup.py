@@ -531,19 +531,15 @@ def _stage_run_package(run_file, opp_root):
 def _write_runtime_meta() -> None:
     """Embed wheel-tier and version-table metadata for the import-time guard.
 
-    Tiered PyPI wheels carry two generated files: ``_build_meta.py`` (which tier
-    this wheel is) and ``_compat.py`` (the version promise, mirrored from
-    scripts/npu_compat.py). Legacy/local builds get neither, which is what keeps
-    the guard inert for them.
+    Every build carries two generated files: ``_build_meta.py`` (which tier this
+    wheel is) and ``_compat.py`` (the version promise, mirrored from
+    scripts/npu_compat.py).  A local build behaves exactly like the published
+    wheel, so the import-time advisory is exercised before release instead of
+    appearing for the first time in a user's environment.
     """
+    tier = get_tier()
     build_meta = FLA_NPU_PACKAGE_DIR / "_build_meta.py"
     compat_py = FLA_NPU_PACKAGE_DIR / "_compat.py"
-    if not _env_flag("FLA_NPU_PYPI"):
-        for stale in (build_meta, compat_py):
-            stale.unlink(missing_ok=True)
-        return
-
-    tier = get_tier()
     build_meta.write_text(
         '"""Generated at wheel build time. Do not edit."""\n'
         f"TIER = {tier!r}\n",
@@ -768,23 +764,22 @@ if _bdist_wheel is not None:
             # wheel should *not* claim is a CPython version, which get_tag()
             # below takes care of.
             self.root_is_pure = False
-            build_tag = get_wheel_build_tag(REPO_ROOT)
+            build_tag = get_wheel_build_tag()
             if build_tag:
                 self.build_number = build_tag
 
         def get_tag(self):
             python, abi, plat = super().get_tag()
-            if _env_flag("FLA_NPU_PYPI"):
-                # PyPI accepts PEP 600 tags only: bdist_wheel would report the
-                # sysconfig platform (linux_<arch>), which upload rejects.
-                return "py3", "none", get_wheel_platform_tag()
             if _LEGACY_BUILD_ENABLED:
+                # The legacy extension really is a CPython extension module.
                 return python, abi, plat
-            # py3-none-<platform>: one wheel per host platform and SoC instead
-            # of one per Python minor.  "any" is wrong twice over here -- pip
-            # would happily install an aarch64 payload on x86_64 and the .so
-            # would fail to load.
-            return "py3", "none", plat
+            # py3-none-manylinux_<glibc>_<arch>: the payload is a host launcher
+            # plus the OPP, not a CPython extension, so the wheel is not
+            # Python-versioned; "any" would let pip install an aarch64 payload
+            # on x86_64 where the .so cannot load.  Local and published builds
+            # return the same tag -- scripts/fla_npu_artifacts.py owns the glibc
+            # watermark and scripts/check_pypi_wheel.py asserts it per .so.
+            return "py3", "none", get_wheel_platform_tag()
 
         def run(self):
             _write_runtime_meta()

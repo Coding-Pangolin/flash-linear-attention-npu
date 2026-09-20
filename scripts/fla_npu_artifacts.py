@@ -105,11 +105,12 @@ WHEEL_PLATFORM_TAG = "manylinux_2_34"
 
 
 def get_wheel_platform_tag() -> str:
-    """PyPI-compatible wheel platform tag for the current arch.
+    """PEP 600 wheel platform tag for the current arch.
 
-    PyPI only accepts PEP 600 tags, so a published wheel must say
-    ``manylinux_<glibc>_<arch>``: the plain ``linux_<arch>`` tag bdist_wheel
-    derives from sysconfig is rejected on upload.
+    Every wheel says ``manylinux_<glibc>_<arch>``; the plain ``linux_<arch>``
+    tag bdist_wheel derives from sysconfig is rejected by PyPI and says nothing
+    about the host a payload can load on.  A local build uses the same tag as a
+    release, so the artifact under test is the artifact that ships.
 
     The glibc watermark is the measured one, not a wish.  The pinned build image
     (``ci/Dockerfile`` -> ``cann:9.1.0-*-ubuntu22.04``, glibc 2.35) stamps the
@@ -139,15 +140,19 @@ def get_tier(soc: str | None = None) -> str:
 def get_distribution_name() -> str:
     """Distribution (PyPI project) name for the current build.
 
-    A published wheel carries a prebuilt OPP for exactly one SoC, and pip
-    cannot pick a chip-specific payload out of one project name, so each
-    product tier publishes its own project (flash-linear-attention-npu-a2/a3/a5,
-    derived from FLA_NPU_SOC). Non-PyPI builds keep the base name for local and
-    GitHub Release artifacts.
+    A wheel carries a prebuilt OPP for exactly one SoC, and pip cannot pick a
+    chip-specific payload out of one project name, so each product tier is its
+    own project (flash-linear-attention-npu-a2/a3/a5, derived from FLA_NPU_SOC).
+    Local, GitHub Release and PyPI artifacts all carry that name.
+
+    One name everywhere is the point: a locally built wheel and the published
+    one are the same distribution, so ``pip install`` upgrades one with the
+    other.  Two names for one payload would let both stay installed, each
+    owning ``fla_npu/``, and uninstalling either would leave the other behind.
+    ``FLA_NPU_SOC`` must therefore map to a published tier -- an unknown SoC
+    fails the build instead of silently producing an unnameable artifact.
     """
-    if env_flag("FLA_NPU_PYPI"):
-        return f"{PACKAGE_NAME}-{get_tier()}"
-    return PACKAGE_NAME
+    return f"{PACKAGE_NAME}-{get_tier()}"
 
 
 def get_wheel_dist_name() -> str:
@@ -182,40 +187,21 @@ def get_commit_id(repo_root: Path) -> str:
     return _normalize_local_version(commit)
 
 
-def get_product_tag() -> str:
-    soc_tag = _compact_tag(get_soc())
-    if soc_tag in {"910b", "ascend910b"}:
-        return "910b"
-    if soc_tag in {"a3", "91093", "ascend91093"}:
-        return "910_93"
-    if soc_tag in {"950", "ascend950"}:
-        return "950"
-    return soc_tag or "unknown"
+def get_wheel_build_tag() -> str:
+    """Optional filename build tag; empty for every ordinary build.
 
-
-def get_wheel_build_tag(repo_root: Path, public_version: str | None = None) -> str:
+    The tier is in the distribution name and the arch in the platform tag, so
+    there is nothing left for a build tag to say: a local build now produces the
+    same file name a release does.  ``FLA_NPU_WHEEL_BUILD_TAG`` stays as the
+    explicit escape hatch for a deliberately labelled artifact (publishing
+    rejects it -- see scripts/check_pypi_wheel.py).
+    """
     explicit = os.getenv("FLA_NPU_WHEEL_BUILD_TAG", "").strip()
-    if explicit:
-        build_tag = _wheel_tag_part(explicit)
-        if build_tag and not build_tag[0].isdigit():
-            return f"1{build_tag}"
-        return build_tag
-    if env_flag("FLA_NPU_PYPI"):
-        # The tier is encoded in the distribution name (a2/a3/a5) and the arch
-        # in the platform tag, so a published wheel needs no SoC build tag.
+    if not explicit:
         return ""
-    if env_flag("FLA_NPU_DISABLE_LOCAL_VERSION"):
-        return ""
-
-    public_version = public_version or read_public_version(repo_root)
-    product_tag = get_product_tag()
-    arch_tag = get_arch()
-    if not product_tag or not arch_tag:
-        return ""
-
-    build_tag = ".".join([product_tag, arch_tag])
+    build_tag = _wheel_tag_part(explicit)
     if build_tag and not build_tag[0].isdigit():
-        build_tag = f"1{build_tag}"
+        return f"1{build_tag}"
     return build_tag
 
 
@@ -223,7 +209,7 @@ def get_local_version(repo_root: Path, public_version: str | None = None) -> str
     explicit = os.getenv("FLA_NPU_LOCAL_VERSION", "").strip()
     if explicit:
         return _normalize_local_version(explicit)
-    if env_flag("FLA_NPU_PYPI") or env_flag("FLA_NPU_DISABLE_LOCAL_VERSION"):
+    if env_flag("FLA_NPU_DISABLE_LOCAL_VERSION"):
         return ""
 
     if get_branch_name(repo_root) != "main":
@@ -244,8 +230,8 @@ def get_package_version(repo_root: Path) -> str:
 def get_wheel_filename(repo_root: Path) -> str:
     public_version = read_public_version(repo_root)
     package_version = get_package_version(repo_root)
-    build_tag = get_wheel_build_tag(repo_root, public_version)
-    platform_tag = get_wheel_platform_tag() if env_flag("FLA_NPU_PYPI") else get_platform_name()
+    build_tag = get_wheel_build_tag()
+    platform_tag = get_wheel_platform_tag()
     dist_name = get_wheel_dist_name()
     # The wheel is not pure Python (it carries a host launcher and the OPP) but
     # it is not CPython-versioned either, so only the platform tag is filled in.
@@ -304,7 +290,7 @@ def main() -> int:
     elif args.field == "commit-id":
         value = get_commit_id(repo_root)
     elif args.field == "wheel-build-tag":
-        value = get_wheel_build_tag(repo_root)
+        value = get_wheel_build_tag()
     elif args.field == "tier":
         value = get_tier()
     elif args.field == "distribution-name":

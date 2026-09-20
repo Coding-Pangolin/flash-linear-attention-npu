@@ -515,6 +515,22 @@ libstdc++ 要来自 GCC 11 及以上的发行版（Ubuntu 22.04+）。这条线�
    3.4.28，需要先确认 CANN devel 镜像与编译器在支持范围内，验证面最大。
 发布门禁：`scripts/check_pypi_wheel.py` 上传前逐个 `.so` 断言 glibc 与 GLIBCXX 都不超过标签
 水位，超出即失败；`tools/stable_abi_audit.py --lib` 是同一套判据的构建期版本。
+### 6.6 发布产物的命名与身份
+
+发布产物把档位写进发行名、把架构写进平台标签，一条链收敛到同一个名字：
+
+```
+flash_linear_attention_npu-<ver>-<buildtag>-py3-none-any.whl
+  → flash_linear_attention_npu-<ver>-<buildtag>-py3-none-<platform>.whl
+  → flash_linear_attention_npu_<tier>-<ver>-py3-none-manylinux_2_34_<arch>.whl
+```
+
+档位来自 `FLA_NPU_SOC`（`a2` / `a3` / `a5`），架构来自平台标签，文件名里的 build tag 不再使用
+（要临时打标可用 `FLA_NPU_WHEEL_BUILD_TAG`，但发布门禁会拒绝带 build tag 的产物）。
+**本地自编产物与 PyPI 包同名同平台标签**，所以本地包和发布包互为升级路径，不会出现"同一份
+payload 两个发行名、各自拥有一份 `fla_npu/`、卸载一个留下另一个"的局面；同一档位的多个版本
+仍然互相覆盖，并存要独立 venv。名字预测脚本见
+`python scripts/fla_npu_artifacts.py wheel-filename`。
 ## 7. 常见问题
 
 ### 是否完全不依赖 torch？

@@ -72,7 +72,6 @@ jobs:
             runner_labels: '["self-hosted","linux","x64","npu","ascend950","flash-linear-attention-npu-a5"]'
             image: fla-npu-ci:9.1.0-950
     env:
-      FLA_NPU_PYPI: "TRUE"
       FLA_NPU_DISABLE_LOCAL_VERSION: "TRUE"
       FLA_NPU_BUILD_OFFLINE_BUNDLE: "TRUE"
       FLA_NPU_SOC: ${{ matrix.soc }}
@@ -99,7 +98,7 @@ jobs:
             -v "$PWD:/workspace/repo" \
             -v "$third_party_cache:/workspace/repo/third_party" \
             -w /workspace/repo \
-            -e FLA_NPU_PYPI -e FLA_NPU_DISABLE_LOCAL_VERSION -e FLA_NPU_BUILD_OFFLINE_BUNDLE \
+            -e FLA_NPU_DISABLE_LOCAL_VERSION -e FLA_NPU_BUILD_OFFLINE_BUNDLE \
             -e FLA_NPU_SOC -e FLA_NPU_ARCH -e FLA_NPU_EXPECT_TIER -e RELEASE_VERSION_GUARD \
             "$CI_IMAGE" bash -lc '
               set -euo pipefail

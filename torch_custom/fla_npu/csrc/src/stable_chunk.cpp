@@ -118,7 +118,7 @@ Tensor run_npu_chunk_scaled_dot_kkt(Tensor k, Tensor g, Tensor beta,
   const TensorMeta k_meta = meta_of(k);
   const TensorMeta g_meta = meta_of(g);
   Tensor out = allocate_sizes(
-      {size_of(k_meta, 0), size_of(g_meta, 1), size_of(k_meta, 2), chunk_size},
+      {SIZE_OF(k_meta, 0), SIZE_OF(g_meta, 1), SIZE_OF(k_meta, 2), chunk_size},
       kFloat, k_meta);
   FLA_STABLE_EXEC("aclnnChunkScaledDotKkt", k_meta, stream, tensor(k_meta),
                   tensor(g_meta), tensor(meta_of(beta)),
@@ -151,8 +151,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> run_npu_chunk_bwd_dqkwg(
   Tensor out_dq = allocate_like(q_meta);
   Tensor out_dk = allocate_like(k_meta);
   Tensor out_dw = allocate_sizes(
-      {size_of(q_meta, 0), size_of(v_meta, 1), size_of(q_meta, 2),
-       size_of(q_meta, 3)},
+      {SIZE_OF(q_meta, 0), SIZE_OF(v_meta, 1), SIZE_OF(q_meta, 2),
+       SIZE_OF(q_meta, 3)},
       q_meta.scalar_type, q_meta);
   Tensor out_dg = allocate_like(g_meta);
   FLA_STABLE_EXEC(
@@ -266,8 +266,8 @@ std::tuple<Tensor, Tensor> run_npu_recompute_w_u_fwd(
   const TensorMeta k_meta = meta_of(k);
   const TensorMeta v_meta = meta_of(v);
   Tensor out_w = allocate_sizes(
-      {size_of(v_meta, 0), size_of(v_meta, 1), size_of(v_meta, 2),
-       size_of(k_meta, 3)},
+      {SIZE_OF(v_meta, 0), SIZE_OF(v_meta, 1), SIZE_OF(v_meta, 2),
+       SIZE_OF(k_meta, 3)},
       k_meta.scalar_type, k_meta);
   Tensor out_u = allocate_like(v_meta);
   FLA_STABLE_EXEC("aclnnRecomputeWUFwd", k_meta, stream, tensor(k_meta),

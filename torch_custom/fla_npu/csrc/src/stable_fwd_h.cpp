@@ -80,12 +80,12 @@ inline Tensor allocate_final_state(const TensorMeta& k_meta,
                                    bool state_v_first,
                                    const std::optional<Tensor>& initial_state) {
   const int64_t rows = cu_seqlens.empty()
-                           ? size_of(k_meta, 0)
+                           ? SIZE_OF(k_meta, 0)
                            : static_cast<int64_t>(cu_seqlens.size()) - 1;
   const std::vector<int64_t> sizes = {
-      rows, size_of(u_meta, 1),
-      state_v_first ? size_of(u_meta, 3) : size_of(k_meta, 3),
-      state_v_first ? size_of(k_meta, 3) : size_of(u_meta, 3)};
+      rows, SIZE_OF(u_meta, 1),
+      state_v_first ? SIZE_OF(u_meta, 3) : SIZE_OF(k_meta, 3),
+      state_v_first ? SIZE_OF(k_meta, 3) : SIZE_OF(u_meta, 3)};
   if (initial_state.has_value()) {
     return allocate_sizes(sizes, meta_of(*initial_state).scalar_type,
                           meta_of(*initial_state));
@@ -108,11 +108,11 @@ inline FwdHOutputs allocate_fwd_h(const TensorMeta& k_meta,
                                   const std::optional<Tensor>& initial_state) {
   FwdHOutputs out;
   out.h = allocate_sizes(
-      {size_of(k_meta, 0), size_of(u_meta, 1),
+      {SIZE_OF(k_meta, 0), SIZE_OF(u_meta, 1),
        count_chunks(cu_seqlens, chunk_indices, chunk_size,
-                    size_of(k_meta, 2)),
-       state_v_first ? size_of(u_meta, 3) : size_of(k_meta, 3),
-       state_v_first ? size_of(k_meta, 3) : size_of(u_meta, 3)},
+                    SIZE_OF(k_meta, 2)),
+       state_v_first ? SIZE_OF(u_meta, 3) : SIZE_OF(k_meta, 3),
+       state_v_first ? SIZE_OF(k_meta, 3) : SIZE_OF(u_meta, 3)},
       k_meta.scalar_type, k_meta);
   out.v_new = allocate_like(u_meta);
   if (output_final_state) {
@@ -228,10 +228,10 @@ run_npu_chunk_gated_delta_rule_bwd_dhu(
   const TensorMeta dv_meta = meta_of(dv);
   const std::vector<int64_t> cu = int_values(cu_seqlens);
   const std::vector<int64_t> ci = int_values(chunk_indices);
-  const int64_t chunks = count_chunks(ci, chunk_size, size_of(q_meta, 2));
+  const int64_t chunks = count_chunks(ci, chunk_size, SIZE_OF(q_meta, 2));
   const std::vector<int64_t> dh_sizes = {
-      size_of(q_meta, 0), size_of(dv_meta, 1), chunks, size_of(q_meta, 3),
-      size_of(dv_meta, 3)};
+      SIZE_OF(q_meta, 0), SIZE_OF(dv_meta, 1), chunks, SIZE_OF(q_meta, 3),
+      SIZE_OF(dv_meta, 3)};
 
   Tensor out_dh = allocate_sizes(dh_sizes, q_meta.scalar_type, q_meta);
   // dh0 mirrors h0's presence: without an initial state there is nothing to
@@ -242,12 +242,12 @@ run_npu_chunk_gated_delta_rule_bwd_dhu(
   std::optional<Tensor> out_dh0;
   if (h0.has_value()) {
     const int64_t sequences = cu.empty()
-                                  ? size_of(q_meta, 0)
+                                  ? SIZE_OF(q_meta, 0)
                                   : static_cast<int64_t>(cu.size()) - 1;
     out_dh0 = allocate_sizes(
-        {sequences, size_of(dv_meta, 1),
-         transpose_state_layout ? size_of(dv_meta, 3) : size_of(q_meta, 3),
-         transpose_state_layout ? size_of(q_meta, 3) : size_of(dv_meta, 3)},
+        {sequences, SIZE_OF(dv_meta, 1),
+         transpose_state_layout ? SIZE_OF(dv_meta, 3) : SIZE_OF(q_meta, 3),
+         transpose_state_layout ? SIZE_OF(q_meta, 3) : SIZE_OF(dv_meta, 3)},
         q_meta.scalar_type, q_meta);
   }
   Tensor out_dv = allocate_like(dv_meta);

@@ -83,20 +83,20 @@ Tensor run_npu_chunk_fwd_o(Tensor q, Tensor k, Tensor v, Tensor h,
 
   Tensor out;
   if (std::strcmp(layout, "BNSD") == 0) {
-    out = allocate_sizes({size_of(v_meta, 0), size_of(v_meta, 1),
-                          size_of(v_meta, 2), size_of(v_meta, 3)},
+    out = allocate_sizes({SIZE_OF(v_meta, 0), SIZE_OF(v_meta, 1),
+                          SIZE_OF(v_meta, 2), SIZE_OF(v_meta, 3)},
                          dtype, v_meta);
   } else if (std::strcmp(layout, "BSND") == 0) {
-    out = allocate_sizes({size_of(v_meta, 0), size_of(v_meta, 2),
-                          size_of(v_meta, 1), size_of(v_meta, 3)},
+    out = allocate_sizes({SIZE_OF(v_meta, 0), SIZE_OF(v_meta, 2),
+                          SIZE_OF(v_meta, 1), SIZE_OF(v_meta, 3)},
                          dtype, v_meta);
   } else if (std::strcmp(layout, "TND") == 0) {
-    out = allocate_sizes({size_of(v_meta, 2), size_of(v_meta, 1),
-                          size_of(v_meta, 3)},
+    out = allocate_sizes({SIZE_OF(v_meta, 2), SIZE_OF(v_meta, 1),
+                          SIZE_OF(v_meta, 3)},
                          dtype, v_meta);
   } else {
-    out = allocate_sizes({size_of(v_meta, 1), size_of(v_meta, 2),
-                          size_of(v_meta, 3)},
+    out = allocate_sizes({SIZE_OF(v_meta, 1), SIZE_OF(v_meta, 2),
+                          SIZE_OF(v_meta, 3)},
                          dtype, v_meta);
   }
 
@@ -126,8 +126,8 @@ std::tuple<Tensor, Tensor, Tensor> run_npu_chunk_gdn_bwd_intra(
   const TensorMeta q_meta = meta_of(q);
   const TensorMeta v_meta = meta_of(v);
   Tensor out_dq = allocate_sizes(
-      {size_of(q_meta, 0), size_of(v_meta, 1), size_of(q_meta, 2),
-       size_of(q_meta, 3)},
+      {SIZE_OF(q_meta, 0), SIZE_OF(v_meta, 1), SIZE_OF(q_meta, 2),
+       SIZE_OF(q_meta, 3)},
       q_meta.scalar_type, q_meta);
   Tensor out_dk = allocate_like(v_meta);
   Tensor out_dv = allocate_like(v_meta);
@@ -194,14 +194,14 @@ run_npu_chunk_gated_delta_rule_fwd(
   // final_state with the wrong shapes, and the Ascend950 tiling rejected the
   // call with 161002 (the shapes were visible in a descriptor dump: e.g. A came
   // out as [1, 128, 1, 64] instead of [1, 4, 128, 64]).
-  const int64_t batch = size_of(q_meta, 0);
+  const int64_t batch = SIZE_OF(q_meta, 0);
   const int64_t tokens = layout_math::tokens4(q_meta, layout);
   const int64_t heads = layout_math::value_heads4(v_meta, layout);
   // Same rank-4 convention as the token axis above, applied to q: HK is dim 2
   // for the sequence-major names and dim 1 for the others.
   const int64_t key_heads = layout_math::value_heads4(q_meta, layout);
-  const int64_t k_dim = size_of(q_meta, 3);
-  const int64_t v_dim = size_of(v_meta, 3);
+  const int64_t k_dim = SIZE_OF(q_meta, 3);
+  const int64_t v_dim = SIZE_OF(v_meta, 3);
   const int64_t state_tail_k = state_v_first ? v_dim : k_dim;
   const int64_t state_tail_v = state_v_first ? k_dim : v_dim;
 
@@ -310,11 +310,11 @@ run_npu_chunk_gated_delta_rule_fwd_prepare(
   const TensorMeta q_meta = meta_of(q);
   const TensorMeta k_meta = meta_of(k);
   const TensorMeta v_meta = meta_of(v);
-  const int64_t batch = size_of(q_meta, 0);
-  const int64_t key_heads = size_of(q_meta, 1);
-  const int64_t tokens = size_of(q_meta, 2);
-  const int64_t key_dim = size_of(q_meta, 3);
-  const int64_t value_heads = size_of(v_meta, 1);
+  const int64_t batch = SIZE_OF(q_meta, 0);
+  const int64_t key_heads = SIZE_OF(q_meta, 1);
+  const int64_t tokens = SIZE_OF(q_meta, 2);
+  const int64_t key_dim = SIZE_OF(q_meta, 3);
+  const int64_t value_heads = SIZE_OF(v_meta, 1);
 
   // Without the in-kernel Q/K normalisation the reference hands `q`/`k` back
   // unchanged and leaves the operator's slots null; the two cases have to be
@@ -461,7 +461,7 @@ run_npu_chunk_gated_delta_rule_bwd(
     bool state_v_first, int64_t stream) {
   const TensorMeta q_meta = meta_of(q);
   const TensorMeta v_meta = meta_of(v);
-  const int64_t batch = size_of(q_meta, 0);
+  const int64_t batch = SIZE_OF(q_meta, 0);
   const int64_t tokens = layout_math::tokens4(q_meta, layout);
   const int64_t heads = layout_math::value_heads4(v_meta, layout);
 

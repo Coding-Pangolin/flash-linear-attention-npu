@@ -1,4 +1,4 @@
-# Stable-ABI 薄层设计（手写适配 + 共享宏）
+# Stable-ABI 适配层设计（手写适配 + 共享宏）
 
 本文描述当前实现的结构、约定和门禁。面向两类读者：想知道"一次调用怎么走"的人，和要新增算子的人（后者直接看 [stable-abi-op-onboarding.md](stable-abi-op-onboarding.md)）。
 
@@ -28,7 +28,7 @@
 | `csrc/src/stable_<family>.cpp` | 适配实现：`kSchema_<op>` + `run_<op>` |
 | `csrc/include/stable/boxed.h` | `boxed_adapter`：按函数签名拆栈/打包 |
 | `csrc/include/stable/exec.h` | RAII 参数持有者 + `FLA_STABLE_EXEC` 宏 |
-| `csrc/include/stable/acl_meta.h` | `TensorMeta`、`AclTensorView`、`AclIntArrayView`、分配/元数据读取 |
+| `csrc/include/stable/acl_meta.h` | `TensorMeta`、`AclTensorView`、`AclIntArrayView`、分配/元数据读取、带实参名与调用点位置的 `SIZE_OF` 宏（helper 走 `size_of` 函数） |
 | `csrc/include/stable/at_facade.h` | 最小 ATen 形状门面（dtype 常量、`TensorOptions`） |
 | `csrc/include/stable/layout_math.h` | 各 layout 下的 token/head/dim/chunk 数 |
 
@@ -40,6 +40,8 @@
 4. **可选输出**：schema 写 `Tensor?`，缺席时 C++ 返回 `std::nullopt`；`boxed.h` 的 `pack` 会把它写成 **boxed optional**——直接塞 tensor handle 会让 dispatcher 当指针解引用（`chunk_fwd_h` 段错误就是这么来的）。
 5. **原地修改**：在 `__init__.py` 的 `MUTATED_ARGUMENTS` 登记参数名；写入与否取决于参数值时再登记 `MUTATION_FLAGS`（例如 `npu_recurrent_kda` 的 `inplace_final_state`）。
 6. **描述符**：`AclTensorView` 把 `meta.sizes`/`meta.strides`/`meta.storage_offset` 原样交给 `aclCreateTensor`，storage shape 默认是扁平的 `numel`（`logical_storage=true` 且张量连续时改用逻辑 shape，见 `acl_meta.h` 的注释）。**适配层不判定布局能力，也不做 dense 拷贝**：非连续输入如实按 view 交出去，能不能正确寻址是算子的责任。OPP 侧 `isview=0` 时 storage shape 不可观测；`isview=1` 的算子（如 `RecurrentGatedDeltaRule`，手写 `op_host/op_api` 里显式 `CreateView`）会读 stride，`npu_recurrent_gated_delta_rule` 的 state 能走 stride 就靠这个。`CausalConv1d` 的 aclnn 接口是构建期生成的（没有 `op_host/op_api`），它理解 `convStates` stride 的能力跟着 CANN 走；在支持该接口之前的 CANN 上算子按连续处理并自行给 warning，适配层不干涉（见 `stable-abi-host-cost.md` 的对应一节）。
+
+7. **取单个维度用 `SIZE_OF(meta, dim)`**（整条 shape 原样照搬时直接传 `meta.sizes` 没问题）：函数体里看不到实参文本，所以适配层用 `SIZE_OF` 宏把 `#meta` 和调用点的 `__builtin_FILE/LINE` 一起带进异常——报错同时给出**是哪张张量**、**读这个维度的那一行**和实际 `ndim`/`shape`，输出 shape 规则每个维度都要取一次，报错必须能指到算子里是哪句。`layout_math.h` 的 helper 调 `size_of_impl(meta, dim, file, line, name)` 并透传调用点，锚点同样是算子自己那行；名字用的是 helper 的形参名，新写 helper 时要自己传对（`value_heads4` 收的是算子的 `q`、报成 `tensor v`，这是已知的例外）。
 
 ## 4. 构建戳
 
@@ -120,7 +122,7 @@ Ascend950（A5）的现状：`--group a5` 在 950 上跑 `regression_950_ops.py`
   要靠返回值承载。今天 vLLM-Ascend 的服务路径是 eager（`--enforce-eager` 关掉了
   torch.compile 与 CUDAGraph），所以这条不构成本次发布风险；要支持图模式时，把
   state 放进返回值才是完整改法，两个 recurrent 入口一起改。
-- **`solve_tri` 的 `tnd`**：该 OPP 上 kernel 直接杀进程（ctypes/launcher 都一样），薄层包装里显式拒绝，避免把非法输入变成崩溃。
+- **`solve_tri` 的 `tnd`**：该 OPP 上 kernel 直接杀进程（ctypes/launcher 都一样），适配层包装里显式拒绝，避免把非法输入变成崩溃。
 - **conv1d FN + `has_initial_state`**：初态序列的输出行在 kernel 里不可复现（同一 ctypes 调用两次结果差 260，第三次是 0），回归里按 kernel 级记录并只对 `has_initial_state=False` 的区间断言 parity。
 - **`int[]` 只能是 host int32/int64 tensor**：device tensor 会被 `int_values` 拒绝（否则按 host 指针读 device 内存）。
 - **`char*` 只能取表内取值**：非法字符串在 Python 侧报错、非法 code 在 C++ 侧报错，与 ctypes"把任意字符串交给 kernel"不同型。

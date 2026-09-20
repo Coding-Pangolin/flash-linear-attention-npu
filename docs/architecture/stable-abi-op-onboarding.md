@@ -1,4 +1,4 @@
-# 新增算子适配（Stable-ABI 薄层）
+# 新增算子适配（Stable-ABI 适配层）
 
 一次适配 = **改 1 个族文件 + 2 行注册 + 1 个 Python wrapper**，外加验证件。**不要求写 ctypes 适配**：有 ctypes 就用它当参考；没有就按 §8 声明，并把参考换成 torch 实现或 golden。设计背景见 [stable-abi-macro-design.md](stable-abi-macro-design.md)。
 
@@ -15,7 +15,7 @@
 | 7 | `tools/stable_ctypes_fallbacks.py` | 若曾登记过该算子的回退：删除条目 | 视情况 |
 | 8 | `fla_npu/ops/ascendc/__init__.py` | 仅当算子**没有** ctypes 参考：名字加进 `_LAUNCHER_ONLY_OPS`（见 §8） | 视情况 |
 
-公开 API 名字不需要加到任何白名单：`__init__.py` 的 `_get_stable_op(name)` 就是 `getattr(_stable, name, None)`，有同名函数即走薄层，没有才回落 ctypes 并在 `BACKENDS` 里记一笔。
+公开 API 名字不需要加到任何白名单：`__init__.py` 的 `_get_stable_op(name)` 就是 `getattr(_stable, name, None)`，有同名函数即走适配层，没有才回落 ctypes 并在 `BACKENDS` 里记一笔。
 
 参考实现默认是 ctypes 同名函数；`stable_coverage.py` 的 `reference` 列会逐算子写明用的是哪一种，没有 ctypes 的见 §8。
 
@@ -66,6 +66,13 @@ schema 形参顺序、以及 aclnn 头文件顺序一致；`op_abi_parity.py` + 
 
 三条硬限制：**没有字符串类型**（字符串一律"名表 + int code"）；**`int[]` 只收 host 的 int64 CPU
 tensor**；**返回的 `Tensor?` 槽必须走 boxed optional**。
+
+输出 shape 推导用 `SIZE_OF(<TensorMeta>, dim)`：坏 rank 时它把**是哪一张张量**、**读这个维度的那一行**和实际形状
+一起报出来（`fla_npu(stable): size_of dim 1 out of range at csrc/src/stable_causal_conv1d_bwd.cpp:74 (tensor x_meta, ndim=1, shape=[1536])`），
+没传的可选入参直接点名：`(tensor g_meta is None / undefined)`。名字和行号都由宏带上，调用点不用传额外东西
+（实参里带逗号时自己加一层括号）；`layout_math.h` 里的 helper 调 `size_of_impl(meta, dim, file, line, name)`
+并透传调用点，新加 helper 照它的写法即可，但要自己传名字——helper 的形参名有时会误导
+（`value_heads4(q_meta, ...)` 收的是算子的 `q`，却会报成 `tensor v`）。
 
 ## 4. 模板
 
@@ -202,6 +209,10 @@ FLA_NPU_STABLE_LIB=/path/libfla_npu_stable.so PYTHONPATH=<env> \
 - 想现场验证"这次调用究竟落在哪个 stream"，用 `fla_npu.ops.ascendc._stable.last_launch_stream()`
   （读的是 C++ 侧本线程最后一次 launch 的真实 stream），不要去读 Python 层的中间变量。
 - 输出 shape 规则要照抄 ctypes 参考实现（`_aclnn_ctypes.py` 同名函数），包括 dtype（例如 `o` 跟 `v`、state 跟 `q`）和可选输出的存在条件。没有 ctypes 参考时，照抄的是算子自己的文档/内核接口（见 §8）。
+- 看到 `fla_npu(stable): size_of dim N out of range at csrc/src/xxx.cpp:LL (tensor t_meta, ndim=..., shape=[...])`：
+  `t_meta` 就是出错的那张张量（对应 schema 形参去掉 `_meta` 后缀），`LL` 是按错的 rank 取维度的那一行（常见是
+  把 4-D 输入当 3-D 传，或漏传了该给的张量）；`ndim` / `shape` 描述的是**这张张量自己**的维数与实际形状，
+  消息里给的是张量名而不是第几个入参。按算子文档里该入参应有的 rank 改调用，别去放宽适配层的 shape 规则。
 
 ## 8. 没有 ctypes 参考的算子
 

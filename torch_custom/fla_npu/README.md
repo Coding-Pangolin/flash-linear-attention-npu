@@ -46,7 +46,7 @@ _ASCENDC_OPS = (
 
 | 文件 | 规范 |
 | --- | --- |
-| `stable_<op>.cpp` | **一个算子一个文件，用宏写，不写手写入口**：`kSchema_<op>` 形参 === `run_<op>` 形参 === `FLA_STABLE_EXEC` 实参 === aclnn 头文件顺序（`stream` 固定在最后）；申请输出 + 一条 `FLA_STABLE_EXEC`，算子私有的名表 / helper 也放这里 |
+| `stable_<op>.cpp` | **一个算子一个文件，用宏写，不写手写入口**：`kSchema_<op>` 形参 === `run_<op>` 形参 === `FLA_STABLE_EXEC` 实参 === aclnn 头文件顺序（`stream` 固定在最后）；申请输出（取维度用 `size_of(meta, dim)`，报错会带上调用点行号 + 实际 shape）+ 一条 `FLA_STABLE_EXEC`，算子私有的名表 / helper 也放这里 |
 | `stable_<前缀>_common.cpp` | 只放**被 ≥2 个算子共用**的 helper，文件名带共享前缀（当前是 `stable_causal_conv1d_common.cpp`、`stable_fwd_h_common.cpp`）；在 include 列表里排在用它的算子之前 |
 | `stable_ops.cpp` | 两件事：include 各算子文件（共享文件在前、其余按算子名排序）+ `m.def(kSchema_<op>)`、`m.impl("<op>", &boxed_adapter<run_<op>>)` 两行注册 |
 | `_stable.py` | 真签名 wrapper（不要 `*args` / `**kwargs`），位置参数顺序与 schema 形参一致；字符串用 `_char_code`、host 数组用 `_host_ints`、stream 用 `_current_stream_ptr()` |
@@ -96,6 +96,16 @@ npu_causal_conv1d_update(..., conv_state, ...)
 # 错：在适配层补一份连续拷贝
 npu_causal_conv1d_update(..., conv_state.contiguous(), ...)
 ```
+
+**报 `size_of dim N out of range` 看不出是哪个张量。** 这是输出 shape 规则按错的 rank 取维度（常是把
+4-D 输入当 3-D 传）。报错里带的是**读这个维度的那一行**加实际形状，打开即可对上是哪个入参：
+
+```text
+fla_npu(stable): size_of dim 1 out of range at csrc/src/stable_causal_conv1d_bwd.cpp:74 (ndim=1, shape=[1536])
+```
+
+调用点不用写任何额外东西（`size_of(meta, dim)` 照旧）：file/line 是默认实参，编译器在调用点填，
+`layout_math.h` 里的 helper 也按同样方式把调用点透传。漏传的可选入参报 `(tensor is None / undefined)`。
 
 **换了新产物却没生效。** launcher 由 `torch.ops.load_library()` 在 torch 初始化之后加载，`fork`
 出来的子进程要重新加载；构建戳（`_stable_hash.py` 的 `SOURCE_HASH` 与 `.so` 内嵌哈希）不一致时加载

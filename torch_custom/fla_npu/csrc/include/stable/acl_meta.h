@@ -3,7 +3,7 @@
 // Everything here talks to CANN through the dlopen'd acl* symbols and to torch
 // exclusively through the aoti_torch_* C shims.  No ATen/c10 headers, no
 // pybind11, so a launcher built on top of it stays valid across torch versions
-// (see docs/architecture/stable-abi-macro-design.md).
+// (see docs/architecture/适配层设计.md).
 #pragma once
 
 #include <torch/csrc/stable/stableivalue_conversions.h>
@@ -281,8 +281,10 @@ inline int64_t size_of_impl(const TensorMeta& meta, int64_t dim,
 }
 
 // Name-less entry point, for a caller that already holds the location and has
-// no expression to report.  The adapters go through the `SIZE_OF` macro, and
-// layout_math.h names its own parameters.
+// no expression to report.  It is also what the adapters' `using
+// fla_npu_stable::stable::size_of;` lines bring into scope; the `SIZE_OF` macro
+// below calls `size_of_impl` directly because only a macro can carry the
+// tensor's name.
 inline int64_t size_of(const TensorMeta& meta, int64_t dim,
                        const char* file = __builtin_FILE(),
                        int line = __builtin_LINE()) {

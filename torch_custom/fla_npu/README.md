@@ -26,7 +26,7 @@ torch_custom/fla_npu/
     └── __init__.py                   # 改：public 名加一行
 ```
 
-public 名要和 schema 里的算子名一致，只改两个地方：
+public 函数名要和 schema 里的算子名一致，只改两个地方：
 
 ```python
 # fla_npu/ops/ascendc/_stable.py
@@ -68,8 +68,9 @@ _ASCENDC_OPS = (
 #include "stable_causal_conv1d_fn.cpp"       // 其余按算子名排序
 ```
 
-**缓存 stream 后复用。** vLLM 是多线程多 stream，进程级缓存过一个 stream pointer，就会把 kernel 发到
-别的线程的 stream 上（512 那次崩溃就是这个原因）。适配代码不要自己取 stream，也不要把值存下来：
+**缓存 stream 后复用。** vLLM 是多线程多 stream，每个 worker 线程有自己的 stream。512 上就是把取到的
+stream pointer 存成了进程级缓存：另一个线程复用时，kernel 被投到不属于它的 stream 上，表现为非法地址
+访问与执行顺序错乱，512 那次崩溃就是这么来的。适配代码不要自己取 stream，也不要把值存下来：
 
 ```python
 # 对：每次调用现场取，作为最后一个实参
@@ -86,8 +87,8 @@ _STREAM = _current_stream_ptr()
 `_stable.py::_current_stream_ptr()` 里，算子适配不需要感知，两个逃生阀是
 `FLA_NPU_STABLE_STREAM=accessor` 与 `FLA_NPU_STABLE_LAUNCH=inline`。
 
-**非连续输入被就地 dense 化。** 张量的 sizes / strides / storage offset 原样交给 `aclCreateTensor`
-即可，适配层不判布局能力：能不能正确寻址是算子的责任，自己 staging 会白白付出约 0.1 ms/次的拷贝代价。
+**非连续输入被就地转连续。** 张量的 sizes / strides / storage offset 原样交给 `aclCreateTensor`
+即可，适配层不额外做转连续操作：自己补一份连续拷贝会白白付出约 0.1 ms/次的代价。
 
 ```python
 # 对：如实交出去，让算子按 strides 寻址
@@ -98,11 +99,18 @@ npu_causal_conv1d_update(..., conv_state.contiguous(), ...)
 ```
 
 **报 `size_of dim N out of range` 看不出是哪个张量。** 这是输出 shape 规则按错的 rank 取维度（常是把
-4-D 输入当 3-D 传）。报错里带的是**读这个维度的那一行**加实际形状，打开即可对上是哪个入参：
+4-D 输入当 3-D 传）。报错里最后那段描述的是**出错的那张张量本身**，不是第几个入参：
 
 ```text
 fla_npu(stable): size_of dim 1 out of range at csrc/src/stable_causal_conv1d_bwd.cpp:74 (ndim=1, shape=[1536])
 ```
+
+四段各是什么：
+
+- `dim 1`：要从这张张量上读第 1 维（从 0 开始数）。
+- `ndim=1`：**这张张量**一共只有 1 维，所以读第 1 维越界。这是维数，不是「第几个输入 / 输出」。
+- `shape=[1536]`：这张张量的实际形状，与 `ndim=1` 对应（1 维、长度 1536）。
+- `at csrc/src/stable_causal_conv1d_bwd.cpp:74`：读这一维的调用点，打开就知道是谁在取维度。
 
 调用点不用写任何额外东西（`size_of(meta, dim)` 照旧）：file/line 是默认实参，编译器在调用点填，
 `layout_math.h` 里的 helper 也按同样方式把调用点透传。漏传的可选入参报 `(tensor is None / undefined)`。
@@ -123,8 +131,6 @@ python3 torch_custom/fla_npu/csrc/build_stable.py --out /tmp/libfla_npu_stable.s
 
 ## 3. 测试要求
 
-- **host 下发性能**：与 ctypes / vLLM-Ascend custom 路径同一量级，不引入毫秒级开销。
+- **host 下发性能**：不劣化，不引入毫秒级开销。
 - **编译期不绑定版本**：产物不绑 torch / torch_npu / Python 版本，任意满足最低要求的版本都能直接用同一个 wheel。
 - **接口兼容性**：`fla_npu.ops.ascendc.xxx` 的公开签名、原地语义与返回值保持兼容。
-
-需要 NPU 的设备回归放在 `tests/stable_abi/`。

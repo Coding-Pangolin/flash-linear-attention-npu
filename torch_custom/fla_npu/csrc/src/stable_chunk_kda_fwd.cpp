@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <tuple>
 #include <vector>
 
@@ -62,7 +63,9 @@ constexpr const char* kSchema_chunk_kda_fwd =
     "bool use_gate_in_kernel, bool state_v_first, float epsilon, "
     "bool use_qk_l2norm_in_kernel, bool use_beta_sigmoid_in_kernel, "
     "bool allow_neg_eigval, bool use_exp2, bool output_final_state, "
-    "bool disable_recompute, bool return_intermediate_states, int stream) "
+    "bool disable_recompute, bool return_intermediate_states, "
+    "Tensor? q_hat_out, Tensor? k_hat_out, Tensor? q_rstd_out, "
+    "Tensor? k_rstd_out, Tensor? beta_eff_out, int stream) "
     "-> (Tensor, Tensor?, Tensor?, Tensor, Tensor, Tensor?, Tensor?, Tensor?, "
     "Tensor?, Tensor?, Tensor?)";
 
@@ -79,7 +82,15 @@ run_npu_chunk_kda_fwd(
     double epsilon, bool use_qk_l2norm_in_kernel,
     bool use_beta_sigmoid_in_kernel, bool allow_neg_eigval, bool use_exp2,
     bool output_final_state, bool disable_recompute,
-    bool return_intermediate_states, int64_t stream) {
+    bool return_intermediate_states,
+    std::optional<Tensor> q_hat_out, std::optional<Tensor> k_hat_out,
+    std::optional<Tensor> q_rstd_out, std::optional<Tensor> k_rstd_out,
+    std::optional<Tensor> beta_eff_out, int64_t stream) {
+  // 反向 L2 norm 保存值出口：调用方给了才导出，不给就是空槽（nullptr），
+  // 因此"不传这五个输出"与改动前的 11 项返回逐位一致。
+  const bool wants_saved =
+      q_hat_out.has_value() || k_hat_out.has_value() || q_rstd_out.has_value() ||
+      k_rstd_out.has_value() || beta_eff_out.has_value();
   namespace layout_math = fla_npu_stable::stable::layout_math;
   const TensorMeta q_meta = meta_of(q);
   const TensorMeta v_meta = meta_of(v);
@@ -191,9 +202,24 @@ run_npu_chunk_kda_fwd(
         out_tensor(out_qg.has_value() ? meta_of(*out_qg) : TensorMeta()),
         out_tensor(out_kg.has_value() ? meta_of(*out_kg) : TensorMeta()),
         out_tensor(out_v_new.has_value() ? meta_of(*out_v_new) : TensorMeta()),
-        out_tensor(out_h.has_value() ? meta_of(*out_h) : TensorMeta()));
+        out_tensor(out_h.has_value() ? meta_of(*out_h) : TensorMeta()),
+        out_tensor(q_hat_out.has_value() ? meta_of(*q_hat_out) : TensorMeta()),
+        out_tensor(k_hat_out.has_value() ? meta_of(*k_hat_out) : TensorMeta()),
+        out_tensor(q_rstd_out.has_value() ? meta_of(*q_rstd_out) : TensorMeta()),
+        out_tensor(k_rstd_out.has_value() ? meta_of(*k_rstd_out) : TensorMeta()),
+        out_tensor(beta_eff_out.has_value() ? meta_of(*beta_eff_out)
+                                           : TensorMeta()));
     return std::make_tuple(out_attn, out_final_state, out_gk, out_aqk, out_akk,
                            out_w, out_u, out_qg, out_kg, out_v_new, out_h);
+  }
+
+  // 保存值只有组合入口（V2）产出；落在融合入口的场景里给了输出槽就拒绝，
+  // 与 ctypes 后端同一句话（_aclnn_ctypes.py 的同名判据）。
+  if (wants_saved) {
+    throw std::runtime_error(
+        "npu_chunk_kda_fwd: q_hat/k_hat/q_rstd/k_rstd/beta_eff are only "
+        "exported by the three-stage entry (bfloat16, K=V=128, "
+        "chunk_size=64); do not pass these outputs in the current scenario.");
   }
 
   FLA_STABLE_EXEC(

@@ -34,6 +34,7 @@
 #include "stable_chunk_kda_bwd_recompute.cpp"
 #include "stable_chunk_kda_fwd.cpp"
 #include "stable_chunk_kda_fwd_finalize.cpp"
+#include "stable_chunk_kda_fwd_prepare.cpp"
 #include "stable_chunk_local_cumsum.cpp"
 #include "stable_chunk_scaled_dot_kkt.cpp"
 #include "stable_fast_gelu_custom.cpp"

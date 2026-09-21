@@ -212,15 +212,18 @@ inline TensorMeta meta_of(const torch::stable::Tensor& tensor) {
 // actually wrote, and the location builtins are expanded at the call site:
 //
 //   fla_npu(stable): size_of dim 1 out of range at
-//       csrc/src/stable_causal_conv1d_bwd.cpp:74 (tensor x_meta, ndim=1, shape=[1536])
+//       csrc/src/stable_causal_conv1d_bwd.cpp:74 (tensor weight_meta, ndim=1, shape=[1536])
 //
-// Helpers that read a dimension on the operator's behalf call `size_of_impl`
-// and forward their own caller's file/line (see layout_math.h), so the anchor
-// is still the line the operator's author wrote; the name they pass is the
-// helper's own parameter.  GCC/Clang expand the location builtins at the call
-// site, which is why the macro body can use them directly; C++20's
-// `std::source_location::current()` is the standard spelling of the same trick
-// (this tree builds with -std=c++17).
+// Both halves come from the macro's own expansion, so both stay right only as
+// far as the line that wrote `SIZE_OF`: a helper that reads the dimension
+// itself can report nothing better than its own parameter and its own line.  A
+// helper therefore answers with an axis number instead, and the operator reads
+// the dimension -- `SIZE_OF(q_meta, layout_math::token_axis(layout))` -- which
+// also settles the case of one helper serving several tensors, where no
+// literal name is right for every caller (see layout_math.h).  GCC/Clang
+// expand the location builtins at the call site, which is why the macro body
+// can use them directly; C++20's `std::source_location::current()` is the
+// standard spelling of the same trick (this tree builds with -std=c++17).
 inline const char* short_location(const char* file) {
   if (file == nullptr) {
     return "?";
@@ -253,9 +256,9 @@ inline std::string shape_detail(const TensorMeta& meta) {
   return "ndim=" + std::to_string(meta.ndim) + ", shape=" + shape;
 }
 
-// Names the tensor: the adapter passes the expression it wrote, layout_math.h
-// passes the helper's own parameter name.  A null `tensor_expr` reports the
-// shape alone.
+// Names the tensor: the adapter passes the expression it wrote, which is the
+// only spelling that is right for every caller when a helper serves several.
+// A null `tensor_expr` reports the shape alone.
 inline std::string arg_detail(const TensorMeta& meta, const char* tensor_expr) {
   if (tensor_expr == nullptr) {
     return meta.defined ? " (" + shape_detail(meta) + ")"
@@ -278,8 +281,10 @@ inline int64_t size_of_impl(const TensorMeta& meta, int64_t dim,
 }
 
 // Name-less entry point, for a caller that already holds the location and has
-// no expression to report.  The adapters go through the `SIZE_OF` macro, and
-// layout_math.h names its own parameters.
+// no expression to report.  It is also what the adapters' `using
+// fla_npu_stable::stable::size_of;` lines bring into scope; the `SIZE_OF` macro
+// below calls `size_of_impl` directly because only a macro can carry the
+// tensor's name.
 inline int64_t size_of(const TensorMeta& meta, int64_t dim,
                        const char* file = __builtin_FILE(),
                        int line = __builtin_LINE()) {

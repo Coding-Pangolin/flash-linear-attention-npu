@@ -96,12 +96,13 @@ run_npu_chunk_kda_fwd(
   const TensorMeta v_meta = meta_of(v);
   const std::vector<int64_t> cu = int_values(cu_seqlens);
   const std::vector<int64_t> ci = int_values(chunk_indices);
-  const int64_t tokens = layout_math::tokens(q_meta, layout);
-  const int64_t heads = layout_math::value_heads(v_meta, layout);
-  const int64_t k_dim = layout_math::key_dim(q_meta, layout);
-  const int64_t v_dim = layout_math::value_dim(v_meta, layout);
   const bool rank3 = layout_math::packed(layout);
-  const int64_t batch_size = layout_math::batch(q_meta, layout);
+  const int64_t tokens = SIZE_OF(q_meta, layout_math::token_axis(layout));
+  const int64_t heads = SIZE_OF(v_meta, layout_math::head_axis(layout));
+  const int64_t k_dim = SIZE_OF(q_meta, layout_math::dim_axis(layout));
+  const int64_t v_dim = SIZE_OF(v_meta, layout_math::dim_axis(layout));
+  // A packed spelling has no batch dimension; the shape math still wants one.
+  const int64_t batch_size = rank3 ? 1 : SIZE_OF(q_meta, 0);
 
   // The head-major spellings put the batch dimension in front of the chunk
   // count; the packed ones do not have one.

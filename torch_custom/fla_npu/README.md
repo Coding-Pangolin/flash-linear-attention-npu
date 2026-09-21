@@ -102,21 +102,21 @@ npu_causal_conv1d_update(..., conv_state.contiguous(), ...)
 报错点名了**是哪一张张量**、**在算子哪一行读的维度**、以及它自己的维数和形状：
 
 ```text
-fla_npu(stable): size_of dim 1 out of range at csrc/src/stable_causal_conv1d_bwd.cpp:74 (tensor x_meta, ndim=1, shape=[1536])
+fla_npu(stable): size_of dim 1 out of range at csrc/src/stable_causal_conv1d_bwd.cpp:74 (tensor weight_meta, ndim=1, shape=[1536])
 ```
 
 四段各是什么：
 
 - `dim 1`：要从这张张量上读第 1 维（从 0 开始数）。
-- `tensor x_meta`：读的是算子里的 `x_meta`（schema 形参 `x`）——调用点写的是 `SIZE_OF(x_meta, 1)`，
-  宏把实参文本带进了消息。
+- `tensor weight_meta`：读的是算子里的 `weight_meta`（schema 形参 `weight`）——调用点写的是
+  `SIZE_OF(weight_meta, 1)`，宏把实参文本带进了消息。
 - `ndim=1` / `shape=[1536]`：**这张张量**只有 1 维、长度 1536，所以读第 1 维越界。这是维数，不是「第几个输入 / 输出」。
 - `at csrc/src/stable_causal_conv1d_bwd.cpp:74`：读这一维的那一行。
 
 调用点只写 `SIZE_OF(meta, dim)`，名字和行号都由宏带上，不用额外传任何参数；实参里带逗号时自己加一层括号。
-没传的可选入参直接点名：`(tensor g_meta is None / undefined)`。`layout_math.h` 里的 helper 也透传算子那
-一行并报名，但名字是 **helper 自己的形参名**（`value_heads4(q_meta, ...)` 会报成 `tensor v`）；新写
-helper 时按实参语义自己传名。
+没传的可选入参直接点名：`(tensor g_meta is None / undefined)`。名字和行号都只来自**宏展开的那一行**，所以
+`layout_math.h` 的 helper 一律不读维度，只回答"该读第几轴"，取维写回算子自己那行——`SIZE_OF(q_meta,
+layout_math::token_axis(layout))` 报出来的就是 `q_meta`，而不是 helper 的形参名。
 
 **换了新产物却没生效。** launcher 由 `torch.ops.load_library()` 在 torch 初始化之后加载，`fork`
 出来的子进程要重新加载；构建戳（`_stable_hash.py` 的 `SOURCE_HASH` 与 `.so` 内嵌哈希）不一致时加载

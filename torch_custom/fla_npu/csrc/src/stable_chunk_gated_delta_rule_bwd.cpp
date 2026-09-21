@@ -77,8 +77,8 @@ run_npu_chunk_gated_delta_rule_bwd(
   const TensorMeta q_meta = meta_of(q);
   const TensorMeta v_meta = meta_of(v);
   const int64_t batch = SIZE_OF(q_meta, 0);
-  const int64_t tokens = layout_math::tokens4(q_meta, layout);
-  const int64_t heads = layout_math::value_heads4(v_meta, layout);
+  const int64_t tokens = SIZE_OF(q_meta, layout_math::token_axis4(layout));
+  const int64_t heads = SIZE_OF(v_meta, layout_math::head_axis4(layout));
 
   Tensor out_dq = allocate_sizes(q_meta.sizes, q_meta.scalar_type, q_meta);
   Tensor out_dk = allocate_sizes(meta_of(k).sizes, meta_of(k).scalar_type,

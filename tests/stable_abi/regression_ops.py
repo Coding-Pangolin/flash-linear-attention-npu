@@ -1512,7 +1512,7 @@ def scenario_chunk_gated_delta_rule_bwd():
             lambda extra=extra: _launcher.npu_chunk_gated_delta_rule_bwd(
                 *args, **dict(kw, **extra)))
     # The operator's other three declared spellings.  It accepts the TND/NTD
-    # *names* but still reads a rank-4 tensor (layout_math::tokens4), so only the
+    # *names* but still reads a rank-4 tensor (layout_math::token_axis4), so only the
     # token axis moves -- BSND/TND put it on dim 1, BNSD/NTD on dim 2 -- and the
     # two packed names additionally take cu_seqlens with a physical batch of 1.
     #

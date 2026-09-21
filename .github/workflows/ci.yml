@@ -26,6 +26,10 @@ on:
         description: "Optional comma-separated operator list for compile diagnostics only"
         required: false
         default: ''
+      requested_by:
+        description: "Original Admin requester; set by the PR comment dispatcher"
+        required: false
+        default: ''
 
 concurrency:
   group: npu-ci-${{ github.repository }}-${{ (github.event_name == 'workflow_dispatch' && inputs.pr_number) || (contains(github.event.comment.body, '/run-npu-ci') && github.event.issue.number) || github.run_id }}
@@ -60,6 +64,7 @@ jobs:
       ci_mode: ${{ steps.prepare.outputs.ci_mode }}
       ops: ${{ steps.prepare.outputs.ops }}
       comment_id: ${{ steps.prepare.outputs.comment_id }}
+      requested_by: ${{ steps.prepare.outputs.requested_by }}
     steps:
       - name: 解析 PR 和 CI 参数
         id: prepare
@@ -71,19 +76,24 @@ jobs:
           github-token: ${{ github.token }}
           script: |
             const actor = context.actor;
+            const workflowInputs = context.payload.inputs || {};
+            const requestedBy = workflowInputs.requested_by || actor;
+            // 评论分发 workflow 用 github.token 转发 workflow_dispatch，actor 是
+            // github-actions[bot]；此时按 requested_by 记录的真实触发人复查 Admin 权限。
+            const permissionSubject = actor === 'github-actions[bot]' ? requestedBy : actor;
             let actorPermission = 'none';
             try {
               const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                username: actor,
+                username: permissionSubject,
               });
               actorPermission = data.permission || 'none';
             } catch (error) {
-              core.warning(`Unable to inspect repository permission for ${actor}: ${error.message}`);
+              core.warning(`Unable to inspect repository permission for ${permissionSubject}: ${error.message}`);
             }
             if (actorPermission !== 'admin') {
-              core.setFailed(`${actor} 无权触发 NPU CI：需要仓库 Admin 权限，当前权限为 ${actorPermission}。`);
+              core.setFailed(`${permissionSubject} 无权触发 NPU CI：需要仓库 Admin 权限，当前权限为 ${actorPermission}。`);
               return;
             }
 
@@ -174,7 +184,6 @@ jobs:
             };
 
             if (context.eventName === 'workflow_dispatch') {
-              const workflowInputs = context.payload.inputs || {};
               prNumber = Number(workflowInputs.pr_number);
               ciMode = workflowInputs.ci_mode || 'quick';
               ops = workflowInputs.ops || '';
@@ -287,7 +296,7 @@ jobs:
                   `本次 NPU CI 请求已经在 \`${pr.head.sha}\` 上通过，不会重复运行。`,
                   '',
                   `- 请求模式：\`${ciMode}\``,
-                  `- 触发人：@${actor}`,
+                  `- 触发人：@${requestedBy}`,
                   '- 验证平台：A2 (`ascend910b`) + A5 (`ascend950`)',
                   requestScope === 'all'
                     ? '- 分项结果：7/7 通过'
@@ -302,6 +311,7 @@ jobs:
               core.setOutput('ci_mode', ciMode);
               core.setOutput('ops', ops);
               core.setOutput('comment_id', commentId);
+              core.setOutput('requested_by', requestedBy);
               return;
             }
             if (latestExecutionMatchesRequest && await isActivePendingStatus(latestExecutionCi)) {
@@ -312,7 +322,7 @@ jobs:
                   `NPU CI 已在验证 \`${pr.head.sha}\`，本次评论不会重复启动新任务。`,
                   '',
                   `- 请求模式：\`${ciMode}\``,
-                  `- 触发人：@${actor}`,
+                  `- 触发人：@${requestedBy}`,
                   '- 验证平台：A2 (`ascend910b`) + A5 (`ascend950`)',
                   '- 当前状态：排队或运行中',
                   '- 执行方式：按顺序执行；前置失败时后续项跳过',
@@ -327,6 +337,7 @@ jobs:
               core.setOutput('ci_mode', ciMode);
               core.setOutput('ops', ops);
               core.setOutput('comment_id', commentId);
+              core.setOutput('requested_by', requestedBy);
               return;
             }
 
@@ -352,7 +363,7 @@ jobs:
                 `NPU CI 已开始验证 \`${pr.head.sha}\`。`,
                 '',
                 `- 模式：\`${ciMode}\``,
-                `- 触发人：@${actor}`,
+                `- 触发人：@${requestedBy}`,
                 '- 验证平台：A2 (`ascend910b`) + A5 (`ascend950`)',
                 requestScope === 'all'
                   ? '- 分项：7 项按顺序执行'
@@ -371,6 +382,7 @@ jobs:
             core.setOutput('ci_mode', ciMode);
             core.setOutput('ops', ops);
             core.setOutput('comment_id', commentId);
+            core.setOutput('requested_by', requestedBy);
 
   ascend-npu:
     name: NPU CI 分项执行 (${{ matrix.name }})
@@ -1281,6 +1293,7 @@ jobs:
         env:
           NPU_CI_MODE: ${{ needs.prepare.outputs.ci_mode }}
           NPU_OPS: ${{ needs.prepare.outputs.ops }}
+          NPU_REQUESTED_BY: ${{ needs.prepare.outputs.requested_by }}
           NPU_PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
           NPU_COMMENT_ID: ${{ needs.prepare.outputs.comment_id }}
           NPU_MATRIX_RESULT: ${{ needs.ascend-npu.result }}

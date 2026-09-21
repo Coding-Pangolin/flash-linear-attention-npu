@@ -21,6 +21,9 @@ module.exports = async function publishNpuCiStatus({ github, context, core }) {
   const expectedRunId = process.env.NPU_EXPECTED_RUN_ID;
   const expectedRunAttempt = process.env.NPU_EXPECTED_RUN_ATTEMPT;
   const matrixResult = process.env.NPU_MATRIX_RESULT || 'failure';
+  // 评论分发 workflow 转发 workflow_dispatch 时 actor 是 github-actions[bot]，
+  // 此时用 ci.yml 透传的 NPU_REQUESTED_BY 记录真实触发人。
+  const requestedBy = process.env.NPU_REQUESTED_BY || context.actor;
   const targetUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
   const platformDefs = [
     { key: 'a2', label: 'A2', soc: 'ascend910b' },
@@ -1003,7 +1006,7 @@ module.exports = async function publishNpuCiStatus({ github, context, core }) {
     `NPU CI ${executionOk && accuracyOk ? '通过' : '失败'}：\`${sha}\`。`,
     '',
     `- 模式：\`${sanitizeMarkdownInline(mode, 40)}\``,
-    `- 触发人：@${context.actor}`,
+    `- 触发人：@${requestedBy}`,
     '- 验证平台：A2 (`ascend910b`) + A5 (`ascend950`)',
     invalidReason ? `- 失效原因：${invalidReason}` : null,
     `- 执行矩阵：\`${sanitizeMarkdownInline(matrixResult, 40)}\``,

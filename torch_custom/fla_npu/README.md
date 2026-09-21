@@ -114,8 +114,9 @@ fla_npu(stable): size_of dim 1 out of range at csrc/src/stable_causal_conv1d_bwd
 - `at csrc/src/stable_causal_conv1d_bwd.cpp:74`：读这一维的那一行。
 
 调用点只写 `SIZE_OF(meta, dim)`，名字和行号都由宏带上，不用额外传任何参数；实参里带逗号时自己加一层括号。
-没传的可选入参直接点名：`(tensor g_meta is None / undefined)`。`layout_math.h` 里的 helper 走保留下来的
-`size_of(meta, dim, file, line)` 函数，仍透传算子那一行，但不带张量名（那里报的是 helper 的形参）。
+没传的可选入参直接点名：`(tensor g_meta is None / undefined)`。`layout_math.h` 里的 helper 也透传算子那
+一行并报名，但名字是 **helper 自己的形参名**（`value_heads4(q_meta, ...)` 会报成 `tensor v`）；新写
+helper 时按实参语义自己传名。
 
 **换了新产物却没生效。** launcher 由 `torch.ops.load_library()` 在 torch 初始化之后加载，`fork`
 出来的子进程要重新加载；构建戳（`_stable_hash.py` 的 `SOURCE_HASH` 与 `.so` 内嵌哈希）不一致时加载

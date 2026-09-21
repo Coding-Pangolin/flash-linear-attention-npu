@@ -33,57 +33,58 @@ inline bool sequence_major(int64_t code) {
   return code == kBsnd || code == kTnd;
 }
 
-// Every helper below reads dimensions through `size_of`, whose message names
-// the call site -- so they take the caller's location as defaulted arguments
-// and forward it.  The reported line is then the operator's own
+// Every helper below reads dimensions through `size_of_impl`, whose message
+// names the call site -- so they take the caller's location as defaulted
+// arguments and forward it.  The reported line is then the operator's own
 // `tokens(q, code)`, not this file; call sites pass only their own arguments.
-// (The adapters' own `SIZE_OF` macro names the tensor as well; this path reports
-// the shape alone, because a name here would be the helper's own parameter.)
+// The name they forward is the helper's own parameter (`q` / `v`), which is
+// the right tensor everywhere today but `value_heads4`: that one receives the
+// operator's `q`, so stable_chunk_gated_delta_rule_fwd.cpp reports `tensor v`.
 //
 // [B, T, H, D] / [T, H, D] versus [B, H, T, D] / [H, T, D].
 inline int64_t tokens(const TensorMeta& q, int64_t code,
                       const char* file = __builtin_FILE(),
                       int line = __builtin_LINE()) {
   if (packed(code)) {
-    return size_of(q, sequence_major(code) ? 0 : 1, file, line);
+    return size_of_impl(q, sequence_major(code) ? 0 : 1, file, line, "q");
   }
-  return size_of(q, sequence_major(code) ? 1 : 2, file, line);
+  return size_of_impl(q, sequence_major(code) ? 1 : 2, file, line, "q");
 }
 
 inline int64_t key_heads(const TensorMeta& q, int64_t code,
                          const char* file = __builtin_FILE(),
                          int line = __builtin_LINE()) {
   if (packed(code)) {
-    return size_of(q, sequence_major(code) ? 1 : 0, file, line);
+    return size_of_impl(q, sequence_major(code) ? 1 : 0, file, line, "q");
   }
-  return size_of(q, sequence_major(code) ? 2 : 1, file, line);
+  return size_of_impl(q, sequence_major(code) ? 2 : 1, file, line, "q");
 }
 
 inline int64_t value_heads(const TensorMeta& v, int64_t code,
                            const char* file = __builtin_FILE(),
                            int line = __builtin_LINE()) {
   if (packed(code)) {
-    return size_of(v, sequence_major(code) ? 1 : 0, file, line);
+    return size_of_impl(v, sequence_major(code) ? 1 : 0, file, line, "v");
   }
-  return size_of(v, sequence_major(code) ? 2 : 1, file, line);
+  return size_of_impl(v, sequence_major(code) ? 2 : 1, file, line, "v");
 }
 
 inline int64_t batch(const TensorMeta& q, int64_t code,
                      const char* file = __builtin_FILE(),
                      int line = __builtin_LINE()) {
-  return packed(code) ? 1 : size_of(q, 0, file, line);
+  return packed(code) ? 1 : size_of_impl(q, 0, file, line, "q");
 }
 
 inline int64_t key_dim(const TensorMeta& q, int64_t code,
                        const char* file = __builtin_FILE(),
                        int line = __builtin_LINE()) {
-  return size_of(q, packed(code) ? 2 : 3, file, line);
+  return size_of_impl(q, packed(code) ? 2 : 3, file, line, "q");
 }
 
 inline int64_t value_dim(const TensorMeta& v, int64_t code,
                          const char* file = __builtin_FILE(),
                          int line = __builtin_LINE()) {
-  return size_of(v, packed(code) ? 2 : 3, file, line);
+  return size_of_impl(v, packed(code) ? 2 : 3, file, line, "v");
 }
 
 // The composite operators accept the TND/NTD names but still read a rank-4
@@ -91,13 +92,13 @@ inline int64_t value_dim(const TensorMeta& v, int64_t code,
 inline int64_t tokens4(const TensorMeta& q, int64_t code,
                        const char* file = __builtin_FILE(),
                        int line = __builtin_LINE()) {
-  return size_of(q, sequence_major(code) ? 1 : 2, file, line);
+  return size_of_impl(q, sequence_major(code) ? 1 : 2, file, line, "q");
 }
 
 inline int64_t value_heads4(const TensorMeta& v, int64_t code,
                             const char* file = __builtin_FILE(),
                             int line = __builtin_LINE()) {
-  return size_of(v, sequence_major(code) ? 2 : 1, file, line);
+  return size_of_impl(v, sequence_major(code) ? 2 : 1, file, line, "v");
 }
 
 // One state per segment: `cu_seqlens` describes them, the batch dimension

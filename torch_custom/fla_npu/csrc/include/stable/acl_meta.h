@@ -214,11 +214,11 @@ inline TensorMeta meta_of(const torch::stable::Tensor& tensor) {
 //   fla_npu(stable): size_of dim 1 out of range at
 //       csrc/src/stable_causal_conv1d_bwd.cpp:74 (tensor x_meta, ndim=1, shape=[1536])
 //
-// Helpers that read a dimension on the operator's behalf keep calling the plain
-// `size_of` function below and forward their own caller's file/line (see
-// layout_math.h): the anchor is still the operator's line, and that path
-// reports the shape without a name.  GCC/Clang expand the location builtins at
-// the call site, which is why the macro body can use them directly; C++20's
+// Helpers that read a dimension on the operator's behalf call `size_of_impl`
+// and forward their own caller's file/line (see layout_math.h), so the anchor
+// is still the line the operator's author wrote; the name they pass is the
+// helper's own parameter.  GCC/Clang expand the location builtins at the call
+// site, which is why the macro body can use them directly; C++20's
 // `std::source_location::current()` is the standard spelling of the same trick
 // (this tree builds with -std=c++17).
 inline const char* short_location(const char* file) {
@@ -253,8 +253,9 @@ inline std::string shape_detail(const TensorMeta& meta) {
   return "ndim=" + std::to_string(meta.ndim) + ", shape=" + shape;
 }
 
-// Names the tensor as the adapter wrote it.  `tensor_expr` is null on the
-// helper path (layout_math.h forwards no name), which reports the shape alone.
+// Names the tensor: the adapter passes the expression it wrote, layout_math.h
+// passes the helper's own parameter name.  A null `tensor_expr` reports the
+// shape alone.
 inline std::string arg_detail(const TensorMeta& meta, const char* tensor_expr) {
   if (tensor_expr == nullptr) {
     return meta.defined ? " (" + shape_detail(meta) + ")"
@@ -276,8 +277,9 @@ inline int64_t size_of_impl(const TensorMeta& meta, int64_t dim,
   return meta.sizes[static_cast<size_t>(dim)];
 }
 
-// Helper entry point: forwarders that already hold the caller's location call
-// this one, so a helper's own line never becomes the anchor.
+// Name-less entry point, for a caller that already holds the location and has
+// no expression to report.  The adapters go through the `SIZE_OF` macro, and
+// layout_math.h names its own parameters.
 inline int64_t size_of(const TensorMeta& meta, int64_t dim,
                        const char* file = __builtin_FILE(),
                        int line = __builtin_LINE()) {

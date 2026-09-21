@@ -46,7 +46,7 @@ _ASCENDC_OPS = (
 
 | 文件 | 规范 |
 | --- | --- |
-| `stable_<op>.cpp` | **一个算子一个文件，用宏写，不写手写入口**：`kSchema_<op>` 形参 === `run_<op>` 形参 === `FLA_STABLE_EXEC` 实参 === aclnn 头文件顺序（`stream` 固定在最后）；申请输出（取维度用 `size_of(meta, dim)`，报错会带上调用点行号 + 实际 shape）+ 一条 `FLA_STABLE_EXEC`，算子私有的名表 / helper 也放这里 |
+| `stable_<op>.cpp` | **一个算子一个文件，用宏写，不写手写入口**：`kSchema_<op>` 形参 === `run_<op>` 形参 === `FLA_STABLE_EXEC` 实参 === aclnn 头文件顺序（`stream` 固定在最后）；申请输出（取维度用 `SIZE_OF(meta, dim)`，报错会带上实参名 + 调用点行号 + 实际 shape）+ 一条 `FLA_STABLE_EXEC`，算子私有的名表 / helper 也放这里 |
 | `stable_<前缀>_common.cpp` | 只放**被 ≥2 个算子共用**的 helper，文件名带共享前缀（当前是 `stable_causal_conv1d_common.cpp`、`stable_fwd_h_common.cpp`）；在 include 列表里排在用它的算子之前 |
 | `stable_ops.cpp` | 两件事：include 各算子文件（共享文件在前、其余按算子名排序）+ `m.def(kSchema_<op>)`、`m.impl("<op>", &boxed_adapter<run_<op>>)` 两行注册 |
 | `_stable.py` | 真签名 wrapper（不要 `*args` / `**kwargs`），位置参数顺序与 schema 形参一致；字符串用 `_char_code`、host 数组用 `_host_ints`、stream 用 `_current_stream_ptr()` |
@@ -98,22 +98,24 @@ npu_causal_conv1d_update(..., conv_state, ...)
 npu_causal_conv1d_update(..., conv_state.contiguous(), ...)
 ```
 
-**报 `size_of dim N out of range` 看不出是哪个张量。** 这是输出 shape 规则按错的 rank 取维度（常是把
-4-D 输入当 3-D 传）。报错里最后那段描述的是**出错的那张张量本身**，不是第几个入参：
+**报 `size_of dim N out of range`。** 这是输出 shape 规则按错的 rank 取维度（常是把 4-D 输入当 3-D 传）。
+报错点名了**是哪一张张量**、**在算子哪一行读的维度**、以及它自己的维数和形状：
 
 ```text
-fla_npu(stable): size_of dim 1 out of range at csrc/src/stable_causal_conv1d_bwd.cpp:74 (ndim=1, shape=[1536])
+fla_npu(stable): size_of dim 1 out of range at csrc/src/stable_causal_conv1d_bwd.cpp:74 (tensor x_meta, ndim=1, shape=[1536])
 ```
 
 四段各是什么：
 
 - `dim 1`：要从这张张量上读第 1 维（从 0 开始数）。
-- `ndim=1`：**这张张量**一共只有 1 维，所以读第 1 维越界。这是维数，不是「第几个输入 / 输出」。
-- `shape=[1536]`：这张张量的实际形状，与 `ndim=1` 对应（1 维、长度 1536）。
-- `at csrc/src/stable_causal_conv1d_bwd.cpp:74`：读这一维的调用点，打开就知道是谁在取维度。
+- `tensor x_meta`：读的是算子里的 `x_meta`（schema 形参 `x`）——调用点写的是 `SIZE_OF(x_meta, 1)`，
+  宏把实参文本带进了消息。
+- `ndim=1` / `shape=[1536]`：**这张张量**只有 1 维、长度 1536，所以读第 1 维越界。这是维数，不是「第几个输入 / 输出」。
+- `at csrc/src/stable_causal_conv1d_bwd.cpp:74`：读这一维的那一行。
 
-调用点不用写任何额外东西（`size_of(meta, dim)` 照旧）：file/line 是默认实参，编译器在调用点填，
-`layout_math.h` 里的 helper 也按同样方式把调用点透传。漏传的可选入参报 `(tensor is None / undefined)`。
+调用点只写 `SIZE_OF(meta, dim)`，名字和行号都由宏带上，不用额外传任何参数；实参里带逗号时自己加一层括号。
+没传的可选入参直接点名：`(tensor g_meta is None / undefined)`。`layout_math.h` 里的 helper 走保留下来的
+`size_of(meta, dim, file, line)` 函数，仍透传算子那一行，但不带张量名（那里报的是 helper 的形参）。
 
 **换了新产物却没生效。** launcher 由 `torch.ops.load_library()` 在 torch 初始化之后加载，`fork`
 出来的子进程要重新加载；构建戳（`_stable_hash.py` 的 `SOURCE_HASH` 与 `.so` 内嵌哈希）不一致时加载

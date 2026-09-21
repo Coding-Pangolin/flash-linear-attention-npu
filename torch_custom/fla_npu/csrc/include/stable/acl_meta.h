@@ -206,19 +206,21 @@ inline TensorMeta meta_of(const torch::stable::Tensor& tensor) {
 // The callee only ever sees the metadata, so a wrong rank used to report a bare
 // "size_of dim out of range" and leave the caller guessing which argument had
 // the wrong rank -- every output-shape rule reads one dimension per argument,
-// optional ones included.  C++ cannot recover the argument *name* inside the
-// callee, but the default arguments below are evaluated at the call site, so
-// the builtins pin the exact adapter line that read the dimension:
+// optional ones included.  C++ cannot recover the text of the tensor
+// expression inside the callee, which is the one thing `SIZE_OF` is a macro
+// for: it stringizes the argument, so the message names the tensor the adapter
+// actually wrote, and the location builtins are expanded at the call site:
 //
 //   fla_npu(stable): size_of dim 1 out of range at
-//       csrc/src/stable_causal_conv1d_bwd.cpp:74 (ndim=1, shape=[1536])
+//       csrc/src/stable_causal_conv1d_bwd.cpp:74 (tensor x_meta, ndim=1, shape=[1536])
 //
-// Call sites stay `size_of(meta, dim)`; nothing extra to pass.  Helpers that
-// read a dimension on the operator's behalf forward file/line the same way (see
-// layout_math.h), so the anchor is the line the operator's author wrote rather
-// than the helper's.  GCC/Clang define these builtins as the call site when
-// they appear in a default argument; C++20's `std::source_location::current()`
-// is the standard spelling of the same thing (this tree builds with -std=c++17).
+// Helpers that read a dimension on the operator's behalf keep calling the plain
+// `size_of` function below and forward their own caller's file/line (see
+// layout_math.h): the anchor is still the operator's line, and that path
+// reports the shape without a name.  GCC/Clang expand the location builtins at
+// the call site, which is why the macro body can use them directly; C++20's
+// `std::source_location::current()` is the standard spelling of the same trick
+// (this tree builds with -std=c++17).
 inline const char* short_location(const char* file) {
   if (file == nullptr) {
     return "?";
@@ -238,7 +240,7 @@ inline std::string shape_detail(const TensorMeta& meta) {
   if (!meta.defined) {
     // An optional input that was not passed has no rank at all, which is the
     // other way to reach this branch.
-    return " (tensor is None / undefined)";
+    return "is None / undefined";
   }
   std::string shape = "[";
   for (int64_t axis = 0; axis < meta.ndim; ++axis) {
@@ -248,25 +250,46 @@ inline std::string shape_detail(const TensorMeta& meta) {
     shape += std::to_string(meta.sizes[static_cast<size_t>(axis)]);
   }
   shape += "]";
-  return " (ndim=" + std::to_string(meta.ndim) + ", shape=" + shape + ")";
+  return "ndim=" + std::to_string(meta.ndim) + ", shape=" + shape;
+}
+
+// Names the tensor as the adapter wrote it.  `tensor_expr` is null on the
+// helper path (layout_math.h forwards no name), which reports the shape alone.
+inline std::string arg_detail(const TensorMeta& meta, const char* tensor_expr) {
+  if (tensor_expr == nullptr) {
+    return meta.defined ? " (" + shape_detail(meta) + ")"
+                        : " (tensor is None / undefined)";
+  }
+  return " (tensor " + std::string(tensor_expr) +
+         (meta.defined ? ", " : " ") + shape_detail(meta) + ")";
 }
 
 inline int64_t size_of_impl(const TensorMeta& meta, int64_t dim,
-                            const char* file, int line) {
+                            const char* file, int line,
+                            const char* tensor_expr = nullptr) {
   if (dim < 0 || dim >= meta.ndim) {
     throw std::runtime_error(
         "fla_npu(stable): size_of dim " + std::to_string(dim) +
         " out of range at " + short_location(file) + ":" +
-        std::to_string(line) + shape_detail(meta));
+        std::to_string(line) + arg_detail(meta, tensor_expr));
   }
   return meta.sizes[static_cast<size_t>(dim)];
 }
 
+// Helper entry point: forwarders that already hold the caller's location call
+// this one, so a helper's own line never becomes the anchor.
 inline int64_t size_of(const TensorMeta& meta, int64_t dim,
                        const char* file = __builtin_FILE(),
                        int line = __builtin_LINE()) {
-  return size_of_impl(meta, dim, file, line);
+  return size_of_impl(meta, dim, file, line, nullptr);
 }
+
+// Call-site form, used by the adapters.  Function-like macro, so an argument
+// that contains a comma needs parentheses of its own.
+#define SIZE_OF(meta, dim)                                              \
+  ::fla_npu_stable::stable::size_of_impl((meta), (dim),                 \
+                                         __builtin_FILE(),              \
+                                         __builtin_LINE(), #meta)
 
 inline TensorMeta meta_optional_handle(std::optional<AtenTensorHandle> handle) {
   TensorMeta meta;

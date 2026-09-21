@@ -60,8 +60,8 @@ std::tuple<Tensor, Tensor, Tensor> run_npu_chunk_gdn_bwd_intra(
   const TensorMeta q_meta = meta_of(q);
   const TensorMeta v_meta = meta_of(v);
   Tensor out_dq = allocate_sizes(
-      {size_of(q_meta, 0), size_of(v_meta, 1), size_of(q_meta, 2),
-       size_of(q_meta, 3)},
+      {SIZE_OF(q_meta, 0), SIZE_OF(v_meta, 1), SIZE_OF(q_meta, 2),
+       SIZE_OF(q_meta, 3)},
       q_meta.scalar_type, q_meta);
   Tensor out_dk = allocate_like(v_meta);
   Tensor out_dv = allocate_like(v_meta);

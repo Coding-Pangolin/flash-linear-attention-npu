@@ -76,7 +76,7 @@ run_npu_chunk_gated_delta_rule_bwd(
   namespace layout_math = fla_npu_stable::stable::layout_math;
   const TensorMeta q_meta = meta_of(q);
   const TensorMeta v_meta = meta_of(v);
-  const int64_t batch = size_of(q_meta, 0);
+  const int64_t batch = SIZE_OF(q_meta, 0);
   const int64_t tokens = layout_math::tokens4(q_meta, layout);
   const int64_t heads = layout_math::value_heads4(v_meta, layout);
 

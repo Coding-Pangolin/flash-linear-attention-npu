@@ -74,11 +74,11 @@ run_kda_bwd_v2(
   std::optional<Tensor> out_d_a_log;
   std::optional<Tensor> out_d_dt_bias;
   // Packed inputs are [H, T, D]; dense ones are [B, H, T, D].
-  const int64_t key_heads = size_of(q_meta, q_meta.ndim == 3 ? 0 : 1);
+  const int64_t key_heads = SIZE_OF(q_meta, q_meta.ndim == 3 ? 0 : 1);
   if (use_gate_in_kernel) {
     out_d_a_log = allocate_sizes({key_heads}, kFloat, q_meta);
     if (dt_bias.has_value()) {
-      out_d_dt_bias = allocate_sizes({key_heads, size_of(q_meta, q_meta.ndim - 1)}, kFloat,
+      out_d_dt_bias = allocate_sizes({key_heads, SIZE_OF(q_meta, q_meta.ndim - 1)}, kFloat,
                                      q_meta);
     }
   }
@@ -155,12 +155,12 @@ run_npu_chunk_kda_bwd(
   std::optional<Tensor> out_d_a_log;
   std::optional<Tensor> out_d_dt_bias;
   // Packed inputs are [H, T, D]; dense ones are [B, H, T, D].
-  const int64_t key_heads = size_of(q_meta, q_meta.ndim == 3 ? 0 : 1);
+  const int64_t key_heads = SIZE_OF(q_meta, q_meta.ndim == 3 ? 0 : 1);
   if (use_gate_in_kernel) {
     out_d_a_log = allocate_sizes({key_heads}, kFloat, q_meta);
     if (dt_bias.has_value()) {
       out_d_dt_bias = allocate_sizes(
-          {key_heads, size_of(q_meta, q_meta.ndim - 1)}, kFloat, q_meta);
+          {key_heads, SIZE_OF(q_meta, q_meta.ndim - 1)}, kFloat, q_meta);
     }
   }
 

@@ -74,20 +74,20 @@ Tensor run_npu_chunk_fwd_o(Tensor q, Tensor k, Tensor v, Tensor h,
 
   Tensor out;
   if (std::strcmp(layout, "BNSD") == 0) {
-    out = allocate_sizes({size_of(v_meta, 0), size_of(v_meta, 1),
-                          size_of(v_meta, 2), size_of(v_meta, 3)},
+    out = allocate_sizes({SIZE_OF(v_meta, 0), SIZE_OF(v_meta, 1),
+                          SIZE_OF(v_meta, 2), SIZE_OF(v_meta, 3)},
                          dtype, v_meta);
   } else if (std::strcmp(layout, "BSND") == 0) {
-    out = allocate_sizes({size_of(v_meta, 0), size_of(v_meta, 2),
-                          size_of(v_meta, 1), size_of(v_meta, 3)},
+    out = allocate_sizes({SIZE_OF(v_meta, 0), SIZE_OF(v_meta, 2),
+                          SIZE_OF(v_meta, 1), SIZE_OF(v_meta, 3)},
                          dtype, v_meta);
   } else if (std::strcmp(layout, "TND") == 0) {
-    out = allocate_sizes({size_of(v_meta, 2), size_of(v_meta, 1),
-                          size_of(v_meta, 3)},
+    out = allocate_sizes({SIZE_OF(v_meta, 2), SIZE_OF(v_meta, 1),
+                          SIZE_OF(v_meta, 3)},
                          dtype, v_meta);
   } else {
-    out = allocate_sizes({size_of(v_meta, 1), size_of(v_meta, 2),
-                          size_of(v_meta, 3)},
+    out = allocate_sizes({SIZE_OF(v_meta, 1), SIZE_OF(v_meta, 2),
+                          SIZE_OF(v_meta, 3)},
                          dtype, v_meta);
   }
 

@@ -37,6 +37,8 @@ inline bool sequence_major(int64_t code) {
 // the call site -- so they take the caller's location as defaulted arguments
 // and forward it.  The reported line is then the operator's own
 // `tokens(q, code)`, not this file; call sites pass only their own arguments.
+// (The adapters' own `SIZE_OF` macro names the tensor as well; this path reports
+// the shape alone, because a name here would be the helper's own parameter.)
 //
 // [B, T, H, D] / [T, H, D] versus [B, H, T, D] / [H, T, D].
 inline int64_t tokens(const TensorMeta& q, int64_t code,

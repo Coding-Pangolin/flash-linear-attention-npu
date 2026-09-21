@@ -67,11 +67,11 @@ run_npu_chunk_gated_delta_rule_fwd_prepare(
   const TensorMeta q_meta = meta_of(q);
   const TensorMeta k_meta = meta_of(k);
   const TensorMeta v_meta = meta_of(v);
-  const int64_t batch = size_of(q_meta, 0);
-  const int64_t key_heads = size_of(q_meta, 1);
-  const int64_t tokens = size_of(q_meta, 2);
-  const int64_t key_dim = size_of(q_meta, 3);
-  const int64_t value_heads = size_of(v_meta, 1);
+  const int64_t batch = SIZE_OF(q_meta, 0);
+  const int64_t key_heads = SIZE_OF(q_meta, 1);
+  const int64_t tokens = SIZE_OF(q_meta, 2);
+  const int64_t key_dim = SIZE_OF(q_meta, 3);
+  const int64_t value_heads = SIZE_OF(v_meta, 1);
 
   // Without the in-kernel Q/K normalisation the reference hands `q`/`k` back
   // unchanged and leaves the operator's slots null; the two cases have to be

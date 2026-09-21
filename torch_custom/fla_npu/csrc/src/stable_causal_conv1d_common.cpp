@@ -52,13 +52,13 @@ constexpr int64_t kNoQueryLenBound = -1;
 Tensor infer_out(const TensorMeta& x_meta, int64_t head_num, int64_t run_mode) {
   if (run_mode == 0 && head_num > 0) {
     if (x_meta.ndim == 3) {
-      return allocate_sizes({size_of(x_meta, 0), head_num, size_of(x_meta, 1),
-                             size_of(x_meta, 2) / head_num},
+      return allocate_sizes({SIZE_OF(x_meta, 0), head_num, SIZE_OF(x_meta, 1),
+                             SIZE_OF(x_meta, 2) / head_num},
                             x_meta.scalar_type, x_meta);
     }
     if (x_meta.ndim == 2) {
-      return allocate_sizes({head_num, size_of(x_meta, 0),
-                             size_of(x_meta, 1) / head_num},
+      return allocate_sizes({head_num, SIZE_OF(x_meta, 0),
+                             SIZE_OF(x_meta, 1) / head_num},
                             x_meta.scalar_type, x_meta);
     }
   }

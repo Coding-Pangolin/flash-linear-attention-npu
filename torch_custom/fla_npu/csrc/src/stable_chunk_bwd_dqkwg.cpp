@@ -55,8 +55,8 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> run_npu_chunk_bwd_dqkwg(
   Tensor out_dq = allocate_like(q_meta);
   Tensor out_dk = allocate_like(k_meta);
   Tensor out_dw = allocate_sizes(
-      {size_of(q_meta, 0), size_of(v_meta, 1), size_of(q_meta, 2),
-       size_of(q_meta, 3)},
+      {SIZE_OF(q_meta, 0), SIZE_OF(v_meta, 1), SIZE_OF(q_meta, 2),
+       SIZE_OF(q_meta, 3)},
       q_meta.scalar_type, q_meta);
   Tensor out_dg = allocate_like(g_meta);
   FLA_STABLE_EXEC(

@@ -47,7 +47,7 @@ Tensor run_npu_chunk_scaled_dot_kkt(Tensor k, Tensor g, Tensor beta,
   const TensorMeta k_meta = meta_of(k);
   const TensorMeta g_meta = meta_of(g);
   Tensor out = allocate_sizes(
-      {size_of(k_meta, 0), size_of(g_meta, 1), size_of(k_meta, 2), chunk_size},
+      {SIZE_OF(k_meta, 0), SIZE_OF(g_meta, 1), SIZE_OF(k_meta, 2), chunk_size},
       kFloat, k_meta);
   FLA_STABLE_EXEC("aclnnChunkScaledDotKkt", k_meta, stream, tensor(k_meta),
                   tensor(g_meta), tensor(meta_of(beta)),

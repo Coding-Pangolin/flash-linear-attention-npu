@@ -67,16 +67,16 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> run_npu_causal_conv1d_bwd(
       std::strcmp(layout, "TND") == 0 || std::strcmp(layout, "NTD") == 0;
   const int64_t state_rows =
       per_segment ? (qsl.empty() ? 0 : static_cast<int64_t>(qsl.size()) - 1)
-                  : size_of(x_meta, 0);
+                  : SIZE_OF(x_meta, 0);
 
   Tensor out_dx = allocate_like(x_meta);
   Tensor out_dw = allocate_sizes(
-      {size_of(weight_meta, 0), size_of(weight_meta, 1)},
+      {SIZE_OF(weight_meta, 0), SIZE_OF(weight_meta, 1)},
       weight_meta.scalar_type, weight_meta);
-  Tensor out_db = allocate_sizes({size_of(weight_meta, 1)},
+  Tensor out_db = allocate_sizes({SIZE_OF(weight_meta, 1)},
                                  weight_meta.scalar_type, weight_meta);
   Tensor out_dinit = allocate_sizes(
-      {state_rows, size_of(weight_meta, 0), size_of(weight_meta, 1)},
+      {state_rows, SIZE_OF(weight_meta, 0), SIZE_OF(weight_meta, 1)},
       x_meta.scalar_type, x_meta);
 
   FLA_STABLE_EXEC("aclnnCausalConv1dBwd", x_meta, stream, tensor(x_meta),

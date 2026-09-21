@@ -47,8 +47,8 @@ std::tuple<Tensor, Tensor> run_npu_recompute_w_u_fwd(
   const TensorMeta k_meta = meta_of(k);
   const TensorMeta v_meta = meta_of(v);
   Tensor out_w = allocate_sizes(
-      {size_of(v_meta, 0), size_of(v_meta, 1), size_of(v_meta, 2),
-       size_of(k_meta, 3)},
+      {SIZE_OF(v_meta, 0), SIZE_OF(v_meta, 1), SIZE_OF(v_meta, 2),
+       SIZE_OF(k_meta, 3)},
       k_meta.scalar_type, k_meta);
   Tensor out_u = allocate_like(v_meta);
   FLA_STABLE_EXEC("aclnnRecomputeWUFwd", k_meta, stream, tensor(k_meta),

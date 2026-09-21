@@ -91,14 +91,14 @@ run_npu_chunk_gated_delta_rule_fwd(
   // final_state with the wrong shapes, and the Ascend950 tiling rejected the
   // call with 161002 (the shapes were visible in a descriptor dump: e.g. A came
   // out as [1, 128, 1, 64] instead of [1, 4, 128, 64]).
-  const int64_t batch = size_of(q_meta, 0);
+  const int64_t batch = SIZE_OF(q_meta, 0);
   const int64_t tokens = layout_math::tokens4(q_meta, layout);
   const int64_t heads = layout_math::value_heads4(v_meta, layout);
   // Same rank-4 convention as the token axis above, applied to q: HK is dim 2
   // for the sequence-major names and dim 1 for the others.
   const int64_t key_heads = layout_math::value_heads4(q_meta, layout);
-  const int64_t k_dim = size_of(q_meta, 3);
-  const int64_t v_dim = size_of(v_meta, 3);
+  const int64_t k_dim = SIZE_OF(q_meta, 3);
+  const int64_t v_dim = SIZE_OF(v_meta, 3);
   const int64_t state_tail_k = state_v_first ? v_dim : k_dim;
   const int64_t state_tail_v = state_v_first ? k_dim : v_dim;
 

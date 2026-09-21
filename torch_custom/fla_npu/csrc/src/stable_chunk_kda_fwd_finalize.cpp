@@ -61,9 +61,9 @@ Tensor run_npu_chunk_kda_fwd_finalize(
   // are head-major either way, so batch/heads/tokens are read from the input
   // with the head-major spelling and only the output layout is switched.
   const bool packed = layout_math::packed(output_layout);
-  const int64_t batch = packed ? 1 : size_of(qg_meta, 0);
-  const int64_t heads = packed ? size_of(qg_meta, 0) : size_of(qg_meta, 1);
-  const int64_t tokens = packed ? size_of(qg_meta, 1) : size_of(qg_meta, 2);
+  const int64_t batch = packed ? 1 : SIZE_OF(qg_meta, 0);
+  const int64_t heads = packed ? SIZE_OF(qg_meta, 0) : SIZE_OF(qg_meta, 1);
+  const int64_t tokens = packed ? SIZE_OF(qg_meta, 1) : SIZE_OF(qg_meta, 2);
   const int64_t head_dim = 128;
   const bool sequence_major = output_layout == 0 || output_layout == 2;
   std::vector<int64_t> attn_sizes;

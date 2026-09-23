@@ -67,6 +67,9 @@ FLA_NPU_OPS=chunk_fwd_o,chunk_bwd_dv_local FLA_NPU_SOC=ascend910b python scripts
 python -m pip install --force-reinstall --no-cache-dir --no-deps dist/<wheel文件名>.whl
 ```
 
+> 自编 wheel 带本地版本（如 `26.9.1+26.9.1.dev0a1b2c3`），排在已装的同档位正式包之上，上面的
+> 命令仍带 `--force-reinstall`，重复构建同一版本时不会被 pip 当作"已是最新版本"跳过。
+
 需要单独编译一个或多个算子 run 包的开发者场景见[开发者指南](docs/开发者指南.md) 场景 1。
 
 #### 2.4 【可选】直接安装已发布的 wheel
@@ -98,9 +101,18 @@ wheel 既不依赖 CPython ABI 也不依赖 libtorch C++ ABI，所以 `Requires-
 
 本地自编的 wheel 与 PyPI 档位包**同名同平台标签**
 （`flash_linear_attention_npu_a2-<版本>-py3-none-manylinux_2_34_<arch>.whl`），两者互为
-升级路径，不会在同一个环境里留下两份互不知晓的 `fla_npu/`。唯一按分支区分的是版本号：
-`main` 分支的开发构建追加 `+main.<commit>`，可以覆盖已装的正式包；从发布分支构建则与正式包
-版本号相同，此时必须带 `--force-reinstall`（见 2.3）。
+升级路径，不会在同一个环境里留下两份互不知晓的 `fla_npu/`。版本号是两者唯一的差别：
+
+| 出包类型 | 版本号 | 例（A2，分支 `v26.9.1`） |
+| --- | --- | --- |
+| 正式发布 | `<__version__>` | `26.9.1` |
+| 每日 / 日常构建 | `<__version__>+<分支>_dev<commit7>` | `26.9.1+26.9.1.dev0a1b2c3` |
+
+每日构建的本地版本取构建分支：`main` 上是 `26.7.0.dev0+main.dev0a1b2c3`，发布线 `v26.9.1` 上是
+`26.9.1+26.9.1.dev0a1b2c3`（PEP 440 把下划线规范化为点号，`pip` 也按规范化后的形式比较）。
+它既让每日包与正式包不会混为一谈，又排在**同版本正式包之上**，因此 `pip install` 一份每日
+wheel 能覆盖已装的正式包。正式出包时用 `FLA_NPU_DISABLE_LOCAL_VERSION=TRUE` 关掉这个后缀
+（发布工作流已带该开关），细节见[开发者指南](docs/开发者指南.md) 场景 6.1。
 
 不再使用时按 distribution 名卸载，例如
 `python -m pip uninstall -y flash-linear-attention-npu-a2`。从旧命名

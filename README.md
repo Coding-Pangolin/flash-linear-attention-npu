@@ -65,93 +65,32 @@ FLA_NPU_OPS=chunk_fwd_o,chunk_bwd_dv_local FLA_NPU_SOC=ascend910b python scripts
 不同版本、不同档位的 wheel，安装时必须传入本轮构建输出的准确文件名，不要用通配符。其余与
 构建、发布相关的环境变量见[开发者指南](docs/开发者指南.md) 场景 1 / 场景 6。
 
-表外取值（例如拼错的芯片名）会让构建直接失败，不会产出一个名字对不上的包。需要给一次性产物
-打标记时用 `FLA_NPU_WHEEL_BUILD_TAG`，它会把标签写进文件名；发布门禁会拒绝带 build tag 的产物。
-
 #### 2.3 安装
 
 ```sh
 python -m pip install --force-reinstall --no-cache-dir --no-deps dist/<wheel文件名>.whl
 ```
 
-> 自编 wheel 带本地版本（如 `26.9.1+26.9.1.dev0a1b2c3`），排在已装的同档位正式包之上，上面的
-> 命令仍带 `--force-reinstall`，重复构建同一版本时不会被 pip 当作"已是最新版本"跳过。
-
 需要单独编译一个或多个算子 run 包的开发者场景见[开发者指南](docs/开发者指南.md) 场景 1。
 
 #### 2.4 【可选】直接安装已发布的 wheel
 
-官方 wheel 按产品档位发布到 PyPI，按机器芯片选一个包名安装即可（CANN 与 `torch` /
-`torch_npu` / `triton-ascend` 仍要先按 Step 1 / Step 2 准备好；wheel 内嵌预编译 OPP 与离线
-编译 bundle，但**不打包**这些运行时依赖）：
-
-| 芯片 | 档位 | 安装 | 平台标签 |
-| --- | --- | --- | --- |
-| 910B（A2，`ascend910b`） | a2 | `python -m pip install flash-linear-attention-npu-a2` | `manylinux_2_34_aarch64` |
-| A3（`ascend910_93`） | a3 | `python -m pip install flash-linear-attention-npu-a3` | `manylinux_2_34_aarch64` |
-| 950（A5，`ascend950`） | a5 | `python -m pip install flash-linear-attention-npu-a5` | `manylinux_2_34_x86_64` |
-
-档位写在包名里、架构写在 wheel 标签里：pip 只会看到与本机架构匹配的文件，架构不符的轮子在
-`pip install` 阶段就被拒绝。wheel 内嵌的 OPP host 库与 Stable-ABI 薄层是按构建机架构编译的，
-因此每组（档位 × 架构）都要有对应架构的构建机，上表是本轮已具备的三组；其余组合（x86_64 上
-的 A2、aarch64 上的 A5）会在相应 runner 注册后随版本补发，包名不变。
-
-本项目不做运行期芯片识别，同一架构换档位要按芯片换包名，装错档位会在调用算子时报错；各档位
-是独立的 PyPI 项目，互不覆盖，可并排装在不同环境里。
-
-**本地自编产物与 PyPI 包同名同标签**：910B 上执行
-`FLA_NPU_SOC=ascend910b python scripts/build_wheel.py` 得到的就是
-`flash_linear_attention_npu_a2-<版本>-py3-none-manylinux_2_34_aarch64.whl`，与
-`pip install flash-linear-attention-npu-a2` 装到的是同一个发行名、同一个平台标签，两者互为
-升级路径，不会在一个环境里留下两份互不知晓的 `fla_npu/`。版本号是两者唯一的差别：
-
-| 出包类型 | 版本号 | 例（A2，分支 `v26.9.1`） |
-| --- | --- | --- |
-| 正式发布 | `<__version__>` | `26.9.1` |
-| 每日 / 日常构建 | `<__version__>+<分支>_dev<commit7>` | `26.9.1+26.9.1.dev0a1b2c3` |
-
-每日构建的本地版本取构建分支：`main` 上是 `26.7.0.dev0+main.dev0a1b2c3`，发布线 `v26.9.1` 上是
-`26.9.1+26.9.1.dev0a1b2c3`（PEP 440 把下划线规范化为点号，`pip` 也按规范化后的形式比较）。
-它既让每日包与正式包不会混为一谈，又排在**同版本正式包之上**，因此 `pip install` 一份每日
-wheel 能覆盖已装的正式包。正式出包时用 `FLA_NPU_DISABLE_LOCAL_VERSION=TRUE` 关掉这个后缀
-（发布工作流已带该开关），细节见[开发者指南](docs/开发者指南.md) 场景 6.1。
-
-一份产物既不依赖 CPython ABI 也不依赖 libtorch C++ ABI，所以 `Requires-Python` 只有下限
-`>=3.9`，不必按 Python / torch 小版本各发一份。wheel 声明 `torch>=2.7.1` /
-`torch_npu>=2.7.1`：低于该版本时薄层无法加载，`import fla_npu` 会告警并自动回退 ctypes
-实现（结果正确，只损失 host 侧加速），**不会中断导入**；离线或受控环境可用 `--no-deps`
-安装，避免 pip 按 PyPI 上的 torch_npu 版本触发升级。
-
-前置依赖下限（低于下限仍可 import，只给 RuntimeWarning；能否正常运行以实际环境为准）：
-
-| 项 | 最低版本 | 说明 |
-| --- | --- | --- |
-| CANN（a2 / a3 档位） | 8.5.2 | |
-| CANN（a5 档位） | 9.0.0 | 950 的 CANN 基线更高 |
-| `torch` / `torch_npu` | 2.7.1 | torch_npu 从昇腾社区发布安装，PyPI 上的版本通常不可用 |
-| `triton-ascend` | 3.2.0；CANN 9.x 需 ≥ 3.2.1 | 需与 CANN 版本匹配 |
-| `glibc` | 2.34 | wheel 标签即 `manylinux_2_34_<arch>`，等于构建镜像（Ubuntu 22.04）的实测水位 |
-| `libstdc++` | GLIBCXX 3.4.29 | 即 Ubuntu 22.04+ / GCC 11+；老系统上的加载失败见[离线编译与使用指南](docs/离线编译与使用指南.md) 第 7 节 |
-
-运行期后端开关（默认已是 Stable-ABI 薄层，取值不识别时按默认处理）：
-
-| 环境变量 | 取值 | 作用 |
-| --- | --- | --- |
-| `FLA_NPU_STABLE_ABI` | `ctypes` | 强制使用 ctypes 参考实现（默认优先薄层，薄层不可用时自动回退并告警一次） |
-| `FLA_NPU_STABLE_VALIDATE` | `1` | 用 ctypes 参考实现做完整入参校验，结果与默认通路逐位一致 |
-| `FLA_NPU_STABLE_TRACE` | `1` | 在 stderr 打印每个算子实际由哪个后端服务 |
-
-卸载按发行名（档位）执行：
+官方 wheel 已按产品档位发布到 PyPI，按机器芯片装对应包即可（CANN 与 `torch` / `torch_npu` /
+`triton-ascend` 仍需先按 Step 1 准备好）：
 
 ```sh
-python -m pip uninstall -y flash-linear-attention-npu-a2   # 910B
-python -m pip uninstall -y flash-linear-attention-npu-a3   # A3
-python -m pip uninstall -y flash-linear-attention-npu-a5   # 950
+python -m pip install flash-linear-attention-npu-a2   # 910B / A2
+python -m pip install flash-linear-attention-npu-a3   # A3
+python -m pip install flash-linear-attention-npu-a5   # 950 / A5
 ```
 
-> 从旧命名（不带档位的 `flash-linear-attention-npu`）升级过来的环境，先执行一次
-> `python -m pip uninstall -y flash-linear-attention-npu`，否则新旧两个发行名会同时拥有
-> `fla_npu/`，卸载其中一个会留下另一个的文件。
+档位写在包名里、架构写在 wheel 标签里，pip 会按本机架构自动选文件。同一架构下装错档位会在调用
+算子时报错，换芯片就是换包名；本地自编的 wheel 与正式包同名，可以互相覆盖安装。不再使用时按
+同名 distribution 卸载（`python -m pip uninstall -y flash-linear-attention-npu-a2`）；从旧命名
+`flash-linear-attention-npu` 升上来的环境，先卸载旧名字再装档位包。
+
+版本与依赖下限、运行期开关见[开发者指南](docs/开发者指南.md) 场景 6；离线编译 bundle 用法见
+[离线编译与使用指南](docs/离线编译与使用指南.md)。
 
 ### Step 3. 验证与测试
 

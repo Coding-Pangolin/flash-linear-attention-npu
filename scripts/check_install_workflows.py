@@ -43,9 +43,27 @@ WHEEL_PAYLOAD_SCHEMES = ("purelib", "platlib")
 
 
 def _dist_name(dist_info: Path) -> str:
-    """Project name of an installed wheel, from its dist-info directory name."""
+    """Project name of an installed wheel.
 
-    return dist_info.name[: -len(".dist-info")]
+    The directory is ``<name>-<version>.dist-info``, so dropping the suffix
+    yields a name that still carries the version -- and ``pip uninstall`` rejects
+    ``name-1.2.3`` as an invalid requirement.  The wheel's own METADATA owns the
+    project name, so read it there and only fall back to trimming the trailing
+    ``-<version>`` component when the metadata cannot be read.
+    """
+
+    metadata = dist_info / "METADATA"
+    try:
+        lines = metadata.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        if line.lower().startswith("name:"):
+            name = line.split(":", 1)[1].strip()
+            if name:
+                return name
+    stem = dist_info.name[: -len(".dist-info")]
+    return stem.rsplit("-", 1)[0] if "-" in stem else stem
 
 
 def _run(command: list[str], *, env: dict[str, str], cwd: Path) -> None:

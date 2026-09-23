@@ -61,10 +61,6 @@ FLA_NPU_SOC=ascend910b python scripts/build_wheel.py            # A2；A3→asce
 FLA_NPU_OPS=chunk_fwd_o,chunk_bwd_dv_local FLA_NPU_SOC=ascend910b python scripts/build_wheel.py
 ```
 
-`FLA_NPU_SOC` 同时决定产物档位与发行名（A2→`a2`、A3→`a3`、A5→`a5`）。`dist/` 下可能同时存在
-不同版本、不同档位的 wheel，安装时必须传入本轮构建输出的准确文件名，不要用通配符。其余与
-构建、发布相关的环境变量见[开发者指南](docs/开发者指南.md) 场景 1 / 场景 6。
-
 #### 2.3 安装
 
 ```sh
@@ -72,25 +68,6 @@ python -m pip install --force-reinstall --no-cache-dir --no-deps dist/<wheel文�
 ```
 
 需要单独编译一个或多个算子 run 包的开发者场景见[开发者指南](docs/开发者指南.md) 场景 1。
-
-#### 2.4 【可选】直接安装已发布的 wheel
-
-官方 wheel 已按产品档位发布到 PyPI，按机器芯片装对应包即可（CANN 与 `torch` / `torch_npu` /
-`triton-ascend` 仍需先按 Step 1 准备好）：
-
-```sh
-python -m pip install flash-linear-attention-npu-a2   # 910B / A2
-python -m pip install flash-linear-attention-npu-a3   # A3
-python -m pip install flash-linear-attention-npu-a5   # 950 / A5
-```
-
-档位写在包名里、架构写在 wheel 标签里，pip 会按本机架构自动选文件。同一架构下装错档位会在调用
-算子时报错，换芯片就是换包名；本地自编的 wheel 与正式包同名，可以互相覆盖安装。不再使用时按
-同名 distribution 卸载（`python -m pip uninstall -y flash-linear-attention-npu-a2`）；从旧命名
-`flash-linear-attention-npu` 升上来的环境，先卸载旧名字再装档位包。
-
-版本与依赖下限、运行期开关见[开发者指南](docs/开发者指南.md) 场景 6；离线编译 bundle 用法见
-[离线编译与使用指南](docs/离线编译与使用指南.md)。
 
 ### Step 3. 验证与测试
 

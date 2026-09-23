@@ -310,15 +310,18 @@ class WheelEnvironmentTest(unittest.TestCase):
         artifacts = self._artifacts_globals()
         version = self._public_version()
         for branch, label in (("main", "main"), ("v26.9.1", "26.9.1")):
+            # A release line names itself in the public part; only the development
+            # line has to name the branch in the local part.
+            expected = f"{label}.dev0a1b2c3" if label != version else "dev0a1b2c3"
             with mock.patch.dict(os.environ, {
                     "FLA_NPU_BRANCH_NAME": branch,
                     "FLA_NPU_COMMIT_ID": "0a1b2c3d"}):
                 os.environ.pop("FLA_NPU_DISABLE_LOCAL_VERSION", None)
                 os.environ.pop("FLA_NPU_LOCAL_VERSION", None)
                 self.assertEqual(artifacts["get_local_version"](REPO_ROOT),
-                                 f"{label}.dev0a1b2c3")
+                                 expected)
                 self.assertEqual(artifacts["get_package_version"](REPO_ROOT),
-                                 f"{version}+{label}.dev0a1b2c3")
+                                 f"{version}+{expected}")
                 # The release switch is what keeps the three tiers of one release
                 # on the single version the index expects.
                 with mock.patch.dict(os.environ,
@@ -326,6 +329,15 @@ class WheelEnvironmentTest(unittest.TestCase):
                     self.assertEqual(artifacts["get_local_version"](REPO_ROOT), "")
                     self.assertEqual(artifacts["get_package_version"](REPO_ROOT),
                                      version)
+
+        # Same rule stated as a property: whatever the branch is called, the local
+        # part never repeats the public version.
+        with mock.patch.dict(os.environ, {
+                "FLA_NPU_BRANCH_NAME": f"v{version}" if version[0].isdigit() else version,
+                "FLA_NPU_COMMIT_ID": "0a1b2c3d"}):
+            os.environ.pop("FLA_NPU_DISABLE_LOCAL_VERSION", None)
+            self.assertEqual(artifacts["get_local_version"](REPO_ROOT),
+                             "dev0a1b2c3")
 
     def test_pypi_file_name_and_wheel_tag_agree(self) -> None:
         """The upload name and the METADATA tag come from two places.

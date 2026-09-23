@@ -226,10 +226,14 @@ def get_local_version(repo_root: Path, public_version: str | None = None) -> str
     carries the bare released version from ``fla/__init__.py`` and nothing else,
     which is what ``check_pypi_wheel.py --require-release-version`` demands of an
     upload to the real index.  Every other build is labelled with where it came
-    from -- ``main_dev0a1b2c3`` on the development line, ``26.9.1_dev0a1b2c3`` on
-    the 26.9.1 line -- so a daily wheel is never mistaken for the release of the
+    from -- ``main_dev0a1b2c3`` on the development line, a bare ``dev0a1b2c3`` on
+    a release line -- so a daily wheel is never mistaken for the release of the
     same version, and it still sorts above that release (a local version outranks
     the same version without one).
+
+    A release line already names itself in the public part, so repeating it in
+    the local part would only add noise: ``26.9.1+dev0a1b2c3``, not
+    ``26.9.1+26.9.1.dev0a1b2c3``.
     """
 
     explicit = os.getenv("FLA_NPU_LOCAL_VERSION", "").strip()
@@ -238,13 +242,16 @@ def get_local_version(repo_root: Path, public_version: str | None = None) -> str
     if env_flag("FLA_NPU_DISABLE_LOCAL_VERSION"):
         return ""
 
+    version = public_version or read_public_version(repo_root)
     label = get_daily_version_label(repo_root)
+    if label == version:
+        label = ""
     commit_id = get_commit_id(repo_root)
     if not commit_id:
-        return label
+        return label or "dev"
     # PEP 440 local versions are dot-separated alphanumerics: ``main_dev0a1b2c3``
     # is normalised to ``main.dev0a1b2c3``, and pip compares the normalised form.
-    return f"{label}.dev{commit_id}"
+    return f"{label}.dev{commit_id}" if label else f"dev{commit_id}"
 
 
 def get_package_version(repo_root: Path) -> str:

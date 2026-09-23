@@ -6,8 +6,9 @@ name: Publish to PyPI (per-tier a2/a3/a5)
 # Cut a release by dispatching this workflow on the *release branch* (for example
 # v26.9.1) with pypi_repo=pypi and dry_run=false. That branch carries the released
 # version in fla/__init__.py -- the same convention the v26.6.0 line used -- while
-# main keeps its <next>.dev0 version, which may only be uploaded to TestPyPI
-# (--require-release-version enforces this for pypi_repo=pypi).
+# main keeps its <next>.dev0 version. The release gate accepts only the exact
+# released version by default, so a daily wheel cannot reach the real index even
+# by mistake.
 #
 # Daily builds use the same workflow: dispatch with dry_run=true to build and
 # verify without uploading, and download the wheels from the run's artifacts.
@@ -105,9 +106,10 @@ jobs:
       - name: Build and verify wheel in the CI image
         env:
           FLA_NPU_EXPECT_TIER: ${{ matrix.soc == 'ascend910b' && 'a2' || matrix.soc == 'ascend910_93' && 'a3' || 'a5' }}
-          # The release index must not receive a dev version: the three tiers are
-          # built from one branch, so the version has to be the released one.
-          RELEASE_VERSION_GUARD: ${{ inputs.pypi_repo == 'pypi' && '--require-release-version' || '' }}
+          # Default is the release gate: the version has to be the released one.
+          # A daily build says so explicitly, which is also how the build carries
+          # "+<branch>_dev<commit>" without failing its own gate.
+          VERSION_MODE_GUARD: ${{ inputs.release_build == false && '--allow-local-version' || '' }}
         run: |
           set -euo pipefail
           third_party_cache="${CI_CACHE_ROOT}/third_party"
@@ -117,7 +119,7 @@ jobs:
             -v "$third_party_cache:/workspace/repo/third_party" \
             -w /workspace/repo \
             -e FLA_NPU_DISABLE_LOCAL_VERSION -e FLA_NPU_BUILD_OFFLINE_BUNDLE \
-            -e FLA_NPU_SOC -e FLA_NPU_ARCH -e FLA_NPU_EXPECT_TIER -e RELEASE_VERSION_GUARD \
+            -e FLA_NPU_SOC -e FLA_NPU_ARCH -e FLA_NPU_EXPECT_TIER -e VERSION_MODE_GUARD \
             -e FLA_NPU_BRANCH_NAME -e FLA_NPU_COMMIT_ID \
             "$CI_IMAGE" bash -lc '
               set -euo pipefail
@@ -131,7 +133,7 @@ jobs:
               python scripts/check_pypi_wheel.py dist/*.whl \
                 --expect-tier "$FLA_NPU_EXPECT_TIER" \
                 --expect-arch "$FLA_NPU_ARCH" \
-                --require-offline-bundle $RELEASE_VERSION_GUARD
+                --require-offline-bundle $VERSION_MODE_GUARD
             '
 
       - name: Upload wheel

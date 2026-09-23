@@ -205,18 +205,46 @@ def get_wheel_build_tag() -> str:
     return build_tag
 
 
+def get_daily_version_label(repo_root: Path) -> str:
+    """Branch-derived prefix of a daily build's local version.
+
+    A daily wheel is "this branch as of this commit", so the label names the
+    branch: ``main`` on the development line, the released version on a release
+    line (``v26.9.1`` -> ``26.9.1``), which is the one that could otherwise be
+    confused with the release built from the same tree.
+    """
+
+    branch = get_branch_name(repo_root)
+    label = re.sub(r"^v(?=\d)", "", branch)
+    return _normalize_local_version(label) or "unknown"
+
+
 def get_local_version(repo_root: Path, public_version: str | None = None) -> str:
+    """Local version that marks a build as a daily (non-release) build.
+
+    ``FLA_NPU_DISABLE_LOCAL_VERSION=TRUE`` is the release switch: the wheel then
+    carries the bare released version from ``fla/__init__.py`` and nothing else,
+    which is what ``check_pypi_wheel.py --require-release-version`` demands of an
+    upload to the real index.  Every other build is labelled with where it came
+    from -- ``main_dev0a1b2c3`` on the development line, ``26.9.1_dev0a1b2c3`` on
+    the 26.9.1 line -- so a daily wheel is never mistaken for the release of the
+    same version, and it still sorts above that release (a local version outranks
+    the same version without one).
+    """
+
     explicit = os.getenv("FLA_NPU_LOCAL_VERSION", "").strip()
     if explicit:
         return _normalize_local_version(explicit)
     if env_flag("FLA_NPU_DISABLE_LOCAL_VERSION"):
         return ""
 
-    if get_branch_name(repo_root) != "main":
-        return ""
-
+    label = get_daily_version_label(repo_root)
     commit_id = get_commit_id(repo_root)
-    return f"main.{commit_id}" if commit_id else "main"
+    if not commit_id:
+        return label
+    # PEP 440 local versions are dot-separated alphanumerics: ``main_dev0a1b2c3``
+    # is normalised to ``main.dev0a1b2c3``, and pip compares the normalised form.
+    return f"{label}.dev{commit_id}"
 
 
 def get_package_version(repo_root: Path) -> str:

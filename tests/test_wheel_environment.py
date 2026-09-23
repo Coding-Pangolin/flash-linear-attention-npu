@@ -297,28 +297,35 @@ class WheelEnvironmentTest(unittest.TestCase):
                  f"flash_linear_attention_npu_{tier}-{version}-py3-none-"
                  "manylinux_2_34_aarch64.whl"))
 
-    def test_local_version_marks_dev_builds_only(self) -> None:
-        """A ``main`` build sorts above the release; a branch build does not.
+    def test_daily_build_is_labelled_with_its_branch_and_the_release_is_not(self) -> None:
+        """A daily build says ``<branch>_dev<commit>``; a release build says nothing.
 
-        The local version is the one difference a dev build keeps: it is what
-        makes ``pip install .`` replace a PyPI wheel of the same release instead
-        of being skipped as already satisfied.
+        The published wheel carries the bare version from ``fla/__init__.py``, so a
+        daily build of the same tree must not: daily wheels are handed out as a file,
+        and two of them must never be indistinguishable from each other or from the
+        release.  The label is also what makes ``pip install .`` replace a released
+        wheel of the same version instead of skipping it as already satisfied.
         """
 
         artifacts = self._artifacts_globals()
         version = self._public_version()
-        os.environ.pop("FLA_NPU_DISABLE_LOCAL_VERSION", None)
-        os.environ.pop("FLA_NPU_LOCAL_VERSION", None)
-        if artifacts["get_branch_name"](REPO_ROOT) == "main":
-            self.assertRegex(artifacts["get_package_version"](REPO_ROOT),
-                             rf"^{re.escape(version)}\+main\.[0-9a-f]+$")
-        else:
-            self.assertEqual(artifacts["get_package_version"](REPO_ROOT), version)
-
-        # The release workflow pins the version it publishes; that switch is
-        # what keeps the three tiers of one release on the same version.
-        with mock.patch.dict(os.environ, {"FLA_NPU_DISABLE_LOCAL_VERSION": "TRUE"}):
-            self.assertEqual(artifacts["get_package_version"](REPO_ROOT), version)
+        for branch, label in (("main", "main"), ("v26.9.1", "26.9.1")):
+            with mock.patch.dict(os.environ, {
+                    "FLA_NPU_BRANCH_NAME": branch,
+                    "FLA_NPU_COMMIT_ID": "0a1b2c3d"}):
+                os.environ.pop("FLA_NPU_DISABLE_LOCAL_VERSION", None)
+                os.environ.pop("FLA_NPU_LOCAL_VERSION", None)
+                self.assertEqual(artifacts["get_local_version"](REPO_ROOT),
+                                 f"{label}.dev0a1b2c3")
+                self.assertEqual(artifacts["get_package_version"](REPO_ROOT),
+                                 f"{version}+{label}.dev0a1b2c3")
+                # The release switch is what keeps the three tiers of one release
+                # on the single version the index expects.
+                with mock.patch.dict(os.environ,
+                                     {"FLA_NPU_DISABLE_LOCAL_VERSION": "TRUE"}):
+                    self.assertEqual(artifacts["get_local_version"](REPO_ROOT), "")
+                    self.assertEqual(artifacts["get_package_version"](REPO_ROOT),
+                                     version)
 
     def test_pypi_file_name_and_wheel_tag_agree(self) -> None:
         """The upload name and the METADATA tag come from two places.

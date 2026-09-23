@@ -8,6 +8,12 @@ name: Publish to PyPI (per-tier a2/a3/a5)
 # version in fla/__init__.py -- the same convention the v26.6.0 line used -- while
 # main keeps its <next>.dev0 version, which may only be uploaded to TestPyPI
 # (--require-release-version enforces this for pypi_repo=pypi).
+#
+# Daily builds use the same workflow: dispatch with dry_run=true to build and
+# verify without uploading, and download the wheels from the run's artifacts.
+# release_build is what separates the two identities: on (default) the wheel
+# carries the bare version from fla/__init__.py, off it carries
+# "+<branch>_dev<commit>", so a daily wheel can never be mistaken for a release.
 on:
   workflow_dispatch:
     inputs:
@@ -39,6 +45,10 @@ on:
           - aarch64
           - x86_64
         default: all
+      release_build:
+        description: "Official release version (off = daily build, labelled +<branch>_dev<commit>)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -72,10 +82,18 @@ jobs:
             runner_labels: '["self-hosted","linux","x64","npu","ascend950","flash-linear-attention-npu-a5"]'
             image: fla-npu-ci:9.1.0-950
     env:
-      FLA_NPU_DISABLE_LOCAL_VERSION: "TRUE"
+      # The release switch: on, the wheel carries the released version alone;
+      # off, it is a daily build labelled with its branch and commit.
+      FLA_NPU_DISABLE_LOCAL_VERSION: ${{ inputs.release_build && 'TRUE' || 'FALSE' }}
       FLA_NPU_BUILD_OFFLINE_BUNDLE: "TRUE"
       FLA_NPU_SOC: ${{ matrix.soc }}
       FLA_NPU_ARCH: ${{ matrix.arch }}
+      # The checkout is a detached HEAD and the build runs inside an image that
+      # need not have the branch checked out, so name the build's source here:
+      # a daily wheel is labelled "+<branch>_dev<commit>" and has to say which
+      # branch it came from.
+      FLA_NPU_BRANCH_NAME: ${{ github.ref_name }}
+      FLA_NPU_COMMIT_ID: ${{ github.sha }}
       CI_IMAGE: ${{ matrix.image }}
       # Same warm cache the NPU CI uses, so the embedded offline bundle is built
       # from a seeded third_party tree instead of a network fetch.
@@ -100,6 +118,7 @@ jobs:
             -w /workspace/repo \
             -e FLA_NPU_DISABLE_LOCAL_VERSION -e FLA_NPU_BUILD_OFFLINE_BUNDLE \
             -e FLA_NPU_SOC -e FLA_NPU_ARCH -e FLA_NPU_EXPECT_TIER -e RELEASE_VERSION_GUARD \
+            -e FLA_NPU_BRANCH_NAME -e FLA_NPU_COMMIT_ID \
             "$CI_IMAGE" bash -lc '
               set -euo pipefail
               source /usr/local/Ascend/ascend-toolkit/set_env.sh

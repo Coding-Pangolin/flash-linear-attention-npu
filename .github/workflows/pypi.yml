@@ -56,32 +56,74 @@ permissions:
   id-token: write  # required for trusted publishing (OIDC) to PyPI
 
 jobs:
+  # The (SoC, arch) rows are filtered here rather than by a job-level ``if``:
+  # GitHub does not expose the ``matrix`` context to ``jobs.<id>.if``, and a
+  # workflow that reads it there is rejected as an invalid workflow file -- the
+  # run fails before a single job starts.  Selecting the rows first also keeps a
+  # skipped dispatch from touching a self-hosted runner at all.
+  select:
+    name: 选择构建矩阵
+    runs-on: ubuntu-latest
+    outputs:
+      build_matrix: ${{ steps.rows.outputs.build_matrix }}
+      publish_matrix: ${{ steps.rows.outputs.publish_matrix }}
+    steps:
+      - name: 按 soc / arch 过滤 (SoC, arch) 行
+        id: rows
+        env:
+          # One row is one published wheel and one runner: the wheel embeds host
+          # libraries compiled on that runner (the OPP host libraries and the
+          # Stable-ABI launcher), and FLA_NPU_ARCH only labels the artifact.  A
+          # new arch therefore means a new row here once its runner is registered.
+          ROWS: |
+            [
+              {
+                "soc": "ascend910b",
+                "tier": "a2",
+                "arch": "aarch64",
+                "runner_labels": "[\"self-hosted\",\"linux\",\"arm64\",\"npu\",\"flash-linear-attention-npu\"]",
+                "image": "fla-npu-ci:9.1.0-910b"
+              },
+              {
+                "soc": "ascend910_93",
+                "tier": "a3",
+                "arch": "aarch64",
+                "runner_labels": "[\"self-hosted\",\"linux\",\"arm64\",\"npu\",\"flash-linear-attention-npu\"]",
+                "image": "fla-npu-ci:9.1.0-910b"
+              },
+              {
+                "soc": "ascend950",
+                "tier": "a5",
+                "arch": "x86_64",
+                "runner_labels": "[\"self-hosted\",\"linux\",\"x64\",\"npu\",\"ascend950\",\"flash-linear-attention-npu-a5\"]",
+                "image": "fla-npu-ci:9.1.0-950"
+              }
+            ]
+          REQUESTED_SOC: ${{ inputs.soc }}
+          REQUESTED_ARCH: ${{ inputs.arch }}
+        run: |
+          set -euo pipefail
+          rows=$(printf '%s' "$ROWS" | jq -c --arg soc "$REQUESTED_SOC" --arg arch "$REQUESTED_ARCH" \
+            'map(select(($soc == "all" or .soc == $soc) and ($arch == "all" or .arch == $arch)))')
+          if [ "$(printf '%s' "$rows" | jq 'length')" -eq 0 ]; then
+            echo "::error::没有匹配的 (SoC, arch) 行：soc=$REQUESTED_SOC arch=$REQUESTED_ARCH"
+            exit 1
+          fi
+          # Only what was built may be published, and each tier has its own
+          # environment because PyPI wants one trusted publisher per project.
+          publish=$(printf '%s' "$rows" | jq -c \
+            'map(.tier) | map({tier: ., env_pypi: ("pypi-" + .), env_testpypi: ("testpypi-" + .)})')
+          echo "build_matrix=$(printf '%s' "$rows" | jq -c '{include: .}')" >> "$GITHUB_OUTPUT"
+          echo "publish_matrix=$(printf '%s' "$publish" | jq -c '{include: .}')" >> "$GITHUB_OUTPUT"
+
   build:
     name: "build ${{ matrix.soc }} / ${{ matrix.arch }}"
-    # One row per published wheel.  The row's runner decides the wheel arch: the
-    # wheel embeds host libraries compiled on that runner (the OPP host libraries
-    # and the Stable-ABI launcher), and FLA_NPU_ARCH only labels the artifact.
-    # Only (SoC, arch) pairs with a matching runner can be built, so publishing a
-    # new arch means adding its row here once its runner is registered.
-    if: ${{ (inputs.soc == 'all' || inputs.soc == matrix.soc) && (inputs.arch == 'all' || inputs.arch == matrix.arch) }}
+    needs: select
     runs-on: ${{ fromJSON(matrix.runner_labels) }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - soc: ascend910b
-            arch: aarch64
-            runner_labels: '["self-hosted","linux","arm64","npu","flash-linear-attention-npu"]'
-            image: fla-npu-ci:9.1.0-910b
-          - soc: ascend910_93
-            arch: aarch64
-            runner_labels: '["self-hosted","linux","arm64","npu","flash-linear-attention-npu"]'
-            image: fla-npu-ci:9.1.0-910b
-          - soc: ascend950
-            arch: x86_64
-            runner_labels: '["self-hosted","linux","x64","npu","ascend950","flash-linear-attention-npu-a5"]'
-            image: fla-npu-ci:9.1.0-950
+      matrix: ${{ fromJSON(needs.select.outputs.build_matrix) }}
     env:
       # The release switch: on, the wheel carries the released version alone;
       # off, it is a daily build labelled with its branch and commit.
@@ -105,7 +147,7 @@ jobs:
 
       - name: Build and verify wheel in the CI image
         env:
-          FLA_NPU_EXPECT_TIER: ${{ matrix.soc == 'ascend910b' && 'a2' || matrix.soc == 'ascend910_93' && 'a3' || 'a5' }}
+          FLA_NPU_EXPECT_TIER: ${{ matrix.tier }}
           # Default is the release gate: the version has to be the released one.
           # A daily build says so explicitly, which is also how the build carries
           # "+<branch>_dev<commit>" without failing its own gate.
@@ -145,25 +187,14 @@ jobs:
 
   publish:
     name: "Publish ${{ matrix.tier }} to ${{ inputs.pypi_repo }}"
-    needs: build
-    if: ${{ !inputs.dry_run && (inputs.soc == 'all' || inputs.soc == matrix.soc) }}
+    needs: [select, build]
+    # Both the tier list and the environment names come from the rows the build
+    # actually ran, so a dispatch that built only a2 cannot publish a3 or a5.
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - tier: a2
-            soc: ascend910b
-            env_pypi: pypi-a2
-            env_testpypi: testpypi-a2
-          - tier: a3
-            soc: ascend910_93
-            env_pypi: pypi-a3
-            env_testpypi: testpypi-a3
-          - tier: a5
-            soc: ascend950
-            env_pypi: pypi-a5
-            env_testpypi: testpypi-a5
+      matrix: ${{ fromJSON(needs.select.outputs.publish_matrix) }}
     # PyPI requires one trusted publisher configuration per project name; the
     # (owner + repository + workflow file + environment) tuple must be unique.
     # Each tier therefore uses its own environment:

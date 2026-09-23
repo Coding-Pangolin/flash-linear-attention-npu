@@ -224,8 +224,8 @@ def get_local_version(repo_root: Path, public_version: str | None = None) -> str
 
     ``FLA_NPU_DISABLE_LOCAL_VERSION=TRUE`` is the release switch: the wheel then
     carries the bare released version from ``fla/__init__.py`` and nothing else,
-    which is what ``check_pypi_wheel.py --require-release-version`` demands of an
-    upload to the real index.  Every other build is labelled with where it came
+    which is what ``check_pypi_wheel.py`` demands of an upload to the real index
+    (its default is the exact released version).  Every other build is labelled with where it came
     from -- ``main_dev0a1b2c3`` on the development line, a bare ``dev0a1b2c3`` on
     a release line -- so a daily wheel is never mistaken for the release of the
     same version, and it still sorts above that release (a local version outranks

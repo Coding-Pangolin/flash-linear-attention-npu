@@ -418,10 +418,10 @@ class WheelEnvironmentTest(unittest.TestCase):
 
     def _write_release_wheel(self, path: Path, *, tier: str, soc: str,
                              declared_tier: str | None = None,
-                             prefix: str = "") -> None:
+                             prefix: str = "", version: str = "26.9.0") -> None:
         """A minimal wheel with the file name, metadata and payload the gate reads."""
 
-        info = f"flash_linear_attention_npu_{tier}-26.9.0.dist-info"
+        info = f"flash_linear_attention_npu_{tier}-{version}.dist-info"
         vendor = "fla_npu/opp/vendors/fla_npu_transformer"
         entries = {
             "fla_npu/libfla_npu_stable.so": b"\x7fELF stable",
@@ -436,7 +436,7 @@ class WheelEnvironmentTest(unittest.TestCase):
             archive.writestr(f"{info}/METADATA", (
                 "Metadata-Version: 2.1\n"
                 f"Name: flash-linear-attention-npu-{tier}\n"
-                "Version: 26.9.0\n"
+                f"Version: {version}\n"
                 "Requires-Python: >=3.9\n"
                 "Requires-Dist: torch>=2.7.1\n"
                 "Requires-Dist: torch_npu>=2.7.1\n"))
@@ -490,6 +490,52 @@ class WheelEnvironmentTest(unittest.TestCase):
             with mock.patch("shutil.which", return_value=None):
                 with self.assertRaisesRegex(gate["CheckFailure"], "kernels"):
                     run_gate(wheel)
+
+    def test_release_gate_tells_a_daily_build_from_a_release(self) -> None:
+        """The gate is strict by default; a daily build has to say it is one.
+
+        A daily wheel is ``<version>+<branch>_dev<commit>``.  If the gate accepted
+        that by default, the same command that guards an upload would also let a
+        daily artifact through, so a local version is rejected unless the caller
+        declares the build as a daily one.
+        """
+
+        gate = runpy.run_path(str(REPO_ROOT / "scripts" / "check_pypi_wheel.py"))
+
+        def run_gate(wheel: Path, *, allow_local_version: bool):
+            return gate["check_wheel"](
+                wheel,
+                expect_tier="a2",
+                expect_arch="aarch64",
+                expect_version="26.9.0",
+                allow_local_version=allow_local_version,
+                require_offline_bundle=False,
+                require_launcher=True,
+                max_glibc="2.34",
+                max_glibcxx="3.4.29",
+                allow_missing_readelf=True,
+            )
+
+        daily_version = "26.9.0+dev989856a"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wheel = Path(temp_dir) / (
+                f"flash_linear_attention_npu_a2-{daily_version}-py3-none-"
+                "manylinux_2_34_aarch64.whl")
+            self._write_release_wheel(wheel, tier="a2", soc="ascend910b",
+                                      version=daily_version)
+            with mock.patch("shutil.which", return_value=None):
+                with self.assertRaisesRegex(gate["CheckFailure"],
+                                            r"allow-local-version"):
+                    run_gate(wheel, allow_local_version=False)
+                run_gate(wheel, allow_local_version=True)
+
+            # The same daily shape built from another tree still fails: the flag
+            # must not double as "any version is fine".
+            self._write_release_wheel(wheel, tier="a2", soc="ascend910b",
+                                      version="26.9.1+dev989856a")
+            with mock.patch("shutil.which", return_value=None):
+                with self.assertRaisesRegex(gate["CheckFailure"], "daily build"):
+                    run_gate(wheel, allow_local_version=True)
 
     def test_release_gate_accepts_wheels_staged_under_data_purelib(self) -> None:
         """The layout setup.py really produces has to pass the gate.

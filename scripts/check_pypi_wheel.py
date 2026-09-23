@@ -24,6 +24,13 @@ Every build -- local, GitHub Release or PyPI -- produces the same distribution
 name, platform tag and tier metadata this gate expects, so a developer can run
 this on a wheel they built themselves before it becomes a release.
 
+The version is the one thing that differs by build type, and the default is the
+strict one: ``Version`` must equal ``__version__`` exactly, which is what a
+published wheel carries.  A daily build is labelled
+``<version>+<branch>_dev<commit>`` and has to be declared as such with
+``--allow-local-version``; the failure message says so, so a daily wheel can
+never be uploaded to the real index by accident.
+
 Usage:
     python scripts/check_pypi_wheel.py dist/*.whl \
         --expect-tier a2 --expect-arch aarch64 --require-offline-bundle
@@ -193,6 +200,8 @@ def check_wheel(
     expect_tier: str | None,
     expect_arch: str | None,
     expect_version: str | None,
+    # Fails closed: without it the version must be the released one exactly.
+    allow_local_version: bool = False,
     require_offline_bundle: bool,
     require_launcher: bool,
     max_glibc: str,
@@ -264,11 +273,27 @@ def check_wheel(
                 f"{wheel.name}: METADATA Name {fields['Name'][0]!r} does not match "
                 f"the file name {parts['distribution']!r}"
             )
-        if expect_version and fields["Version"][0] != expect_version:
-            raise CheckFailure(
-                f"{wheel.name}: METADATA Version {fields['Version'][0]!r} != "
-                f"{expect_version!r}"
-            )
+        if expect_version:
+            version = fields["Version"][0]
+            public, _, local = version.partition("+")
+            if allow_local_version:
+                # A daily build: the version has to be a build of this tree, and
+                # the local part is what says which branch and commit it came from.
+                if public != expect_version:
+                    raise CheckFailure(
+                        f"{wheel.name}: METADATA Version {version!r} is not a daily "
+                        f"build of {expect_version!r}"
+                    )
+            elif version != expect_version:
+                hint = (
+                    " (a daily build carries a +<branch>_dev<commit> local version; "
+                    "pass --allow-local-version to accept it)"
+                    if local
+                    else ""
+                )
+                raise CheckFailure(
+                    f"{wheel.name}: METADATA Version {version!r} != {expect_version!r}{hint}"
+                )
         requires_python = " ".join(fields.get("Requires-Python", []))
         if "3.9" not in requires_python:
             raise CheckFailure(
@@ -419,6 +444,12 @@ def main() -> int:
     )
     parser.add_argument("--require-offline-bundle", action="store_true")
     parser.add_argument(
+        "--allow-local-version",
+        action="store_true",
+        help="accept a daily build: <version>+<branch>_dev<commit>; without it the "
+             "version must equal __version__ exactly (what a published wheel carries)",
+    )
+    parser.add_argument(
         "--without-launcher",
         action="store_true",
         help="the wheel was built with FLA_NPU_BUILD_STABLE_ABI=0",
@@ -447,6 +478,7 @@ def main() -> int:
                 expect_tier=args.expect_tier,
                 expect_arch=args.expect_arch,
                 expect_version=expect_version,
+                allow_local_version=args.allow_local_version,
                 require_offline_bundle=args.require_offline_bundle,
                 require_launcher=not args.without_launcher,
                 max_glibc=args.max_glibc,

@@ -27,7 +27,8 @@ this on a wheel they built themselves before it becomes a release.
 The version is the one thing that differs by build type, and the default is the
 strict one: ``Version`` must equal ``__version__`` exactly, which is what a
 published wheel carries.  A daily build is labelled
-``<version>+<branch>_dev<commit>`` and has to be declared as such with
+``<release>+<branch>_dev<commit>`` -- the public part is ``__version__`` with a
+trailing ``.devN`` dropped -- and has to be declared as such with
 ``--allow-local-version``; the failure message says so, so a daily wheel can
 never be uploaded to the real index by accident.
 
@@ -60,6 +61,12 @@ DEFAULT_MAX_GLIBCXX = "3.4.29"
 # Kept beside ``DEFAULT_MAX_GLIBC`` so a bare checkout can check a wheel without
 # importing the build helper; tests assert the two stay in step.
 EXPECTED_PLATFORM_PREFIX = "manylinux_2_34"
+
+# A development line carries ``<next>.dev0`` in fla/__init__.py; a daily build of
+# it drops the ``.devN``, so the local version is the only thing that says "not
+# released yet".  Kept in step with scripts/fla_npu_artifacts.daily_base_version
+# by tests/test_wheel_environment.py.
+DAILY_BASE_SUFFIX = re.compile(r"\.dev\d+$")
 
 TIER_SOC = {"a2": "ascend910b", "a3": "ascend910_93", "a5": "ascend950"}
 
@@ -279,7 +286,7 @@ def check_wheel(
             if allow_local_version:
                 # A daily build: the version has to be a build of this tree, and
                 # the local part is what says which branch and commit it came from.
-                if public != expect_version:
+                if public != DAILY_BASE_SUFFIX.sub("", expect_version):
                     raise CheckFailure(
                         f"{wheel.name}: METADATA Version {version!r} is not a daily "
                         f"build of {expect_version!r}"

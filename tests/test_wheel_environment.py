@@ -309,6 +309,7 @@ class WheelEnvironmentTest(unittest.TestCase):
 
         artifacts = self._artifacts_globals()
         version = self._public_version()
+        daily_base = re.sub(r"\.dev\d+$", "", version)
         for branch, label in (("main", "main"), ("v26.9.1", "26.9.1")):
             # A release line names itself in the public part; only the development
             # line has to name the branch in the local part.
@@ -321,7 +322,7 @@ class WheelEnvironmentTest(unittest.TestCase):
                 self.assertEqual(artifacts["get_local_version"](REPO_ROOT),
                                  expected)
                 self.assertEqual(artifacts["get_package_version"](REPO_ROOT),
-                                 f"{version}+{expected}")
+                                 f"{daily_base}+{expected}")
                 # The release switch is what keeps the three tiers of one release
                 # on the single version the index expects.
                 with mock.patch.dict(os.environ,
@@ -338,6 +339,29 @@ class WheelEnvironmentTest(unittest.TestCase):
             os.environ.pop("FLA_NPU_DISABLE_LOCAL_VERSION", None)
             self.assertEqual(artifacts["get_local_version"](REPO_ROOT),
                              "dev0a1b2c3")
+
+    def test_daily_build_of_a_development_line_drops_the_dev_number(self) -> None:
+        """``26.10.0.dev0`` builds as ``26.10.0+main_dev<commit>``.
+
+        The development line carries the next release as ``<next>.dev0`` in
+        ``fla/__init__.py``.  A daily build of that line names the release it
+        leads to, so the local part is the only thing that says "not released
+        yet" -- and the gate has to read the same rule, or the wheel the build
+        produces would be rejected by the gate that guards it.
+        """
+
+        artifacts = self._artifacts_globals()
+        self.assertEqual(artifacts["daily_base_version"]("26.10.0.dev0"), "26.10.0")
+        # A released version has nothing to drop, and the rule only eats the
+        # ``.devN`` PEP 440 spells a development release with.
+        self.assertEqual(artifacts["daily_base_version"]("26.9.1"), "26.9.1")
+        self.assertEqual(artifacts["daily_base_version"]("26.10.0.dev"),
+                         "26.10.0.dev")
+
+        gate = runpy.run_path(str(REPO_ROOT / "scripts" / "check_pypi_wheel.py"))
+        self.assertEqual(gate["DAILY_BASE_SUFFIX"].sub("", "26.10.0.dev0"),
+                         "26.10.0")
+        self.assertEqual(gate["DAILY_BASE_SUFFIX"].sub("", "26.9.1"), "26.9.1")
 
     def test_pypi_file_name_and_wheel_tag_agree(self) -> None:
         """The upload name and the METADATA tag come from two places.
@@ -494,7 +518,7 @@ class WheelEnvironmentTest(unittest.TestCase):
     def test_release_gate_tells_a_daily_build_from_a_release(self) -> None:
         """The gate is strict by default; a daily build has to say it is one.
 
-        A daily wheel is ``<version>+<branch>_dev<commit>``.  If the gate accepted
+        A daily wheel is ``<release>+<branch>_dev<commit>``.  If the gate accepted
         that by default, the same command that guards an upload would also let a
         daily artifact through, so a local version is rejected unless the caller
         declares the build as a daily one.
@@ -502,12 +526,13 @@ class WheelEnvironmentTest(unittest.TestCase):
 
         gate = runpy.run_path(str(REPO_ROOT / "scripts" / "check_pypi_wheel.py"))
 
-        def run_gate(wheel: Path, *, allow_local_version: bool):
+        def run_gate(wheel: Path, *, allow_local_version: bool,
+                     expect_version: str = "26.9.0"):
             return gate["check_wheel"](
                 wheel,
                 expect_tier="a2",
                 expect_arch="aarch64",
-                expect_version="26.9.0",
+                expect_version=expect_version,
                 allow_local_version=allow_local_version,
                 require_offline_bundle=False,
                 require_launcher=True,
@@ -536,6 +561,18 @@ class WheelEnvironmentTest(unittest.TestCase):
             with mock.patch("shutil.which", return_value=None):
                 with self.assertRaisesRegex(gate["CheckFailure"], "daily build"):
                     run_gate(wheel, allow_local_version=True)
+
+            # A daily build of the development line: the wheel drops the
+            # ``.dev0`` that ``__version__`` carries, and the gate reads the same
+            # rule instead of demanding the version it will never see.
+            self._write_release_wheel(wheel, tier="a2", soc="ascend910b",
+                                      version="26.10.0+main.dev0a1b2c3")
+            with mock.patch("shutil.which", return_value=None):
+                run_gate(wheel, allow_local_version=True,
+                         expect_version="26.10.0.dev0")
+                with self.assertRaisesRegex(gate["CheckFailure"], "daily build"):
+                    run_gate(wheel, allow_local_version=True,
+                             expect_version="26.10.1.dev0")
 
     def test_release_gate_accepts_wheels_staged_under_data_purelib(self) -> None:
         """The layout setup.py really produces has to pass the gate.

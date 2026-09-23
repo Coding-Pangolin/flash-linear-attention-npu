@@ -219,6 +219,19 @@ def get_daily_version_label(repo_root: Path) -> str:
     return _normalize_local_version(label) or "unknown"
 
 
+# A development line writes ``<next>.dev0`` in fla/__init__.py, and a daily build
+# of that line names the release it leads to: the local part is the only thing
+# that says "not released yet", so ``26.10.0+main_dev0a1b2c3`` rather than
+# ``26.10.0.dev0+main_dev0a1b2c3``.
+_DEV_NUMBER_SUFFIX = re.compile(r"\.dev\d+$")
+
+
+def daily_base_version(public_version: str) -> str:
+    """Public version a daily build of *public_version* is labelled with."""
+
+    return _DEV_NUMBER_SUFFIX.sub("", public_version)
+
+
 def get_local_version(repo_root: Path, public_version: str | None = None) -> str:
     """Local version that marks a build as a daily (non-release) build.
 
@@ -234,6 +247,8 @@ def get_local_version(repo_root: Path, public_version: str | None = None) -> str
     A release line already names itself in the public part, so repeating it in
     the local part would only add noise: ``26.9.1+dev0a1b2c3``, not
     ``26.9.1+26.9.1.dev0a1b2c3``.
+    The public part of a daily build is ``daily_base_version``, so the
+    development line reads ``26.10.0+main_dev0a1b2c3`` too.
     """
 
     explicit = os.getenv("FLA_NPU_LOCAL_VERSION", "").strip()
@@ -259,7 +274,9 @@ def get_package_version(repo_root: Path) -> str:
     local_version = get_local_version(repo_root, public_version)
     if not local_version:
         return public_version
-    return f"{public_version}+{local_version}"
+    # A daily build of a development line names the release it leads to, not the
+    # ``<next>.dev0`` the tree carries while that release is still unwritten.
+    return f"{daily_base_version(public_version)}+{local_version}"
 
 
 def get_wheel_filename(repo_root: Path) -> str:

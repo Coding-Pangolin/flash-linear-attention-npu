@@ -772,10 +772,16 @@ private:
             PipeBarrier<PIPE_ALL>();
             DataCopy(extBlkF_, dhBuf[rb * CV_V], RB * CV_V);
             PipeBarrier<PIPE_ALL>();
-            for (int32_t r = rb; r < rb + RB; ++r) {
-                const float dc = usePrevDecay ? decayPrevF_.GetValue(useG ? 0 : r)
-                                              : (useG ? decayF_.GetValue(0) : decayF_.GetValue(r));
-                Muls(stateBlkF_[(r - rb) * CV_V], stateBlkF_[(r - rb) * CV_V], dc, CV_V);
+            if (useG) {
+                // GDN：每 chunk 一个标量 decay ⇒ 整块一次 Muls（原来 16 次逐行 Muls +
+                // 16 次 GetValue；h/m 合计每 chunk 每子核 128 次，是 AIV SCALAR 的主要来源）
+                const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
+                Muls(stateBlkF_, stateBlkF_, dc, RB * CV_V);
+            } else {
+                for (int32_t r = rb; r < rb + RB; ++r) {
+                    const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
+                    Muls(stateBlkF_[(r - rb) * CV_V], stateBlkF_[(r - rb) * CV_V], dc, CV_V);
+                }
             }
             PipeBarrier<PIPE_V>();
             Add(stateBlkF_, stateBlkF_, extBlkF_, RB * CV_V);
@@ -792,10 +798,14 @@ private:
             PipeBarrier<PIPE_ALL>();
             DataCopy(extBlkF_, t2Buf[rb * CV_K], RB * CV_K);
             PipeBarrier<PIPE_ALL>();
-            for (int32_t r = rb; r < rb + RB; ++r) {
-                const float dc = usePrevDecay ? decayPrevF_.GetValue(useG ? 0 : r)
-                                              : (useG ? decayF_.GetValue(0) : decayF_.GetValue(r));
-                Muls(stateBlkF_[(r - rb) * CV_K], stateBlkF_[(r - rb) * CV_K], dc, CV_K);
+            if (useG) {
+                const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
+                Muls(stateBlkF_, stateBlkF_, dc, RB * CV_K);
+            } else {
+                for (int32_t r = rb; r < rb + RB; ++r) {
+                    const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
+                    Muls(stateBlkF_[(r - rb) * CV_K], stateBlkF_[(r - rb) * CV_K], dc, CV_K);
+                }
             }
             PipeBarrier<PIPE_V>();
             Sub(stateBlkF_, stateBlkF_, extBlkF_, RB * CV_K);

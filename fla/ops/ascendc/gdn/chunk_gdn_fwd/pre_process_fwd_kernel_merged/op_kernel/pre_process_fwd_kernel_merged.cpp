@@ -178,6 +178,10 @@ using TiledCopyNT = Common::Tile::PackedTileCopyTlaToUB<
 using TiledCopyTA = Common::Tile::PackedTileCopyTlaToUB<
     TiledArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor,
     float, Catlass::layout::RowMajor>;
+// ITER8（A2）：NT 形态的 C 直接落 UB，SPLIT_M（前一半行→低半区、后一半行→高半区）
+using TiledCopyNTSplitUb = Common::Tile::PackedTileCopyTlaToUB<
+    TiledArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor,
+    float, Catlass::layout::RowMajor, void, Catlass::Gemm::Tile::CopyL0CToUBMode::SPLIT_M>;
 using TiledMmadNT = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
                                                      typename TiledCopyNT::LayoutTagL1A>;
 using TiledMmadTA = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
@@ -653,7 +657,10 @@ private:
         // ---- staging：**按整段（16 行）分配 subcore**，段内自己完成"清零/搬运/left 计算/落盘"----
         // 这样既没有两个 subcore 重复搬运，也不存在"块级算术读另一个 subcore 半成品"的竞态
         constexpr int32_t SEG = 16;
-        for (int32_t seg = subIdx_; seg < CV_BT / SEG; seg += subNum_) {
+        // ITER8（A2）：段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
+        // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
+        constexpr int32_t SEG_PER_SUB = (CV_BT / SEG) / PPFM_SUB;
+        for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
             const int32_t valid = (rows > off) ? ((rows - off < SEG) ? (rows - off) : SEG) : 0;
             // ITER2：只有尾块需要零填充（整段时下面的 DataCopy 会写满整段）
@@ -709,14 +716,10 @@ private:
     {
         const bool useG = (ctx_.tiling->gateMode == PPFM_GATE_USE_G);
         AivWaitFromAic(kFlagHalf1);
-        // 过渡措施（L0C→UB 直连落地后删除）：flag 到达时 AIC 的 C 写回可能仍在途，
-        // 先"探读"一次再加屏障，把读到上一代/零值的窗口关掉（实测探针版连续 6 轮干净）。
-        DataCopy(row2F_, vTmpF_, 8);
-        PipeBarrier<PIPE_ALL>();
+        // ITER8（A2）：vTmp 走 UB（fixpipe SPLIT_M 直落），原来的"探读 vTmpF_ + DCCI"
+        // 过渡措施随之删除；T1 仍走 GM，保留它的探读与 DCCI
         DataCopy(row2F_, t1F_, 8);
         PipeBarrier<PIPE_ALL>();
-        DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
-                                 DcciDst::CACHELINE_OUT>(vTmpF_);
 #if PPFM_DIAG
         // 诊断：记下"本子核读到的 vTmpF_[0]"（chunk 0 时它必须恰好是 0）
         if (curChunk_ < PPFM_DIAG_CHUNKS) {
@@ -730,12 +733,14 @@ private:
         // v_new = (v - vTmp) · dg → bf16（逐行；整块版本会引入 ~0.4% 的 GDN 偏差，待查）
         // v_new = (v - vTmp)·dg → bf16：同样**按整段分配 subcore**，段内做完 Cast/Sub/缩放/Cast/落盘
         constexpr int32_t SEG = 16;
-        for (int32_t seg = subIdx_; seg < CV_BT / SEG; seg += subNum_) {
+        // ITER8（A2）：段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
+        // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
+        constexpr int32_t SEG_PER_SUB = (CV_BT / SEG) / PPFM_SUB;
+        for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
-            // extBlkF_ 是 per-subcore 的（只有 2 段的空间），段内用本地偏移
-            const int32_t lo = (seg - subIdx_) / subNum_ * SEG;
-            DataCopy(extBlkF_[lo * CV_V], vTmpF_[off * CV_V], SEG * CV_V);
-            PipeBarrier<PIPE_ALL>();
+            // ITER8（A2）：vTmp 已由 AIC 的 fixpipe(SPLIT_M) 落在 extBlkF_ 里，
+            // 子核按本地段号取自己那半，不再从 GM 回读（去掉了 C 的 HBM 往返与可见性窗口）
+            const int32_t lo = (seg - subIdx_ * SEG_PER_SUB) * SEG;
             Cast(scrF_[off * CV_V], vBlkBf_[off * CV_V], RoundMode::CAST_NONE, SEG * CV_V);
             PipeBarrier<PIPE_V>();
             Sub(scrF_[off * CV_V], scrF_[off * CV_V], extBlkF_[lo * CV_V], SEG * CV_V);
@@ -752,7 +757,10 @@ private:
             PipeBarrier<PIPE_ALL>();
         }
         // bf16(T1)：同样按段分配
-        for (int32_t seg = subIdx_; seg < CV_BT / SEG; seg += subNum_) {
+        // ITER8（A2）：段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
+        // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
+        constexpr int32_t SEG_PER_SUB = (CV_BT / SEG) / PPFM_SUB;
+        for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
             DataCopy(scrF_[off * CV_K], t1F_[off * CV_K], SEG * CV_K);
             PipeBarrier<PIPE_ALL>();
@@ -957,7 +965,7 @@ private:
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(mBf_);
 #if PPFM_TILE_MMAD
-        RunTiledNT(wBf_, hBf_, vTmpF_, CV_BT, CV_V, CV_K);
+        RunTiledNT(wBf_, hBf_, vTmpF_, CV_BT, CV_V, CV_K, /*toUb=*/true);   // ITER8（A2）
 #else
         RunMmadNT(wBf_, hBf_, vTmpF_, CV_BT, CV_V, CV_K);
 #endif
@@ -971,8 +979,8 @@ private:
         // ⚠ 写侧也要 clean（写回），只靠读者 DCCI 不够：FIX 写回可能还停在写缓冲里，
         //   此时 AIV 即便 DCCI 也会读到旧值。实测（PPFM_DIAG 指纹）：AIV 读到 vTmp 全 0，
         //   而 AIC 实际写了 -0.013/+0.0092 → v_new 退化成 v，h 半边随机整头崩（m 不受影响）。
-        DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
-                                 DcciDst::CACHELINE_OUT>(vTmpF_);
+        // ITER8（A2）：vTmp 已不经 GM（fixpipe 直落 UB），写侧不再需要它的 DCCI；
+        // T1 仍落 GM，保留 DCCI + DDR 屏障后再抬 flag
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1F_);
         // ⚠ 正式原语：DDR 数据同步屏障——保证 C 的写回对其他核可见后再抬 flag。
@@ -1019,8 +1027,10 @@ private:
 #if PPFM_TILE_MMAD
     // ---- 手写 tile 级（增量 A1）：GM→L1→L0A/L0B→MMAD→C 回写（落点仍是 GM）----
     // 目的：先用与 BlockMmad 相同的落点验证 tile/MMAD 数值一致；A5 的 L0C→UB 在 A2 增量里接。
+    // ITER8（A2）：toUb=true 时 C 落 UB_EXT_F 区的共享槽（fixpipe SPLIT_M），否则仍落 gmC
     __aicore__ inline void RunTiledNT(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
-                                      GlobalTensor<float> &gmC, uint32_t m, uint32_t n, uint32_t k)
+                                      GlobalTensor<float> &gmC, uint32_t m, uint32_t n, uint32_t k,
+                                      bool toUb = false)
     {
         Catlass::Arch::Resource<MmArchTag> res;
         auto l1A = res.l1Buf.template GetBufferByByte<bfloat16_t>(TILED_L1_A_OFF);
@@ -1072,10 +1082,21 @@ private:
         SetFlag<HardEvent::M_FIX>(EVENT_ID2);
         WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 
-        typename MmTileCopyNT::template CopyL0CToDst<decltype(bC)> copyC;
-        // ⚠ 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
-        //    批处理变体，l0Batch=0 ⇒ fixpipe 一个块都不搬，C 恒为初值 0。
-        copyC(bC, tL0C, static_cast<uint8_t>(0));
+        if (toUb) {
+            // ITER8（A2）：写进 UB_EXT_F 区（64x128 fp32 = 32KB，正好是该区尺寸）。
+            // SPLIT_M 语义：整块的「前一半行」落在该地址的低半区、「后一半行」落高半区，
+            // 与「段按连续半区分配 subcore」对齐 ⇒ 两个子核各读自己那半。
+            AscendC::LocalTensor<float> vTmpUb(AscendC::TPosition::VECCALC, UB_EXT_F, CV_BT * CV_V);
+            auto layoutUb = tla::MakeLayout<float, Catlass::layout::RowMajor>(m, n);
+            auto tensorUb = tla::MakeTensor(vTmpUb, layoutUb, Catlass::Arch::PositionUB{});
+            typename TiledCopyNTSplitUb::template CopyL0CToDst<decltype(tensorUb)> copyUb;
+            copyUb(tensorUb, tL0C);
+        } else {
+            typename MmTileCopyNT::template CopyL0CToDst<decltype(bC)> copyC;
+            // ⚠ 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
+            //    批处理变体，l0Batch=0 ⇒ fixpipe 一个块都不搬，C 恒为初值 0。
+            copyC(bC, tL0C, static_cast<uint8_t>(0));
+        }
         SetFlag<HardEvent::FIX_M>(EVENT_ID3);
         WaitFlag<HardEvent::FIX_M>(EVENT_ID3);
         PipeBarrier<PIPE_ALL>();

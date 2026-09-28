@@ -187,9 +187,12 @@ using MmTileMmadTA = Catlass::Gemm::Tile::TileMmadTla<MmArchTag, bfloat16_t,
 // 手写 tile 路径下 L1 的两个槽（A 在前、B 在后），单位字节
 constexpr int32_t TILED_L1_A_OFF = 0;
 constexpr int32_t TILED_L1_B_OFF = 32 * 1024;
-// 手写 tile 级 mmad 开关：1=用 TileMmadTla 手拼（A 增量），0=退回 BlockMmadTla
+// 手写 tile 级 mmad 开关：1=用 TileMmadTla 手拼，0=退回 BlockMmadTla（默认）
+// ⚠ 增量 A1（tile 版落 GM）已能编译，但数值还没对上（PPFM-31/33 matched≈0.51，h 半边错）
+//   ⇒ 正在核对 tile 语义：TileMmadTla 的调用形态（(c,a,b,true,0) vs (c,a,b,m,n,k)）、
+//   L1A/L1B 布局标签与 L0C 布局。调通后翻成 1，再上 A2（A5 的 L0C→UB）。
 #ifndef PPFM_TILE_MMAD
-#define PPFM_TILE_MMAD 1
+#define PPFM_TILE_MMAD 0
 #endif
 
 // ---------------- AIV 侧 UB 布局（字节）----------------

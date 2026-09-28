@@ -89,6 +89,9 @@ constexpr int64_t WS_DH_F32_1 = WS_T2_F32 + 65536;     // dH 第二份 65536
 constexpr int64_t WS_T2_F32_1 = WS_DH_F32_1 + 65536;   // T2 第二份 65536
 constexpr int64_t WS_GATE = WS_T2_F32_1 + 65536;       // dg[BT] + decay[K] 1024
 constexpr int64_t WS_H_F32 = WS_GATE + 4096;           // h  [K,V] fp32 65536（最后一段）
+// ITER7（P3 跨 chunk 预取）：kBf_/lBf_ 的第二槽（chunk 奇偶选槽）
+constexpr int64_t WS_K_BF_1 = WS_H_F32 + 65536;        // k_c 第二槽 16384
+constexpr int64_t WS_L_BF_1 = WS_K_BF_1 + 16384;       // left 第二槽 16384
 constexpr int64_t WS_GATE_DG = 0;
 constexpr int64_t WS_GATE_DECAY = CV_BT * 4;
 
@@ -327,6 +330,8 @@ public:
         wBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_W_BF), CV_BT * CV_K);
         kBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_K_BF), CV_BT * CV_K);
         lBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_L_BF), CV_BT * CV_K);
+        kBf1_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_K_BF_1), CV_BT * CV_K);  // ITER7
+        lBf1_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_L_BF_1), CV_BT * CV_K);  // ITER7
         vBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_V_BF), CV_BT * CV_V);
         vTmpF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_VTMP_F32), CV_BT * CV_V);
         vNewBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_VNEW_BF), CV_BT * CV_V);
@@ -475,6 +480,9 @@ private:
             PipeBarrier<PIPE_ALL>();
         }
         const int64_t nt = (len + CV_BT - 1) / CV_BT;
+        // ITER7（P3）：先独立做 chunk 0 的 staging；循环内把 staging(c+1) 提到
+        // 「等 dH/T2(c)」之前 ⇒ staging 与 AIC 的 mm2/mm4(c) 重叠（原来 AIV 在这里纯等）
+        StageChunk(n, hv, bos, (len < CV_BT) ? len : CV_BT, 0);
         for (int64_t c = 0; c < nt; ++c) {
 #if PPFM_DIAG
             curChunk_ = c;
@@ -483,20 +491,21 @@ private:
             const int64_t left = len - c * CV_BT;
             const int64_t rows = (left < CV_BT) ? left : CV_BT;
             if (c > 0) {
-                // StageChunk 会覆盖 decayF_；先把上一 chunk 的 decay 存下来，
-                // 供"推迟一个 chunk 的状态更新"使用
-                // ITER4：整块向量拷贝取代 128 SetValue + 128 GetValue
-                Adds(decayPrevF_, decayF_, 0.0f, CV_K);
-                PipeBarrier<PIPE_ALL>();
-            }
-            StageChunk(n, hv, t0, rows);
-            if (c > 0) {
-                // 上一 chunk 的 dH / T2 此刻早已落地（其间 AIC 已完成本 chunk 的 mm1/mm3）
+                // dH/T2(c-1) 已在上一轮末尾等到；decayPrevF_ 此时是 decay(c-1)
                 ApplyStateUpdates(true, c - 1);
             }
             // ITER5：staging 产物 + 本 chunk 状态一次通知（原来分 kFlagInputs / kFlagState 两次）
             AivSetToAic(kFlagInputs);
             UpdateVNew(hv, t0, rows);
+            if (c + 1 < nt) {
+                // ITER7：保存本 chunk 的 decay（下一轮推迟状态更新要用），随后 staging 覆盖 decayF_
+                Adds(decayPrevF_, decayF_, 0.0f, CV_K);
+                PipeBarrier<PIPE_ALL>();
+                const int64_t t0n = bos + (c + 1) * CV_BT;
+                const int64_t leftn = len - (c + 1) * CV_BT;
+                const int64_t rowsn = (leftn < CV_BT) ? leftn : CV_BT;
+                StageChunk(n, hv, t0n, rowsn, static_cast<int32_t>((c + 1) & 1));
+            }
             AivWaitFromAic(kFlagDH);
             // 读别的核（AIC）写的 GM 前必须让本核缓存行失效，否则会读到过期数据
             // （与 CANN matmul_client.h 中"读跨核 GM flag 前先 DCCI"的用法一致）
@@ -605,8 +614,11 @@ private:
     }
 
     // staging：W / k / left / v（bf16，尾块零填充）+ dg / decay
-    __aicore__ inline void StageChunk(int64_t n, int64_t hv, int64_t t0, int64_t rows)
+    __aicore__ inline void StageChunk(int64_t n, int64_t hv, int64_t t0, int64_t rows, int32_t slot)
     {
+        // ITER7：k/left 按 chunk 奇偶写不同 GM 槽，使 staging 可与上一 chunk 的 mm2/mm4 重叠
+        GlobalTensor<bfloat16_t> &kOut = ((slot & 1) != 0) ? kBf1_ : kBf_;
+        GlobalTensor<bfloat16_t> &lOut = ((slot & 1) != 0) ? lBf1_ : lBf_;
         const auto *t = ctx_.tiling;
         const int64_t hk = hv / (t->hvPerHk == 0 ? 1 : t->hvPerHk);
         const bool useG = (t->gateMode == PPFM_GATE_USE_G);
@@ -660,7 +672,7 @@ private:
                          static_cast<uint32_t>(valid * CV_V));
             }
             PipeBarrier<PIPE_ALL>();
-            DataCopy(kBf_[off * CV_K], kBlkBf_[off * CV_K], SEG * CV_K);
+            DataCopy(kOut[off * CV_K], kBlkBf_[off * CV_K], SEG * CV_K);
             DataCopy(wBf_[off * CV_K], wBlkBf_[off * CV_K], SEG * CV_K);
             // 注意：v 不再落到 GM（v_new 直接从 UB 的 vBlkBf_ 读），省一份 16 KiB/chunk 的 MTE3
             PipeBarrier<PIPE_ALL>();
@@ -674,10 +686,10 @@ private:
                 PipeBarrier<PIPE_V>();
                 Cast(scrBf_[off * CV_K], scrF_[off * CV_K], RoundMode::CAST_RINT, SEG * CV_K);
                 PipeBarrier<PIPE_ALL>();   // V -> MTE3
-                DataCopy(lBf_[off * CV_K], scrBf_[off * CV_K], SEG * CV_K);
+                DataCopy(lOut[off * CV_K], scrBf_[off * CV_K], SEG * CV_K);
                 PipeBarrier<PIPE_ALL>();
             } else {
-                DataCopy(lBf_[off * CV_K], kBlkBf_[off * CV_K], SEG * CV_K);
+                DataCopy(lOut[off * CV_K], kBlkBf_[off * CV_K], SEG * CV_K);
                 PipeBarrier<PIPE_ALL>();
             }
         }
@@ -858,6 +870,8 @@ private:
     GlobalTensor<bfloat16_t> wBf_;
     GlobalTensor<bfloat16_t> kBf_;
     GlobalTensor<bfloat16_t> lBf_;
+    GlobalTensor<bfloat16_t> kBf1_;  // ITER7
+    GlobalTensor<bfloat16_t> lBf1_;  // ITER7
     GlobalTensor<bfloat16_t> vBf_;
     GlobalTensor<float> vTmpF_;
     GlobalTensor<bfloat16_t> vNewBf_;
@@ -891,6 +905,8 @@ public:
         wBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_W_BF), CV_BT * CV_K);
         kBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_K_BF), CV_BT * CV_K);
         lBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_L_BF), CV_BT * CV_K);
+        kBf1_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_K_BF_1), CV_BT * CV_K);  // ITER7
+        lBf1_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_L_BF_1), CV_BT * CV_K);  // ITER7
         hBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_H_BF), CV_K * CV_V);
 #if PPFM_DIAG
         diagG_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_DIAG), 16);
@@ -966,18 +982,21 @@ private:
 
         // ② dH[K,V] = k_c^T @ bf16(v_new)[BT,V]
         AicWaitFromAiv(kFlagVNew);
+        // ITER7：按 chunk 奇偶取 k/left 槽（与 AIV staging 写入槽一致）
+        GlobalTensor<bfloat16_t> &kIn = ((c & 1) != 0) ? kBf1_ : kBf_;
+        GlobalTensor<bfloat16_t> &lIn = ((c & 1) != 0) ? lBf1_ : lBf_;
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
-                                 DcciDst::CACHELINE_OUT>(kBf_);
+                                 DcciDst::CACHELINE_OUT>(kIn);
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
-                                 DcciDst::CACHELINE_OUT>(lBf_);
+                                 DcciDst::CACHELINE_OUT>(lIn);
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(vNewBf_);
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1Bf_);
-        RunMmadTA(kBf_, vNewBf_, dhBuf, CV_K, CV_V, CV_BT);
+        RunMmadTA(kIn, vNewBf_, dhBuf, CV_K, CV_V, CV_BT);
 
         // ④ T2[K,K] = left^T @ bf16(T1)[BT,K]
-        RunMmadTA(lBf_, t1Bf_, t2Buf, CV_K, CV_K, CV_BT);
+        RunMmadTA(lIn, t1Bf_, t2Buf, CV_K, CV_K, CV_BT);
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(dhBuf);
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
@@ -1170,6 +1189,8 @@ private:
     GlobalTensor<bfloat16_t> wBf_;
     GlobalTensor<bfloat16_t> kBf_;
     GlobalTensor<bfloat16_t> lBf_;
+    GlobalTensor<bfloat16_t> kBf1_;  // ITER7
+    GlobalTensor<bfloat16_t> lBf1_;  // ITER7
     GlobalTensor<bfloat16_t> hBf_;
     GlobalTensor<bfloat16_t> mBf_;
     GlobalTensor<bfloat16_t> vNewBf_;

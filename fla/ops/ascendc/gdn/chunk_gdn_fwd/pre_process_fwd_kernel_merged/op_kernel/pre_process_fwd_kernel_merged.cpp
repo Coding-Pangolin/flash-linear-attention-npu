@@ -116,13 +116,17 @@ constexpr int64_t WS_L_BF_1 = WS_K_BF_1 + 16384;       // left 第二槽 16384
 constexpr int64_t WS_GATE_DG = 0;
 constexpr int64_t WS_GATE_DECAY = CV_BT * 4;
 
-// ---------------- CrossCore flag（950 MIX 同核内 AIC <-> AIV）----------------
-// ⚠ 必须用 mode 0x4（intra-block）+ **每个 AIV 子核各自的 flag slot**（第二个子核 =
-//   id + 16），AIC 侧显式 wait/set 两个 slot。这与仓内 arch35 算子的约定一致
-//   （见 chunk_fwd_h/op_kernel/chunk_fwd_h_policy.h、kda/chunk_kda_fwd/.../fwd_h.h）。
-//   实测反例：用 A2/A3 风格的 `CrossCoreSetFlag<0x2, ...>` 时，950 上先干完的那个
-//   子核就会把 AIC 放行，AIC 的 mm1/mm3 读到"只写了一半"的 h/m bf16 状态，
-//   表现为 h 半边约一半行数据错、m 基本对（GDN 快路径暴露，KDA 慢路径看不出来）。
+// ---------------- CrossCore flag（MIX 内 AIC <-> 2×AIV）----------------
+// 两个平台的同步模型不同（见 PPFM_XCORE_MODE / PPFM_ARCH_IS_950）：
+//   * 950 用 mode 0x4：flag ID 按 subblock 分槽（第二个子核 = id + 16），AIC 侧显式
+//     wait/set 两个 slot。与仓内 arch35 算子的约定一致
+//     （见 chunk_fwd_h/op_kernel/chunk_fwd_h_policy.h、kda/chunk_kda_fwd/.../fwd_h.h）。
+//     实测反例：用 A2/A3 风格的 `CrossCoreSetFlag<0x2, ...>` 时，950 上先干完的那个
+//     子核就会把 AIC 放行，AIC 的 mm1/mm3 读到"只写了一半"的 h/m bf16 状态，
+//     表现为 h 半边约一半行数据错、m 基本对（GDN 快路径暴露，KDA 慢路径看不出来）。
+//   * 910B/910_93 用 mode 0x2：AIC 与「本 block 的 2 个 AIV」是集合同步 —— AIC 的一次
+//     set 对本 block 两个 AIV 同时置起；两个 AIV 都 set 同一个 ID 才算 AIC 侧事件置起。
+//     因此 AIC 侧每轮只需一对 set/wait（多 set/多 wait 会让 flag 计数失衡）。
 constexpr uint16_t PPFM_SUBFLAG_STRIDE = 16;   // AIV 子核 1 的 slot 偏移
 constexpr uint16_t kFlagInputs = 1;   // AIV -> AIC：本 chunk staging 就位
 constexpr uint16_t kFlagState = 2;    // AIV -> AIC：h/m 状态就位
@@ -148,19 +152,30 @@ __aicore__ inline void AivWaitFromAic(uint16_t id)
     CrossCoreWaitFlag<PPFM_XCORE_MODE, PIPE_S>(id);
 }
 
-// AIC：把两个 AIV 子核的 slot 都消费掉
+// AIC：消费 AIV 侧的通知
+//   950 (mode 0x4)：flag ID 按 subblock 分槽，两个 AIV 子核各自 set 自己的 ID ⇒ 这里要等两次
+//   910B/910_93 (mode 0x2)：AIC 与「本 block 的 2 个 AIV」是**集合同步**——两个 AIV 必须
+//     都 set 同一个 ID，事件才会对 AIC 置起 ⇒ 这里只等一次
+//   （约定出处：仓内 chunk_fwd_h/op_kernel/chunk_fwd_h_policy.h 的 FwdHAicPeerFlag 注释）
 __aicore__ inline void AicWaitFromAiv(uint16_t id)
 {
     CrossCoreWaitFlag<PPFM_XCORE_MODE, PIPE_S>(id);
+#if PPFM_ARCH_IS_950
     CrossCoreWaitFlag<0x4, PIPE_S>(static_cast<uint16_t>(id + PPFM_SUBFLAG_STRIDE));
+#endif
 }
 
-// AIC：两个 slot 都要置位，否则只会唤醒一个子核
+// AIC -> AIV：
+//   950：两个 slot 都要置位，否则只会唤醒一个子核；
+//   910B/910_93：0x2 下一次 set 即对本 block 的两个 AIV 同时置起，只能 set 一次
+//   （多 set 会让计数失衡 —— 单条 flag 连续 set 超过 15 次会挂死，见 catlass cross_core_sync.hpp）
 __aicore__ inline void AicSetToAiv(uint16_t id)
 {
     PipeBarrier<PIPE_FIX>();
     CrossCoreSetFlag<PPFM_XCORE_MODE, PIPE_FIX>(id);
+#if PPFM_ARCH_IS_950
     CrossCoreSetFlag<PPFM_XCORE_MODE, PIPE_FIX>(static_cast<uint16_t>(id + PPFM_SUBFLAG_STRIDE));
+#endif
 }
 
 // ---------------- matmul 类型 ----------------

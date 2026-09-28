@@ -1291,3 +1291,34 @@ h 半边 matched≈0.06~0.65、m 半边 matched≈0.993。用 `PPFM_TILE_MMAD_SE
    结构性去掉 GM 往返与可见性窗口，而不是继续在 GM 路径叠加屏障。
 3. 本轮归类为实现精度问题：`stage=implementation`、`issue_type=precision_debug`、
    `resume_from=implementation`、`validation_scope=precision_targeted`；A2 落地并复测 41 条后回 05 全量验收。
+
+## A1 tile 版上板性能画像（2026-09-28，241 device6，msopprof 上板）
+
+采集方式（见 `PROFILING_GUIDE.md`）：`msprof op --kernel-name=PreProcessFwdKernelMerged
+--launch-count=1 --warm-up=1 --aic-metrics=Default`；harness `scripts/diag_a1/profiling/sim_ppfm.py`
+（单次调用、无 warmup 循环；`import fla_npu_opp_env` 早于 `torch_npu`；`ASCEND_RT_VISIBLE_DEVICES=6`）。
+shape：GDN，K=V=128，BT=64，Nseq=1。
+
+| shape | 单元数 | Task Duration | ns/单元 | AIV vec | AIV scalar | AIV mte2 | AIV mte3 | AIC cube | AIC fixpipe |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| T=64/HV=1 | 1 | 125.0 µs | 124985 | 12.2% | 16.4% | 14.1% | 41.9~46.7% | 0.9% | 3.9% |
+| T=256/HV=2 | 8 | 203.4 µs | 25429 | 17.0% | 20.6% | 15.7% | 29.7~32.8% | 1.7% | 6.7% |
+| T=1024/HV=8 | 128 | 519.8 µs | 4061 | 22.0% | 24.6% | 17.1% | 17.7~19.4% | 2.1% | 8.4% |
+| T=4096/HV=8 | 512 | 1782.5 µs | 3481 | 24.2% | 26.3% | 17.6% | 12.4~13.1% | 2.3% | 9.0% |
+
+成本模型（四个 shape 全部吻合）：**≈99 µs 固定 + 26.3 µs/chunk**（固定项 = 每 block 的 prologue：
+128 行逐行构造 h=0 / m=I）。对照交接文档里 tile 之前的同 shape 记录（247，98 µs + 24.5 µs/chunk）：
+**A1 的 tile 路径没有性能收益，反而每 chunk 贵约 1.8 µs（~7%）**——多出来的是手拼 L1/L0 拷贝与
+tile 函数内的 `PipeBarrier<PIPE_ALL>`；与设计预期一致（A1 只负责验证数值，收益留给 A2）。
+
+瓶颈判读：
+
+1. **AIV bound**：AIV elapsed ≈ Task Duration；AIC 的 CUBE 仅 0.9%~2.3%（cube 基本闲置）。
+2. 大 shape 关键路径 = **AIV 的 VEC(24%) + SCALAR(26%)**；SCALAR 主因是 `ApplyStateUpdates` 的逐行
+   `Muls(..., decayF_.GetValue(r))` 与 staging 的逐行 `GetValue`（指南优化优先级 #1）。
+3. 小 shape 由 **MTE3（UB→GM 写回）42~47%** 与固定开销主导（T=64 时 99 µs 固定项占 79%）。
+4. 带宽远未饱和（AIV MTE2 15~38 GB/s、AIC MTE2 ~102 GB/s）⇒ **瓶颈是搬运次数/同步/标量，不是带宽**。
+5. AIC fixpipe 占 3.9%~9.0%（C 写回 GM），AIV 再把 `vTmp/T1` 读回 —— 正是 **A2（L0C→UB 直连）** 要消除的往返。
+
+后续优先级：① 状态更新/staging 去逐行标量；② **A2：L0C→UB 直连**（省 64 KB/chunk 往返，并消除
+GDN h 可见性窗口）；③ 压 prologue 的 99 µs（T=64 时占 79%）；④ 提高 Nwork（多序列打包）。

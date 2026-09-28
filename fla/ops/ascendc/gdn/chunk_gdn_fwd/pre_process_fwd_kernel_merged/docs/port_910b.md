@@ -107,6 +107,10 @@ python3 scripts/gates/arch_view_diff.py --ignore-comments \
 950 的已验证二进制与最终提交行为一致。
 （同一工具按 `--macros "__CCE_AICORE__=220,..."` 跑 910B 视角，则能看到上述 4 处修复的真实差异。）
 
+**后续补强**：246 的网络恢复后，已把最终提交 `1d2ce4b` 落到 246 **直接重建+复验**：
+L0 PASS、smoke 10/10、41 条 0 失败（`--repeats 2`）、L3 序列探针 **0/30 失败** ——
+等价性证明与直接复验两条证据一致。
+
 ```bash
 # 910B 构建+安装（221 容器 wym）
 cd /root/ppfm910 && source /usr/local/Ascend/ascend-toolkit/set_env.sh

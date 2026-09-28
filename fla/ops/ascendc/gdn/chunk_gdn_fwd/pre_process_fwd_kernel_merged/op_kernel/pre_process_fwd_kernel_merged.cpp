@@ -212,6 +212,11 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #ifndef PPFM_TILE_MMAD
 #define PPFM_TILE_MMAD 1
 #endif
+// ITER9：A2 优化方案（mm1 的 C 由 fixpipe SPLIT_M 直落 UB）开关。
+//   0 = A5 主线（C 落 GM，已验证）；1 = UB 落点（首测 h 半边崩，UB 语义待实测确认）。
+#ifndef PPFM_VTMP_UB
+#define PPFM_VTMP_UB 0
+#endif
 
 // ---------------- AIV 侧 UB 布局（字节）----------------
 // ⚠ 950 MIX 下 UB 由**一个 AIC + 两个 AIV 子核共享**（同 chunk_fwd_h / KDA fwd_h 的
@@ -716,8 +721,11 @@ private:
     {
         const bool useG = (ctx_.tiling->gateMode == PPFM_GATE_USE_G);
         AivWaitFromAic(kFlagHalf1);
-        // ITER8（A2）：vTmp 走 UB（fixpipe SPLIT_M 直落），原来的"探读 vTmpF_ + DCCI"
-        // 过渡措施随之删除；T1 仍走 GM，保留它的探读与 DCCI
+        // ITER9：vTmp 走 GM 时保留过渡探读（A2 走 UB 时才省掉）
+#if !PPFM_VTMP_UB
+        DataCopy(row2F_, vTmpF_, 8);
+        PipeBarrier<PIPE_ALL>();
+#endif
         DataCopy(row2F_, t1F_, 8);
         PipeBarrier<PIPE_ALL>();
 #if PPFM_DIAG
@@ -727,6 +735,10 @@ private:
             dbgF_.SetValue(static_cast<int32_t>(curChunk_), vTmpF_.GetValue(0));
             PipeBarrier<PIPE_ALL>();
         }
+#endif
+#if !PPFM_VTMP_UB
+        DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(vTmpF_);
 #endif
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1F_);
@@ -738,9 +750,12 @@ private:
         constexpr int32_t SEG_PER_SUB = (CV_BT / SEG) / PPFM_SUB;
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
-            // ITER8（A2）：vTmp 已由 AIC 的 fixpipe(SPLIT_M) 落在 extBlkF_ 里，
-            // 子核按本地段号取自己那半，不再从 GM 回读（去掉了 C 的 HBM 往返与可见性窗口）
             const int32_t lo = (seg - subIdx_ * SEG_PER_SUB) * SEG;
+#if !PPFM_VTMP_UB
+            // A5 主线：vTmp 仍从 GM 回读（A2 优化方案走 UB 时删掉这两行）
+            DataCopy(extBlkF_[lo * CV_V], vTmpF_[off * CV_V], SEG * CV_V);
+            PipeBarrier<PIPE_ALL>();
+#endif
             Cast(scrF_[off * CV_V], vBlkBf_[off * CV_V], RoundMode::CAST_NONE, SEG * CV_V);
             PipeBarrier<PIPE_V>();
             Sub(scrF_[off * CV_V], scrF_[off * CV_V], extBlkF_[lo * CV_V], SEG * CV_V);
@@ -965,7 +980,8 @@ private:
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(mBf_);
 #if PPFM_TILE_MMAD
-        RunTiledNT(wBf_, hBf_, vTmpF_, CV_BT, CV_V, CV_K, /*toUb=*/true);   // ITER8（A2）
+        RunTiledNT(wBf_, hBf_, vTmpF_, CV_BT, CV_V, CV_K,
+                    /*toUb=*/(PPFM_VTMP_UB != 0));   // ITER9：按宏选择 A2 UB 落点
 #else
         RunMmadNT(wBf_, hBf_, vTmpF_, CV_BT, CV_V, CV_K);
 #endif
@@ -979,8 +995,10 @@ private:
         // ⚠ 写侧也要 clean（写回），只靠读者 DCCI 不够：FIX 写回可能还停在写缓冲里，
         //   此时 AIV 即便 DCCI 也会读到旧值。实测（PPFM_DIAG 指纹）：AIV 读到 vTmp 全 0，
         //   而 AIC 实际写了 -0.013/+0.0092 → v_new 退化成 v，h 半边随机整头崩（m 不受影响）。
-        // ITER8（A2）：vTmp 已不经 GM（fixpipe 直落 UB），写侧不再需要它的 DCCI；
-        // T1 仍落 GM，保留 DCCI + DDR 屏障后再抬 flag
+#if !PPFM_VTMP_UB
+        DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(vTmpF_);
+#endif
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1F_);
         // ⚠ 正式原语：DDR 数据同步屏障——保证 C 的写回对其他核可见后再抬 flag。

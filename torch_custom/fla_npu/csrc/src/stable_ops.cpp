@@ -13,6 +13,7 @@
 #include "stable_gdn.cpp"
 #include "stable_conv1d.cpp"
 #include "stable_fwd_h.cpp"
+#include "stable_pre_process_fwd_kernel_merged.cpp"
 
 // Build stamp: the md5 of the adapter sources this library was compiled from,
 // injected by csrc/build_stable.py.  fla_npu/ops/ascendc/_stable.py
@@ -88,6 +89,7 @@ STABLE_TORCH_LIBRARY(fla_npu_stable, m) {
   m.def(kSchema_chunk_gated_delta_rule_bwd_finalize);
   m.def(kSchema_chunk_kda_bwd);
   m.def(kSchema_chunk_gated_delta_rule_bwd);
+  m.def(kSchema_pre_process_fwd_kernel_merged);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.def("_stream_probe(int device_index) -> (int, int)");
 #endif
@@ -172,6 +174,8 @@ STABLE_TORCH_LIBRARY_IMPL(fla_npu_stable, CompositeExplicitAutograd, m) {
       "npu_chunk_gated_delta_rule_bwd",
       &fla_npu_stable::stable::boxed_adapter<
           run_npu_chunk_gated_delta_rule_bwd>);
+  m.impl("npu_pre_process_fwd_kernel_merged",
+         &fla_npu_stable::stable::boxed_adapter<run_npu_pre_process_fwd_kernel_merged>);
 #ifndef FLA_STABLE_NO_DEBUG_PROBE
   m.impl("_stream_probe", &boxed_stream_probe);
 #endif

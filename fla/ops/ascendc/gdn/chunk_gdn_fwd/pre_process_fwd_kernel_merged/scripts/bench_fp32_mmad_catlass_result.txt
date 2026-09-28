@@ -1,0 +1,33 @@
+# CATLASS fp32 (float x float -> float) matmul 微基准 — Ascend950PR_9579 / CANN 9.1.0 / 28 AIC
+# 程序: catlass/examples/99_bench_fp32_mmad (改写自 68_ascend950_multi_core_splitk_matmul, 加了计时循环)
+# 跑法: ASCEND_RT_VISIBLE_DEVICES=0 ./99_bench_fp32_mmad M N K 0    (iters=200, 取均值)
+
+shape m=128 n=64 k=128   (本算子 M_c @ m 的形状)
+  FP32(native, HF32=off):      8.092 us/call    129.6 GMAC/s
+  FP32(HF32=on)         :      5.997 us/call    174.8 GMAC/s
+  HF32 speedup          :       1.35x
+shape m=128 n=128 k=128
+  FP32(native, HF32=off):     10.899 us/call    192.4 GMAC/s
+  FP32(HF32=on)         :      6.758 us/call    310.3 GMAC/s
+  HF32 speedup          :       1.61x
+shape m=128 n=64 k=8192
+  FP32(native, HF32=off):     15.456 us/call   4342.0 GMAC/s
+  FP32(HF32=on)         :     10.263 us/call   6538.9 GMAC/s
+  HF32 speedup          :       1.51x
+shape m=512 n=512 k=512
+  FP32(native, HF32=off):     30.315 us/call   4427.4 GMAC/s
+  FP32(HF32=on)         :     13.764 us/call   9751.1 GMAC/s
+  HF32 speedup          :       2.20x
+shape m=2048 n=2048 k=2048   <- 计算主导, 可信的峰值
+  FP32(native, HF32=off):    827.516 us/call  10380.4 GMAC/s   (20.8 TFLOPS)
+  FP32(HF32=on)         :    137.438 us/call  62500.6 GMAC/s   (125.0 TFLOPS)
+  HF32 speedup          :       6.02x
+
+# 理论值(asc_enable_hf32.md 表2, cube_m=n=16):
+#   FP32 不启 HF32: cube_k=1 -> 256 MAC/AIC/cyc -> 28*256*1.65e9 = 11.8 TMAC/s
+#   FP32 启 HF32  : cube_k=8 -> 2048 MAC/AIC/cyc ->  94.6 TMAC/s
+#   实测达成率: native 10380/11800 = 88%;  HF32 62501/94600 = 66%
+#   -> 文档说的 8x 是真的, 只是需要计算主导的形状才看得出来
+#
+# 我们的形状(128x64x128)上: 纯 Cube 只需 0.089us(native) / 0.011us(HF32),
+#   实测却是 8.09 / 6.00 us -> 99% 是固定开销(launch + L1/L0 staging + 同步)

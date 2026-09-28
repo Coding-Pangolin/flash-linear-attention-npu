@@ -494,7 +494,8 @@ private:
                 // 上一 chunk 的 dH / T2 此刻早已落地（其间 AIC 已完成本 chunk 的 mm1/mm3）
                 ApplyStateUpdates(true, c - 1);
             }
-            AivSetToAic(kFlagState);
+            // ITER5：staging 产物 + 本 chunk 状态一次通知（原来分 kFlagInputs / kFlagState 两次）
+            AivSetToAic(kFlagInputs);
             UpdateVNew(hv, t0, rows);
             AivWaitFromAic(kFlagDH);
             // 读别的核（AIC）写的 GM 前必须让本核缓存行失效，否则会读到过期数据
@@ -689,7 +690,7 @@ private:
         DataCopy(gateF_[WS_GATE_DECAY / 4], decayF_, CV_K);
         PipeBarrier<PIPE_ALL>();
 #endif
-        AivSetToAic(kFlagInputs);
+        // ITER5：不再在这里发通知——与状态更新合并成一次（见 ProcessChain）
     }
 
     __aicore__ inline void UpdateVNew(int64_t hv, int64_t t0, int64_t rows)
@@ -928,8 +929,8 @@ private:
         GlobalTensor<float> &dhBuf = evenChunk ? dHF_ : dHF1_;
         GlobalTensor<float> &t2Buf = evenChunk ? t2F_ : t2F1_;
         // ① vTmp[BT,V] = W_c[BT,K] @ bf16(h)[K,V]
+        // ITER5：inputs 与 state 已合并为同一次通知
         AicWaitFromAiv(kFlagInputs);
-        AicWaitFromAiv(kFlagState);
         // ⚠ 读别的核（AIV）刚写过的 GM 之前必须让本核的 cache 失效：h/m 每 chunk 都被
         //    AIV 重写，若 AIC 命中自己缓存的旧行，mm1/mm3 就会拿到过期的 h/m
         //    （实测表现为概率性的 h 半边大面积错、m 只是略偏，且随调度时好时坏）。

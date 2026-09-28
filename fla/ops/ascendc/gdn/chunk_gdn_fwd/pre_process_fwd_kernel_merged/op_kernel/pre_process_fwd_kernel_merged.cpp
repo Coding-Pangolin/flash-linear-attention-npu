@@ -1027,7 +1027,7 @@ private:
 
         auto tL0C = tla::MakeTensor(l0C, tla::MakeLayoutL0C(m, n), Catlass::Arch::PositionL0C{});
         MmTileMmadNT mmad;
-        mmad(tL0C, tL0A, tL0B, true, 0);
+        mmad(tL0C, tL0A, tL0B, m, n, k);
         SetFlag<HardEvent::M_FIX>(EVENT_ID2);
         WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 
@@ -1087,7 +1087,7 @@ private:
 
         auto tL0C = tla::MakeTensor(l0C, tla::MakeLayoutL0C(m, n), Catlass::Arch::PositionL0C{});
         MmTileMmadTA mmad;
-        mmad(tL0C, tL0A, tL0B, true, 0);
+        mmad(tL0C, tL0A, tL0B, m, n, k);
         SetFlag<HardEvent::M_FIX>(EVENT_ID2);
         WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 

@@ -91,6 +91,22 @@
 
 ## 5. 复现命令
 
+### 5.1 950 视角的等价性证明（不需要重建）
+
+246 的 GitHub 拉取本轮回不上（GnuTLS），而它**入站大包会被 reset**，
+所以最终提交没法直接落到 246 重编。用 `scripts/gates/arch_view_diff.py` 做等价性证明：
+
+```bash
+git show 0a9eea6:<kernel.cpp> > /tmp/old.cpp
+python3 scripts/gates/arch_view_diff.py --ignore-comments \
+    --macros "__CCE_AICORE__=310,PPFM_TILE_MMAD=1" /tmp/old.cpp <kernel.cpp>
+```
+
+结果：950 视角活跃代码 896 → 898 行，**唯一差异是新增的两行探针宏定义（`PPFM_SENTINEL_PROBE 0`、
+`PPFM_RD_PROBE 0`），没有一行代码变化** ⇒ 4 个修复全部落在 `#else`（910B）分支或默认关的探针里，
+950 的已验证二进制与最终提交行为一致。
+（同一工具按 `--macros "__CCE_AICORE__=220,..."` 跑 910B 视角，则能看到上述 4 处修复的真实差异。）
+
 ```bash
 # 910B 构建+安装（221 容器 wym）
 cd /root/ppfm910 && source /usr/local/Ascend/ascend-toolkit/set_env.sh

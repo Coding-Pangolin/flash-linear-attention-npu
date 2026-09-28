@@ -435,7 +435,9 @@ private:
         }
         const int64_t nt = (len + CV_BT - 1) / CV_BT;
         for (int64_t c = 0; c < nt; ++c) {
+#if PPFM_DIAG
             curChunk_ = c;
+#endif
             const int64_t t0 = bos + c * CV_BT;
             const int64_t left = len - c * CV_BT;
             const int64_t rows = (left < CV_BT) ? left : CV_BT;

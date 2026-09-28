@@ -214,7 +214,8 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 //   每个 per-subcore 常量都是**两份的总字节数**，取 Tensor 时按 subIdx_ 偏移一份。
 constexpr int32_t PPFM_SUB = 2;      // AIV 子核数（UB 共享）
 constexpr int32_t PPFM_SEG = 16;     // left / v_new 的段长（行）
-constexpr int32_t PPFM_RB = 16;      // 状态更新的行块（行）
+constexpr int32_t PPFM_RB = 32;      // ITER3: 状态更新的行块（行）16->32，
+                                      // 每 chunk 状态相位搬运/栅栏减半（UB +24K）
 
 // ---------------- 诊断开关（定位概率性 h 错）----------------
 // 打开后：每个工作项把前 N 个 chunk 的 "AIV 读到的 vTmpF_[0]"（AIV 侧）与

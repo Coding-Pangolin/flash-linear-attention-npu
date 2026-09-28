@@ -63,6 +63,27 @@
 namespace GDN {
 using namespace AscendC;
 
+// ---------------- 目标 arch 分档 ----------------
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+#define PPFM_ARCH_IS_950 1
+// 950：有 L0C→UB 直连通道（A2 优化方案可用）
+#ifndef PPFM_VTMP_UB
+#define PPFM_VTMP_UB 1
+#endif
+#else
+#define PPFM_ARCH_IS_950 0
+// 910B/910_93(A2/A3)：cube↔vector 必须经 GM，无 L0C→UB 通道
+#ifndef PPFM_VTMP_UB
+#define PPFM_VTMP_UB 0
+#endif
+#endif
+// 跨核 flag 模式：950 用 0x4（同 block 内 AIC↔AIV，每子核 slot），910B 用 0x2
+#if PPFM_ARCH_IS_950
+constexpr int32_t PPFM_XCORE_MODE = 0x4;
+#else
+constexpr int32_t PPFM_XCORE_MODE = 0x2;
+#endif
+
 constexpr int32_t CV_BT = 64;
 constexpr int32_t CV_K = 128;
 constexpr int32_t CV_V = 128;
@@ -118,19 +139,19 @@ __aicore__ inline void AivSetToAic(uint16_t id)
 #if PPFM_LEGACY_CACHEOPS
     DataSyncBarrier<MemDsbT::DDR>();
 #endif
-    CrossCoreSetFlag<0x4, PIPE_MTE3>(id);
+    CrossCoreSetFlag<PPFM_XCORE_MODE, PIPE_MTE3>(id);
 }
 
 __aicore__ inline void AivWaitFromAic(uint16_t id)
 {
     // 用 PIPE_S 排队：等待指令必须卡住后续指令的发射（否则后面的 MTE2/V 会先跑）
-    CrossCoreWaitFlag<0x4, PIPE_S>(id);
+    CrossCoreWaitFlag<PPFM_XCORE_MODE, PIPE_S>(id);
 }
 
 // AIC：把两个 AIV 子核的 slot 都消费掉
 __aicore__ inline void AicWaitFromAiv(uint16_t id)
 {
-    CrossCoreWaitFlag<0x4, PIPE_S>(id);
+    CrossCoreWaitFlag<PPFM_XCORE_MODE, PIPE_S>(id);
     CrossCoreWaitFlag<0x4, PIPE_S>(static_cast<uint16_t>(id + PPFM_SUBFLAG_STRIDE));
 }
 
@@ -138,8 +159,8 @@ __aicore__ inline void AicWaitFromAiv(uint16_t id)
 __aicore__ inline void AicSetToAiv(uint16_t id)
 {
     PipeBarrier<PIPE_FIX>();
-    CrossCoreSetFlag<0x4, PIPE_FIX>(id);
-    CrossCoreSetFlag<0x4, PIPE_FIX>(static_cast<uint16_t>(id + PPFM_SUBFLAG_STRIDE));
+    CrossCoreSetFlag<PPFM_XCORE_MODE, PIPE_FIX>(id);
+    CrossCoreSetFlag<PPFM_XCORE_MODE, PIPE_FIX>(static_cast<uint16_t>(id + PPFM_SUBFLAG_STRIDE));
 }
 
 // ---------------- matmul 类型 ----------------
@@ -152,7 +173,11 @@ constexpr MatmulConfig CV_MM_CFG = GetNormalConfig(true);
 // ---------------- CATLASS BlockMmad（950 的核内 cube→vector 惯用法）----------------
 // 与仓内 chunk_scaled_dot_kkt 的 950 路径一致：BlockMmad + preSetFlags()/finalWaitFlags()
 // 才是"C 已写回 GM"的保证；MatmulImpl::IterateAll 不提供这个保证（见 docs/validation.md §12.11）。
+#if PPFM_ARCH_IS_950
 using MmArchTag = Catlass::Arch::Ascend950;
+#else
+using MmArchTag = Catlass::Arch::AtlasA2;
+#endif
 using MmDispatchPolicy = Catlass::Gemm::MmadPingpongTlaMulti<MmArchTag, true, false>;
 using MmL1Shape = tla::Shape<tla::Int<128>, tla::Int<128>, tla::Int<128>>;
 using MmL0Shape = MmL1Shape;
@@ -173,22 +198,50 @@ using MmBlockTA = Catlass::Gemm::Block::BlockMmadTla<MmDispatchPolicy, MmL1Shape
 // 与仓内 chunk_fwd_h_cube.h / chunk_kda_fwd_fwd_h.h 同一套 API：
 //   PackedTileCopyTlaToUB 提供 CopyGmToL1A/B、CopyL1ToL0A/B、CopyL0CToDst（落 UB）；
 //   TileMmadTla 做单 tile MMAD。A2/A3 没有 UB 直连通道，仍用上面的 PackedTileCopyTla 落 GM。
+#if PPFM_ARCH_IS_950
 using TiledArchTag = Catlass::Arch::Ascend950;
+#else
+using TiledArchTag = Catlass::Arch::AtlasA2;
+#endif
+#if PPFM_ARCH_IS_950
 using TiledCopyNT = Common::Tile::PackedTileCopyTlaToUB<
     TiledArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor,
     float, Catlass::layout::RowMajor>;
 using TiledCopyTA = Common::Tile::PackedTileCopyTlaToUB<
     TiledArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor,
     float, Catlass::layout::RowMajor>;
+#else
+// 910B：没有 L0C→UB，这里只用它的 L1A 布局标签喂给 TileMmadTla
+using TiledCopyNT = Catlass::Gemm::Tile::PackedTileCopyTla<
+    TiledArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor,
+    float, Catlass::layout::RowMajor>;
+using TiledCopyTA = Catlass::Gemm::Tile::PackedTileCopyTla<
+    TiledArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor,
+    float, Catlass::layout::RowMajor>;
+#endif
+#if PPFM_ARCH_IS_950
 // ITER8（A2）：NT 形态的 C 直接落 UB，SPLIT_M（前一半行→低半区、后一半行→高半区）
 using TiledCopyNTSplitUb = Common::Tile::PackedTileCopyTlaToUB<
     TiledArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor,
     float, Catlass::layout::RowMajor, void, Catlass::Gemm::Tile::CopyL0CToUBMode::SPLIT_M>;
+#endif
 using TiledMmadNT = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
                                                      typename TiledCopyNT::LayoutTagL1A>;
 using TiledMmadTA = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
                                                      typename TiledCopyTA::LayoutTagL1A>;
 // GM 落点的 tile+C 回写类型（A2/A3 与 A5 的 A1 增量都用它）
+// C 落 GM 的 tile-copy 别名（两代 API 名字不同）
+#if PPFM_ARCH_IS_950
+template <class TensorC>
+using MmCopyL0CToGm = typename MmTileCopyNT::template CopyL0CToDst<TensorC>;
+template <class TensorC>
+using MMTACopyL0CToGm = typename MmTileCopyTA::template CopyL0CToDst<TensorC>;
+#else
+template <class TensorC>
+using MmCopyL0CToGm = typename MmTileCopyNT::template CopyL0CToGm<TensorC>;
+template <class TensorC>
+using MMTACopyL0CToGm = typename MmTileCopyTA::template CopyL0CToGm<TensorC>;
+#endif
 using MmTileMmadNT = Catlass::Gemm::Tile::TileMmadTla<MmArchTag, bfloat16_t,
                                                       typename MmTileCopyNT::LayoutTagL1A>;
 using MmTileMmadTA = Catlass::Gemm::Tile::TileMmadTla<MmArchTag, bfloat16_t,
@@ -1180,6 +1233,7 @@ private:
         SetFlag<HardEvent::M_FIX>(EVENT_ID2);
         WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 
+#if PPFM_ARCH_IS_950
         if (toUb) {
             // ITER8（A2）：写进 UB_EXT_F 区（64x128 fp32 = 32KB，正好是该区尺寸）。
             // SPLIT_M 语义：整块的「前一半行」落在该地址的低半区、「后一半行」落高半区，
@@ -1193,8 +1247,10 @@ private:
             typename MmTileCopyNT::template CopyL0CToDst<decltype(bC)> copyCRef;
             copyCRef(bC, tL0C, static_cast<uint8_t>(0));   // 诊断参照：同值再落一份 GM
 #endif
-        } else {
-            typename MmTileCopyNT::template CopyL0CToDst<decltype(bC)> copyC;
+        } else
+#endif
+        {
+            MmCopyL0CToGm<decltype(bC)> copyC;
             // ⚠ 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
             //    批处理变体，l0Batch=0 ⇒ fixpipe 一个块都不搬，C 恒为初值 0。
             copyC(bC, tL0C, static_cast<uint8_t>(0));
@@ -1257,7 +1313,7 @@ private:
         SetFlag<HardEvent::M_FIX>(EVENT_ID2);
         WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 
-        typename MmTileCopyTA::template CopyL0CToDst<decltype(bC)> copyC;
+        MMTACopyL0CToGm<decltype(bC)> copyC;
         // ⚠ 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
         //    批处理变体，l0Batch=0 ⇒ fixpipe 一个块都不搬，C 恒为初值 0。
         copyC(bC, tL0C, static_cast<uint8_t>(0));

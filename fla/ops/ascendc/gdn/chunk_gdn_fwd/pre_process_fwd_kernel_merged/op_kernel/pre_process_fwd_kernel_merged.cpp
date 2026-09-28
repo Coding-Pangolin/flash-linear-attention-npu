@@ -181,7 +181,7 @@ constexpr int32_t PPFM_RB = 16;      // 状态更新的行块（行）
 //   (0,0) 恒为 0"，曾被误判成算子精度缺陷（PPFM-31/33 的 m 坏点就是这么来的）。
 //   只在定位跨核可见性时临时打开，并对拍时排除 hm[..., 0, V:]。
 #ifndef PPFM_DIAG
-#define PPFM_DIAG 0
+#define PPFM_DIAG 1
 #endif
 constexpr int32_t PPFM_DIAG_CHUNKS = 4;
 constexpr int64_t WS_DIAG = 626688;               // 每核 4 KiB（AIC 写，AIV epilogue 搬到 hm）

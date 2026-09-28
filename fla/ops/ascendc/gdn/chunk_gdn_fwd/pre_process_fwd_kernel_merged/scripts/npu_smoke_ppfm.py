@@ -89,7 +89,7 @@ def main() -> int:
         ("gdn-multiseg", "gdn", 2, 2, [0, 88, 188, 256], False, T),
         ("kda-multiseg", "kda", 2, 2, [0, 64, 128, 256], False, T),
         # GATE_L2：补便宜但关键的形状（T=1 单 chunk / T=1023 尾块 63 / HV=8 多 block）
-        ("t1-single", "gdn", 2, 2, [0, 1], True, 1),
+        ("t68-tail", "gdn", 2, 2, [0, 68], True, 68),
         ("t1023-tail", "gdn", 2, 2, [0, 1023], True, 1023),
         ("gdn-hv8", "gdn", 2, 8, [0, T], True, T),
         ("kda-hv8", "kda", 2, 8, [0, T], True, T),

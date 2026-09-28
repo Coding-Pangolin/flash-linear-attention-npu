@@ -759,7 +759,7 @@ private:
         // bf16(T1)：同样按段分配
         // ITER8（A2）：段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
         // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
-        constexpr int32_t SEG_PER_SUB = (CV_BT / SEG) / PPFM_SUB;
+        // ITER8（A2）：SEG_PER_SUB 已在 v_new 循环前声明（同一函数内不能重复定义）
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
             DataCopy(scrF_[off * CV_K], t1F_[off * CV_K], SEG * CV_K);

@@ -767,13 +767,13 @@ private:
         DataCopy(row2F_, t2Buf, 8);
         PipeBarrier<PIPE_ALL>();
         // 每 RB 行一次搬运：块内逐行 Muls（廉价、无需栅栏），块级 Add/Sub/Cast
-        constexpr int32_t RB = PPFM_RB;   // ITER6：真正用上 32 行（ITER3 只改了 UB 尺寸）
+        constexpr int32_t RB = PPFM_RB;   // ITER6a：真正用上 32 行（ITER3 只改了 UB 尺寸）
         for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {
             // ITER2：第一次搬运后的全栅栏冗余——紧随其后第二次搬运之后还有一次，
             //        足以保证两次 MTE2 都在 Muls/Add 之前完成
             DataCopy(stateBlkF_, hF32_[rb * CV_V], RB * CV_V);
             DataCopy(extBlkF_, dhBuf[rb * CV_V], RB * CV_V);
-            PipeBarrier<PIPE_MTE2>();   // ITER6：只需等 MTE2（原来 PIPE_ALL 会排空所有流水）
+            PipeBarrier<PIPE_ALL>();
             if (useG) {
                 // GDN：每 chunk 一个标量 decay ⇒ 整块一次 Muls（原来 16 次逐行 Muls +
                 // 16 次 GetValue；h/m 合计每 chunk 每子核 128 次，是 AIV SCALAR 的主要来源）
@@ -787,17 +787,18 @@ private:
             }
             PipeBarrier<PIPE_V>();
             Add(stateBlkF_, stateBlkF_, extBlkF_, RB * CV_V);
-            PipeBarrier<PIPE_V>();      // ITER6：V -> MTE3
+            PipeBarrier<PIPE_ALL>();   // V -> MTE3
             DataCopy(hF32_[rb * CV_V], stateBlkF_, RB * CV_V);
+            PipeBarrier<PIPE_ALL>();
             Cast(stateBlkBf_, stateBlkF_, RoundMode::CAST_RINT, RB * CV_V);
-            PipeBarrier<PIPE_V>();      // ITER6：Cast 落 UB 后 MTE3 才能读
+            PipeBarrier<PIPE_ALL>();   // V -> MTE3
             DataCopy(hBf_[rb * CV_V], stateBlkBf_, RB * CV_V);
-            PipeBarrier<PIPE_MTE3>();   // ITER6：两个 MTE3 读完，下一轮才能覆盖
+            PipeBarrier<PIPE_ALL>();
         }
         for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {
             DataCopy(stateBlkF_, mF32_[rb * CV_K], RB * CV_K);
             DataCopy(extBlkF_, t2Buf[rb * CV_K], RB * CV_K);
-            PipeBarrier<PIPE_MTE2>();   // ITER6
+            PipeBarrier<PIPE_ALL>();
             if (useG) {
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(stateBlkF_, stateBlkF_, dc, RB * CV_K);
@@ -809,12 +810,13 @@ private:
             }
             PipeBarrier<PIPE_V>();
             Sub(stateBlkF_, stateBlkF_, extBlkF_, RB * CV_K);
-            PipeBarrier<PIPE_V>();      // ITER6：V -> MTE3
+            PipeBarrier<PIPE_ALL>();   // V -> MTE3
             DataCopy(mF32_[rb * CV_K], stateBlkF_, RB * CV_K);
+            PipeBarrier<PIPE_ALL>();
             Cast(stateBlkBf_, stateBlkF_, RoundMode::CAST_RINT, RB * CV_K);
-            PipeBarrier<PIPE_V>();      // ITER6
+            PipeBarrier<PIPE_ALL>();   // V -> MTE3
             DataCopy(mBf_[rb * CV_K], stateBlkBf_, RB * CV_K);
-            PipeBarrier<PIPE_MTE3>();   // ITER6
+            PipeBarrier<PIPE_ALL>();
         }
     }
 

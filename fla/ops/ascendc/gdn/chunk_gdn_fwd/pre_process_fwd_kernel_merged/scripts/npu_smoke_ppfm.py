@@ -82,12 +82,17 @@ def main() -> int:
     T, K, V, BT = 256, 128, 128, 64
     plan = [
         # (名字, variant, HK, HV, cu_seqlens, 每段单独对拍)
-        ("gdn-single", "gdn", 2, 2, [0, T], True),
-        ("kda-single", "kda", 2, 2, [0, T], True),
-        ("gva-1x2", "gdn", 1, 2, [0, T], True),
-        ("gva-2x4-sub", "gdn", 2, 4, [64, 192], True),
-        ("gdn-multiseg", "gdn", 2, 2, [0, 88, 188, 256], False),
-        ("kda-multiseg", "kda", 2, 2, [0, 64, 128, 256], False),
+        ("gdn-single", "gdn", 2, 2, [0, T], True, T),
+        ("kda-single", "kda", 2, 2, [0, T], True, T),
+        ("gva-1x2", "gdn", 1, 2, [0, T], True, T),
+        ("gva-2x4-sub", "gdn", 2, 4, [64, 192], True, T),
+        ("gdn-multiseg", "gdn", 2, 2, [0, 88, 188, 256], False, T),
+        ("kda-multiseg", "kda", 2, 2, [0, 64, 128, 256], False, T),
+        # GATE_L2：补便宜但关键的形状（T=1 单 chunk / T=1023 尾块 63 / HV=8 多 block）
+        ("t1-single", "gdn", 2, 2, [0, 1], True, 1),
+        ("t1023-tail", "gdn", 2, 2, [0, 1023], True, 1023),
+        ("gdn-hv8", "gdn", 2, 8, [0, T], True, T),
+        ("kda-hv8", "kda", 2, 8, [0, T], True, T),
     ]
 
     dev = args.device
@@ -95,9 +100,9 @@ def main() -> int:
     print("=" * 78)
     print(f"pre_process_fwd_kernel_merged 上板冒烟（device={dev}, T={T}, K={K}, V={V}, BT={BT}）")
     print("=" * 78)
-    for idx, (name, variant, hk, hv, cu, single_seg) in enumerate(plan):
+    for idx, (name, variant, hk, hv, cu, single_seg, t_case) in enumerate(plan):
         try:
-            case = build_case(1000 + idx, T, hk, hv, K, V, variant, BT=BT)
+            case = build_case(1000 + idx, t_case, hk, hv, K, V, variant, BT=BT)
         except AssertionError as exc:
             print(f"[SKIP] {name}: {exc}")
             continue
@@ -129,7 +134,13 @@ def main() -> int:
 
         shape_ok = tuple(got.shape) == (len(cu) - 1, hv, K, V + K)
         stats = compare(got, want, atol=1.5e-2, rtol=2e-3)
-        ok = shape_ok and stats["matched"] >= 0.999
+        # GATE_L2：matced 与 max_abs 都要过（只卡 matched 会漏掉"少数元素错"的假绿）
+        half_ok = True
+        for _sl in (slice(0, V), slice(V, V + K)):
+            _s = compare(got[..., _sl], want[..., _sl], atol=1.5e-2, rtol=2e-3)
+            half_ok = half_ok and _s["matched"] >= 0.999 and _s["max_abs"] <= 0.05
+        ok = (shape_ok and stats["matched"] >= 0.999
+              and stats["max_abs"] <= 0.05 and half_ok)
         failures += 0 if ok else 1
         print(f"[{'PASS' if ok else 'FAIL'}] {name:14s} variant={variant} HK={hk} HV={hv} "
               f"cu={cu} got={tuple(got.shape)} want={tuple(want.shape)}")

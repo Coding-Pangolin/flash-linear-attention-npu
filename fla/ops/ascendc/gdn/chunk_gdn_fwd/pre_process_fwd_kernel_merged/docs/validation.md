@@ -1241,3 +1241,53 @@ staging 的 `left` 也有同一隐患（当时侥幸通过）。
 176 × 59 µs ≈ 10 ms（32 条链 / 28 核 ≈ 1.1 链/核）⇒ 仍比 H20 慢约 6×。
 后续可做的三件事（按收益）：① 修好整块 staging/`v_new`（~1.6×）；② AIC/AIV 跨 chunk 流水重叠
 （当前纯串行，理论 ~2×）；③ 把"1 段 × 1 head"细分填满 28 个 AIC。
+
+## A1 tile 数值对齐与 L0C 回写误选（2026-09-28，241 device6）
+
+### 现象
+
+tile 路径（`PPFM_TILE_MMAD=1`，mm1/mm3 换手写 `TileMmadTla`）在 smoke 上 5/6 形状失败：
+h 半边 matched≈0.06~0.65、m 半边 matched≈0.993。用 `PPFM_TILE_MMAD_SEL`（bit0=mm1、bit1=mm3）隔离后：
+
+- 只 tile mm1：m 半边与基线**逐位一致**，h 从 T≥2 chunk 起错；
+- 只 tile mm3：h 半边与基线**逐位一致**，m 半边错；
+- T=64（1 chunk）时两者都逐位正确 —— 因为 chunk0 的 `vTmp=W@0=0`、`T1=W@I=W`。
+
+### 定位
+
+`m` 的误差 topk 显示**整条对角元恒等于同一个常数**（GDN T=64：0.989008 = `decay=2^g`），
+即 `m = decay·I` ⇒ `T2 = leftᵀ·bf16(T1) = 0` ⇒ **tile 出来的 C 是 0**。
+
+根因：`Catlass::Gemm::Tile::CopyL0CToGmTla<Ascend950, …, GM+RowMajor>` 有两个重载
+
+- `(dst, src, uint8_t unitFlag = 0)`
+- `(dst, src, uint32_t l0Batch, uint32_t dstNdStride)` ← ND 批处理变体
+
+代码写的是 `copyC(bC, tL0C, 0, 0)`，命中后者且 `l0Batch=0` ⇒ `SetFixpipeNz2ndFlag(0, …)`
+一个块都不搬，L0C 从未落到 GM，C 保持 workspace 初值 0。T=64 时 `vTmp` 本就该为 0、
+`m` 的偏差又只有 1e-2 量级，所以长期被误判成"tile 布局/数值精度"问题
+（`7b3c192` 那次「TileMmadTla 参数顺序」修复其实不是根因）。
+
+### 修复
+
+- `copyC(bC, tL0C, static_cast<uint8_t>(0))`（走 3 参重载）；
+- 顺带把 L1A/L1B 的 tla tensor 改成**容量形状** `(128,128)` 构造、再用 `GetTile` 取实际子块，
+  与 `BlockMmad` / `chunk_kda_fwd_post_wu.h` 的既有写法一致（`TILED_L1_B_OFF=32KiB` 正是 128×128 bf16 的 footprint）。
+
+### 验证证据（241 device6；torch 2.7.1 + torch_npu 2.7.1.post5）
+
+| 配置 | 结果 |
+| --- | --- |
+| `PPFM_TILE_MMAD=0`（BlockMmad 基线） | smoke 5/5 轮 FAIL=0，h/m max_abs ≤ 2.4e-5 |
+| 只 tile mm1 / 只 tile mm3 | 非目标半边与基线**逐位一致**（h 9.537e-07 / m 4.657e-10） |
+| `PPFM_TILE_MMAD=1` 未修复 | smoke 6/6 轮 FAIL=5（与 247 上观测一致） |
+| `PPFM_TILE_MMAD=1` 本修复 | smoke 6 轮 FAIL = 0,1,2,0,0,0；命中轮次幅度 1.168~1.563 随机跳动 |
+
+### 结论与后续
+
+1. A1（mm1/mm3 手写 tile，GM 落点）**数值已与 BlockMmad 等价**：不命中残留竞态时 h/m 逐位正确。
+2. 残留失败是**已知的 GDN h 跨核可见性窗口**（见交接文档 §5.3-4/5）：tile 路径只改变时序把它放大
+   （基线 5/5 干净 vs tile 版 2/6 轮命中，幅度随机）。⇒ 按计划进入 **A2（A5 L0C→UB 直连）**，
+   结构性去掉 GM 往返与可见性窗口，而不是继续在 GM 路径叠加屏障。
+3. 本轮归类为实现精度问题：`stage=implementation`、`issue_type=precision_debug`、
+   `resume_from=implementation`、`validation_scope=precision_targeted`；A2 落地并复测 41 条后回 05 全量验收。

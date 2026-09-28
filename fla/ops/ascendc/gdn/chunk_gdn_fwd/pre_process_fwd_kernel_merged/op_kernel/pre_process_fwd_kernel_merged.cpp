@@ -217,6 +217,10 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #ifndef PPFM_VTMP_UB
 #define PPFM_VTMP_UB 1
 #endif
+// UB 语义诊断（默认 0）：1=UB 落点同时再写一份 GM，并在 AIV 侧回采探针
+#ifndef PPFM_VTMP_UB_DIAG
+#define PPFM_VTMP_UB_DIAG 0
+#endif
 
 // ---------------- AIV 侧 UB 布局（字节）----------------
 // ⚠ 950 MIX 下 UB 由**一个 AIC + 两个 AIV 子核共享**（同 chunk_fwd_h / KDA fwd_h 的
@@ -458,6 +462,7 @@ private:
 
     __aicore__ inline void ProcessChain(int64_t n, int64_t hv, int64_t bos, int64_t len)
     {
+        curN_ = n;
         const auto *t = ctx_.tiling;
         // ---- prologue：h = 0，m = I ----
         Duplicate(row0F_, 0.0f, CV_V);
@@ -723,6 +728,28 @@ private:
     {
         const bool useG = (ctx_.tiling->gateMode == PPFM_GATE_USE_G);
         AivWaitFromAic(kFlagHalf1);
+#if PPFM_VTMP_UB_DIAG
+        if (curChunk_ == 1) {
+            PipeBarrier<PIPE_ALL>();
+            const float g0 = vTmpF_.GetValue(0);
+            const float g32 = vTmpF_.GetValue(32 * CV_V);
+            const float uOwn0 = extBlkF_.GetValue(0);
+            const float uOwn32 = extBlkF_.GetValue(32 * CV_V);
+            const float uSh0 = vTmpUb_.GetValue(0);
+            const float uSh32 = vTmpUb_.GetValue(32 * CV_V);
+            PipeBarrier<PIPE_ALL>();
+            row0F_.SetValue(0, g0);
+            row0F_.SetValue(1, g32);
+            row0F_.SetValue(2, uOwn0);
+            row0F_.SetValue(3, uOwn32);
+            row0F_.SetValue(4, uSh0);
+            row0F_.SetValue(5, uSh32);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(hmGm_[((curN_ * ctx_.tiling->Hv + hv) * CV_K) * (CV_V + CV_K) + CV_V],
+                     row0F_, 8);
+            PipeBarrier<PIPE_ALL>();
+        }
+#endif
         // ITER9：vTmp 走 GM 时保留过渡探读（A2 走 UB 时才省掉）
 #if !PPFM_VTMP_UB
         DataCopy(row2F_, vTmpF_, 8);
@@ -886,6 +913,7 @@ private:
     LocalTensor<float> scrF_;
     LocalTensor<bfloat16_t> scrBf_;
     int32_t subIdx_ = 0;
+    int64_t curN_ = 0;   // ITER11：UB 诊断探针要定位本链 hm 地址
     int32_t subNum_ = 1;
     GlobalTensor<bfloat16_t> kGm_;
     GlobalTensor<bfloat16_t> wGm_;
@@ -1117,6 +1145,10 @@ private:
             auto tensorUb = tla::MakeTensor(vTmpUb, layoutUb, Catlass::Arch::PositionUB{});
             typename TiledCopyNTSplitUb::template CopyL0CToDst<decltype(tensorUb)> copyUb;
             copyUb(tensorUb, tL0C);
+#if PPFM_VTMP_UB_DIAG
+            typename MmTileCopyNT::template CopyL0CToDst<decltype(bC)> copyCRef;
+            copyCRef(bC, tL0C, static_cast<uint8_t>(0));   // 诊断参照：同值再落一份 GM
+#endif
         } else {
             typename MmTileCopyNT::template CopyL0CToDst<decltype(bC)> copyC;
             // ⚠ 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)

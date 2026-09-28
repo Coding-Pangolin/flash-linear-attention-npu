@@ -547,11 +547,12 @@ private:
             DataCopy(hBf_[r * CV_V], row0Bf_, CV_V);
         }
         PipeBarrier<PIPE_ALL>();
-        // m 初值 = I：**逐行纯向量构造**（不再用共享的 identF_ 矩阵，避免两个子核
-        // 在同一块 UB 上互相覆盖；也省下 64 KiB UB）。
+        // m 初值 = I
+        // 950：**逐行纯向量构造**（ArithProgression + |k-r| 造对角，省下 64 KiB UB）。
         // ⚠ 不要用 row0F_.SetValue(r,1) 这类"标量写 UB + 向量写同一块 UB"的组合：
         //   实测标量写的落盘顺序不受 PipeBarrier<PIPE_V> 保护，会让个别行丢掉对角 1
         //   （表现为 m 只有 ~0.05% 元素错、max_abs≈1）。
+#if PPFM_ARCH_IS_950
         Duplicate(row2F_, 1.0f, CV_K);
         PipeBarrier<PIPE_V>();
         ArithProgression(row1F_, 0.0f, 1.0f, CV_K);   // row1F_[k] = k
@@ -569,6 +570,27 @@ private:
             DataCopy(mBf_[r * CV_K], row0Bf_, CV_K);
             PipeBarrier<PIPE_ALL>();
         }
+#else
+        // 910B/910_93：同一套「ArithProgression + |k-r|」构造在 A2 上**实测退化**——
+        //   m 变成"每行常数"（行 r 的值只随 r 变化、整行相同，对角与状态全错；
+        //   用 w=0,g=0 探针可复现：m 应为 I，实到 m[r][:] 恒等于 [r%4<2]）。
+        //   A2 上 ArithProgression 走 common 实现（标量写 8 拍 + 向量 Add 展开），
+        //   与外层逐行向量组合相互干扰；且全仓仅本算子用到该原语（无先例）。
+        //   这里改成最朴素、逐行可验证的构造：整行清零 + 单点写 1，
+        //   标量写与搬运之间一律用 PIPE_ALL 全栅栏隔离（KDA 的逐点 SetValue 路径
+        //   在 A2 上实测正确，说明标量写本身没问题）。
+        for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
+            Duplicate(row0F_, 0.0f, CV_K);
+            PipeBarrier<PIPE_ALL>();
+            row0F_.SetValue(r, 1.0f);
+            PipeBarrier<PIPE_ALL>();       // S -> V/MTE3
+            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, CV_K);
+            PipeBarrier<PIPE_ALL>();       // V -> MTE3
+            DataCopy(mF32_[r * CV_K], row0F_, CV_K);
+            DataCopy(mBf_[r * CV_K], row0Bf_, CV_K);
+            PipeBarrier<PIPE_ALL>();       // MTE3 读完才能下一轮覆盖
+        }
+#endif
         const int64_t nt = (len + CV_BT - 1) / CV_BT;
         // ITER7（P3）：先独立做 chunk 0 的 staging；循环内把 staging(c+1) 提到
         // 「等 dH/T2(c)」之前 ⇒ staging 与 AIC 的 mm2/mm4(c) 重叠（原来 AIV 在这里纯等）

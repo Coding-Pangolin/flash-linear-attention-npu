@@ -109,6 +109,8 @@ __aicore__ inline void AivSetToAic(uint16_t id)
 {
     // set_intra_block 不保证"之前的搬运已落地"，这里显式排空 MTE3
     PipeBarrier<PIPE_MTE3>();
+    // 对称于 AIC 侧：本核写出的 GM（kBf_/wBf_/lBf_/vNewBf_/t1Bf_/状态）也要先对其他核可见
+    DataSyncBarrier<MemDsbT::DDR>();
     CrossCoreSetFlag<0x4, PIPE_MTE3>(id);
 }
 

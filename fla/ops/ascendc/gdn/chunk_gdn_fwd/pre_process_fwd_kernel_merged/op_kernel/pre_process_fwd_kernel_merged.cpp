@@ -652,6 +652,12 @@ private:
     {
         const bool useG = (ctx_.tiling->gateMode == PPFM_GATE_USE_G);
         AivWaitFromAic(kFlagHalf1);
+        // 过渡措施（L0C→UB 直连落地后删除）：flag 到达时 AIC 的 C 写回可能仍在途，
+        // 先"探读"一次再加屏障，把读到上一代/零值的窗口关掉（实测探针版连续 6 轮干净）。
+        DataCopy(row2F_, vTmpF_, 8);
+        PipeBarrier<PIPE_ALL>();
+        DataCopy(row2F_, t1F_, 8);
+        PipeBarrier<PIPE_ALL>();
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(vTmpF_);
 #if PPFM_DIAG
@@ -710,6 +716,11 @@ private:
         const bool evenChunk = ((dataChunk & 1) == 0);
         GlobalTensor<float> &dhBuf = evenChunk ? dHF_ : dHF1_;
         GlobalTensor<float> &t2Buf = evenChunk ? t2F_ : t2F1_;
+        // 同 UpdateVNew 的过渡探读：dH / T2 也是 AIC 刚写、本核刚读的 GM
+        DataCopy(row2F_, dhBuf, 8);
+        PipeBarrier<PIPE_ALL>();
+        DataCopy(row2F_, t2Buf, 8);
+        PipeBarrier<PIPE_ALL>();
         // 每 RB 行一次搬运：块内逐行 Muls（廉价、无需栅栏），块级 Add/Sub/Cast
         constexpr int32_t RB = 16;
         for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {

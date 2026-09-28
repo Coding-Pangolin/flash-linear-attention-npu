@@ -115,7 +115,9 @@ __aicore__ inline void AivSetToAic(uint16_t id)
     // set_intra_block 不保证"之前的搬运已落地"，这里显式排空 MTE3
     PipeBarrier<PIPE_MTE3>();
     // 对称于 AIC 侧：本核写出的 GM（kBf_/wBf_/lBf_/vNewBf_/t1Bf_/状态）也要先对其他核可见
+#if PPFM_LEGACY_CACHEOPS
     DataSyncBarrier<MemDsbT::DDR>();
+#endif
     CrossCoreSetFlag<0x4, PIPE_MTE3>(id);
 }
 
@@ -220,6 +222,10 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 // UB 语义诊断（默认 0）：1=UB 落点同时再写一份 GM，并在 AIV 侧回采探针
 #ifndef PPFM_VTMP_UB_DIAG
 #define PPFM_VTMP_UB_DIAG 0
+#endif
+// 实验开关：1=保留手工 DCCI/DSB（历史做法）；0=只用跨核 flag（与生产算子一致）
+#ifndef PPFM_LEGACY_CACHEOPS
+#define PPFM_LEGACY_CACHEOPS 0
 #endif
 
 // ---------------- AIV 侧 UB 布局（字节）----------------
@@ -525,10 +531,14 @@ private:
             AivWaitFromAic(kFlagDH);
             // 读别的核（AIC）写的 GM 前必须让本核缓存行失效，否则会读到过期数据
             // （与 CANN matmul_client.h 中"读跨核 GM flag 前先 DCCI"的用法一致）
+#if PPFM_LEGACY_CACHEOPS
             DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                      DcciDst::CACHELINE_OUT>(dHF_);
+#endif
+#if PPFM_LEGACY_CACHEOPS
             DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                      DcciDst::CACHELINE_OUT>(t2F_);
+#endif
 #ifdef PPFM_DEBUG_HEADER
             // [临时调试] 在各更新点之后立刻回读状态（fp32 标量直读，最可靠）
             // 结果先放 UB（row1F_ 高位 lane），最后由 epilogue 的 header 块带出
@@ -563,8 +573,10 @@ private:
                 row0F_.SetValue(i, dbgF_.GetValue(i));
             }
             PipeBarrier<PIPE_ALL>();
+#if PPFM_LEGACY_CACHEOPS
             DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                      DcciDst::CACHELINE_OUT>(diagG_);
+#endif
             DataCopy(row1F_, diagG_, 8);          // 8 个 fp32 = 32B，满足对齐要求
             PipeBarrier<PIPE_ALL>();
             for (int32_t i = 0; i < PPFM_DIAG_CHUNKS; ++i) {
@@ -766,11 +778,15 @@ private:
         }
 #endif
 #if !PPFM_VTMP_UB
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(vTmpF_);
 #endif
+#endif
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1F_);
+#endif
         // v_new = (v - vTmp) · dg → bf16（逐行；整块版本会引入 ~0.4% 的 GDN 偏差，待查）
         // v_new = (v - vTmp)·dg → bf16：同样**按整段分配 subcore**，段内做完 Cast/Sub/缩放/Cast/落盘
         constexpr int32_t SEG = 16;
@@ -1009,12 +1025,18 @@ private:
         // ⚠ 读别的核（AIV）刚写过的 GM 之前必须让本核的 cache 失效：h/m 每 chunk 都被
         //    AIV 重写，若 AIC 命中自己缓存的旧行，mm1/mm3 就会拿到过期的 h/m
         //    （实测表现为概率性的 h 半边大面积错、m 只是略偏，且随调度时好时坏）。
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(wBf_);
+#endif
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(hBf_);
+#endif
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(mBf_);
+#endif
 #if PPFM_TILE_MMAD
         RunTiledNT(wBf_, hBf_, vTmpF_, CV_BT, CV_V, CV_K,
                     /*toUb=*/(PPFM_VTMP_UB != 0));   // ITER9：按宏选择 A2 UB 落点
@@ -1032,14 +1054,20 @@ private:
         //   此时 AIV 即便 DCCI 也会读到旧值。实测（PPFM_DIAG 指纹）：AIV 读到 vTmp 全 0，
         //   而 AIC 实际写了 -0.013/+0.0092 → v_new 退化成 v，h 半边随机整头崩（m 不受影响）。
 #if !PPFM_VTMP_UB
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(vTmpF_);
 #endif
+#endif
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1F_);
+#endif
         // ⚠ 正式原语：DDR 数据同步屏障——保证 C 的写回对其他核可见后再抬 flag。
         //   诊断版实验表明竞态是"flag 已到、写回仍在途"的时序窗口（加探针即掩盖）。
+#if PPFM_LEGACY_CACHEOPS
         DataSyncBarrier<MemDsbT::DDR>();
+#endif
         AicSetToAiv(kFlagHalf1);
 
         // ② dH[K,V] = k_c^T @ bf16(v_new)[BT,V]
@@ -1047,29 +1075,45 @@ private:
         // ITER7：按 chunk 奇偶取 k/left 槽（与 AIV staging 写入槽一致）
         GlobalTensor<bfloat16_t> &kIn = ((c & 1) != 0) ? kBf1_ : kBf_;
         GlobalTensor<bfloat16_t> &lIn = ((c & 1) != 0) ? lBf1_ : lBf_;
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(kIn);
+#endif
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(lIn);
+#endif
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(vNewBf_);
+#endif
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1Bf_);
+#endif
         RunMmadTA(kIn, vNewBf_, dhBuf, CV_K, CV_V, CV_BT);
 
         // ④ T2[K,K] = left^T @ bf16(T1)[BT,K]
         RunMmadTA(lIn, t1Bf_, t2Buf, CV_K, CV_K, CV_BT);
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(dhBuf);
+#endif
+#if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t2Buf);
+#endif
+#if PPFM_LEGACY_CACHEOPS
         DataSyncBarrier<MemDsbT::DDR>();
+#endif
         // dH 与 T2 都由 AIV 在**下一个 chunk 开头**使用，合并为一次跨核通知（省一次 flag 往返）
         AicSetToAiv(kFlagDH);
 #if PPFM_DIAG
         if (c < PPFM_DIAG_CHUNKS) {
+#if PPFM_LEGACY_CACHEOPS
             DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                      DcciDst::CACHELINE_OUT>(vTmpF_);
+#endif
             PipeBarrier<PIPE_ALL>();
             diagG_.SetValue(static_cast<int32_t>(c), vTmpF_.GetValue(0));
             PipeBarrier<PIPE_ALL>();

@@ -53,6 +53,8 @@
 #include "catlass/gemm_coord.hpp"
 #include "catlass/layout/layout.hpp"
 #include "kernel_utils/block/block_mmad_pingpong_tla_multi.hpp"
+// A5 的 L0C→UB 直连（手写 tile 级 mmad 用；A2/A3 用 PackedTileCopyTla 落 GM）
+#include "kernel_utils/tile/copy_l0c_to_ub.hpp"
 #include "tla/layout.hpp"
 #include "tla/tensor.hpp"
 #include "pre_process_fwd_kernel_merged_struct.h"
@@ -161,6 +163,22 @@ using MmTileCopyTA = Catlass::Gemm::Tile::PackedTileCopyTla<
     Catlass::layout::RowMajor>;
 using MmBlockTA = Catlass::Gemm::Block::BlockMmadTla<MmDispatchPolicy, MmL1Shape, MmL0Shape, bfloat16_t,
                                                      bfloat16_t, float, void, MmTileCopyTA>;
+
+// ---------------- A5 手写 tile 级（L0C→UB）类型 ----------------
+// 与仓内 chunk_fwd_h_cube.h / chunk_kda_fwd_fwd_h.h 同一套 API：
+//   PackedTileCopyTlaToUB 提供 CopyGmToL1A/B、CopyL1ToL0A/B、CopyL0CToDst（落 UB）；
+//   TileMmadTla 做单 tile MMAD。A2/A3 没有 UB 直连通道，仍用上面的 PackedTileCopyTla 落 GM。
+using TiledArchTag = Catlass::Arch::Ascend950;
+using TiledCopyNT = Common::Tile::PackedTileCopyTlaToUB<
+    TiledArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor,
+    float, Catlass::layout::RowMajor>;
+using TiledCopyTA = Common::Tile::PackedTileCopyTlaToUB<
+    TiledArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor,
+    float, Catlass::layout::RowMajor>;
+using TiledMmadNT = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
+                                                     typename TiledCopyNT::LayoutTagL1A>;
+using TiledMmadTA = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
+                                                     typename TiledCopyTA::LayoutTagL1A>;
 
 // ---------------- AIV 侧 UB 布局（字节）----------------
 // ⚠ 950 MIX 下 UB 由**一个 AIC + 两个 AIV 子核共享**（同 chunk_fwd_h / KDA fwd_h 的

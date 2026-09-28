@@ -876,6 +876,13 @@ private:
 
         // ③ T1[BT,K] = W_c[BT,K] @ bf16(m)[K,K]
         RunMmadNT(wBf_, mBf_, t1F_, CV_BT, CV_K, CV_K);
+        // ⚠ 写侧也要 clean（写回），只靠读者 DCCI 不够：FIX 写回可能还停在写缓冲里，
+        //   此时 AIV 即便 DCCI 也会读到旧值。实测（PPFM_DIAG 指纹）：AIV 读到 vTmp 全 0，
+        //   而 AIC 实际写了 -0.013/+0.0092 → v_new 退化成 v，h 半边随机整头崩（m 不受影响）。
+        DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(vTmpF_);
+        DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(t1F_);
         AicSetToAiv(kFlagHalf1);
 
         // ② dH[K,V] = k_c^T @ bf16(v_new)[BT,V]
@@ -892,6 +899,10 @@ private:
 
         // ④ T2[K,K] = left^T @ bf16(T1)[BT,K]
         RunMmadTA(lBf_, t1Bf_, t2Buf, CV_K, CV_K, CV_BT);
+        DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(dhBuf);
+        DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(t2Buf);
         // dH 与 T2 都由 AIV 在**下一个 chunk 开头**使用，合并为一次跨核通知（省一次 flag 往返）
         AicSetToAiv(kFlagDH);
 #if PPFM_DIAG

@@ -429,9 +429,8 @@ private:
         if (ctx_.tiling->gateMode == PPFM_GATE_USE_G) {
             const float glast = gGm_.GetValue(hv * ctx_.tiling->T + tGlobal);
             const float dc = Exp2Scalar(glast);
-            for (int32_t k = 0; k < CV_K; ++k) {
-                decayF_.SetValue(k, dc);
-            }
+            // ITER4：decayF_ 是全 128 项同值 ⇒ 一次 Duplicate 取代 128 次 SetValue
+            Duplicate(decayF_, dc, CV_K);
         } else {
             for (int32_t k = 0; k < CV_K; ++k) {
                 const float gk = gkGm_.GetValue((hv * ctx_.tiling->T + tGlobal) * CV_K + k);
@@ -446,15 +445,13 @@ private:
         const auto *t = ctx_.tiling;
         // ---- prologue：h = 0，m = I ----
         Duplicate(row0F_, 0.0f, CV_V);
-        PipeBarrier<PIPE_ALL>();
+        Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, CV_V);
+        PipeBarrier<PIPE_ALL>();   // ITER4：V -> MTE3 只需一次（源行不变）
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
             DataCopy(hF32_[r * CV_V], row0F_, CV_V);
-            PipeBarrier<PIPE_ALL>();
-            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, CV_V);
-            PipeBarrier<PIPE_ALL>();
             DataCopy(hBf_[r * CV_V], row0Bf_, CV_V);
-            PipeBarrier<PIPE_ALL>();
         }
+        PipeBarrier<PIPE_ALL>();
         // m 初值 = I：**逐行纯向量构造**（不再用共享的 identF_ 矩阵，避免两个子核
         // 在同一块 UB 上互相覆盖；也省下 64 KiB UB）。
         // ⚠ 不要用 row0F_.SetValue(r,1) 这类"标量写 UB + 向量写同一块 UB"的组合：
@@ -465,18 +462,15 @@ private:
         ArithProgression(row1F_, 0.0f, 1.0f, CV_K);   // row1F_[k] = k
         PipeBarrier<PIPE_V>();
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
+            // ITER4：同一 pipe 内的 4 次 V 运算无需各自栅栏，只在 V->MTE3 与
+            //        MTE3 读完（下一轮要覆盖 row0F_/row0Bf_）处各保留一次
             Adds(row0F_, row1F_, -static_cast<float>(r), CV_K);   // k - r
-            PipeBarrier<PIPE_V>();
             Abs(row0F_, row0F_, CV_K);
-            PipeBarrier<PIPE_V>();
             Mins(row0F_, row0F_, 1.0f, CV_K);
-            PipeBarrier<PIPE_V>();
             Sub(row0F_, row2F_, row0F_, CV_K);                    // 1 - min(|k-r|,1)
-            PipeBarrier<PIPE_ALL>();
-            DataCopy(mF32_[r * CV_K], row0F_, CV_K);
-            PipeBarrier<PIPE_ALL>();
             Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, CV_K);
             PipeBarrier<PIPE_ALL>();
+            DataCopy(mF32_[r * CV_K], row0F_, CV_K);
             DataCopy(mBf_[r * CV_K], row0Bf_, CV_K);
             PipeBarrier<PIPE_ALL>();
         }
@@ -491,9 +485,8 @@ private:
             if (c > 0) {
                 // StageChunk 会覆盖 decayF_；先把上一 chunk 的 decay 存下来，
                 // 供"推迟一个 chunk 的状态更新"使用
-                for (int32_t k = 0; k < CV_K; ++k) {
-                    decayPrevF_.SetValue(k, decayF_.GetValue(k));
-                }
+                // ITER4：整块向量拷贝取代 128 SetValue + 128 GetValue
+                Adds(decayPrevF_, decayF_, 0.0f, CV_K);
                 PipeBarrier<PIPE_ALL>();
             }
             StageChunk(n, hv, t0, rows);

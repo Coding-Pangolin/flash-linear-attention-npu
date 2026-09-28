@@ -34,7 +34,7 @@ def build_case(seed: int, T: int, HK: int, HV: int, K: int, V: int, variant: str
     u = v.clone()
     if variant == "gdn":
         return dict(k=k, v=v, w=w, u=u, g=real_gate((HV,)).to(torch.float32), gk=None)
-    assert HK == HV, "KDA (gk) requires HK == HV"
+    # KDA：gk 按 value head（HV），k 按 HK 头；HK < HV（GVA）合法
     return dict(k=k, v=v, w=w, u=u, g=None, gk=real_gate((HV, K)).to(torch.float32))
 
 

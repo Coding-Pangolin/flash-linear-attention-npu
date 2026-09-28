@@ -44,8 +44,7 @@ def build_case(seed: int, T: int, HK: int, HV: int, K: int, V: int, variant: str
     if variant == "gdn":
         gate = real_gate((HV,)).to(torch.float32)
         return dict(k=k, v=v, w=w, u=u, g=gate, gk=None)
-    # KDA：gk 逐 K 门控，k 必须是预 gate 的 kg（HK == HV）
-    assert HK == HV, "KDA (gk) requires HK == HV"
+    # KDA：gk 逐 K 门控，按 value head 给（HV 个门控）；k 按 HK 头。HK < HV（GVA）合法。
     gate = real_gate((HV, K)).to(torch.float32)
     return dict(k=k, v=v, w=w, u=u, g=None, gk=gate)
 

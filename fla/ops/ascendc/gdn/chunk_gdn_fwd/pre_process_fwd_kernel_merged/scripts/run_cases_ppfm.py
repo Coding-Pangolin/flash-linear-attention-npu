@@ -95,8 +95,8 @@ def build_inputs(case: dict, seed: int = 0):
     dt = torch.bfloat16 if case.get("g/gk dtype") == "BF16" else torch.float32
     if variant == "GDN":
         return dict(k=k, v=v, u=v.clone(), w=w, g=real_gate((hv,)).to(dt), gk=None)
-    # KDA（gk）：k 必须是已 gate 的 kg，且 HK == HV
-    assert hk == hv, f"{case['用例ID']}: KDA 要求 HK == HV"
+    # KDA（gk）：gk 按 value head 给（[B,T,HV,K]），k 按 HK 头（hk = hv // (HV/HK)）；
+    # GVA（HK < HV）合法，与竞品 chunk_kda / CP kernel 一致，不再限制 HK == HV。
     return dict(k=k, v=v, u=v.clone(), w=w, g=None, gk=real_gate((hv, kdim)).to(dt))
 
 

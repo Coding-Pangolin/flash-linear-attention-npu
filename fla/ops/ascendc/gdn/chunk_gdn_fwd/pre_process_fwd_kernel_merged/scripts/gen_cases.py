@@ -10,7 +10,11 @@
 用例表里的 `(B, HV)` 配对取自 `GDN泛化用例表.xlsx` 的真实场景。
 GVA：HK 与 HV 可以不一致但必须成倍数（不设上限）；k 在 HK 维、其余在 HV 维，
 算子内部按 hk = hv // (HV/HK) 复用 key head，hm 与两个状态在 HV 维。
-注意 GVA 只存在于 g-only（GDN）路径——gk 路径要求 HK == HV。
+**GVA 同样适用于 gk（KDA）路径**：gk 是按 value head 给的 [B,T,HV,K]，k 仍按 HK 头，
+两者由同一个 hk = hv // (HV/HK) 映射串起来 —— 竞品 `fla/ops/kda/chunk.py` 文档写明
+"GVA (Grouped Value Attention) is applied if HV > H"（并给出 HV=8/H=4、g=[B,T,HV,K] 的样例），
+CP kernel `fla/ops/cp/chunk_delta_h.py` 里 k 用 `i_h // (HV // H)`、gk 用 `i_h`，
+与本算子的 kernel/标杆实现逐行一致（scripts/stable_abi/test_kda_gva.py 实测 matched=1.000000）。
 
 本轮范围：**GDN（g）+ KDA（gk）**。DPLR（gk + bg）**预留**——接口与 03 设计已覆盖
 （S2 的 `bg^T @ V_c` 项、`M_c` 取 `+`、L1 的 `bg`/`V_c` 槽、`USE_BG` 分支都留着），
@@ -86,9 +90,8 @@ def build_cases() -> list[tuple]:
     # E 并行度（Nseq × HV）：覆盖"用不满核"到"多波"。GDN 表里的 (B, HV) 配对改写成
     # "把 B 条等长序列打包进一个窗口"（每段 4096，total = B × 4096），Nwork 不变。
     # 并行度与算法路径无关，这里按 GDN/KDA 交替取，避免本组把路径分布拉偏。
-    # ⚠ gk（KDA/DPLR）路径要求 **HK == HV**（k 是已 gate 的 kg，见 docs/api.md），
-    #   所以本组里 KDA 行的 HK 必须跟着 HV 走；GVA（HK < HV）只存在于 GDN 路径，
-    #   其覆盖由 C 组（PPFM-19..25）保证。
+    # 本组的 KDA 行同样保留 GVA（HK=8 < HV=16/64）：gk 按 value head 给，k 按 HK 头，
+    #   hk = hv // (HV/HK)；这条映射与竞品 chunk_kda / CP kernel 一致（见文件头说明）。
     for b, hv, path, risk, note in (
         (1, 8, "GDN", "高", "Nwork=8：28 个 AIC 只用到 8 个，用不满核的最坏情形（GDN 表 V2 配对）"),
         (1, 16, "KDA", "高", "Nwork=16：只用到 16 个 AIC（GDN 表 V1 配对）"),
@@ -99,7 +102,7 @@ def build_cases() -> list[tuple]:
     ):
         t_seg = 4096
         cu = [i * t_seg for i in range(b + 1)]
-        hk = hv if path != "GDN" else 8      # KDA 必须 HK==HV；GDN 保留 GVA 复用
+        hk = 8                               # GDN/KDA 都用 GVA 1:(HV/8)，KDA 的 gk 按 value head
         rows.append(("精度-并行度", f"Nseq={b}×HV={hv}", path, 1, hk, hv, b * t_seg, cu, "FP32",
                      risk, note + f"；打包 {b} 段 × 每段 {t_seg}"))
 

@@ -192,7 +192,7 @@ constexpr int32_t TILED_L1_B_OFF = 32 * 1024;
 //   ⇒ 正在核对 tile 语义：TileMmadTla 的调用形态（(c,a,b,true,0) vs (c,a,b,m,n,k)）、
 //   L1A/L1B 布局标签与 L0C 布局。调通后翻成 1，再上 A2（A5 的 L0C→UB）。
 #ifndef PPFM_TILE_MMAD
-#define PPFM_TILE_MMAD 0
+#define PPFM_TILE_MMAD 1
 #endif
 
 // ---------------- AIV 侧 UB 布局（字节）----------------
@@ -1008,7 +1008,9 @@ private:
         typename MmTileCopyNT::template CopyGmToL1B<decltype(bB)> copyG2LB;
         copyG2LA(tL1A, bA);
         copyG2LB(tL1B, bB);
-        PipeBarrier<PIPE_ALL>();
+        // 跨流水必须用事件对（chunk_fwd_h_cube.h 的写法），PIPE_ALL 不保证 MTE1/M/FIX 次序
+        SetFlag<HardEvent::MTE2_MTE1>(EVENT_ID0);
+        WaitFlag<HardEvent::MTE2_MTE1>(EVENT_ID0);
 
         auto tL0A = tla::MakeTensor(
             l0A, tla::MakeLayout<bfloat16_t, typename MmTileCopyNT::LayoutTagL0A>(m, k),
@@ -1020,15 +1022,19 @@ private:
         typename MmTileCopyNT::CopyL1ToL0B copyL2L0B;
         copyL2L0A(tL0A, GetTile(tL1A, tla::MakeCoord(0, 0), tla::MakeShape(m, k)));
         copyL2L0B(tL0B, GetTile(tL1B, tla::MakeCoord(0, 0), tla::MakeShape(k, n)));
-        PipeBarrier<PIPE_ALL>();
+        SetFlag<HardEvent::MTE1_M>(EVENT_ID1);
+        WaitFlag<HardEvent::MTE1_M>(EVENT_ID1);
 
         auto tL0C = tla::MakeTensor(l0C, tla::MakeLayoutL0C(m, n), Catlass::Arch::PositionL0C{});
         MmTileMmadNT mmad;
         mmad(tL0C, tL0A, tL0B, true, 0);
-        PipeBarrier<PIPE_ALL>();
+        SetFlag<HardEvent::M_FIX>(EVENT_ID2);
+        WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 
         typename MmTileCopyNT::template CopyL0CToDst<decltype(bC)> copyC;
         copyC(bC, tL0C, 0, 0);
+        SetFlag<HardEvent::FIX_M>(EVENT_ID3);
+        WaitFlag<HardEvent::FIX_M>(EVENT_ID3);
         PipeBarrier<PIPE_ALL>();
     }
 
@@ -1063,7 +1069,8 @@ private:
         typename MmTileCopyTA::template CopyGmToL1B<decltype(bB)> copyG2LB;
         copyG2LA(tL1A, bA);
         copyG2LB(tL1B, bB);
-        PipeBarrier<PIPE_ALL>();
+        SetFlag<HardEvent::MTE2_MTE1>(EVENT_ID0);
+        WaitFlag<HardEvent::MTE2_MTE1>(EVENT_ID0);
 
         auto tL0A = tla::MakeTensor(
             l0A, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL0A>(m, k),
@@ -1075,15 +1082,19 @@ private:
         typename MmTileCopyTA::CopyL1ToL0B copyL2L0B;
         copyL2L0A(tL0A, GetTile(tL1A, tla::MakeCoord(0, 0), tla::MakeShape(m, k)));
         copyL2L0B(tL0B, GetTile(tL1B, tla::MakeCoord(0, 0), tla::MakeShape(k, n)));
-        PipeBarrier<PIPE_ALL>();
+        SetFlag<HardEvent::MTE1_M>(EVENT_ID1);
+        WaitFlag<HardEvent::MTE1_M>(EVENT_ID1);
 
         auto tL0C = tla::MakeTensor(l0C, tla::MakeLayoutL0C(m, n), Catlass::Arch::PositionL0C{});
         MmTileMmadTA mmad;
         mmad(tL0C, tL0A, tL0B, true, 0);
-        PipeBarrier<PIPE_ALL>();
+        SetFlag<HardEvent::M_FIX>(EVENT_ID2);
+        WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 
         typename MmTileCopyTA::template CopyL0CToDst<decltype(bC)> copyC;
         copyC(bC, tL0C, 0, 0);
+        SetFlag<HardEvent::FIX_M>(EVENT_ID3);
+        WaitFlag<HardEvent::FIX_M>(EVENT_ID3);
         PipeBarrier<PIPE_ALL>();
     }
 #endif  // PPFM_TILE_MMAD

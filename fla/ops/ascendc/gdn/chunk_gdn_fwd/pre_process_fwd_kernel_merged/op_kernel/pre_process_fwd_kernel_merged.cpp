@@ -215,7 +215,7 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 // ITER9：A2 优化方案（mm1 的 C 由 fixpipe SPLIT_M 直落 UB）开关。
 //   0 = A5 主线（C 落 GM，已验证）；1 = UB 落点（首测 h 半边崩，UB 语义待实测确认）。
 #ifndef PPFM_VTMP_UB
-#define PPFM_VTMP_UB 0
+#define PPFM_VTMP_UB 1
 #endif
 
 // ---------------- AIV 侧 UB 布局（字节）----------------
@@ -378,6 +378,8 @@ public:
         gBlkF_ = ubBuf_.Get<float>()[UB_GBLK_ELEM + sdg];
         stateBlkF_ = ubBuf_.Get<float>()[UB_STATE_F_ELEM + sstate];
         extBlkF_ = ubBuf_.Get<float>()[UB_EXT_F_ELEM + sext];
+        // ITER10：fixpipe SPLIT_M 把两半写到**同一偏移**（各自 bank），这里用共享基址视图
+        vTmpUb_ = ubBuf_.Get<float>()[UB_EXT_F_ELEM];
         stateBlkBf_ = ubBuf_.Get<bfloat16_t>()[UB_STATE_BF_ELEM + sstate];
         kBlkBf_ = ubBuf_.Get<bfloat16_t>()[UB_KBLK_BF_ELEM];
         wBlkBf_ = ubBuf_.Get<bfloat16_t>()[UB_WBLK_BF_ELEM];
@@ -752,13 +754,18 @@ private:
             const int32_t off = seg * SEG;
             const int32_t lo = (seg - subIdx_ * SEG_PER_SUB) * SEG;
 #if !PPFM_VTMP_UB
-            // A5 主线：vTmp 仍从 GM 回读（A2 优化方案走 UB 时删掉这两行）
+            // A5 主线：vTmp 仍从 GM 回读
             DataCopy(extBlkF_[lo * CV_V], vTmpF_[off * CV_V], SEG * CV_V);
             PipeBarrier<PIPE_ALL>();
 #endif
             Cast(scrF_[off * CV_V], vBlkBf_[off * CV_V], RoundMode::CAST_NONE, SEG * CV_V);
             PipeBarrier<PIPE_V>();
+#if PPFM_VTMP_UB
+            // ITER10：从共享基址视图读本子核那半（lo ∈ {0, SEG}）
+            Sub(scrF_[off * CV_V], scrF_[off * CV_V], vTmpUb_[lo * CV_V], SEG * CV_V);
+#else
             Sub(scrF_[off * CV_V], scrF_[off * CV_V], extBlkF_[lo * CV_V], SEG * CV_V);
+#endif
             PipeBarrier<PIPE_V>();
             if (useG) {
                 for (int32_t i = 0; i < SEG; ++i) {
@@ -871,6 +878,7 @@ private:
     LocalTensor<float> gBlkF_;
     LocalTensor<float> stateBlkF_;
     LocalTensor<float> extBlkF_;
+    LocalTensor<float> vTmpUb_;   // ITER10（A2）：共享基址的 vTmp 落点视图
     LocalTensor<bfloat16_t> stateBlkBf_;
     LocalTensor<bfloat16_t> kBlkBf_;
     LocalTensor<bfloat16_t> wBlkBf_;

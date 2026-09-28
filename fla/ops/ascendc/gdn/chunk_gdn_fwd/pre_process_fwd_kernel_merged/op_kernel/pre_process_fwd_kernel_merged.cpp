@@ -649,10 +649,13 @@ private:
         for (int32_t seg = subIdx_; seg < CV_BT / SEG; seg += subNum_) {
             const int32_t off = seg * SEG;
             const int32_t valid = (rows > off) ? ((rows - off < SEG) ? (rows - off) : SEG) : 0;
-            Duplicate(kBlkBf_[off * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
-            Duplicate(wBlkBf_[off * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
-            Duplicate(vBlkBf_[off * CV_V], static_cast<bfloat16_t>(0), SEG * CV_V);
-            PipeBarrier<PIPE_V>();
+            // ITER2：只有尾块需要零填充（整段时下面的 DataCopy 会写满整段）
+            if (valid < SEG) {
+                Duplicate(kBlkBf_[off * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
+                Duplicate(wBlkBf_[off * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
+                Duplicate(vBlkBf_[off * CV_V], static_cast<bfloat16_t>(0), SEG * CV_V);
+                PipeBarrier<PIPE_V>();
+            }
             if (valid > 0) {
                 DataCopy(kBlkBf_[off * CV_K], kGm_[(hk * t->T + t0 + off) * CV_K],
                          static_cast<uint32_t>(valid * CV_K));
@@ -684,11 +687,14 @@ private:
             }
         }
         PipeBarrier<PIPE_ALL>();
-        // dg / decay 落 GM（供 kernel 自身调试与一致性检查）
+        // ITER2：dg / decay 落 GM 只是调试用途（只有 PPFM_DIAG 下的 ProbeF32 会读），
+        //        默认关掉，每 chunk 省 2 次 DataCopy + 2 次全栅栏
+#if PPFM_DIAG
         DataCopy(gateF_[WS_GATE_DG / 4], dgF_, CV_BT);
         PipeBarrier<PIPE_ALL>();
         DataCopy(gateF_[WS_GATE_DECAY / 4], decayF_, CV_K);
         PipeBarrier<PIPE_ALL>();
+#endif
         AivSetToAic(kFlagInputs);
     }
 
@@ -768,8 +774,9 @@ private:
         // 每 RB 行一次搬运：块内逐行 Muls（廉价、无需栅栏），块级 Add/Sub/Cast
         constexpr int32_t RB = 16;
         for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {
+            // ITER2：第一次搬运后的全栅栏冗余——紧随其后第二次搬运之后还有一次，
+            //        足以保证两次 MTE2 都在 Muls/Add 之前完成
             DataCopy(stateBlkF_, hF32_[rb * CV_V], RB * CV_V);
-            PipeBarrier<PIPE_ALL>();
             DataCopy(extBlkF_, dhBuf[rb * CV_V], RB * CV_V);
             PipeBarrier<PIPE_ALL>();
             if (useG) {
@@ -795,7 +802,6 @@ private:
         }
         for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {
             DataCopy(stateBlkF_, mF32_[rb * CV_K], RB * CV_K);
-            PipeBarrier<PIPE_ALL>();
             DataCopy(extBlkF_, t2Buf[rb * CV_K], RB * CV_K);
             PipeBarrier<PIPE_ALL>();
             if (useG) {

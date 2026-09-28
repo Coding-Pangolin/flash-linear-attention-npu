@@ -39,6 +39,15 @@ run_variant() {
   cd "$OP" || return
   if [ "$mode" = "diag" ]; then
     "$PY" "$WORK/run_npu.py" "$WORK/diag_map.py" "$OP" >> "$LOG" 2>&1
+  elif [ "$mode" = "race" ]; then
+    local rounds=${ROUNDS:-5}
+    local i r n worst
+    for i in $(seq 1 "$rounds"); do
+      r=$("$PY" "$WORK/run_npu.py" scripts/npu_smoke_ppfm.py --op-dir "$OP" 2>&1)
+      n=$(printf '%s\n' "$r" | grep -cE '^\[FAIL')
+      worst=$(printf '%s\n' "$r" | grep -E '^\[FAIL' -A2 | grep -E 'h_half matched' | head -1 | tr -s ' ')
+      echo "  round $i: FAIL=$n $worst" | tee -a "$LOG"
+    done
   else
     "$PY" "$WORK/run_npu.py" scripts/npu_smoke_ppfm.py --op-dir "$OP" 2>&1 \
       | grep -E "^\[(PASS|FAIL)\]|matched=|条失败" | tee -a "$LOG"

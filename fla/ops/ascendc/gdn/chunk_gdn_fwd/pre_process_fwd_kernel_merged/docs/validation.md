@@ -1322,3 +1322,19 @@ tile 函数内的 `PipeBarrier<PIPE_ALL>`；与设计预期一致（A1 只负责
 
 后续优先级：① 状态更新/staging 去逐行标量；② **A2：L0C→UB 直连**（省 64 KB/chunk 往返，并消除
 GDN h 可见性窗口）；③ 压 prologue 的 99 µs（T=64 时占 79%）；④ 提高 Nwork（多序列打包）。
+
+### 同机 A/B：tile 版 vs BlockMmad 基线（241 device6，同一批采集命令）
+
+| shape | `PPFM_TILE_MMAD=0` | `PPFM_TILE_MMAD=1`（A1） | Δ |
+| --- | --- | --- | --- |
+| T=256/HV=2 | 201.78 µs | 203.43 µs | +0.8% |
+| T=1024/HV=8 | 511.69 µs | 519.77 µs | +1.6% |
+| T=4096/HV=8 | 1746.66 µs | 1782.50 µs | +2.1% |
+
+成本模型：基线 **100.0 µs + 25.73 µs/chunk**；tile 版 **98.8 µs + 26.31 µs/chunk**（四个 shape 均吻合）
+⇒ **固定开销持平，每 chunk 贵 0.58 µs（+2.3%）**。
+
+但分项里有个值得注意的点：**AIC fixpipe 从 235.8 µs（13.9%）降到 154.9 µs（8.9%）**——
+手拼 tile 的 C 回写比 `BlockMmadTla` 快约 35%；代价是 L1/L0 手拼拷贝与 tile 内的
+`PipeBarrier<PIPE_ALL>` 把这点收益吃掉还倒亏 2%。这说明 **A2 走 UB 落点后可收回的 fixpipe 成本是实打实的**，
+同时 tile 内部的 `PIPE_ALL` 应尽快换成事件对（P1 的一半内容）。

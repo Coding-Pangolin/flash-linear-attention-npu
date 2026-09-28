@@ -7,7 +7,9 @@ K=$OP/op_kernel/pre_process_fwd_kernel_merged.cpp
 PY=$HOME/BartonFang/envs/fzy/bin/python
 WORK=/tmp/ppfm241
 LOG=$WORK/matrix.log
-export ASCEND_RT_VISIBLE_DEVICES=${DEV:-4}
+export ASCEND_RT_VISIBLE_DEVICES=${DEV:-6}
+export PPFM_REF_THREADS=${REF_THREADS:-2}
+export PYTHONUNBUFFERED=1
 export PYTHONWARNINGS=ignore
 source /usr/local/Ascend/ascend-toolkit/set_env.sh || exit 9
 : > "$LOG"
@@ -44,8 +46,9 @@ run_variant() {
   echo "" | tee -a "$LOG"
 }
 
-run_variant "${T1:-1}" "${S1:-3}" "${M1:-0}" "${MODE1:-smoke}"
-if [ "${N:-1}" -ge 2 ]; then run_variant "$2" "$3" "$4" "${MODE2:-smoke}"; fi
-if [ "${N:-1}" -ge 3 ]; then run_variant "$5" "$6" "$7" "${MODE3:-smoke}"; fi
-if [ "${N:-1}" -ge 4 ]; then run_variant "$8" "$9" "${10}" "${MODE4:-smoke}"; fi
+N=${N:-1}
+[ "$N" -ge 1 ] && run_variant "${T1:-1}" "${S1:-3}" "${M1:-0}" "${MODE1:-smoke}"
+[ "$N" -ge 2 ] && run_variant "${T2:-1}" "${S2:-1}" "${M2:-0}" "${MODE2:-smoke}"
+[ "$N" -ge 3 ] && run_variant "${T3:-1}" "${S3:-2}" "${M3:-0}" "${MODE3:-smoke}"
+[ "$N" -ge 4 ] && run_variant "${T4:-1}" "${S4:-3}" "${M4:-0}" "${MODE4:-smoke}"
 echo "ALL_DONE" | tee -a "$LOG"

@@ -883,6 +883,9 @@ private:
                                  DcciDst::CACHELINE_OUT>(vTmpF_);
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1F_);
+        // ⚠ 正式原语：DDR 数据同步屏障——保证 C 的写回对其他核可见后再抬 flag。
+        //   诊断版实验表明竞态是"flag 已到、写回仍在途"的时序窗口（加探针即掩盖）。
+        DataSyncBarrier<MemDsbT::DDR>();
         AicSetToAiv(kFlagHalf1);
 
         // ② dH[K,V] = k_c^T @ bf16(v_new)[BT,V]
@@ -903,6 +906,7 @@ private:
                                  DcciDst::CACHELINE_OUT>(dhBuf);
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t2Buf);
+        DataSyncBarrier<MemDsbT::DDR>();
         // dH 与 T2 都由 AIV 在**下一个 chunk 开头**使用，合并为一次跨核通知（省一次 flag 往返）
         AicSetToAiv(kFlagDH);
 #if PPFM_DIAG

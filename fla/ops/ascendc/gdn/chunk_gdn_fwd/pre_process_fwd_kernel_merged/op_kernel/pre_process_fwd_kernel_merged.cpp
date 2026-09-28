@@ -187,10 +187,21 @@ using MmTileMmadTA = Catlass::Gemm::Tile::TileMmadTla<MmArchTag, bfloat16_t,
 // 手写 tile 路径下 L1 的两个槽（A 在前、B 在后），单位字节
 constexpr int32_t TILED_L1_A_OFF = 0;
 constexpr int32_t TILED_L1_B_OFF = 32 * 1024;
-// 手写 tile 级 mmad 开关：1=用 TileMmadTla 手拼，0=退回 BlockMmadTla（默认）
-// ⚠ 增量 A1（tile 版落 GM）已能编译，但数值还没对上（PPFM-31/33 matched≈0.51，h 半边错）
-//   ⇒ 正在核对 tile 语义：TileMmadTla 的调用形态（(c,a,b,true,0) vs (c,a,b,m,n,k)）、
-//   L1A/L1B 布局标签与 L0C 布局。调通后翻成 1，再上 A2（A5 的 L0C→UB）。
+// L1A/L1B 的「容量形状」：必须与 BlockMmad 的 L1_TILE_M/K/N 一致（zZ/nZ 分形布局的
+// stride 由 originShape 决定，用实际 (m,k) 构造会让 GM→L1 的落点与 L1→L0 的读点错位，
+// 表现为 mmad 读到空 L0、C 恒为 0）。TILED_L1_B_OFF=32KiB 正是 128x128 bf16 的 footprint。
+constexpr int32_t TILED_L1_CAP_M = 128;
+constexpr int32_t TILED_L1_CAP_K = 128;
+constexpr int32_t TILED_L1_CAP_N = 128;
+// 手写 tile 级 mmad 开关：1=用 TileMmadTla 手拼，0=退回 BlockMmadTla
+// ✅ A1 数值已对齐（2026-09-28，241 device6 实测）：
+//   - 只 tile mm1（SEL=1）时 m 半边与基线逐位一致，只 tile mm3（SEL=2）时 h 半边逐位一致
+//     ⇒ 两个 matmul 各自的 tile 结果与 BlockMmad 等价；
+//   - 全 tile 时 5 轮 smoke 有 3 轮命中**已知的 GDN h 跨核可见性窗口**（TILE=0 基线 5/5 干净），
+//     误差幅度 1.17~1.53 随机跳动，属时序放大，待 A2（A5 L0C→UB 直连）结构性消除。
+//   根因（曾表现为 h 半边错、m≈decay·I）：`CopyL0CToGmTla` 的 4 参调用会误选
+//   `(dst, src, l0Batch, dstNdStride)` 批处理变体，l0Batch=0 ⇒ fixpipe 一个块都不搬，
+//   C 恒为 workspace 初值 0。必须走 3 参 `(dst, src, unitFlag)`。
 #ifndef PPFM_TILE_MMAD
 #define PPFM_TILE_MMAD 1
 #endif
@@ -999,10 +1010,10 @@ private:
         auto bC = GetTile(tC, tla::MakeCoord(0, 0), tla::MakeShape(m, n));
 
         auto tL1A = tla::MakeTensor(
-            l1A, tla::MakeLayout<bfloat16_t, typename MmTileCopyNT::LayoutTagL1A>(m, k),
+            l1A, tla::MakeLayout<bfloat16_t, typename MmTileCopyNT::LayoutTagL1A>(TILED_L1_CAP_M, TILED_L1_CAP_K),
             Catlass::Arch::PositionL1{});
         auto tL1B = tla::MakeTensor(
-            l1B, tla::MakeLayout<bfloat16_t, typename MmTileCopyNT::LayoutTagL1B>(k, n),
+            l1B, tla::MakeLayout<bfloat16_t, typename MmTileCopyNT::LayoutTagL1B>(TILED_L1_CAP_K, TILED_L1_CAP_N),
             Catlass::Arch::PositionL1{});
         typename MmTileCopyNT::template CopyGmToL1A<decltype(bA)> copyG2LA;
         typename MmTileCopyNT::template CopyGmToL1B<decltype(bB)> copyG2LB;
@@ -1032,7 +1043,9 @@ private:
         WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 
         typename MmTileCopyNT::template CopyL0CToDst<decltype(bC)> copyC;
-        copyC(bC, tL0C, 0, 0);
+        // ⚠ 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
+        //    批处理变体，l0Batch=0 ⇒ fixpipe 一个块都不搬，C 恒为初值 0。
+        copyC(bC, tL0C, static_cast<uint8_t>(0));
         SetFlag<HardEvent::FIX_M>(EVENT_ID3);
         WaitFlag<HardEvent::FIX_M>(EVENT_ID3);
         PipeBarrier<PIPE_ALL>();
@@ -1060,10 +1073,10 @@ private:
         auto bC = GetTile(tC, tla::MakeCoord(0, 0), tla::MakeShape(m, n));
 
         auto tL1A = tla::MakeTensor(
-            l1A, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL1A>(m, k),
+            l1A, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL1A>(TILED_L1_CAP_M, TILED_L1_CAP_K),
             Catlass::Arch::PositionL1{});
         auto tL1B = tla::MakeTensor(
-            l1B, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL1B>(k, n),
+            l1B, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL1B>(TILED_L1_CAP_K, TILED_L1_CAP_N),
             Catlass::Arch::PositionL1{});
         typename MmTileCopyTA::template CopyGmToL1A<decltype(bA)> copyG2LA;
         typename MmTileCopyTA::template CopyGmToL1B<decltype(bB)> copyG2LB;
@@ -1092,7 +1105,9 @@ private:
         WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 
         typename MmTileCopyTA::template CopyL0CToDst<decltype(bC)> copyC;
-        copyC(bC, tL0C, 0, 0);
+        // ⚠ 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
+        //    批处理变体，l0Batch=0 ⇒ fixpipe 一个块都不搬，C 恒为初值 0。
+        copyC(bC, tL0C, static_cast<uint8_t>(0));
         SetFlag<HardEvent::FIX_M>(EVENT_ID3);
         WaitFlag<HardEvent::FIX_M>(EVENT_ID3);
         PipeBarrier<PIPE_ALL>();

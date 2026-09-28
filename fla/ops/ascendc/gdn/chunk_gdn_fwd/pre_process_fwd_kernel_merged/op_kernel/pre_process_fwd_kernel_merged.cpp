@@ -148,8 +148,16 @@ __aicore__ inline void AivSetToAic(uint16_t id)
 
 __aicore__ inline void AivWaitFromAic(uint16_t id)
 {
-    // 用 PIPE_S 排队：等待指令必须卡住后续指令的发射（否则后面的 MTE2/V 会先跑）
+    // 950：用 PIPE_S 排队 —— 等待指令卡住后续指令的发射（否则后面的 MTE2/V 会先跑）。
+    // 910B/910_93：消费方是 MTE2（从 GM 回读 cube 的 C），按 A2 惯用法在 MTE2 上排队
+    //   （见仓内 arch22 的 `CrossCoreWaitFlag<0x2, PIPE_MTE2>(..._READY_FLAG)`）。
+    //   实测 A2 上用 PIPE_S 等待时，随后的 MTE2 会提前发射，读到"半新半旧"的 C：
+    //   表现为 h 半边误差 ~1.5e-2 且逐次小幅跳动（v=0 的探针本应得到 h≡0）。
+#if PPFM_ARCH_IS_950
     CrossCoreWaitFlag<PPFM_XCORE_MODE, PIPE_S>(id);
+#else
+    CrossCoreWaitFlag<PPFM_XCORE_MODE, PIPE_MTE2>(id);
+#endif
 }
 
 // AIC：消费 AIV 侧的通知
@@ -159,9 +167,12 @@ __aicore__ inline void AivWaitFromAic(uint16_t id)
 //   （约定出处：仓内 chunk_fwd_h/op_kernel/chunk_fwd_h_policy.h 的 FwdHAicPeerFlag 注释）
 __aicore__ inline void AicWaitFromAiv(uint16_t id)
 {
-    CrossCoreWaitFlag<PPFM_XCORE_MODE, PIPE_S>(id);
 #if PPFM_ARCH_IS_950
+    CrossCoreWaitFlag<PPFM_XCORE_MODE, PIPE_S>(id);
     CrossCoreWaitFlag<0x4, PIPE_S>(static_cast<uint16_t>(id + PPFM_SUBFLAG_STRIDE));
+#else
+    // 910B：AIC 侧消费方同样是 MTE2（把 AIV 写好的 k/w/h/m/vNew 搬进 L1/L0）
+    CrossCoreWaitFlag<PPFM_XCORE_MODE, PIPE_MTE2>(id);
 #endif
 }
 
@@ -292,8 +303,24 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #define PPFM_VTMP_UB_DIAG 0
 #endif
 // 实验开关：1=保留手工 DCCI/DSB（历史做法）；0=只用跨核 flag（与生产算子一致）
+// 950：实测只用跨核 flag 就够（并且去掉 DCCI 后竞态由 3/6 降到 1/6），默认 0。
+// 910B/910_93：实测 AIC 会读到 AIV 尚未对其他核可见的 bf16(h)（chunk0 的 h≡0 探针
+//   仍得到 1.6e-2 的 h），故先按 A2 老做法启用 DCCI/DSB；若后续定位到更精确的边，
+//   可只保留必要的那一条（见 docs/a2_opt_status.md 的定位方法）。
 #ifndef PPFM_LEGACY_CACHEOPS
+#if PPFM_ARCH_IS_950
 #define PPFM_LEGACY_CACHEOPS 0
+#else
+#define PPFM_LEGACY_CACHEOPS 1
+#endif
+#endif
+// 临时诊断开关：1=在 prologue 给 AIC 要写的 C 缓冲预置哨兵（见 ProcessChain）
+#ifndef PPFM_SENTINEL_PROBE
+#define PPFM_SENTINEL_PROBE 0
+#endif
+// 临时诊断开关：1=把 AIV 读到的 vTmp 第 0 行搬到 hm 的 m 半边第 0 行（chain0/head0）
+#ifndef PPFM_RD_PROBE
+#define PPFM_RD_PROBE 0
 #endif
 
 // ---------------- AIV 侧 UB 布局（字节）----------------
@@ -429,6 +456,13 @@ public:
         t2F_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T2_F32), CV_K * CV_K);
         t2F1_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T2_F32_1), CV_K * CV_K);
         gateF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_GATE), CV_BT + CV_K);
+#if PPFM_RD_PROBE
+        // 诊断暂存：WS_GATE 区共 4096B，gateF_ 只用前 192 个 float，后面 256 个 float 用来放
+        // AIV 读回的 vTmp 行（仅诊断构建使用）。
+        // 6 行 × 128 float：row0=vTmp 读回、row2=h 状态 prologue 回读、row3=h 状态读回、
+        // row4=dH 读回。
+        probeG_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_GATE + 1024), 768);
+#endif
 #if PPFM_DIAG
         diagG_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_DIAG), 16);
 #endif
@@ -538,7 +572,8 @@ private:
     {
         curN_ = n;
         const auto *t = ctx_.tiling;
-        // ---- prologue：h = 0，m = I ----
+#if PPFM_ARCH_IS_950
+        // ---- prologue：h = 0（950）----
         Duplicate(row0F_, 0.0f, CV_V);
         Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, CV_V);
         PipeBarrier<PIPE_ALL>();   // ITER4：V -> MTE3 只需一次（源行不变）
@@ -547,6 +582,38 @@ private:
             DataCopy(hBf_[r * CV_V], row0Bf_, CV_V);
         }
         PipeBarrier<PIPE_ALL>();
+#else
+        // ---- prologue：h = 0（910B/910_93）----
+        // 实测（RD_PROBE 探针）：A2 上用"一次 Cast 出 bf16 行 + 循环内 128 次 MTE3 复用
+        // 同一 UB 行"的写法，会把 bf16(h) 落到 GM 时写成 ~1e-3 量级的脏数据（同一循环里的
+        // fp32 版本却是严格 0）。AIC 的 mm1 于是把非零的 bf16(h) 当输入，vTmp=W@h≠0，
+        // 整条 h 链偏 1.5e-2；m 链因为用逐行写（见下）反而是对的。
+        // 这里改成与 m 初值同款的逐行写法：每行重新 Cast，行间用 PIPE_ALL 隔离。
+        for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
+            Duplicate(row0F_, 0.0f, CV_V);
+            PipeBarrier<PIPE_ALL>();
+            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, CV_V);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(hF32_[r * CV_V], row0F_, CV_V);
+            DataCopy(hBf_[r * CV_V], row0Bf_, CV_V);
+            PipeBarrier<PIPE_ALL>();
+        }
+#endif
+#if PPFM_RD_PROBE
+        // 诊断：prologue 写完后立刻回读 h 状态第 0 行（期望全 0）
+        if (subIdx_ == 0) {
+            DataCopy(row1F_, hF32_, CV_V);           // GM -> UB
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(probeG_[2 * CV_V], row1F_, CV_V);   // UB -> GM
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(row2Bf_, hBf_, CV_V);                // bf16(h) 第 0 行（bf16->fp32 观察）
+            PipeBarrier<PIPE_ALL>();
+            Cast(row2F_, row2Bf_, RoundMode::CAST_NONE, CV_V);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(probeG_[1 * CV_V], row2F_, CV_V);
+            PipeBarrier<PIPE_ALL>();
+        }
+#endif
         // m 初值 = I
         // 950：**逐行纯向量构造**（ArithProgression + |k-r| 造对角，省下 64 KiB UB）。
         // ⚠ 不要用 row0F_.SetValue(r,1) 这类"标量写 UB + 向量写同一块 UB"的组合：
@@ -590,6 +657,18 @@ private:
             DataCopy(mBf_[r * CV_K], row0Bf_, CV_K);
             PipeBarrier<PIPE_ALL>();       // MTE3 读完才能下一轮覆盖
         }
+#endif
+        // 临时诊断（默认关）：给 AIC 即将写的 C 缓冲预置哨兵。
+        //   vTmpF_ = 7.0、t1F_ = 5.0 ⇒ 若 AIC 的 fixpipe 正常覆盖，chunk0 的结果不受影响；
+        //   若结果里出现 7/5 量级的残留，说明 AIC→AIV 的 C 落点/可见性有问题。
+#if PPFM_SENTINEL_PROBE
+        Duplicate(scrF_, 7.0f, CV_BT * CV_V);
+        PipeBarrier<PIPE_ALL>();
+        DataCopy(vTmpF_, scrF_, static_cast<uint32_t>(CV_BT * CV_V));
+        Duplicate(scrF_, 5.0f, CV_BT * CV_K);
+        PipeBarrier<PIPE_ALL>();
+        DataCopy(t1F_, scrF_, static_cast<uint32_t>(CV_BT * CV_K));
+        PipeBarrier<PIPE_ALL>();
 #endif
         const int64_t nt = (len + CV_BT - 1) / CV_BT;
         // ITER7（P3）：先独立做 chunk 0 的 staging；循环内把 staging(c+1) 提到
@@ -653,6 +732,17 @@ private:
             DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + CV_V], row0F_, CV_K);
             PipeBarrier<PIPE_ALL>();
         }
+#if PPFM_RD_PROBE
+        // 诊断：把探针各行搬到 hm 的 m 半边第 0..4 行（验收时排除这些行）
+        if (n == 0 && hv == 0 && subIdx_ == 0) {
+            for (int32_t pr = 0; pr <= 5; ++pr) {
+                DataCopy(row0F_, probeG_[pr * CV_V], CV_K);
+                PipeBarrier<PIPE_ALL>();
+                DataCopy(hmGm_[hmBase + pr * (CV_V + CV_K) + CV_V], row0F_, CV_K);
+                PipeBarrier<PIPE_ALL>();
+            }
+        }
+#endif
 #if PPFM_DIAG
         // 诊断收尾（只由子核 0 写）：lane 0..3 = AIV 读到的 vTmpF_[0]（第 c 个 chunk），
         // lane 8..11 = AIC 写出的 vTmpF_[0]。落在 hm 的 m 半边第 0 行（验收时排除该行）。
@@ -890,6 +980,14 @@ private:
             // A5 主线：vTmp 仍从 GM 回读
             DataCopy(extBlkF_[lo * CV_V], vTmpF_[off * CV_V], SEG * CV_V);
             PipeBarrier<PIPE_ALL>();
+#if PPFM_RD_PROBE
+        // 诊断：把本子核读到的 vTmp 第 0 行原样存到 GM 暂存（首个 chunk，子核 0）
+            if (probeCnt_ == 0 && subIdx_ == 0) {
+                DataCopy(probeG_, extBlkF_, CV_V);
+                PipeBarrier<PIPE_ALL>();
+                probeCnt_ = 1;
+            }
+#endif
 #endif
             Cast(scrF_[off * CV_V], vBlkBf_[off * CV_V], RoundMode::CAST_NONE, SEG * CV_V);
             PipeBarrier<PIPE_V>();
@@ -924,6 +1022,17 @@ private:
             DataCopy(t1Bf_[off * CV_K], scrBf_[off * CV_K], SEG * CV_K);
             PipeBarrier<PIPE_ALL>();
         }
+#if PPFM_RD_PROBE
+        // 诊断：vNewBf_ 第 0 行（bf16→fp32）读回，确认 AIV 写出的 B 内容
+        if (probeCnt_ == 1 && subIdx_ == 0) {
+            DataCopy(row2Bf_, vNewBf_, CV_V);
+            PipeBarrier<PIPE_ALL>();
+            Cast(row2F_, row2Bf_, RoundMode::CAST_NONE, CV_V);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(probeG_[5 * CV_V], row2F_, CV_V);
+            PipeBarrier<PIPE_ALL>();
+        }
+#endif
         AivSetToAic(kFlagVNew);
     }
 
@@ -949,6 +1058,14 @@ private:
             DataCopy(stateBlkF_, hF32_[rb * CV_V], RB * CV_V);
             DataCopy(extBlkF_, dhBuf[rb * CV_V], RB * CV_V);
             PipeBarrier<PIPE_ALL>();
+#if PPFM_RD_PROBE
+            // 诊断：首个 RB 块里，把"读到的 h 状态"和"读到的 dH"各留一行
+            if (rb == subIdx_ * RB && subIdx_ == 0) {
+                DataCopy(probeG_[3 * CV_V], stateBlkF_, CV_V);   // h 状态读回
+                DataCopy(probeG_[4 * CV_V], extBlkF_, CV_V);     // dH 读回
+                PipeBarrier<PIPE_ALL>();
+            }
+#endif
             if (useG) {
                 // GDN：每 chunk 一个标量 decay ⇒ 整块一次 Muls（原来 16 次逐行 Muls +
                 // 16 次 GetValue；h/m 合计每 chunk 每子核 128 次，是 AIV SCALAR 的主要来源）
@@ -1047,6 +1164,10 @@ private:
     GlobalTensor<float> t2F_;
     GlobalTensor<float> t2F1_;
     GlobalTensor<float> gateF_;
+#if PPFM_RD_PROBE
+    GlobalTensor<float> probeG_;     // 诊断：AIV 读回的 vTmp 行暂存
+    int32_t probeCnt_ = 0;
+#endif
 #if PPFM_DIAG
     GlobalTensor<float> diagG_;      // 每核诊断区（读 AIC 写的 vTmp 指纹）
     LocalTensor<float> dbgF_;        // 每子核 16 个诊断槽

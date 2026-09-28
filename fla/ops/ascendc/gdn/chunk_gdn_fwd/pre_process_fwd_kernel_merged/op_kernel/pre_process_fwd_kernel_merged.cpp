@@ -179,6 +179,18 @@ using TiledMmadNT = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
                                                      typename TiledCopyNT::LayoutTagL1A>;
 using TiledMmadTA = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
                                                      typename TiledCopyTA::LayoutTagL1A>;
+// GM 落点的 tile+C 回写类型（A2/A3 与 A5 的 A1 增量都用它）
+using MmTileMmadNT = Catlass::Gemm::Tile::TileMmadTla<MmArchTag, bfloat16_t,
+                                                      typename MmTileCopyNT::LayoutTagL1A>;
+using MmTileMmadTA = Catlass::Gemm::Tile::TileMmadTla<MmArchTag, bfloat16_t,
+                                                      typename MmTileCopyTA::LayoutTagL1A>;
+// 手写 tile 路径下 L1 的两个槽（A 在前、B 在后），单位字节
+constexpr int32_t TILED_L1_A_OFF = 0;
+constexpr int32_t TILED_L1_B_OFF = 32 * 1024;
+// 手写 tile 级 mmad 开关：1=用 TileMmadTla 手拼（A 增量），0=退回 BlockMmadTla
+#ifndef PPFM_TILE_MMAD
+#define PPFM_TILE_MMAD 1
+#endif
 
 // ---------------- AIV 侧 UB 布局（字节）----------------
 // ⚠ 950 MIX 下 UB 由**一个 AIC + 两个 AIV 子核共享**（同 chunk_fwd_h / KDA fwd_h 的
@@ -903,10 +915,18 @@ private:
                                  DcciDst::CACHELINE_OUT>(hBf_);
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(mBf_);
+#if PPFM_TILE_MMAD
+        RunTiledNT(wBf_, hBf_, vTmpF_, CV_BT, CV_V, CV_K);
+#else
         RunMmadNT(wBf_, hBf_, vTmpF_, CV_BT, CV_V, CV_K);
+#endif
 
         // ③ T1[BT,K] = W_c[BT,K] @ bf16(m)[K,K]
+#if PPFM_TILE_MMAD
+        RunTiledNT(wBf_, mBf_, t1F_, CV_BT, CV_K, CV_K);
+#else
         RunMmadNT(wBf_, mBf_, t1F_, CV_BT, CV_K, CV_K);
+#endif
         // ⚠ 写侧也要 clean（写回），只靠读者 DCCI 不够：FIX 写回可能还停在写缓冲里，
         //   此时 AIV 即便 DCCI 也会读到旧值。实测（PPFM_DIAG 指纹）：AIV 读到 vTmp 全 0，
         //   而 AIC 实际写了 -0.013/+0.0092 → v_new 退化成 v，h 半边随机整头崩（m 不受影响）。
@@ -952,6 +972,119 @@ private:
     }
 
     // A 行主：C[m,n] = A[m,k] @ B[k,n]（A/B 都是 bf16、行主；C 是 fp32 行主）
+#if PPFM_TILE_MMAD
+    // ---- 手写 tile 级（增量 A1）：GM→L1→L0A/L0B→MMAD→C 回写（落点仍是 GM）----
+    // 目的：先用与 BlockMmad 相同的落点验证 tile/MMAD 数值一致；A5 的 L0C→UB 在 A2 增量里接。
+    __aicore__ inline void RunTiledNT(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
+                                      GlobalTensor<float> &gmC, uint32_t m, uint32_t n, uint32_t k)
+    {
+        Catlass::Arch::Resource<MmArchTag> res;
+        auto l1A = res.l1Buf.template GetBufferByByte<bfloat16_t>(TILED_L1_A_OFF);
+        auto l1B = res.l1Buf.template GetBufferByByte<bfloat16_t>(TILED_L1_B_OFF);
+        auto l0A = res.l0ABuf.template GetBufferByByte<bfloat16_t>(0);
+        auto l0B = res.l0BBuf.template GetBufferByByte<bfloat16_t>(0);
+        auto l0C = res.l0CBuf.template GetBufferByByte<float>(0);
+
+        auto tA = tla::MakeTensor(gmA[0], tla::MakeLayout<bfloat16_t, Catlass::layout::RowMajor>(m, k),
+                                  Catlass::Arch::PositionGM{});
+        auto tB = tla::MakeTensor(gmB[0], tla::MakeLayout<bfloat16_t, Catlass::layout::RowMajor>(k, n),
+                                  Catlass::Arch::PositionGM{});
+        auto tC = tla::MakeTensor(gmC[0], tla::MakeLayout<float, Catlass::layout::RowMajor>(m, n),
+                                  Catlass::Arch::PositionGM{});
+        auto bA = GetTile(tA, tla::MakeCoord(0, 0), tla::MakeShape(m, k));
+        auto bB = GetTile(tB, tla::MakeCoord(0, 0), tla::MakeShape(k, n));
+        auto bC = GetTile(tC, tla::MakeCoord(0, 0), tla::MakeShape(m, n));
+
+        auto tL1A = tla::MakeTensor(
+            l1A, tla::MakeLayout<bfloat16_t, typename MmTileCopyNT::LayoutTagL1A>(m, k),
+            Catlass::Arch::PositionL1{});
+        auto tL1B = tla::MakeTensor(
+            l1B, tla::MakeLayout<bfloat16_t, typename MmTileCopyNT::LayoutTagL1B>(k, n),
+            Catlass::Arch::PositionL1{});
+        typename MmTileCopyNT::template CopyGmToL1A<decltype(bA)> copyG2LA;
+        typename MmTileCopyNT::template CopyGmToL1B<decltype(bB)> copyG2LB;
+        copyG2LA(tL1A, bA);
+        copyG2LB(tL1B, bB);
+        PipeBarrier<PIPE_ALL>();
+
+        auto tL0A = tla::MakeTensor(
+            l0A, tla::MakeLayout<bfloat16_t, typename MmTileCopyNT::LayoutTagL0A>(m, k),
+            Catlass::Arch::PositionL0A{});
+        auto tL0B = tla::MakeTensor(
+            l0B, tla::MakeLayout<bfloat16_t, typename MmTileCopyNT::LayoutTagL0B>(k, n),
+            Catlass::Arch::PositionL0B{});
+        typename MmTileCopyNT::CopyL1ToL0A copyL2L0A;
+        typename MmTileCopyNT::CopyL1ToL0B copyL2L0B;
+        copyL2L0A(tL0A, GetTile(tL1A, tla::MakeCoord(0, 0), tla::MakeShape(m, k)));
+        copyL2L0B(tL0B, GetTile(tL1B, tla::MakeCoord(0, 0), tla::MakeShape(k, n)));
+        PipeBarrier<PIPE_ALL>();
+
+        auto tL0C = tla::MakeTensor(l0C, tla::MakeLayoutL0C(m, n), Catlass::Arch::PositionL0C{});
+        MmTileMmadNT mmad;
+        mmad(tL0C, tL0A, tL0B, true, 0);
+        PipeBarrier<PIPE_ALL>();
+
+        typename MmTileCopyNT::template CopyL0CToDst<decltype(bC)> copyC;
+        copyC(bC, tL0C, 0, 0);
+        PipeBarrier<PIPE_ALL>();
+    }
+
+    // A 列主（A 在 GM 上是 [k,m] 列主，逻辑 [m,k]）
+    __aicore__ inline void RunTiledTA(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
+                                      GlobalTensor<float> &gmC, uint32_t m, uint32_t n, uint32_t k)
+    {
+        Catlass::Arch::Resource<MmArchTag> res;
+        auto l1A = res.l1Buf.template GetBufferByByte<bfloat16_t>(TILED_L1_A_OFF);
+        auto l1B = res.l1Buf.template GetBufferByByte<bfloat16_t>(TILED_L1_B_OFF);
+        auto l0A = res.l0ABuf.template GetBufferByByte<bfloat16_t>(0);
+        auto l0B = res.l0BBuf.template GetBufferByByte<bfloat16_t>(0);
+        auto l0C = res.l0CBuf.template GetBufferByByte<float>(0);
+
+        auto tA = tla::MakeTensor(gmA[0], tla::MakeLayout<bfloat16_t, Catlass::layout::ColumnMajor>(m, k),
+                                  Catlass::Arch::PositionGM{});
+        auto tB = tla::MakeTensor(gmB[0], tla::MakeLayout<bfloat16_t, Catlass::layout::RowMajor>(k, n),
+                                  Catlass::Arch::PositionGM{});
+        auto tC = tla::MakeTensor(gmC[0], tla::MakeLayout<float, Catlass::layout::RowMajor>(m, n),
+                                  Catlass::Arch::PositionGM{});
+        auto bA = GetTile(tA, tla::MakeCoord(0, 0), tla::MakeShape(m, k));
+        auto bB = GetTile(tB, tla::MakeCoord(0, 0), tla::MakeShape(k, n));
+        auto bC = GetTile(tC, tla::MakeCoord(0, 0), tla::MakeShape(m, n));
+
+        auto tL1A = tla::MakeTensor(
+            l1A, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL1A>(m, k),
+            Catlass::Arch::PositionL1{});
+        auto tL1B = tla::MakeTensor(
+            l1B, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL1B>(k, n),
+            Catlass::Arch::PositionL1{});
+        typename MmTileCopyTA::template CopyGmToL1A<decltype(bA)> copyG2LA;
+        typename MmTileCopyTA::template CopyGmToL1B<decltype(bB)> copyG2LB;
+        copyG2LA(tL1A, bA);
+        copyG2LB(tL1B, bB);
+        PipeBarrier<PIPE_ALL>();
+
+        auto tL0A = tla::MakeTensor(
+            l0A, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL0A>(m, k),
+            Catlass::Arch::PositionL0A{});
+        auto tL0B = tla::MakeTensor(
+            l0B, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL0B>(k, n),
+            Catlass::Arch::PositionL0B{});
+        typename MmTileCopyTA::CopyL1ToL0A copyL2L0A;
+        typename MmTileCopyTA::CopyL1ToL0B copyL2L0B;
+        copyL2L0A(tL0A, GetTile(tL1A, tla::MakeCoord(0, 0), tla::MakeShape(m, k)));
+        copyL2L0B(tL0B, GetTile(tL1B, tla::MakeCoord(0, 0), tla::MakeShape(k, n)));
+        PipeBarrier<PIPE_ALL>();
+
+        auto tL0C = tla::MakeTensor(l0C, tla::MakeLayoutL0C(m, n), Catlass::Arch::PositionL0C{});
+        MmTileMmadTA mmad;
+        mmad(tL0C, tL0A, tL0B, true, 0);
+        PipeBarrier<PIPE_ALL>();
+
+        typename MmTileCopyTA::template CopyL0CToDst<decltype(bC)> copyC;
+        copyC(bC, tL0C, 0, 0);
+        PipeBarrier<PIPE_ALL>();
+    }
+#endif  // PPFM_TILE_MMAD
+
     __aicore__ inline void RunMmadNT(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
                                      GlobalTensor<float> &gmC, uint32_t m, uint32_t n, uint32_t k)
     {

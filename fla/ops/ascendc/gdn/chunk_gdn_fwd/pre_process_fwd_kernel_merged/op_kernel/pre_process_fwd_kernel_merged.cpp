@@ -350,6 +350,13 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #ifndef PPFM_AIC_DIRECT_INPUTS
 #define PPFM_AIC_DIRECT_INPUTS 0
 #endif
+// 早期怀疑"C 的跨核可见性"时加的 4 处"过渡探读"（各读 8 个 fp32 并配一次 PIPE_ALL）。
+// 现在可见性结论已明确（见 validation §11/§13：hBf_ 写坏、T1 双写等），这些探读疑似纯开销
+// （每 chunk 最多 4 次全栅栏 + 4 次小 DataCopy）。默认 **1 = 保留**（不改主线行为）；
+// 计划 R9 一轮把它们置 0 做 A/B，并用 L3 ≥20 独立进程确认不会让 §1.4 的残余竞态变差。
+#ifndef PPFM_LEGACY_PROBE_READS
+#define PPFM_LEGACY_PROBE_READS 1
+#endif
 #if !PPFM_TILE_MMAD
 #undef PPFM_AIC_DIRECT_INPUTS
 #define PPFM_AIC_DIRECT_INPUTS 0
@@ -1071,12 +1078,14 @@ private:
         }
 #endif
         // ITER9：vTmp 走 GM 时保留过渡探读（A2 走 UB 时才省掉）
+#if PPFM_LEGACY_PROBE_READS
 #if !PPFM_VTMP_UB
         DataCopy(row2F_, vTmpF_, 8);
         PipeBarrier<PIPE_ALL>();
 #endif
         DataCopy(row2F_, t1F_, 8);
         PipeBarrier<PIPE_ALL>();
+#endif  // PPFM_LEGACY_PROBE_READS
 #if PPFM_DIAG
         // 诊断：记下"本子核读到的 vTmpF_[0]"（chunk 0 时它必须恰好是 0）
         if (curChunk_ < PPFM_DIAG_CHUNKS) {
@@ -1182,10 +1191,12 @@ private:
         GlobalTensor<float> &dhBuf = evenChunk ? dHF_ : dHF1_;
         GlobalTensor<float> &t2Buf = evenChunk ? t2F_ : t2F1_;
         // 同 UpdateVNew 的过渡探读：dH / T2 也是 AIC 刚写、本核刚读的 GM
+#if PPFM_LEGACY_PROBE_READS
         DataCopy(row2F_, dhBuf, 8);
         PipeBarrier<PIPE_ALL>();
         DataCopy(row2F_, t2Buf, 8);
         PipeBarrier<PIPE_ALL>();
+#endif  // PPFM_LEGACY_PROBE_READS
         // 每 RB 行一次搬运：块内逐行 Muls（廉价、无需栅栏），块级 Add/Sub/Cast
         constexpr int32_t RB = PPFM_RB;   // ITER6a：真正用上 32 行（ITER3 只改了 UB 尺寸）
         for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {

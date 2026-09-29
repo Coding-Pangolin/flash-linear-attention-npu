@@ -351,11 +351,13 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #define PPFM_AIC_DIRECT_INPUTS 0
 #endif
 // 早期怀疑"C 的跨核可见性"时加的 4 处"过渡探读"（各读 8 个 fp32 并配一次 PIPE_ALL）。
-// 现在可见性结论已明确（见 validation §11/§13：hBf_ 写坏、T1 双写等），这些探读疑似纯开销
-// （每 chunk 最多 4 次全栅栏 + 4 次小 DataCopy）。默认 **1 = 保留**（不改主线行为）；
-// 计划 R9 一轮把它们置 0 做 A/B，并用 L3 ≥20 独立进程确认不会让 §1.4 的残余竞态变差。
+// 可见性结论已明确（见 validation §11/§13：hBf_ 写坏、T1 双写等），这些探读是纯开销。
+// **默认 0 = 删除**（依据 validation §20，2026-09-29，950/247）：
+//   位级 `BIT_IDENTICAL`、L2/L4/L3 全绿、**进程级竞态探针 0/20 CLEAN**（原来担心的 1/6 竞态未回归），
+//   性能 T=1024 −3.7%、T=4096 −4.2%、模型 case −3.2%（3828.7 → 3707.6 µs）。
+// 置 1 可回退到"保留探读"的旧行为（若哪天出现跨核可见性症状，先开这个再查）。
 #ifndef PPFM_LEGACY_PROBE_READS
-#define PPFM_LEGACY_PROBE_READS 1
+#define PPFM_LEGACY_PROBE_READS 0
 #endif
 #if !PPFM_TILE_MMAD
 #undef PPFM_AIC_DIRECT_INPUTS

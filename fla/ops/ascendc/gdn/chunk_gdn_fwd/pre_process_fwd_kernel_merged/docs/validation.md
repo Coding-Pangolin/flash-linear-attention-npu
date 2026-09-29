@@ -1626,3 +1626,31 @@ OPP 安装器的临时目录要指向 **tmpfs**（且 `TMPDIR`(pip) 与 `FLA_NPU
 
 247 的 `git remote origin` URL 里**内嵌了 GitHub token**（`https://ghp_...@github.com/...`）⇒ 建议轮换该 token 并改成
 credential helper / SSH（本次未改动该配置）。
+---
+
+## 20. R9：删掉 4 处"过渡探读"（默认 0；950 实测 −3.2~4.2%）
+
+**依据**：计划 §1.4 / A7 —— 当年为掩盖跨核可见性窗口加的 `DataCopy(row2F_, vTmpF_/t1F_/dhBuf/t2Buf, 8)`
+（每处配一次 `PipeBarrier<PIPE_ALL>`，每 chunk 最多 4 组）。可见性根因已定位清楚（§11/§13），
+这些探读属纯开销。收进 `PPFM_LEGACY_PROBE_READS`，**默认 0 = 删除**；置 1 可回退旧行为。
+
+**验证（247，950，commit `a3de9f2` + 本行改动，TAG=probe0，BASE=tip_base）**：
+
+| 门禁 | 结果 |
+| --- | --- |
+| L0 | PASS |
+| **L1 位级（vs `tip_base`）** | **BIT_IDENTICAL** |
+| L2 smoke（含 `max_abs≤0.05`） | 10/10 |
+| L4 41 条 | 41/41 |
+| L3 序列探针（6 轮 ×5 例） | 0/30 |
+| **进程级竞态探针（20 个独立进程）** | **0/20 失败（`RACE_PROBE_CLEAN`）** —— 担心的 1/6 竞态未回归（若仍 1/6，20 次全清的概率仅 ~2.6%） |
+
+**性能（247，msprof `Task Duration`）**：
+
+| 用例 | 基线（有探读） | 删除后 | 变化 |
+| --- | --- | --- | --- |
+| T=1024/HV=8 | 212.20 µs | **204.43 µs** | **−3.7%** |
+| T=4096/HV=8 | 623.63 µs | **597.28 µs** | **−4.2%** |
+| 模型 case T=11264/HK=HV=32 | 3828.70 µs | **3707.62 µs（2.29× H20）** | **−3.2%** |
+
+⇒ 保留（默认 0），回退开关 `PPFM_LEGACY_PROBE_READS=1`。

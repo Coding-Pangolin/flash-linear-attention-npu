@@ -53,6 +53,9 @@ struct PreProcessFwdKernelMergedTilingData {
     int64_t isVariedLen;  // 恒 1
     int64_t usedAicNum;   // 实际使用的 Cube 核数
     int64_t taskNum;      // nSeq * Hv
+    // P5 列块切分因子：1 = 不切（列宽 V/K = 128）；2 = 每条链按列切两半（列宽 64）。
+    // 切分只影响"列"维度：h 链切 V 列、m 链切 K 列，两侧互相独立（见 docs/validation.md §16）。
+    int64_t colSplit;     // ∈ {1, 2}
     // —— Cube(Matmul) tiling：v2 的四个矩阵乘只有两种形状 ——
     //   cubeNoTrans：① vTmp = W_c @ bf16(h)、③ T1 = W_c @ bf16(m)（M=BT,N=128,K=128，A 不转置）
     //   cubeTransA ：② dH   = k^T @ bf16(v_new)、④ T2 = left^T @ bf16(T1)（M=128,N=128,K=BT，A 转置）

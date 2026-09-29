@@ -22,6 +22,7 @@
 #include <register/op_impl_registry.h>
 #include "platform/soc_spec.h"
 #include "tiling_base/tiling_templates_registry.h"
+#include <cstdlib>   // std::getenv / std::atoll（PPFM_FORCE_COLSPLIT 测试钩子）
 
 namespace optiling {
 
@@ -188,7 +189,26 @@ ge::graphStatus Tiling4PreProcessFwdKernelMerged(gert::TilingContext *context)
 
     const auto ascendcPlatform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
     const int64_t aicNum = static_cast<int64_t>(ascendcPlatform.GetCoreNumAic());
-    const int64_t taskNum = nSeq * Hv;
+    // ---- P5 列块切分：把"链"按列切成 colSplit 份，用来消掉波次量化 ----
+    // 单条链的成本 ≈ (a + nt·b)，切 s 份后每份 ≈ (a + nt·b)/s（列维独立且可切）。
+    // 总时间 ≈ ceil(N·s / aicNum) × (a + nt·b)/s，只跟波数有关 ⇒ 选 waves(s)/s 最小的 s。
+    // 约束：cube 的 N 维（= V/K 列宽 = 128/s）不能太窄，只考虑 s ∈ {1,2}（N=128 / 64）。
+    const int64_t hwItems = nSeq * Hv;
+    auto wavesOf = [aicNum](int64_t items) {
+        return (aicNum > 0) ? (items + aicNum - 1) / aicNum : int64_t{1};
+    };
+    int64_t colSplit = 1;
+    if (aicNum > 0 && wavesOf(hwItems * 2) * 1 < wavesOf(hwItems) * 2) {
+        colSplit = 2;
+    }
+    // 测试/调试钩子：环境变量可强制列块切分因子（1 或 2），用于位级 A/B 与回归。
+    if (const char *forceSplit = std::getenv("PPFM_FORCE_COLSPLIT")) {
+        const int64_t v = std::atoll(forceSplit);
+        if (v == 1 || v == 2) {
+            colSplit = v;
+        }
+    }
+    const int64_t taskNum = hwItems * colSplit;
 
     tiling->B = B;
     tiling->Hk = Hk;
@@ -204,6 +224,7 @@ ge::graphStatus Tiling4PreProcessFwdKernelMerged(gert::TilingContext *context)
     tiling->isVariedLen = 1;
     tiling->usedAicNum = (taskNum < aicNum) ? taskNum : aicNum;
     tiling->taskNum = taskNum;
+    tiling->colSplit = colSplit;
 
     OP_CHECK_IF(context->GetRawTilingData() == nullptr ||
                     context->GetRawTilingData()->GetCapacity() <

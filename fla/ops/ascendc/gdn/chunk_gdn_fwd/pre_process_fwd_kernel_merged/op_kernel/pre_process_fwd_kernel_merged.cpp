@@ -489,6 +489,11 @@ public:
         if (subNum_ <= 0) {
             subNum_ = 1;
         }
+        // P5：列块切分（运行时可配，见 host tiling 的 colSplit）。cb_ = 本工作项负责的列宽，
+        // colBase_ = 该列块在整条链里的起始列（h 的 V 列 / m 的 K 列同一个 colBase_）。
+        splitNum_ = (t->colSplit > 0) ? static_cast<int32_t>(t->colSplit) : 1;
+        cb_ = static_cast<int32_t>(CV_V) / splitNum_;
+        colBase_ = 0;
         __gm__ uint8_t *ws = reinterpret_cast<__gm__ uint8_t *>(ctx_.ws) + coreIdx * PPFM_CORE_WS_BYTES;
 
         hF32_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_H_F32), CV_K * CV_V);
@@ -556,10 +561,13 @@ public:
         dbgF_ = ubBuf_.Get<float>()[UB_DBG / 4 + subIdx_ * 16];
 #endif
 
-        const int64_t taskNum = t->nSeq * t->Hv;
+        const int64_t taskNum = t->nSeq * t->Hv * static_cast<int64_t>(splitNum_);
         for (int64_t task = coreIdx; task < taskNum; task += static_cast<int64_t>(t->usedAicNum)) {
-            const int64_t hv = task % t->Hv;
-            const int64_t n = task / t->Hv;
+            // P5：工作项 = (n, hv, 列块 s)。s 变化最快 ⇒ 同一条链的两个列块尽量落在不同核上。
+            const int64_t s = task % static_cast<int64_t>(splitNum_);
+            const int64_t hv = (task / static_cast<int64_t>(splitNum_)) % t->Hv;
+            const int64_t n = task / (static_cast<int64_t>(splitNum_) * t->Hv);
+            colBase_ = static_cast<int32_t>(s) * cb_;
             const int64_t bos = cuGm_.GetValue(n);
             const int64_t eos = cuGm_.GetValue(n + 1);
             ProcessChain(n, hv, bos, eos - bos);
@@ -641,12 +649,12 @@ private:
         const auto *t = ctx_.tiling;
 #if PPFM_ARCH_IS_950
         // ---- prologue：h = 0（950）----
-        Duplicate(row0F_, 0.0f, CV_V);
-        Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, CV_V);
+        Duplicate(row0F_, 0.0f, cb_);
+        Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
         PipeBarrier<PIPE_ALL>();   // ITER4：V -> MTE3 只需一次（源行不变）
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
-            DataCopy(hF32_[r * CV_V], row0F_, CV_V);
-            DataCopy(hBf_[r * CV_V], row0Bf_, CV_V);
+            DataCopy(hF32_[r * cb_], row0F_, cb_);
+            DataCopy(hBf_[r * cb_], row0Bf_, cb_);
         }
         PipeBarrier<PIPE_ALL>();
 #else
@@ -657,12 +665,12 @@ private:
         // 整条 h 链偏 1.5e-2；m 链因为用逐行写（见下）反而是对的。
         // 这里改成与 m 初值同款的逐行写法：每行重新 Cast，行间用 PIPE_ALL 隔离。
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
-            Duplicate(row0F_, 0.0f, CV_V);
+            Duplicate(row0F_, 0.0f, cb_);
             PipeBarrier<PIPE_ALL>();
-            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, CV_V);
+            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
             PipeBarrier<PIPE_ALL>();
-            DataCopy(hF32_[r * CV_V], row0F_, CV_V);
-            DataCopy(hBf_[r * CV_V], row0Bf_, CV_V);
+            DataCopy(hF32_[r * cb_], row0F_, cb_);
+            DataCopy(hBf_[r * cb_], row0Bf_, cb_);
             PipeBarrier<PIPE_ALL>();
         }
 #endif
@@ -687,21 +695,22 @@ private:
         //   实测标量写的落盘顺序不受 PipeBarrier<PIPE_V> 保护，会让个别行丢掉对角 1
         //   （表现为 m 只有 ~0.05% 元素错、max_abs≈1）。
 #if PPFM_ARCH_IS_950
-        Duplicate(row2F_, 1.0f, CV_K);
+        // P5：列块切分后，本工作项只需要列 [colBase_, colBase_+cb_) 的对角
+        Duplicate(row2F_, 1.0f, cb_);
         PipeBarrier<PIPE_V>();
-        ArithProgression(row1F_, 0.0f, 1.0f, CV_K);   // row1F_[k] = k
+        ArithProgression(row1F_, static_cast<float>(colBase_), 1.0f, cb_);   // row1F_[k] = k
         PipeBarrier<PIPE_V>();
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
             // ITER4：同一 pipe 内的 4 次 V 运算无需各自栅栏，只在 V->MTE3 与
             //        MTE3 读完（下一轮要覆盖 row0F_/row0Bf_）处各保留一次
-            Adds(row0F_, row1F_, -static_cast<float>(r), CV_K);   // k - r
-            Abs(row0F_, row0F_, CV_K);
-            Mins(row0F_, row0F_, 1.0f, CV_K);
-            Sub(row0F_, row2F_, row0F_, CV_K);                    // 1 - min(|k-r|,1)
-            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, CV_K);
+            Adds(row0F_, row1F_, -static_cast<float>(r), cb_);   // k - r
+            Abs(row0F_, row0F_, cb_);
+            Mins(row0F_, row0F_, 1.0f, cb_);
+            Sub(row0F_, row2F_, row0F_, cb_);                    // 1 - min(|k-r|,1)
+            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
             PipeBarrier<PIPE_ALL>();
-            DataCopy(mF32_[r * CV_K], row0F_, CV_K);
-            DataCopy(mBf_[r * CV_K], row0Bf_, CV_K);
+            DataCopy(mF32_[r * cb_], row0F_, cb_);
+            DataCopy(mBf_[r * cb_], row0Bf_, cb_);
             PipeBarrier<PIPE_ALL>();
         }
 #else
@@ -714,14 +723,17 @@ private:
         //   标量写与搬运之间一律用 PIPE_ALL 全栅栏隔离（KDA 的逐点 SetValue 路径
         //   在 A2 上实测正确，说明标量写本身没问题）。
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
-            Duplicate(row0F_, 0.0f, CV_K);
+            Duplicate(row0F_, 0.0f, cb_);
             PipeBarrier<PIPE_ALL>();
-            row0F_.SetValue(r, 1.0f);
+            // 只在"本列块包含第 r 列"时写对角 1（P5 列块切分）
+            if (r >= colBase_ && r < colBase_ + cb_) {
+                row0F_.SetValue(r - colBase_, 1.0f);
+            }
             PipeBarrier<PIPE_ALL>();       // S -> V/MTE3
-            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, CV_K);
+            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
             PipeBarrier<PIPE_ALL>();       // V -> MTE3
-            DataCopy(mF32_[r * CV_K], row0F_, CV_K);
-            DataCopy(mBf_[r * CV_K], row0Bf_, CV_K);
+            DataCopy(mF32_[r * cb_], row0F_, cb_);
+            DataCopy(mBf_[r * cb_], row0Bf_, cb_);
             PipeBarrier<PIPE_ALL>();       // MTE3 读完才能下一轮覆盖
         }
 #endif
@@ -790,13 +802,14 @@ private:
         // ---- epilogue：写 hm ----
         const int64_t hmBase = ((n * t->Hv + hv) * CV_K) * (CV_V + CV_K);
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
-            DataCopy(row0F_, hF32_[r * CV_V], CV_V);
+            // P5：只写本工作项的列块（h 占 [0,V) 列、m 占 [V,V+K) 列，两者同一个 colBase_）
+            DataCopy(row0F_, hF32_[r * cb_], cb_);
             PipeBarrier<PIPE_ALL>();
-            DataCopy(hmGm_[hmBase + r * (CV_V + CV_K)], row0F_, CV_V);
+            DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + colBase_], row0F_, cb_);
             PipeBarrier<PIPE_ALL>();
-            DataCopy(row0F_, mF32_[r * CV_K], CV_K);
+            DataCopy(row0F_, mF32_[r * cb_], cb_);
             PipeBarrier<PIPE_ALL>();
-            DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + CV_V], row0F_, CV_K);
+            DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + CV_V + colBase_], row0F_, cb_);
             PipeBarrier<PIPE_ALL>();
         }
 #if PPFM_RD_PROBE
@@ -945,7 +958,7 @@ private:
             if (valid < SEG) {
                 Duplicate(kBlkBf_[off * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
                 Duplicate(wBlkBf_[off * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
-                Duplicate(vBlkBf_[off * CV_V], static_cast<bfloat16_t>(0), SEG * CV_V);
+                Duplicate(vBlkBf_[off * cb_], static_cast<bfloat16_t>(0), SEG * cb_);
                 PipeBarrier<PIPE_V>();
                 AIV_SET_V_MTE2();
                 AIV_WAIT_V_MTE2();
@@ -955,8 +968,13 @@ private:
                          static_cast<uint32_t>(valid * CV_K));
                 DataCopy(wBlkBf_[off * CV_K], wGm_[(hv * t->T + t0 + off) * CV_K],
                          static_cast<uint32_t>(valid * CV_K));
-                DataCopy(vBlkBf_[off * CV_V], vGm_[(hv * t->T + t0 + off) * CV_V],
-                         static_cast<uint32_t>(valid * CV_V));
+                // P5：v 只搬本工作项需要的列窗 [colBase_, colBase_+cb_)（列间隔用 srcStride 跳过）
+                DataCopyExtParams vParams{
+                    static_cast<uint16_t>(valid),
+                    static_cast<uint32_t>(cb_ * static_cast<int32_t>(sizeof(bfloat16_t))),
+                    static_cast<uint32_t>((CV_V - cb_) * static_cast<int32_t>(sizeof(bfloat16_t))), 0, 0};
+                DataCopyPad(vBlkBf_[off * cb_], vGm_[(hv * t->T + t0 + off) * CV_V + colBase_],
+                            vParams, {false, 0, 0, 0});
             }
             AIV_SET_MTE2_MTE3();
             AIV_WAIT_MTE2_MTE3();
@@ -1056,37 +1074,37 @@ private:
             const int32_t lo = (seg - subIdx_ * SEG_PER_SUB) * SEG;
 #if !PPFM_VTMP_UB
             // A5 主线：vTmp 仍从 GM 回读
-            DataCopy(extBlkF_[lo * CV_V], vTmpF_[off * CV_V], SEG * CV_V);
+            DataCopy(extBlkF_[lo * cb_], vTmpF_[off * cb_], SEG * cb_);
             AIV_SET_MTE2_V();
             AIV_WAIT_MTE2_V();
 #if PPFM_RD_PROBE
         // 诊断：把本子核读到的 vTmp 第 0 行原样存到 GM 暂存（首个 chunk，子核 0）
             if (probeCnt_ == 0 && subIdx_ == 0) {
-                DataCopy(probeG_, extBlkF_, CV_V);
+                DataCopy(probeG_, extBlkF_, cb_);
                 PipeBarrier<PIPE_ALL>();
                 probeCnt_ = 1;
             }
 #endif
 #endif
-            Cast(scrF_[off * CV_V], vBlkBf_[off * CV_V], RoundMode::CAST_NONE, SEG * CV_V);
+            Cast(scrF_[off * cb_], vBlkBf_[off * cb_], RoundMode::CAST_NONE, SEG * cb_);
             PipeBarrier<PIPE_V>();
 #if PPFM_VTMP_UB
             // ITER10：从共享基址视图读本子核那半（lo ∈ {0, SEG}）
-            Sub(scrF_[off * CV_V], scrF_[off * CV_V], vTmpUb_[lo * CV_V], SEG * CV_V);
+            Sub(scrF_[off * cb_], scrF_[off * cb_], vTmpUb_[lo * cb_], SEG * cb_);
 #else
-            Sub(scrF_[off * CV_V], scrF_[off * CV_V], extBlkF_[lo * CV_V], SEG * CV_V);
+            Sub(scrF_[off * cb_], scrF_[off * cb_], extBlkF_[lo * cb_], SEG * cb_);
 #endif
             PipeBarrier<PIPE_V>();
             if (useG) {
                 for (int32_t i = 0; i < SEG; ++i) {
-                    Muls(scrF_[(off + i) * CV_V], scrF_[(off + i) * CV_V], dgF_.GetValue(off + i), CV_V);
+                    Muls(scrF_[(off + i) * cb_], scrF_[(off + i) * cb_], dgF_.GetValue(off + i), cb_);
                 }
                 PipeBarrier<PIPE_V>();
             }
-            Cast(scrBf_[off * CV_V], scrF_[off * CV_V], RoundMode::CAST_RINT, SEG * CV_V);
+            Cast(scrBf_[off * cb_], scrF_[off * cb_], RoundMode::CAST_RINT, SEG * cb_);
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
-            DataCopy(vNewBf_[off * CV_V], scrBf_[off * CV_V], SEG * CV_V);
+            DataCopy(vNewBf_[off * cb_], scrBf_[off * cb_], SEG * cb_);
         }
         // 各子核只写自己那两段（off 互不相交），循环内无需段间信用；
         // 出口保留一次全栅栏，供后面的 staging 复用 scrF_/scrBf_（跨函数边界）。
@@ -1097,13 +1115,13 @@ private:
         // ITER8（A2）：SEG_PER_SUB 已在 v_new 循环前声明（同一函数内不能重复定义）
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
-            DataCopy(scrF_[off * CV_K], t1F_[off * CV_K], SEG * CV_K);
+            DataCopy(scrF_[off * cb_], t1F_[off * cb_], SEG * cb_);
             AIV_SET_MTE2_V();
             AIV_WAIT_MTE2_V();
-            Cast(scrBf_[off * CV_K], scrF_[off * CV_K], RoundMode::CAST_RINT, SEG * CV_K);
+            Cast(scrBf_[off * cb_], scrF_[off * cb_], RoundMode::CAST_RINT, SEG * cb_);
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
-            DataCopy(t1Bf_[off * CV_K], scrBf_[off * CV_K], SEG * CV_K);
+            DataCopy(t1Bf_[off * cb_], scrBf_[off * cb_], SEG * cb_);
         }
         PipeBarrier<PIPE_ALL>();
 #if PPFM_RD_PROBE
@@ -1142,8 +1160,8 @@ private:
             // P1a：上一轮的 MTE3（写 hF32_/hBf_）读的是同一组 UB，先等它读完再覆盖
             AIV_SET_MTE3_MTE2();
             AIV_WAIT_MTE3_MTE2();
-            DataCopy(stateBlkF_, hF32_[rb * CV_V], RB * CV_V);
-            DataCopy(extBlkF_, dhBuf[rb * CV_V], RB * CV_V);
+            DataCopy(stateBlkF_, hF32_[rb * cb_], RB * cb_);
+            DataCopy(extBlkF_, dhBuf[rb * cb_], RB * cb_);
             AIV_SET_MTE2_V();
             AIV_WAIT_MTE2_V();
 #if PPFM_RD_PROBE
@@ -1158,53 +1176,53 @@ private:
                 // GDN：每 chunk 一个标量 decay ⇒ 整块一次 Muls（原来 16 次逐行 Muls +
                 // 16 次 GetValue；h/m 合计每 chunk 每子核 128 次，是 AIV SCALAR 的主要来源）
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
-                Muls(stateBlkF_, stateBlkF_, dc, RB * CV_V);
+                Muls(stateBlkF_, stateBlkF_, dc, RB * cb_);
             } else {
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
-                    Muls(stateBlkF_[(r - rb) * CV_V], stateBlkF_[(r - rb) * CV_V], dc, CV_V);
+                    Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
             }
             PipeBarrier<PIPE_V>();
-            Add(stateBlkF_, stateBlkF_, extBlkF_, RB * CV_V);
+            Add(stateBlkF_, stateBlkF_, extBlkF_, RB * cb_);
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
-            DataCopy(hF32_[rb * CV_V], stateBlkF_, RB * CV_V);
+            DataCopy(hF32_[rb * cb_], stateBlkF_, RB * cb_);
             AIV_SET_MTE3_V();
             AIV_WAIT_MTE3_V();   // 上一次 MTE3 读完 stateBlkF_/stateBlkBf_ 才能覆盖
-            Cast(stateBlkBf_, stateBlkF_, RoundMode::CAST_RINT, RB * CV_V);
+            Cast(stateBlkBf_, stateBlkF_, RoundMode::CAST_RINT, RB * cb_);
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
-            DataCopy(hBf_[rb * CV_V], stateBlkBf_, RB * CV_V);
+            DataCopy(hBf_[rb * cb_], stateBlkBf_, RB * cb_);
         }
         PipeBarrier<PIPE_ALL>();
         for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {
             AIV_SET_MTE3_MTE2();
             AIV_WAIT_MTE3_MTE2();
-            DataCopy(stateBlkF_, mF32_[rb * CV_K], RB * CV_K);
-            DataCopy(extBlkF_, t2Buf[rb * CV_K], RB * CV_K);
+            DataCopy(stateBlkF_, mF32_[rb * cb_], RB * cb_);
+            DataCopy(extBlkF_, t2Buf[rb * cb_], RB * cb_);
             AIV_SET_MTE2_V();
             AIV_WAIT_MTE2_V();
             if (useG) {
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
-                Muls(stateBlkF_, stateBlkF_, dc, RB * CV_K);
+                Muls(stateBlkF_, stateBlkF_, dc, RB * cb_);
             } else {
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
-                    Muls(stateBlkF_[(r - rb) * CV_K], stateBlkF_[(r - rb) * CV_K], dc, CV_K);
+                    Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
             }
             PipeBarrier<PIPE_V>();
-            Sub(stateBlkF_, stateBlkF_, extBlkF_, RB * CV_K);
+            Sub(stateBlkF_, stateBlkF_, extBlkF_, RB * cb_);
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
-            DataCopy(mF32_[rb * CV_K], stateBlkF_, RB * CV_K);
+            DataCopy(mF32_[rb * cb_], stateBlkF_, RB * cb_);
             AIV_SET_MTE3_V();
             AIV_WAIT_MTE3_V();
-            Cast(stateBlkBf_, stateBlkF_, RoundMode::CAST_RINT, RB * CV_K);
+            Cast(stateBlkBf_, stateBlkF_, RoundMode::CAST_RINT, RB * cb_);
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
-            DataCopy(mBf_[rb * CV_K], stateBlkBf_, RB * CV_K);
+            DataCopy(mBf_[rb * cb_], stateBlkBf_, RB * cb_);
         }
         PipeBarrier<PIPE_ALL>();
     }
@@ -1233,8 +1251,11 @@ private:
     LocalTensor<float> scrF_;
     LocalTensor<bfloat16_t> scrBf_;
     int32_t subIdx_ = 0;
-    int64_t curN_ = 0;   // ITER11：UB 诊断探针要定位本链 hm 地址
     int32_t subNum_ = 1;
+    int32_t splitNum_ = 1;   // P5 列块数（1 或 2），由 tiling.colSplit 决定
+    int32_t cb_ = CV_V;      // P5 本工作项的列宽（128 或 64）
+    int32_t colBase_ = 0;    // P5 本工作项列块在整条链里的起始列
+    int64_t curN_ = 0;   // ITER11：UB 诊断探针要定位本链 hm 地址
     GlobalTensor<bfloat16_t> kGm_;
     GlobalTensor<bfloat16_t> wGm_;
     GlobalTensor<bfloat16_t> vGm_;
@@ -1283,6 +1304,10 @@ public:
     {
         const auto *t = ctx_.tiling;
         const int64_t coreIdx = static_cast<int64_t>(GetBlockIdx());
+        // P5：列块切分（与 AIV 侧同一套解码；cb_/colBase_ 见 PpFwdVector::Run）
+        splitNum_ = (t->colSplit > 0) ? static_cast<int32_t>(t->colSplit) : 1;
+        cb_ = static_cast<int32_t>(CV_V) / splitNum_;
+        colBase_ = 0;
         __gm__ uint8_t *ws = reinterpret_cast<__gm__ uint8_t *>(ctx_.ws) + coreIdx * PPFM_CORE_WS_BYTES;
 
         wBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_W_BF), CV_BT * CV_K);
@@ -1305,10 +1330,12 @@ public:
         t2F1_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T2_F32_1), CV_K * CV_K);
 
         cuGm_.SetGlobalBuffer(reinterpret_cast<__gm__ int64_t *>(ctx_.cu));
-        const int64_t taskNum = t->nSeq * t->Hv;
+        const int64_t taskNum = t->nSeq * t->Hv * static_cast<int64_t>(splitNum_);
         for (int64_t task = coreIdx; task < taskNum; task += static_cast<int64_t>(t->usedAicNum)) {
-            const int64_t hv = task % t->Hv;
-            const int64_t n = task / t->Hv;
+            const int64_t s = task % static_cast<int64_t>(splitNum_);
+            const int64_t hv = (task / static_cast<int64_t>(splitNum_)) % t->Hv;
+            const int64_t n = task / (static_cast<int64_t>(splitNum_) * t->Hv);
+            colBase_ = static_cast<int32_t>(s) * cb_;
             const int64_t bos = cuGm_.GetValue(n);
             const int64_t eos = cuGm_.GetValue(n + 1);
             const int64_t len = eos - bos;
@@ -1346,17 +1373,17 @@ private:
                                  DcciDst::CACHELINE_OUT>(mBf_);
 #endif
 #if PPFM_TILE_MMAD
-        RunTiledNT(wBf_, hBf_, vTmpF_, CV_BT, CV_V, CV_K,
+        RunTiledNT(wBf_, hBf_, vTmpF_, CV_BT, static_cast<uint32_t>(cb_), CV_K,
                     /*toUb=*/(PPFM_VTMP_UB != 0));   // ITER9：按宏选择 A2 UB 落点
 #else
-        RunMmadNT(wBf_, hBf_, vTmpF_, CV_BT, CV_V, CV_K);
+        RunMmadNT(wBf_, hBf_, vTmpF_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #endif
 
         // ③ T1[BT,K] = W_c[BT,K] @ bf16(m)[K,K]
 #if PPFM_TILE_MMAD
-        RunTiledNT(wBf_, mBf_, t1F_, CV_BT, CV_K, CV_K);
+        RunTiledNT(wBf_, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #else
-        RunMmadNT(wBf_, mBf_, t1F_, CV_BT, CV_K, CV_K);
+        RunMmadNT(wBf_, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #endif
         // ⚠ 写侧也要 clean（写回），只靠读者 DCCI 不够：FIX 写回可能还停在写缓冲里，
         //   此时 AIV 即便 DCCI 也会读到旧值。实测（PPFM_DIAG 指纹）：AIV 读到 vTmp 全 0，
@@ -1399,10 +1426,10 @@ private:
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1Bf_);
 #endif
-        RunMmadTA(kIn, vNewBf_, dhBuf, CV_K, CV_V, CV_BT);
+        RunMmadTA(kIn, vNewBf_, dhBuf, CV_K, static_cast<uint32_t>(cb_), CV_BT);
 
         // ④ T2[K,K] = left^T @ bf16(T1)[BT,K]
-        RunMmadTA(lIn, t1Bf_, t2Buf, CV_K, CV_K, CV_BT);
+        RunMmadTA(lIn, t1Bf_, t2Buf, CV_K, static_cast<uint32_t>(cb_), CV_BT);
 #if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(dhBuf);
@@ -1623,6 +1650,9 @@ private:
     GlobalTensor<bfloat16_t> wBf_;
     GlobalTensor<bfloat16_t> kBf_;
     GlobalTensor<bfloat16_t> lBf_;
+    int32_t splitNum_ = 1;   // P5 列块数（1 或 2），与 AIV 侧同源（tiling.colSplit）
+    int32_t cb_ = CV_V;      // P5 本工作项的列宽（128 或 64）
+    int32_t colBase_ = 0;    // P5 本工作项列块起始列（AIC 侧只用于诊断/一致性）
     GlobalTensor<bfloat16_t> kBf1_;  // ITER7
     GlobalTensor<bfloat16_t> lBf1_;  // ITER7
     GlobalTensor<bfloat16_t> hBf_;

@@ -78,6 +78,11 @@ using namespace AscendC;
 #define PPFM_EP_MERGE 1
 #endif
 
+// R27: m=I 整块构造（行间零栅栏）
+#ifndef PPFM_M_INIT_BLOCK
+#define PPFM_M_INIT_BLOCK 1
+#endif
+
 // ---------------- 目标 arch 分档 ----------------
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 #define PPFM_ARCH_IS_950 1
@@ -981,26 +986,47 @@ private:
         PipeBarrier<PIPE_V>();
 #if PPFM_M_UB
         // R12：m 常驻 UB（本子核那 64 行），行范围改成连续半区（逐行 elementwise，数值等价）
+#if PPFM_M_INIT_BLOCK
+        // R27：每行直接写进块内自己的偏移 ⇒ 行间无 WAR、零栅栏；最后整块 Cast + 一次落盘
         for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
+            Adds(row0F_, row1F_, -static_cast<float>(r), cb_);
+            Abs(row0F_, row0F_, cb_);
+            Mins(row0F_, row0F_, 1.0f, cb_);
+            Sub(row0F_, row2F_, row0F_, cb_);
+            Muls(mUb_[(r - subIdx_ * H_UB_ROWS) * cb_], row0F_, 1.0f, cb_);
+        }
+        PipeBarrier<PIPE_ALL>();
+        Cast(stateBlkBf_, mUb_, RoundMode::CAST_RINT, H_UB_ROWS * cb_);
+        AIV_SET_V_MTE3();
+        AIV_WAIT_V_MTE3();
+        DataCopy(mBf_[subIdx_ * H_UB_ROWS * cb_], stateBlkBf_, H_UB_ROWS * cb_);
+        PipeBarrier<PIPE_ALL>();
 #else
-        for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
-#endif
-            // ITER4：同一 pipe 内的 4 次 V 运算无需各自栅栏，只在 V->MTE3 与
-            //        MTE3 读完（下一轮要覆盖 row0F_/row0Bf_）处各保留一次
+        for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
             Adds(row0F_, row1F_, -static_cast<float>(r), cb_);   // k - r
             Abs(row0F_, row0F_, cb_);
             Mins(row0F_, row0F_, 1.0f, cb_);
             Sub(row0F_, row2F_, row0F_, cb_);                    // 1 - min(|k-r|,1)
             Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
             PipeBarrier<PIPE_ALL>();
-#if PPFM_M_UB
             Muls(mUb_[(r - subIdx_ * H_UB_ROWS) * cb_], row0F_, 1.0f, cb_);   // 精确搬移
-#else
-            DataCopy(mF32_[r * cb_], row0F_, cb_);
-#endif
             DataCopy(mBf_[r * cb_], row0Bf_, cb_);
             PipeBarrier<PIPE_ALL>();
         }
+#endif
+#else
+        for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
+            Adds(row0F_, row1F_, -static_cast<float>(r), cb_);   // k - r
+            Abs(row0F_, row0F_, cb_);
+            Mins(row0F_, row0F_, 1.0f, cb_);
+            Sub(row0F_, row2F_, row0F_, cb_);                    // 1 - min(|k-r|,1)
+            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(mF32_[r * cb_], row0F_, cb_);
+            DataCopy(mBf_[r * cb_], row0Bf_, cb_);
+            PipeBarrier<PIPE_ALL>();
+        }
+#endif
 #else
         // 910B/910_93：同一套「ArithProgression + |k-r|」构造在 A2 上**实测退化**——
         //   m 变成"每行常数"（行 r 的值只随 r 变化、整行相同，对角与状态全错；

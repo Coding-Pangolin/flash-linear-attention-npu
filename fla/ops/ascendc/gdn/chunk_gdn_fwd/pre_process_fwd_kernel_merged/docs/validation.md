@@ -2865,3 +2865,57 @@ DataCopy(hmGm_[hmBase + subIdx_*H_UB_ROWS*(V+K) + colBase_], hUb_, epParams);
 > 而每个核要跑 `taskNum/usedAicNum` 条链 —— T=1024 的 16 条链 / 16 核 ⇒ 1 条链/核，
 > 但每条链只有 16 个 chunk 分摊这份开销；模型 case 的链有 176 个 chunk ⇒ 被摊薄。
 > **教训：per-task 固定开销要用"小 shape"来暴露**，只看大 shape 会漏掉它。
+
+---
+
+## 44. R26 探针 + R27：`m = I` 初始化的逐行栅栏 —— T=1024 **-11.5%**
+
+### 44.1 R26 探针（安静机器；基线 T=1024 102.22 us / 模型 case 1817.2 us）
+
+| 探针 | 摘掉 | T=1024/HV=8 | 模型 case |
+| --- | --- | --- | --- |
+| `noinih` | h 清零的 64 次逐行落盘 | 101.62（-0.6%） | 1818.9（噪声） |
+| **`noinim`** | **m=I 的逐行构造** | **84.11（-17.7%）** | **1793.9（-1.3%）** |
+
+> ⚠ 第一次跑探针时机器被别的任务压满（同一 shape 读到 211 us vs 100.6 us），
+> 数据完全不可用 —— **测之前先看 `uptime`/`npu-smi`**，这已经是第三次踩到。
+
+### 44.2 根因仍是"逐行栅栏"，不是算术
+
+950 的 m 初值是**逐行向量构造**（`1-min(|k-r|,1)` 造对角），每行：
+`Adds/Abs/Mins/Sub` + `Cast` + **`PipeBarrier<PIPE_ALL>`** + `Muls` + `DataCopy` + **`PipeBarrier<PIPE_ALL>`**。
+64 行 ⇒ **128 次全栅栏**。栅栏存在的唯一原因是"同一行缓冲 `row0F_`/`row0Bf_` 被下一行复用"（WAR）。
+
+### 44.3 R27：行内写进块内自己的偏移 ⇒ 行间零栅栏
+
+```cpp
+for (r = subIdx_*H_UB_ROWS; r < (subIdx_+1)*H_UB_ROWS; ++r) {
+    Adds/Abs/Mins/Sub(...);                                   // 只读 row1F_/row2F_
+    Muls(mUb_[(r-subIdx_*H_UB_ROWS)*cb_], row0F_, 1.0f, cb_); // 写到**各自的**块内行
+}
+PipeBarrier<PIPE_ALL>();                                      // 一次
+Cast(stateBlkBf_, mUb_, RoundMode::CAST_RINT, H_UB_ROWS*cb_); // 整块一次
+AIV_SET_V_MTE3(); AIV_WAIT_V_MTE3();
+DataCopy(mBf_[subIdx_*H_UB_ROWS*cb_], stateBlkBf_, H_UB_ROWS*cb_);
+```
+
+（`PPFM_M_INIT_BLOCK` 默认 1；UB 复用 `stateBlkBf_`（16 KiB，正好装下 64x128 bf16）。）
+
+### 44.4 结果（950/247，dev=5）
+
+| 用例 | R25 | **R27** | 变化 | vs R0 |
+| --- | --- | --- | --- | --- |
+| T=1024/HV=8 | 101.0 us | **89.71 us** | **-11.5%** | 212.2 -> **-57.7%** |
+| T=4096/HV=8 | 315.80 us | **307.41 us** | -2.7% | 623.6 -> **-50.7%** |
+| 模型 case T=11264 | 1817.2 us | **1799.12 us** | -1.0%（1.12x -> **1.11x H20**） | 3828.7 -> **-53.0%** |
+
+**验证**：L1 位级 vs `r25` **`BIT_IDENTICAL`**、L0 PASS、smoke 10/10、41/41、L3 0/42 ⇒ `GATE_ALL_DONE`。
+
+### 44.5 一条通吃三处的模式（写给后续轮次）
+
+R25（epilogue）、R27（prologue 的 m=I）是**同一个模式**：**"逐行小搬运 / 逐行构造 + 每行一个全栅栏"**。
+它在 950 上已经被清掉三处；**A2 上还有更多**（A2 的 h 清零 3 栅栏/行、m 初值 4 栅栏/行、
+epilogue 4 栅栏/行 —— 都是 64 行）⇒ **这是 910B 下一个确定的大目标**（等机器安静时量化并收口）。
+
+> 判据也要跟着改：**per-task 固定开销要用小 shape 暴露**（R25 在 T=1024 上 -15.8%、
+R27 在 T=1024 上 -11.5%，而模型 case 只有 -2.3%/-1.0%）。只看大 shape 会漏掉整类问题。

@@ -63,6 +63,11 @@
 namespace GDN {
 using namespace AscendC;
 
+// R22b: 行缩放标量预取（位级不变）
+#ifndef PPFM_ROW_PREFETCH
+#define PPFM_ROW_PREFETCH 1
+#endif
+
 // ---------------- 目标 arch 分档 ----------------
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 #define PPFM_ARCH_IS_950 1
@@ -1314,9 +1319,20 @@ private:
             if (useG) {
                 Cast(scrF_[lo * CV_K], kBlkBf_[lo * CV_K], RoundMode::CAST_NONE, SEG * CV_K);
                 PipeBarrier<PIPE_V>();
+#if PPFM_ROW_PREFETCH
+                float facBuf_[PPFM_SEGROWS];
+                for (int32_t i = 0; i < SEG; ++i) {
+                    facBuf_[i] = dgF_.GetValue(off + i);   // 先把 32 个标量读完（隐藏 UB 标量读延迟）
+                }
+#pragma unroll
+                for (int32_t i = 0; i < SEG; ++i) {
+                    Muls(scrF_[(lo + i) * CV_K], scrF_[(lo + i) * CV_K], facBuf_[i], CV_K);
+                }
+#else
                 for (int32_t i = 0; i < SEG; ++i) {
                     Muls(scrF_[(lo + i) * CV_K], scrF_[(lo + i) * CV_K], dgF_.GetValue(off + i), CV_K);
                 }
+#endif
                 PipeBarrier<PIPE_V>();
                 Cast(scrBf_[lo * CV_K], scrF_[lo * CV_K], RoundMode::CAST_RINT, SEG * CV_K);
                 AIV_SET_V_MTE3();
@@ -1427,9 +1443,20 @@ private:
 #endif
             PipeBarrier<PIPE_V>();
             if (useG) {
+#if PPFM_ROW_PREFETCH
+                float facBuf_[PPFM_SEGROWS];
+                for (int32_t i = 0; i < SEG; ++i) {
+                    facBuf_[i] = dgF_.GetValue(off + i);
+                }
+#pragma unroll
+                for (int32_t i = 0; i < SEG; ++i) {
+                    Muls(scrF_[(lo + i) * cb_], scrF_[(lo + i) * cb_], facBuf_[i], cb_);
+                }
+#else
                 for (int32_t i = 0; i < SEG; ++i) {
                     Muls(scrF_[(lo + i) * cb_], scrF_[(lo + i) * cb_], dgF_.GetValue(off + i), cb_);
                 }
+#endif
                 PipeBarrier<PIPE_V>();
             }
             Cast(scrBf_[lo * cb_], scrF_[lo * cb_], RoundMode::CAST_RINT, SEG * cb_);

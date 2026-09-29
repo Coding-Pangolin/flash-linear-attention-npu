@@ -66,6 +66,16 @@
 #include "pre_process_fwd_kernel_merged_common.h"
 #include "pre_process_fwd_kernel_merged_vec.h"
 #include "pre_process_fwd_kernel_merged_cube.h"
+
+// ---- 入口常量自检（§4.4 ②/§7.7：常量集中处配 static_assert）----
+// tiling 结构由 host 写入、kernel 解析，两侧必须同源同尺寸（host 侧 TilingData 容量 4 KiB 量级）
+static_assert(sizeof(GDN::PreProcessFwdKernelMergedTilingData) <= 4096,
+              "tiling 结构超过预留容量，请检查 host/kernel 是否同源");
+static_assert(sizeof(GDN::PreProcessFwdKernelMergedTilingData) % 8 == 0,
+              "tiling 结构需按 8B 对齐（host 侧写入按 int64 序列化）");
+// 每个工作项一块 workspace：按 512B 对齐，供 UB<->GM 的 DataCopy 落点使用
+static_assert(GDN::PPFM_CORE_WS_BYTES % 512 == 0,
+              "每核 workspace 尺寸需按 512B 对齐");
 #ifndef TORCH_MODE
 extern "C" __global__ __aicore__ void pre_process_fwd_kernel_merged(
     GM_ADDR k, GM_ADDR w, GM_ADDR u, GM_ADDR g, GM_ADDR gk, GM_ADDR bg, GM_ADDR v,

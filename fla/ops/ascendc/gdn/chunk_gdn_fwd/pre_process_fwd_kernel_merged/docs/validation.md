@@ -1581,3 +1581,17 @@ k: 16 KiB 落盘），AIC 再从 workspace 读 48 KiB —— 看起来可以省�
 变成"输入张量（冷行）"，读延迟变差把节省吃掉还倒亏。两平台一致 ⇒ **回退**，
 代码保留在 `PPFM_AIC_DIRECT_INPUTS`（默认 0）下，供后续（例如配合预取）复验。
 位级回归：`=1` 与改造前基线 `BIT_IDENTICAL`（数值一致，纯粹是时序/带宽差异）。
+### 18.1 回退后的确认（`fd79fe8`）
+
+| 平台 | 门禁 | 性能 |
+| --- | --- | --- |
+| 950（246） | L0 PASS、**BIT_IDENTICAL**、smoke 全通过、41/41、L3 0/30 | T=4096/HV=8 **627.3 µs**、模型 case **3829.3 µs（2.37× H20）** |
+| 910B（221） | L0 PASS、**BIT_IDENTICAL**、smoke 全通过、41/41、L3 0/30 | T=4096/HV=8 **651.2 µs**、模型 case **4053.2 µs（2.50×）** |
+
+### 18.2 环境事实：246 宿主机在一次会话内重启两次
+
+`192.168.13.246` 在 2026-09-29 凌晨**重启了两次**（`uptime` 分别 ~15 min / ~0 min），
+每次重启都会把 `admin123-gdn-test` 容器带崩（`ExitCode=255`，`RestartPolicy=no` ⇒ 需要 `docker start` 手动拉起），
+且容器 `/etc/hosts` 里补的 `github.com` 条目会丢（需要重新追加）。
+另外宿主盘写满后 `/home` 的 `statvfs.bavail` 会变成 0（ext4 5% 保留块），
+OPP 安装器的临时目录要指向 **tmpfs**（且 `TMPDIR`(pip) 与 `FLA_NPU_RUN_TMPDIR`(setup.py 会 rmtree) 必须分开）。

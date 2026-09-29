@@ -322,6 +322,12 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #ifndef PPFM_RD_PROBE
 #define PPFM_RD_PROBE 0
 #endif
+// KDA 的逐 k 衰减（decay[k] = 2^gk_last[k]）是否走向量化实现。
+// 0 = 原来的逐点 SetValue + Exp2Scalar（每 chunk 128 次"标量写 + 2 次全栅栏 + Exp + 标量读"）
+// 1 = 整块 DataCopy gk_last → ×ln2 → Exp（与逐点版本逐位等价，L1 位级门禁验证）
+#ifndef PPFM_KDA_DECAY_VEC
+#define PPFM_KDA_DECAY_VEC 1
+#endif
 
 // ---------------- AIV 侧跨流水同步：事件对（P1a）----------------
 // 热路径原来用 PipeBarrier<PIPE_ALL> 把所有流水排空；跨流水的依赖其实只需要"生产者→消费者"
@@ -608,10 +614,23 @@ private:
             // ITER4：decayF_ 是全 128 项同值 ⇒ 一次 Duplicate 取代 128 次 SetValue
             Duplicate(decayF_, dc, CV_K);
         } else {
+#if PPFM_KDA_DECAY_VEC
+            // KDA（USE_GK）：decay[k] = 2^(gk_last[k])，整块向量化。
+            // 原实现是 128 次 Exp2Scalar：每次都"标量写 UB → 全栅栏 → Exp → 全栅栏 → 标量读"，
+            // 实测是 AIV scalar 流水的最大单一来源。这里用 row0F_ 做暂存（本函数里它不承载数据），
+            // 逐元素仍是 exp(x·ln2)，与逐点版本逐位等价（L1 位级门禁验证）。
+            DataCopy(row0F_, gkGm_[(hv * ctx_.tiling->T + tGlobal) * CV_K], CV_K);
+            AIV_SET_MTE2_V();
+            AIV_WAIT_MTE2_V();
+            Muls(row0F_, row0F_, 0.6931471805599453f, CV_K);
+            PipeBarrier<PIPE_V>();
+            Exp(decayF_, row0F_, CV_K);
+#else
             for (int32_t k = 0; k < CV_K; ++k) {
                 const float gk = gkGm_.GetValue((hv * ctx_.tiling->T + tGlobal) * CV_K + k);
                 decayF_.SetValue(k, Exp2Scalar(gk));
             }
+#endif
         }
         PipeBarrier<PIPE_ALL>();
     }

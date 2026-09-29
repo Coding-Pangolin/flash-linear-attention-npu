@@ -510,6 +510,13 @@ constexpr int32_t PPFM_SUB = 2;      // AIV 子核数（UB 共享）
 constexpr int32_t PPFM_SEG = 16;     // left / v_new 的段长（行）
 constexpr int32_t PPFM_RB = 32;      // ITER3: 状态更新的行块（行）16->32，
                                       // 每 chunk 状态相位搬运/栅栏减半（UB +24K）
+// R13：h/m 都常驻 UB 后，状态相位按 32 行分两块已经没有意义（两块都不再搬运状态本体）
+// ⇒ 并成**一块 64 行**：每 chunk 的 V 运算与同步对从 8 次降到 4 次（位级不变，只是把两块拼起来）。
+#if PPFM_M_UB && PPFM_H_UB
+constexpr int32_t PPFM_SBRB = CV_K / PPFM_SUB;   // 64
+#else
+constexpr int32_t PPFM_SBRB = PPFM_RB;           // 32（A2 与回退路径）
+#endif
 
 // ---------------- 诊断开关（定位概率性 h 错）----------------
 // 打开后：每个工作项把前 N 个 chunk 的 "AIV 读到的 vTmpF_[0]"（AIV 侧）与
@@ -546,7 +553,8 @@ constexpr int32_t UB_STATE_BF = UB_EXT_F + PPFM_NSLOT * 2 * PPFM_SEG * CV_V * 4;
 // 下面这些按"段"分区。R11 起改成**子核本地段**寻址（`lo`，每个子核只有自己那 32 行）
 // ⇒ 尺寸砍半（k/w/v/scr 合计省 48 KiB）。依据：每个 AIV 子核有独立 UB bank（§23/§24）。
 constexpr int32_t PPFM_SEGROWS = CV_BT / PPFM_SUB;                             // 32
-constexpr int32_t UB_KBLK_BF = UB_STATE_BF + PPFM_NSLOT * PPFM_RB * CV_V * 2;  // [BT,K] bf16
+// stateBlkBf_ 的尺寸按 PPFM_SBRB（R13 起 950 上是 64 行 ⇒ 16 KiB）
+constexpr int32_t UB_KBLK_BF = UB_STATE_BF + PPFM_NSLOT * PPFM_SBRB * CV_V * 2;
 constexpr int32_t UB_WBLK_BF = UB_KBLK_BF + PPFM_SEGROWS * CV_K * 2;          // [SEGROWS,K] bf16
 constexpr int32_t UB_VBLK_BF = UB_WBLK_BF + PPFM_SEGROWS * CV_K * 2;          // [SEGROWS,V] bf16
 constexpr int32_t UB_SCR_F = UB_VBLK_BF + PPFM_SEGROWS * CV_V * 2;            // [SEGROWS,K] fp32
@@ -1402,7 +1410,8 @@ private:
         PipeBarrier<PIPE_ALL>();
 #endif  // PPFM_LEGACY_PROBE_READS
         // 每 RB 行一次搬运：块内逐行 Muls（廉价、无需栅栏），块级 Add/Sub/Cast
-        constexpr int32_t RB = PPFM_RB;   // ITER6a：真正用上 32 行（ITER3 只改了 UB 尺寸）
+        // R13：h/m 常驻 UB 时用 PPFM_SBRB（一块 64 行）；A2/回退路径仍是 PPFM_RB=32
+        constexpr int32_t RB = PPFM_SBRB;
 #if PPFM_H_UB
         // R7/R9：h 常驻 UB 时本子核只持有自己那 64 行 ⇒ h 相位必须按**连续半区**分配
         // （子核 i 负责行 [i*CV_K/2, (i+1)*CV_K/2)）。状态更新是逐行 elementwise，

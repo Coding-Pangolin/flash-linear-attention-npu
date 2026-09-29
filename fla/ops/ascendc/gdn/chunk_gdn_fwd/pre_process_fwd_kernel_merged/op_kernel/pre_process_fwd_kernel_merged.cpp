@@ -328,6 +328,17 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #ifndef PPFM_KDA_DECAY_VEC
 #define PPFM_KDA_DECAY_VEC 1
 #endif
+// T1（mm3 的 C）是否由 fixpipe 直接按 bf16 落 GM（=1）——省掉 AIV 侧"读回 t1F_(fp32) →
+// Cast → 写 t1Bf_" 的整条回路（每 chunk 32KB 读 + 16KB 写 + 一次 32K 元素的 Cast）。
+// 前提：fixpipe 的 fp32→bf16 量化与原来的 CAST_RINT 等价（L1 位级门禁验证）；
+// 仅在 PPFM_TILE_MMAD=1（手写 tile 路径）下生效。
+#ifndef PPFM_T1_FIXPIPE_BF16
+#define PPFM_T1_FIXPIPE_BF16 1
+#endif
+#if !PPFM_TILE_MMAD
+#undef PPFM_T1_FIXPIPE_BF16
+#define PPFM_T1_FIXPIPE_BF16 0
+#endif
 
 // ---------------- AIV 侧跨流水同步：事件对（P1a）----------------
 // 热路径原来用 PipeBarrier<PIPE_ALL> 把所有流水排空；跨流水的依赖其实只需要"生产者→消费者"
@@ -1113,6 +1124,7 @@ private:
         // ITER8（A2）：段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
         // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
         // ITER8（A2）：SEG_PER_SUB 已在 v_new 循环前声明（同一函数内不能重复定义）
+#if !PPFM_T1_FIXPIPE_BF16
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
             DataCopy(scrF_[off * cb_], t1F_[off * cb_], SEG * cb_);
@@ -1124,6 +1136,7 @@ private:
             DataCopy(t1Bf_[off * cb_], scrBf_[off * cb_], SEG * cb_);
         }
         PipeBarrier<PIPE_ALL>();
+#endif
 #if PPFM_RD_PROBE
         // 诊断：vNewBf_ 第 0 行（bf16→fp32）读回，确认 AIV 写出的 B 内容
         if (probeCnt_ == 1 && subIdx_ == 0) {
@@ -1381,7 +1394,12 @@ private:
 
         // ③ T1[BT,K] = W_c[BT,K] @ bf16(m)[K,K]
 #if PPFM_TILE_MMAD
+#if PPFM_T1_FIXPIPE_BF16
+        // fixpipe 直接把 T1 量化成 bf16 落 t1Bf_（mm4 的 B 操作数），AIV 侧不再往返
+        RunTiledNT(wBf_, mBf_, t1Bf_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
+#else
         RunTiledNT(wBf_, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
+#endif
 #else
         RunMmadNT(wBf_, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #endif
@@ -1461,8 +1479,11 @@ private:
     // ---- 手写 tile 级（增量 A1）：GM→L1→L0A/L0B→MMAD→C 回写（落点仍是 GM）----
     // 目的：先用与 BlockMmad 相同的落点验证 tile/MMAD 数值一致；A5 的 L0C→UB 在 A2 增量里接。
     // ITER8（A2）：toUb=true 时 C 落 UB_EXT_F 区的共享槽（fixpipe SPLIT_M），否则仍落 gmC
+    // CT = C 的元素类型：float（默认）或 bfloat16_t（fixpipe 直接按输入 dtype 量化，省掉
+    // AIV 侧的"读回 fp32 → Cast → 写 bf16"整条回路，见 PPFM_T1_FIXPIPE_BF16）。
+    template <class CT>
     __aicore__ inline void RunTiledNT(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
-                                      GlobalTensor<float> &gmC, uint32_t m, uint32_t n, uint32_t k,
+                                      GlobalTensor<CT> &gmC, uint32_t m, uint32_t n, uint32_t k,
                                       bool toUb = false)
     {
         Catlass::Arch::Resource<MmArchTag> res;
@@ -1476,7 +1497,7 @@ private:
                                   Catlass::Arch::PositionGM{});
         auto tB = tla::MakeTensor(gmB[0], tla::MakeLayout<bfloat16_t, Catlass::layout::RowMajor>(k, n),
                                   Catlass::Arch::PositionGM{});
-        auto tC = tla::MakeTensor(gmC[0], tla::MakeLayout<float, Catlass::layout::RowMajor>(m, n),
+        auto tC = tla::MakeTensor(gmC[0], tla::MakeLayout<CT, Catlass::layout::RowMajor>(m, n),
                                   Catlass::Arch::PositionGM{});
         auto bA = GetTile(tA, tla::MakeCoord(0, 0), tla::MakeShape(m, k));
         auto bB = GetTile(tB, tla::MakeCoord(0, 0), tla::MakeShape(k, n));
@@ -1515,26 +1536,36 @@ private:
         SetFlag<HardEvent::M_FIX>(EVENT_ID2);
         WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 
+        if constexpr (std::is_same_v<CT, float>) {
+            // fp32 C：950 可直接 L0C→UB（SPLIT_M），A2/A3 只能落 GM
+            bool handled = false;
 #if PPFM_ARCH_IS_950
-        if (toUb) {
-            // ITER8（A2）：写进 UB_EXT_F 区（64x128 fp32 = 32KB，正好是该区尺寸）。
-            // SPLIT_M 语义：整块的「前一半行」落在该地址的低半区、「后一半行」落高半区，
-            // 与「段按连续半区分配 subcore」对齐 ⇒ 两个子核各读自己那半。
-            AscendC::LocalTensor<float> vTmpUb(AscendC::TPosition::VECCALC, UB_EXT_F, CV_BT * CV_V);
-            auto layoutUb = tla::MakeLayout<float, Catlass::layout::RowMajor>(m, n);
-            auto tensorUb = tla::MakeTensor(vTmpUb, layoutUb, Catlass::Arch::PositionUB{});
-            typename TiledCopyNTSplitUb::template CopyL0CToDst<decltype(tensorUb)> copyUb;
-            copyUb(tensorUb, tL0C);
+            if (toUb) {
+                // ITER8（A2）：写进 UB_EXT_F 区（64x128 fp32 = 32KB，正好是该区尺寸）。
+                // SPLIT_M 语义：整块的「前一半行」落在该地址的低半区、「后一半行」落高半区，
+                // 与「段按连续半区分配 subcore」对齐 ⇒ 两个子核各读自己那半。
+                AscendC::LocalTensor<float> vTmpUb(AscendC::TPosition::VECCALC, UB_EXT_F, CV_BT * CV_V);
+                auto layoutUb = tla::MakeLayout<float, Catlass::layout::RowMajor>(m, n);
+                auto tensorUb = tla::MakeTensor(vTmpUb, layoutUb, Catlass::Arch::PositionUB{});
+                typename TiledCopyNTSplitUb::template CopyL0CToDst<decltype(tensorUb)> copyUb;
+                copyUb(tensorUb, tL0C);
 #if PPFM_VTMP_UB_DIAG
-            typename MmTileCopyNT::template CopyL0CToDst<decltype(bC)> copyCRef;
-            copyCRef(bC, tL0C, static_cast<uint8_t>(0));   // 诊断参照：同值再落一份 GM
+                typename MmTileCopyNT::template CopyL0CToDst<decltype(bC)> copyCRef;
+                copyCRef(bC, tL0C, static_cast<uint8_t>(0));   // 诊断参照：同值再落一份 GM
 #endif
-        } else
+                handled = true;
+            }
 #endif
-        {
+            if (!handled) {
+                MmCopyL0CToGm<decltype(bC)> copyC;
+                // ⚠ 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
+                //    批处理变体，l0Batch=0 ⇒ fixpipe 一个块都不搬，C 恒为初值 0。
+                copyC(bC, tL0C, static_cast<uint8_t>(0));
+            }
+        } else {
+            // bf16 C（PPFM_T1_FIXPIPE_BF16）：fixpipe 直接把 fp32 的 C 量化成 bf16 落 GM，
+            // AIV 侧不再需要"读回 fp32 → Cast → 写 bf16"。
             MmCopyL0CToGm<decltype(bC)> copyC;
-            // ⚠ 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
-            //    批处理变体，l0Batch=0 ⇒ fixpipe 一个块都不搬，C 恒为初值 0。
             copyC(bC, tL0C, static_cast<uint8_t>(0));
         }
         SetFlag<HardEvent::FIX_M>(EVENT_ID3);

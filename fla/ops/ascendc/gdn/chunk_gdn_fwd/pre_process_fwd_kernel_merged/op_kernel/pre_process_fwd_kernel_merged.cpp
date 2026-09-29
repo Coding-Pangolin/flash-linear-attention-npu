@@ -346,7 +346,19 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #endif
 // h 常驻 UB 依赖两件事，二者都由 R6 提供：① 状态更新的**连续半区**行分配；
 // ② dH 已经在 UB 里（否则还要额外一份 UB 拷贝）。没有 L0C→UB 的 A2/A3 上自动关闭。
-#if PPFM_H_UB && !PPFM_DH_CV
+// R9（2026-09-29）：**A2/A3 的版本已实现但默认关闭**（`PPFM_H_UB_A2=0`）。
+//   实现：那边 dH 仍从 GM 回读进 `extBlkF_` 暂存，h 本体不再往返 GM
+//   （省每 chunk「h fp32 读 64 KiB + 写 64 KiB」）；910B 的 `ub_size=262144`
+//   （按保守的 192 KiB 读也够）也放得下这 32 KiB。
+//   ⚠ **为什么默认关**：910B 上实测它**数值全对但非确定**（§28）——
+//     同一 kernel 连跑 4 次 dump，两两比较有 2/3 次出现差异（每次 3/5 个用例，
+//     64 个元素、bf16 舍入量级，集中在 `m` 半边某一行）。而 R8（本改动的父版本）
+//     连跑 4 次**完全确定**。⇒ 它改变了时序，把 A2 上"T2 走 GM"那条边的残余窗口
+//     顶到了表面（与 950 的 R6b 之前同源）。**先把那条边收口，再打开这个开关。**
+#ifndef PPFM_H_UB_A2
+#define PPFM_H_UB_A2 0
+#endif
+#if PPFM_H_UB && !PPFM_DH_CV && !PPFM_H_UB_A2
 #undef PPFM_H_UB
 #define PPFM_H_UB 0
 #endif
@@ -811,6 +823,19 @@ private:
         // fp32 版本却是严格 0）。AIC 的 mm1 于是把非零的 bf16(h) 当输入，vTmp=W@h≠0，
         // 整条 h 链偏 1.5e-2；m 链因为用逐行写（见下）反而是对的。
         // 这里改成与 m 初值同款的逐行写法：每行重新 Cast，行间用 PIPE_ALL 隔离。
+#if PPFM_H_UB
+        // R9：h 初值落在常驻 UB；GM 上只留 bf16(h)（逐行写法保持不变，见上面的 A2 实测）
+        Duplicate(hUb_, 0.0f, H_UB_ROWS * cb_);
+        PipeBarrier<PIPE_ALL>();
+        for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
+            Duplicate(row0F_, 0.0f, cb_);
+            PipeBarrier<PIPE_ALL>();
+            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(hBf_[r * cb_], row0Bf_, cb_);
+            PipeBarrier<PIPE_ALL>();
+        }
+#else
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
             Duplicate(row0F_, 0.0f, cb_);
             PipeBarrier<PIPE_ALL>();
@@ -820,6 +845,7 @@ private:
             DataCopy(hBf_[r * cb_], row0Bf_, cb_);
             PipeBarrier<PIPE_ALL>();
         }
+#endif
 #endif
 #if PPFM_RD_PROBE
         // 诊断：prologue 写完后立刻回读 h 状态第 0 行（期望全 0）
@@ -1338,9 +1364,15 @@ private:
 #endif  // PPFM_LEGACY_PROBE_READS
         // 每 RB 行一次搬运：块内逐行 Muls（廉价、无需栅栏），块级 Add/Sub/Cast
         constexpr int32_t RB = PPFM_RB;   // ITER6a：真正用上 32 行（ITER3 只改了 UB 尺寸）
-#if PPFM_DH_CV
+#if PPFM_H_UB
+        // R7/R9：h 常驻 UB 时本子核只持有自己那 64 行 ⇒ h 相位必须按**连续半区**分配
+        // （子核 i 负责行 [i*CV_K/2, (i+1)*CV_K/2)）。状态更新是逐行 elementwise，
+        // 换分法数值等价（GVA/KDA 的 decay 索引仍是全局行号）。
+        const int32_t rbBeg = subIdx_ * H_UB_ROWS;
+        const int32_t rbEnd = rbBeg + H_UB_ROWS;
+        const int32_t rbStep = RB;
+#elif PPFM_DH_CV
         // R6：SPLIT_M 是「连续半区」⇒ 子核 i 负责行 [i*CV_K/2, (i+1)*CV_K/2)。
-        // 状态更新是逐行 elementwise，换分法数值等价（GVA/KDA 的 decay 索引仍是全局行号）。
         const int32_t rbBeg = subIdx_ * (CV_K / PPFM_SUB);
         const int32_t rbEnd = rbBeg + (CV_K / PPFM_SUB);
         const int32_t rbStep = RB;
@@ -1354,6 +1386,16 @@ private:
             // R7：h 常驻 UB（本子核那 64 行）⇒ 就地更新，无 MTE2 载入、无 fp32 落盘。
             // 只有 bf16(h) 仍要写 GM —— 那是 AIC mm1 的输入。
             const int32_t lo = rb - rbBeg;
+#if !PPFM_DH_CV
+            // R9（A2/A3）：dH 仍从 GM 回读，但**提前发**（与下面 h 的 Muls 重叠）
+            // ⚠ 必须显式补 WAR 序：上一块（或上一相位）对 extBlkF_ 的 **V 读**要先完成，
+            //   否则这一个 MTE2 会覆盖它、dH 只写进去一部分 → h 的对应行整行错。
+            //   （950 不踩这个坑是因为它的 dH 走 UB 槽，h 相位根本不碰 extBlkF_。）
+            AIV_SET_MTE3_MTE2();
+            AIV_WAIT_MTE3_MTE2();
+            DataCopy(extBlkF_, dhBuf[rb * cb_], RB * cb_);
+            AIV_SET_MTE2_V();
+#endif
             if (useG) {
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(hUb_[lo * cb_], hUb_[lo * cb_], dc, RB * cb_);
@@ -1364,7 +1406,12 @@ private:
                 }
             }
             PipeBarrier<PIPE_V>();
+#if PPFM_DH_CV
             Add(hUb_[lo * cb_], hUb_[lo * cb_], dHUb[lo * cb_], RB * cb_);
+#else
+            AIV_WAIT_MTE2_V();
+            Add(hUb_[lo * cb_], hUb_[lo * cb_], extBlkF_, RB * cb_);
+#endif
             AIV_SET_MTE3_V();
             AIV_WAIT_MTE3_V();   // 上一次 MTE3 读完 stateBlkBf_ 才能覆盖
             Cast(stateBlkBf_, hUb_[lo * cb_], RoundMode::CAST_RINT, RB * cb_);

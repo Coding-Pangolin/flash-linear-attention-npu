@@ -189,16 +189,16 @@ ge::graphStatus Tiling4PreProcessFwdKernelMerged(gert::TilingContext *context)
 
     const auto ascendcPlatform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
     const int64_t aicNum = static_cast<int64_t>(ascendcPlatform.GetCoreNumAic());
-    // ---- P5 列块切分：把"链"按列切成 colSplit 份，用来消掉波次量化 ----
-    // 单条链的成本 ≈ (a + nt·b)，切 s 份后每份 ≈ (a + nt·b)/s（列维独立且可切）。
-    // 总时间 ≈ ceil(N·s / aicNum) × (a + nt·b)/s，只跟波数有关 ⇒ 选 waves(s)/s 最小的 s。
-    // 约束：cube 的 N 维（= V/K 列宽 = 128/s）不能太窄，只考虑 s ∈ {1,2}（N=128 / 64）。
+    // ---- P5 列块切分：把"链"按列切成 colSplit 份（h 切 V 列、m 切 K 列，两侧独立） ----
+    // 实测（950，msprof，见 docs/validation.md §16）：
+    //   * Nwork=8 / aic=28：切 2 份仍是 1 波，16 个核干活 ⇒ 783 → 653 µs（−16.7%）✅
+    //   * Nwork=32 / aic=28：切 2 份把波数从 2 抬到 3，而每项成本**并不减半**
+    //     （staging/left/decay 被两半重复、状态更新的逐行回路条数不变）
+    //     ⇒ 4027 → 4976 µs（+23.6%）❌
+    // 因此只在一波放得下时切：2·Nwork ≤ aicNum。cube 的 N 维此时是 64（仍够宽）。
     const int64_t hwItems = nSeq * Hv;
-    auto wavesOf = [aicNum](int64_t items) {
-        return (aicNum > 0) ? (items + aicNum - 1) / aicNum : int64_t{1};
-    };
     int64_t colSplit = 1;
-    if (aicNum > 0 && wavesOf(hwItems * 2) * 1 < wavesOf(hwItems) * 2) {
+    if (aicNum > 0 && hwItems * 2 <= aicNum) {
         colSplit = 2;
     }
     // 测试/调试钩子：环境变量可强制列块切分因子（1 或 2），用于位级 A/B 与回归。

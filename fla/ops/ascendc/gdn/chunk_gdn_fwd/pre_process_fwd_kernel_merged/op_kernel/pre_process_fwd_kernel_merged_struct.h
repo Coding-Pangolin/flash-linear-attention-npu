@@ -61,6 +61,13 @@ struct PreProcessFwdKernelMergedTilingData {
     //   cubeTransA ：② dH   = k^T @ bf16(v_new)、④ T2 = left^T @ bf16(T1)（M=128,N=128,K=BT，A 转置）
     PpFwdCubeTiling cubeNoTrans;
     PpFwdCubeTiling cubeTransA;
+    // ---- R21 混合调度 ----
+    // 链数 > 核数 且余数较少时：前 hybridBase 条链整宽，余数链按 hybridS 切列；
+    // 切出来的 hybridS 片作为「第二个任务（task += usedAicNum）」交给队首若干核 ⇒
+    // 把原来「余数核跑 2 条整宽链」的 2 波尾巴换成「1 条整宽 + 1 片」。
+    // hybridS <= 1 表示关闭（走原有 colSplit 路径）。
+    int64_t hybridS;
+    int64_t hybridBase;
 };
 
 // v1 每个工作项（AIC/AIV 对）在 user workspace 里的分段布局（单位：float 元素）。

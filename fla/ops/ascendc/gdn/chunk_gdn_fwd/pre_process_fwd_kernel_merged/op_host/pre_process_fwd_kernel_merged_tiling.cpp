@@ -208,7 +208,46 @@ ge::graphStatus Tiling4PreProcessFwdKernelMerged(gert::TilingContext *context)
             colSplit = v;
         }
     }
-    const int64_t taskNum = hwItems * colSplit;
+    // ---- R21 混合调度 ----
+    // 链数 > 核数 时 round-robin 会让 (hwItems % aicNum) 个核跑 2 条链 ⇒ 关键路径 = 2 波。
+    // 把余数链按列切成 S 片（成本模型 c(s)=α+(1-α)/s，实测 α≈0.72），
+    // S 片分给 S*r 个核的第二个任务 ⇒ 尾巴从「整宽」变「1/S 宽」。约束 r*S <= aicNum。
+    // 实测：模型 case（hwItems=32/A=28）S=2 −7.2%、S=4 −9.84%（vs colSplit=1）。
+    int64_t hybridS = 1;
+    int64_t hybridBase = 0;
+    if (colSplit == 1 && aicNum > 1 && hwItems > aicNum) {
+        const int64_t base = (hwItems / aicNum) * aicNum;
+        const int64_t rem = hwItems - base;
+        int64_t s = 1;
+        if (rem > 0 && rem < aicNum) {
+            // 片数 = V=128 的可整除因子（1/2/4/8），且受「第 2 波核数」限制 r*s <= aicNum。
+            // 成本模型 c(s) = α + (1-α)/s，实测 α≈0.72 ⇒ s 越大越好，但 cb_=16 风险大，封顶 4。
+            const int64_t sMax = aicNum / rem;
+            s = (sMax >= 4) ? 4 : ((sMax >= 2) ? 2 : 1);
+        }
+        if (s >= 2) {
+            hybridS = s;
+            hybridBase = base;
+        }
+    }
+    // 调试钩子：PPFM_HYBRID_S=0 关掉、=2/4 强制指定（用于上板 A/B）。
+    if (const char *forceHyb = std::getenv("PPFM_HYBRID_S")) {
+        const int64_t v = std::atoll(forceHyb);
+        if (v <= 1) {
+            hybridS = 1;
+            hybridBase = 0;
+        } else if ((v == 2 || v == 4) && aicNum > 1 && hwItems > aicNum) {
+            const int64_t base = (hwItems / aicNum) * aicNum;
+            const int64_t rem = hwItems - base;
+            if (rem > 0 && rem * v <= aicNum) {
+                hybridS = v;
+                hybridBase = base;
+            }
+        }
+    }
+    const int64_t taskNum = (hybridS > 1)
+        ? (hybridBase + (hwItems - hybridBase) * hybridS)
+        : (hwItems * colSplit);
 
     tiling->B = B;
     tiling->Hk = Hk;
@@ -225,6 +264,8 @@ ge::graphStatus Tiling4PreProcessFwdKernelMerged(gert::TilingContext *context)
     tiling->usedAicNum = (taskNum < aicNum) ? taskNum : aicNum;
     tiling->taskNum = taskNum;
     tiling->colSplit = colSplit;
+    tiling->hybridS = hybridS;
+    tiling->hybridBase = hybridBase;
 
     OP_CHECK_IF(context->GetRawTilingData() == nullptr ||
                     context->GetRawTilingData()->GetCapacity() <

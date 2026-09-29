@@ -656,6 +656,39 @@ struct PpFwdCtx {
 // =====================================================================================
 // AIV：elementwise
 // =====================================================================================
+
+// =====================================================================================
+// R21：任务号 → (n, hv, 列片)。整宽链 pieces=1；余数链按 hybridS 切列。
+// =====================================================================================
+struct PpFwdTaskPos {
+    int64_t n;
+    int64_t hv;
+    int32_t piece;
+    int32_t pieces;
+};
+
+__aicore__ inline PpFwdTaskPos DecodePpFwdTask(const PreProcessFwdKernelMergedTilingData *t,
+                                               int32_t colSplit, int64_t task)
+{
+    PpFwdTaskPos r{0, 0, 0, (colSplit > 0) ? colSplit : 1};
+    if (t->hybridS > 1 && task >= t->hybridBase) {
+        const int64_t j = task - t->hybridBase;
+        r.pieces = static_cast<int32_t>(t->hybridS);
+        r.piece = static_cast<int32_t>(j % r.pieces);
+        const int64_t chain = t->hybridBase + j / r.pieces;
+        r.hv = chain % t->Hv;
+        r.n = chain / t->Hv;
+    } else {
+        const int32_t s = (colSplit > 0) ? colSplit : 1;
+        r.pieces = s;
+        r.piece = static_cast<int32_t>(task % s);
+        const int64_t chain = task / s;
+        r.hv = chain % t->Hv;
+        r.n = chain / t->Hv;
+    }
+    return r;
+}
+
 class PpFwdVector {
 public:
     __aicore__ inline PpFwdVector(const PpFwdCtx &ctx) : ctx_(ctx) {}
@@ -762,13 +795,18 @@ public:
         dbgF_ = ubBuf_.Get<float>()[UB_DBG / 4 + subIdx_ * 16];
 #endif
 
-        const int64_t taskNum = t->nSeq * t->Hv * static_cast<int64_t>(splitNum_);
+        // R21：任务空间 = 整宽链（前 hybridBase 条）+ 余数链的列片；hybridS<=1 时退化为原逻辑。
+        const int64_t nChain = t->nSeq * t->Hv;
+        const int64_t taskNum = (t->hybridS > 1)
+            ? (t->hybridBase + (nChain - t->hybridBase) * t->hybridS)
+            : (nChain * static_cast<int64_t>(splitNum_));
         for (int64_t task = coreIdx; task < taskNum; task += static_cast<int64_t>(t->usedAicNum)) {
-            // P5：工作项 = (n, hv, 列块 s)。s 变化最快 ⇒ 同一条链的两个列块尽量落在不同核上。
-            const int64_t s = task % static_cast<int64_t>(splitNum_);
-            const int64_t hv = (task / static_cast<int64_t>(splitNum_)) % t->Hv;
-            const int64_t n = task / (static_cast<int64_t>(splitNum_) * t->Hv);
-            colBase_ = static_cast<int32_t>(s) * cb_;
+            // P5/R21：工作项 = (n, hv, 列块)。s 变化最快 ⇒ 同一条链的两个列块尽量落在不同核上。
+            const PpFwdTaskPos pos_ = DecodePpFwdTask(t, splitNum_, task);
+            const int64_t hv = pos_.hv;
+            const int64_t n = pos_.n;
+            cb_ = static_cast<int32_t>(CV_V) / pos_.pieces;
+            colBase_ = pos_.piece * cb_;
             const int64_t bos = cuGm_.GetValue(n);
             const int64_t eos = cuGm_.GetValue(n + 1);
             ProcessChain(n, hv, bos, eos - bos);
@@ -1765,12 +1803,17 @@ public:
         // PPFM_AIC_DIRECT_INPUTS：满 chunk 时直接读输入张量里的 w/k（省掉 AIV 的 staging）
         wIn_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ctx_.w));
         kIn_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ctx_.k));
-        const int64_t taskNum = t->nSeq * t->Hv * static_cast<int64_t>(splitNum_);
+        // R21：与 AIV 侧同一套任务解码。
+        const int64_t nChain = t->nSeq * t->Hv;
+        const int64_t taskNum = (t->hybridS > 1)
+            ? (t->hybridBase + (nChain - t->hybridBase) * t->hybridS)
+            : (nChain * static_cast<int64_t>(splitNum_));
         for (int64_t task = coreIdx; task < taskNum; task += static_cast<int64_t>(t->usedAicNum)) {
-            const int64_t s = task % static_cast<int64_t>(splitNum_);
-            const int64_t hv = (task / static_cast<int64_t>(splitNum_)) % t->Hv;
-            const int64_t n = task / (static_cast<int64_t>(splitNum_) * t->Hv);
-            colBase_ = static_cast<int32_t>(s) * cb_;
+            const PpFwdTaskPos pos_ = DecodePpFwdTask(t, splitNum_, task);
+            const int64_t hv = pos_.hv;
+            const int64_t n = pos_.n;
+            cb_ = static_cast<int32_t>(CV_V) / pos_.pieces;
+            colBase_ = pos_.piece * cb_;
             const int64_t bos = cuGm_.GetValue(n);
             const int64_t eos = cuGm_.GetValue(n + 1);
             const int64_t len = eos - bos;

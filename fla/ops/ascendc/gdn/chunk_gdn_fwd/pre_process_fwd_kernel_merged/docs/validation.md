@@ -2726,3 +2726,45 @@ L3 **0/42**（7 用例 x 6 轮）⇒ `GATE_ALL_DONE`。（因为是纯调度/发
 2. `code_exe.csv` 的 `cycles` 是**逐 pipe 累加、有重叠**的量，不能与 wall 时间相加；
    要判断"谁是真瓶颈"仍要用 §39 那种"摘掉它、看 wall 差多少"的探针。
 3. 保留这套能力（env 开关 + 两个脚本）给后续每一轮：**先 -g 采一次定位，再用探针量化**。
+
+---
+
+## 41. R23a：`glast` 改走 UB（省掉每 chunk 两次 GM 标量读）—— 位级不变
+
+### 41.1 动机（来自 §40 的 -g 行号 profile）
+
+`-g` 行号数据把 AIV 的标量开销定位到"内建调用展开出来的外壳"，于是按"**GM 标量读**"这条
+最贵的依赖找，发现 `StageChunk` 每个 chunk 有**两次** `gGm_.GetValue(...)`：
+
+1. 算 `dg[t] = exp2(glast - g[t])` 时读 `g[t0+rows-1]`；
+2. `SetDecay(hv, t0+rows-1)` 里再读一次同一个值来算 `decay = exp2(glast)`。
+
+而该值**刚好是刚用 `DataCopyPad` 搬进 UB 的 `gBlkF_[rows-1]`**（同一地址、同一 cacheline）。
+GM 标量读是一整趟 DDR 访问（数百 cycle），且 `SetDecay` 里紧接着 `Exp2Scalar` 依赖它 ⇒ 纯 stall。
+
+### 41.2 改法
+
+* `StageChunk`：先 `DataCopyPad` 落 UB，再 `glast = gBlkF_.GetValue(rows - 1)`（UB 标量读）；
+* `SetDecay(hv, tGlobal)` → `SetDecay(hv, tGlobal, glastIn)`：直接用调用方算好的值；
+* `PPFM_GLAST_UB`（默认 1）保留旧路径便于 A/B。
+
+### 41.3 结果（950/247，dev=5）
+
+| 用例 | R22b | **R23a** | 变化 |
+| --- | --- | --- | --- |
+| T=1024/HV=8 | 123.08 us | **119.50 us** | **-2.9%** |
+| T=4096/HV=8 | 351.94 us | **337.54 us** | **-4.1%** |
+| 模型 case T=11264 | 1904.39 us | **1860.52 us** | **-2.3%（1.17x -> 1.15x H20）** |
+
+**验证**：L1 位级 vs `r22brow` **`BIT_IDENTICAL`**、L0 PASS、smoke 10/10、L4 41/41、L3 0/42 ⇒ `GATE_ALL_DONE`。
+（改的只是"从哪儿读同一个值"，所以位级必须一致。）
+
+### 41.4 累计（950 模型 case）
+
+| 阶段 | 时间 | 累计 |
+| --- | --- | --- |
+| R0 基线 | 3828.7 us（2.36x H20） | — |
+| R20 | 2317.9 us | -39.5% |
+| R21（混合调度） | 2089.8 us | -45.4% |
+| R22b（标量预取） | 1904.4 us | -50.3% |
+| **R23a（glast 走 UB）** | **1860.5 us（1.15x H20）** | **-51.4%** |

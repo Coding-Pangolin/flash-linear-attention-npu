@@ -68,6 +68,11 @@ using namespace AscendC;
 #define PPFM_ROW_PREFETCH 1
 #endif
 
+// R23a: glast 走 UB（省每 chunk 两次 GM 标量读）
+#ifndef PPFM_GLAST_UB
+#define PPFM_GLAST_UB 1
+#endif
+
 // ---------------- 目标 arch 分档 ----------------
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 #define PPFM_ARCH_IS_950 1
@@ -858,10 +863,12 @@ private:
         return expScratch_.GetValue(0);
     }
 
-    __aicore__ inline void SetDecay(int64_t hv, int64_t tGlobal)
+    // R23a: glast 由调用方算好传入（原本这里又做了一次 GM 标量读）
+    __aicore__ inline void SetDecay(int64_t hv, int64_t tGlobal, float glastIn)
     {
         if (ctx_.tiling->gateMode == PPFM_GATE_USE_G) {
-            const float glast = gGm_.GetValue(hv * ctx_.tiling->T + tGlobal);
+            const float glast = PPFM_GLAST_UB ? glastIn
+                : gGm_.GetValue(hv * ctx_.tiling->T + tGlobal);
             const float dc = Exp2Scalar(glast);
             // ITER4：decayF_ 是全 128 项同值 ⇒ 一次 Duplicate 取代 128 次 SetValue
             Duplicate(decayF_, dc, CV_K);
@@ -1226,13 +1233,19 @@ private:
         const bool useG = (t->gateMode == PPFM_GATE_USE_G);
         float glast = 0.0f;
         if (useG) {
+#if !PPFM_GLAST_UB
             glast = gGm_.GetValue(hv * t->T + (t0 + rows - 1));
+#endif
             // 向量化：dg[t] = exp2(glast - g[t])（整块一次算完，替代逐 token 标量 Exp）
             // ⚠ 尾块 rows 不是 8（32B）的整数倍时：DataCopy 的长度必须 32B 对齐，
             //    否则是 UB（越界读）；这里改用 DataCopyPad（blockLen 按字节给）。
             DataCopyExtParams gParams{1, static_cast<uint32_t>(rows * sizeof(float)), 0, 0, 0};
             DataCopyPad(gBlkF_, gGm_[hv * t->T + t0], gParams, {false, 0, 0, 0});
             PipeBarrier<PIPE_ALL>();
+#if PPFM_GLAST_UB
+            // R23a: 同一个值已经在 UB 里（rows-1 就是本 chunk 最后一个 token 的 g）
+            glast = gBlkF_.GetValue(rows - 1);
+#endif
             Muls(gBlkF_, gBlkF_, -1.0f, static_cast<int32_t>(rows));
             PipeBarrier<PIPE_V>();
             Adds(gBlkF_, gBlkF_, glast, static_cast<int32_t>(rows));
@@ -1251,7 +1264,7 @@ private:
             Duplicate(dgF_, 1.0f, static_cast<int32_t>(CV_BT));
         }
         PipeBarrier<PIPE_ALL>();
-        SetDecay(hv, t0 + rows - 1);
+        SetDecay(hv, t0 + rows - 1, glast);
         // ---- staging：**按子核整半区（32 行）分配**，段内自己完成"清零/搬运/left 计算/落盘"----
         // R19：原来切成 2×16 行是历史遗留 —— 子核 i 拿的是连续半区（`seg = i*SEG_PER_SUB + k`
         // ⇒ 行 [i*32,(i+1)*32)），R11 之后缓冲也正好按 32 行分配 ⇒ **一段装齐**。

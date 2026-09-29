@@ -54,11 +54,11 @@ public:
             ? (t->hybridBase + (nChain - t->hybridBase) * t->hybridS)
             : (nChain * static_cast<int64_t>(splitNum_));
         for (int64_t task = coreIdx; task < taskNum; task += static_cast<int64_t>(t->usedAicNum)) {
-            const PpFwdTaskPos pos_ = DecodePpFwdTask(t, splitNum_, task);
+            const PpFwdChunkInfo pos_ = GetChunkInfo(t, splitNum_, task);
             const int64_t hv = pos_.hv;
             const int64_t n = pos_.n;
-            cb_ = static_cast<int32_t>(CV_V) / pos_.pieces;
-            colBase_ = pos_.piece * cb_;
+            cb_ = pos_.cb;          // GetChunkInfo 已算好列窗（§4.4 ⑤）
+            colBase_ = pos_.colBase;
             const int64_t bos = cuGm_.GetValue(n);
             const int64_t eos = cuGm_.GetValue(n + 1);
             const int64_t len = eos - bos;

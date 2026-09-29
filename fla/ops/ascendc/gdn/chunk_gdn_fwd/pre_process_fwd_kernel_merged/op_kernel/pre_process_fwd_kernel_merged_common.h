@@ -775,17 +775,21 @@ struct PpFwdCtx {
 // =====================================================================================
 // 任务号 → (n, hv, 列片)。整宽链 pieces=1；余数链按 hybridS 切列。
 // =====================================================================================
-struct PpFwdTaskPos {
-    int64_t n;
-    int64_t hv;
-    int32_t piece;
-    int32_t pieces;
+// 任务换算结果（§4.4 ⑤）：Stage/Process 只消费本结构，不再各自重算列窗
+struct PpFwdChunkInfo {
+    int64_t n;        // 序列号（varlen 打包里的第几条）
+    int64_t hv;       // value head
+    int32_t piece;    // 列片序号（混合调度）
+    int32_t pieces;   // 列片总数（1 = 整宽）
+    int32_t cb;       // 本任务的列宽 = CV_V / pieces
+    int32_t colBase;  // 本任务列块起始列 = piece * cb
+    int32_t colEnd;   // 本任务列块结束列（= colBase + cb，便于边界判断）
 };
 
-__aicore__ inline PpFwdTaskPos DecodePpFwdTask(const PreProcessFwdKernelMergedTilingData *t,
+__aicore__ inline PpFwdChunkInfo GetChunkInfo(const PreProcessFwdKernelMergedTilingData *t,
                                                int32_t colSplit, int64_t task)
 {
-    PpFwdTaskPos r{0, 0, 0, (colSplit > 0) ? colSplit : 1};
+    PpFwdChunkInfo r{0, 0, 0, (colSplit > 0) ? colSplit : 1, 0, 0, 0};
     if (t->hybridS > 1 && task >= t->hybridBase) {
         const int64_t j = task - t->hybridBase;
         r.pieces = static_cast<int32_t>(t->hybridS);
@@ -801,6 +805,9 @@ __aicore__ inline PpFwdTaskPos DecodePpFwdTask(const PreProcessFwdKernelMergedTi
         r.hv = chain % t->Hv;
         r.n = chain / t->Hv;
     }
+    r.cb = static_cast<int32_t>(CV_V) / r.pieces;
+    r.colBase = r.piece * r.cb;
+    r.colEnd = r.colBase + r.cb;
     return r;
 }
 

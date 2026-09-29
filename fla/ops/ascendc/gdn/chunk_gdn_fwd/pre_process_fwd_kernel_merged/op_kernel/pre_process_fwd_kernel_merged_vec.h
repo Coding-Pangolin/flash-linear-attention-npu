@@ -127,11 +127,11 @@ public:
 
             // P5/工作项 = (n, hv, 列块)。s 变化最快 ⇒
             // 同一条链的两个列块尽量落在不同核上。
-            const PpFwdTaskPos pos_ = DecodePpFwdTask(t, splitNum_, task);
+            const PpFwdChunkInfo pos_ = GetChunkInfo(t, splitNum_, task);
             const int64_t hv = pos_.hv;
             const int64_t n = pos_.n;
-            cb_ = static_cast<int32_t>(CV_V) / pos_.pieces;
-            colBase_ = pos_.piece * cb_;
+            cb_ = pos_.cb;          // GetChunkInfo 已算好列窗（§4.4 ⑤）
+            colBase_ = pos_.colBase;
             const int64_t bos = cuGm_.GetValue(n);
             const int64_t eos = cuGm_.GetValue(n + 1);
             ProcessChain(n, hv, bos, eos - bos);

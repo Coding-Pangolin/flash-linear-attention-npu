@@ -1505,3 +1505,41 @@ bash /workspace/bartonfang/ppfm-sim/run_msopprof_246.sh 1024:8 4096:8   # 246 �
 
 > 注：模型 case（32 链 / 28 核）仍然是 2 波量化，`colSplit=2` 反而更慢 ⇒ 想再吃掉这 2 波，
 > 需要让"切分后每项成本真的减半"（去掉重复 staging、把逐行回路也切分），属后续工作。
+---
+
+## 17. T1 由 fixpipe 直接按 bf16 落 GM（950 + 910B，2026-09-29）
+
+### 17.1 问题
+
+mm3 的 C（`T1 = W@m`）原来落 `t1F_`（fp32, 32 KiB/chunk），再由 AIV **读回 → Cast 成 bf16 → 写 `t1Bf_`**，
+供 mm4 当 B 操作数。这一整条回路（每 chunk 32 KiB 读 + 16 KiB 写 + 一次 32K 元素 Cast + 4 个事件对）
+纯属多余：**mm4 只要 bf16，而 fixpipe 本来就能按目标 dtype 量化**。
+
+### 17.2 改法（`PPFM_T1_FIXPIPE_BF16`，默认 1；仅在 `PPFM_TILE_MMAD=1` 生效）
+
+`RunTiledNT` 按 C 的元素类型模板化（`CT = float | bfloat16_t`），mm3 直接传 `t1Bf_`：
+
+```cpp
+RunTiledNT(wBf_, mBf_, t1Bf_, CV_BT, cb_, CV_K);   // fixpipe: fp32 C → bf16 落 GM
+```
+
+AIV 的整条 t1 回路（读 `t1F_` + Cast + 写 `t1Bf_`）删掉；`t1F_` 缓冲区保留但不再使用。
+
+### 17.3 验收
+
+| 项 | 950 | 910B |
+| --- | --- | --- |
+| L0 / L2 / L4(41 条，`--repeats 2`) / L3(0/30) | 全绿 | 全绿 |
+| **L1 位级回归（vs P5 基线）** | **BIT_IDENTICAL** | **BIT_IDENTICAL** |
+
+位级一致说明 **fixpipe 的 fp32→bf16 量化与原来的 `CAST_RINT` 完全等价**（不是"近似"），
+所以这次改动是纯粹的"少搬一趟"，没有数值口径变化。
+
+### 17.4 收益（950，msprof）
+
+| 用例 | P5 后 | +T1 fixpipe bf16 | 变化 |
+| --- | --- | --- | --- |
+| T=1024/HV=8 | 219.42 µs | **211.61 µs** | −3.6% |
+| T=4096/HV=8 | 655.57 µs | **624.75 µs** | −4.7% |
+| KDA T=4096/HV=8 | 761.54 µs | **737.16 µs** | −3.2% |
+| 模型 case T=11264/HK=HV=32 | 4021.83 µs | **3825.09 µs（2.36× H20）** | −4.9% |

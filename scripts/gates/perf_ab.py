@@ -33,6 +33,12 @@ from pathlib import Path
 DEFAULT_SHAPES = ["1024:8", "4096:8", "11264:32"]
 KERNEL_NAME = "PreProcessFwdKernelMerged"
 HERE = Path(__file__).resolve().parent
+def _find_harness(op_dir: Path) -> Path:
+    """perf_harness.py 位于算子目录的 scripts/gates/ 下；兼容与工具同目录的布局。"""
+    for c in (op_dir / "scripts" / "gates" / "perf_harness.py", HERE / "perf_harness.py"):
+        if c.exists():
+            return c
+    raise RuntimeError("找不到 perf_harness.py（试过 %s）" % (op_dir,))
 
 
 def parse_opbasic(csv_path: Path) -> tuple[float, int | None, int]:
@@ -73,7 +79,7 @@ def run_once(op_dir: Path, shape: str, variant: str, dev: str, keep: Path | None
     })
     cmd = [
         "msprof", "op",
-        f"--application={sys.executable} {HERE / 'perf_harness.py'}",
+        f"--application={sys.executable} {_find_harness(Path(op_dir))}",
         f"--output={out_dir}", f"--kernel-name={KERNEL_NAME}",
         "--launch-count=1", "--warm-up=1", "--aic-metrics=Default",
     ]

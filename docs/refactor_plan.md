@@ -127,3 +127,11 @@ git -C <repo> status --short && git -C <repo> diff --check      # §8 最后两�
 | `docs/race_status_20260929.md` | soak 协议与竞态结论；T3c/T4/T5 的 soak 判据引用它 |
 | `docs/validation.md §13+` | 各轮实测；T6 重构成 `docs/perf/round_NNN/`，validation 保留为总账 |
 | `docs/a2_opt_status.md` | 内容已过时，T1 顺手更正 |
+
+---
+
+## 例外登记（2026-09-29，主线程）
+
+| 审计项 | 决定 | 依据 |
+| --- | --- | --- |
+| `TORCH_MODE` 宏命名（§4.1-8 点名要求改为 `FLA_TORCH_EXTENSION_INLINE_BUILD`） | **保留 `TORCH_MODE`，登记为已批准例外（不改代码）** | 本仓 `examples/fast_kernel_launch_example/CMakeLists.txt:81` 以 `-DTORCH_MODE` 定义该宏；另有约 20 个算子（`kda/chunk_kda_bwd*`、`gdn/recurrent_gdn/*`、`gdn/chunk_gdn_bwd/*` 等）使用同一写法。**只改本算子会让该 guard 在新名字下永不生效**（构建侧不定义新宏）⇒ 与本仓既有约定冲突。按 §4.1-8 的意图（避免泛化负向宏）在此登记例外；若要整仓统一改名，应作为独立的跨算子批次 + 构建侧同步。 |

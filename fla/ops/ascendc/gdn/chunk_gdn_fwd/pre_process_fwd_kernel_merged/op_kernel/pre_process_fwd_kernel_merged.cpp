@@ -339,6 +339,16 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #undef PPFM_T1_FIXPIPE_BF16
 #define PPFM_T1_FIXPIPE_BF16 0
 #endif
+// 满 chunk（rows == BT）时 AIC 直接读输入张量里的 w/k（省掉 AIV 每 chunk 的
+// w 载入(16KiB)+w 落盘(16KiB)+k 落盘(16KiB) 与对应事件对）；尾块仍走 staging
+// 零填充路径（mmad 靠零填充行把无效行贡献置 0）。两侧都由 rows 判定，天然一致。
+#ifndef PPFM_AIC_DIRECT_INPUTS
+#define PPFM_AIC_DIRECT_INPUTS 1
+#endif
+#if !PPFM_TILE_MMAD
+#undef PPFM_AIC_DIRECT_INPUTS
+#define PPFM_AIC_DIRECT_INPUTS 0
+#endif
 
 // ---------------- AIV 侧跨流水同步：事件对（P1a）----------------
 // 热路径原来用 PipeBarrier<PIPE_ALL> 把所有流水排空；跨流水的依赖其实只需要"生产者→消费者"
@@ -955,6 +965,8 @@ private:
         // ITER8（A2）：段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
         // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
         constexpr int32_t SEG_PER_SUB = (CV_BT / SEG) / PPFM_SUB;
+        // 满 chunk 时 AIC 会直接读输入里的 w/k ⇒ 这里不必再 staging 它们
+        const bool directInputs = (PPFM_AIC_DIRECT_INPUTS != 0) && (rows == CV_BT);
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
             const int32_t valid = (rows > off) ? ((rows - off < SEG) ? (rows - off) : SEG) : 0;
@@ -977,8 +989,10 @@ private:
             if (valid > 0) {
                 DataCopy(kBlkBf_[off * CV_K], kGm_[(hk * t->T + t0 + off) * CV_K],
                          static_cast<uint32_t>(valid * CV_K));
-                DataCopy(wBlkBf_[off * CV_K], wGm_[(hv * t->T + t0 + off) * CV_K],
-                         static_cast<uint32_t>(valid * CV_K));
+                if (!directInputs) {
+                    DataCopy(wBlkBf_[off * CV_K], wGm_[(hv * t->T + t0 + off) * CV_K],
+                             static_cast<uint32_t>(valid * CV_K));
+                }
                 // P5：v 只搬本工作项需要的列窗 [colBase_, colBase_+cb_)（列间隔用 srcStride 跳过）
                 DataCopyExtParams vParams{
                     static_cast<uint16_t>(valid),
@@ -989,8 +1003,10 @@ private:
             }
             AIV_SET_MTE2_MTE3();
             AIV_WAIT_MTE2_MTE3();
-            DataCopy(kOut[off * CV_K], kBlkBf_[off * CV_K], SEG * CV_K);
-            DataCopy(wBf_[off * CV_K], wBlkBf_[off * CV_K], SEG * CV_K);
+            if (!directInputs) {
+                DataCopy(kOut[off * CV_K], kBlkBf_[off * CV_K], SEG * CV_K);
+                DataCopy(wBf_[off * CV_K], wBlkBf_[off * CV_K], SEG * CV_K);
+            }
             // 注意：v 不再落到 GM（v_new 直接从 UB 的 vBlkBf_ 读），省一份 16 KiB/chunk 的 MTE3
             AIV_SET_MTE2_V();
             AIV_WAIT_MTE2_V();
@@ -1343,6 +1359,9 @@ public:
         t2F1_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T2_F32_1), CV_K * CV_K);
 
         cuGm_.SetGlobalBuffer(reinterpret_cast<__gm__ int64_t *>(ctx_.cu));
+        // PPFM_AIC_DIRECT_INPUTS：满 chunk 时直接读输入张量里的 w/k（省掉 AIV 的 staging）
+        wIn_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ctx_.w));
+        kIn_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ctx_.k));
         const int64_t taskNum = t->nSeq * t->Hv * static_cast<int64_t>(splitNum_);
         for (int64_t task = coreIdx; task < taskNum; task += static_cast<int64_t>(t->usedAicNum)) {
             const int64_t s = task % static_cast<int64_t>(splitNum_);
@@ -1353,20 +1372,27 @@ public:
             const int64_t eos = cuGm_.GetValue(n + 1);
             const int64_t len = eos - bos;
             const int64_t nt = (len + CV_BT - 1) / CV_BT;
-            (void)hv;
             for (int64_t c = 0; c < nt; ++c) {
-                ProcessChunk(c);
+                const int64_t leftLen = len - c * CV_BT;
+                const int64_t rows = (leftLen < CV_BT) ? leftLen : CV_BT;
+                ProcessChunk(c, hv, bos + c * CV_BT, rows);
             }
         }
     }
 
 private:
-    __aicore__ inline void ProcessChunk(int64_t c)
+    __aicore__ inline void ProcessChunk(int64_t c, int64_t hv, int64_t t0, int64_t rows)
     {
         // dH / T2 双缓冲：本 chunk 写到自己那一份（不用拷贝，直接分支）
         const bool evenChunk = ((c & 1) == 0);
         GlobalTensor<float> &dhBuf = evenChunk ? dHF_ : dHF1_;
         GlobalTensor<float> &t2Buf = evenChunk ? t2F_ : t2F1_;
+        // 满 chunk 时 w/k 直接用输入张量（AIV 侧不再 staging）；尾块仍用零填充后的 staging
+        const auto *tt = ctx_.tiling;
+        const int64_t hk = hv / (tt->hvPerHk == 0 ? 1 : tt->hvPerHk);
+        const bool directInputs = (PPFM_AIC_DIRECT_INPUTS != 0) && (rows == CV_BT);
+        GlobalTensor<bfloat16_t> wTile =
+            directInputs ? wIn_[(hv * tt->T + t0) * CV_K] : wBf_;
         // ① vTmp[BT,V] = W_c[BT,K] @ bf16(h)[K,V]
         // ITER5：inputs 与 state 已合并为同一次通知
         AicWaitFromAiv(kFlagInputs);
@@ -1386,22 +1412,22 @@ private:
                                  DcciDst::CACHELINE_OUT>(mBf_);
 #endif
 #if PPFM_TILE_MMAD
-        RunTiledNT(wBf_, hBf_, vTmpF_, CV_BT, static_cast<uint32_t>(cb_), CV_K,
+        RunTiledNT(wTile, hBf_, vTmpF_, CV_BT, static_cast<uint32_t>(cb_), CV_K,
                     /*toUb=*/(PPFM_VTMP_UB != 0));   // ITER9：按宏选择 A2 UB 落点
 #else
-        RunMmadNT(wBf_, hBf_, vTmpF_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
+        RunMmadNT(wTile, hBf_, vTmpF_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #endif
 
         // ③ T1[BT,K] = W_c[BT,K] @ bf16(m)[K,K]
 #if PPFM_TILE_MMAD
 #if PPFM_T1_FIXPIPE_BF16
         // fixpipe 直接把 T1 量化成 bf16 落 t1Bf_（mm4 的 B 操作数），AIV 侧不再往返
-        RunTiledNT(wBf_, mBf_, t1Bf_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
+        RunTiledNT(wTile, mBf_, t1Bf_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #else
-        RunTiledNT(wBf_, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
+        RunTiledNT(wTile, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #endif
 #else
-        RunMmadNT(wBf_, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
+        RunMmadNT(wTile, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #endif
         // ⚠ 写侧也要 clean（写回），只靠读者 DCCI 不够：FIX 写回可能还停在写缓冲里，
         //   此时 AIV 即便 DCCI 也会读到旧值。实测（PPFM_DIAG 指纹）：AIV 读到 vTmp 全 0，
@@ -1428,6 +1454,8 @@ private:
         // ITER7：按 chunk 奇偶取 k/left 槽（与 AIV staging 写入槽一致）
         GlobalTensor<bfloat16_t> &kIn = ((c & 1) != 0) ? kBf1_ : kBf_;
         GlobalTensor<bfloat16_t> &lIn = ((c & 1) != 0) ? lBf1_ : lBf_;
+        // 满 chunk：k 也直接来自输入（AIV 不再写 kBf_）
+        GlobalTensor<bfloat16_t> kTile = directInputs ? kIn_[(hk * tt->T + t0) * CV_K] : kIn;
 #if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(kIn);
@@ -1444,7 +1472,7 @@ private:
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1Bf_);
 #endif
-        RunMmadTA(kIn, vNewBf_, dhBuf, CV_K, static_cast<uint32_t>(cb_), CV_BT);
+        RunMmadTA(kTile, vNewBf_, dhBuf, CV_K, static_cast<uint32_t>(cb_), CV_BT);
 
         // ④ T2[K,K] = left^T @ bf16(T1)[BT,K]
         RunMmadTA(lIn, t1Bf_, t2Buf, CV_K, static_cast<uint32_t>(cb_), CV_BT);
@@ -1684,6 +1712,8 @@ private:
     int32_t splitNum_ = 1;   // P5 列块数（1 或 2），与 AIV 侧同源（tiling.colSplit）
     int32_t cb_ = CV_V;      // P5 本工作项的列宽（128 或 64）
     int32_t colBase_ = 0;    // P5 本工作项列块起始列（AIC 侧只用于诊断/一致性）
+    GlobalTensor<bfloat16_t> wIn_;   // PPFM_AIC_DIRECT_INPUTS：输入 w 视图
+    GlobalTensor<bfloat16_t> kIn_;   // PPFM_AIC_DIRECT_INPUTS：输入 k 视图
     GlobalTensor<bfloat16_t> kBf1_;  // ITER7
     GlobalTensor<bfloat16_t> lBf1_;  // ITER7
     GlobalTensor<bfloat16_t> hBf_;

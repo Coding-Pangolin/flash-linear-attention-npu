@@ -135,3 +135,49 @@ git -C <repo> status --short && git -C <repo> diff --check      # §8 最后两�
 | 审计项 | 决定 | 依据 |
 | --- | --- | --- |
 | `TORCH_MODE` 宏命名（§4.1-8 点名要求改为 `FLA_TORCH_EXTENSION_INLINE_BUILD`） | **保留 `TORCH_MODE`，登记为已批准例外（不改代码）** | 本仓 `examples/fast_kernel_launch_example/CMakeLists.txt:81` 以 `-DTORCH_MODE` 定义该宏；另有约 20 个算子（`kda/chunk_kda_bwd*`、`gdn/recurrent_gdn/*`、`gdn/chunk_gdn_bwd/*` 等）使用同一写法。**只改本算子会让该 guard 在新名字下永不生效**（构建侧不定义新宏）⇒ 与本仓既有约定冲突。按 §4.1-8 的意图（避免泛化负向宏）在此登记例外；若要整仓统一改名，应作为独立的跨算子批次 + 构建侧同步。 |
+
+---
+
+## 整改进度与验证证据（2026-09-29，主线程；HEAD=3535e36）
+
+### 判据：两层"未受影响"的证明
+
+1. **L-A 机器码恒等（最强，等价于"精度与性能必然一致"）**：同 SOC、同宏取值下，kernel `.o`
+   逐字节相同 ⇒ 不跑位级/性能/soak 也有证明力。**整改前 7 批里有 6 批走的是这一层。**
+2. **L-B/L-C（位级 + 性能 + soak）**：只有会改变机器码的批次才需要，用于证明"改动本身无害"。
+
+### 各批次证据（kernel `.o` md5 = `md5sum <opp_vendors/<tag>>/**/*.o`）
+
+| 批次 | commit | kernel .o md5 | 与整改前 | 走哪层判据 |
+| --- | --- | --- | --- | --- |
+| （整改前生产包 base） | `b3450e5` | `3c27a1f59a0907094a3dc1b25ab1fc52`（171336 B） | — | — |
+| T1 删死文件 | `593df26` | 同上 | **逐字节相同** | L-A |
+| T2 清开发注释 | `1563899` | 同上 | **逐字节相同** | L-A |
+| T2c 注释折行 | `4001e49` | 同上 | **逐字节相同** | L-A |
+| T3 机械拆文件 | `a38b0df` | 同上（`r33split`） | **逐字节相同** | L-A |
+| T3b 文件头三张表 | `1ae500d` | 同上（`r34t3b`） | **逐字节相同** | L-A |
+| T3c-1/-2 static_assert | `8abd02a` / `538d455` | 同上（`r35t3c1`/`r36t3c2`） | **逐字节相同** | L-A |
+| **T4 TilingKey 模板化** | `94c6045` | `318d12fa47c121517fd2bc12fd953500` | 不同（入口模板实例化，属"允许变"） | **L-B + L-C + soak** |
+| T4b 入口注释改写 | `3535e36` | `318d12fa47c121517fd2bc12fd953500` | 与 T4 **逐字节相同** | L-A |
+
+### T4（唯一改机器码的批次）的三件套结果
+
+| 判据 | 命令 | 结果 |
+| --- | --- | --- |
+| 位级 | `TAG=r37t4 BASE=r28kda bash scripts/gates/run_gate_all.sh <op> 6` | **`GATE_ALL_DONE`**：L1 **`BIT_IDENTICAL`**（7 用例逐元素相同，含 `kda-t256` 与 2 个 hybrid 形状）+ smoke 10/10 + **41/41** + L3 0/42 |
+| 性能 | `python3 scripts/gates/perf_ab.py --op-dir <op> --save/--compare ...`（3 次中位、同卡交替、tol 2%） | **`REGRESS=0` ⇒ `PERF_PASS`** |
+| 竞态 | `PROCS=20 PAR=4 bash scripts/gates/race_soak.sh <op>` | **`SOAK_CLEAN`**（0/20） |
+
+### 复核命令（任何人可复跑）
+
+```bash
+# 1) 机器码恒等（对 L-A 批次）
+md5sum $(find $PKG/opp_vendors/r28kda -name '*.o' | head -1) \
+       $(find $PKG/opp_vendors/r36t3c2 -name '*.o' | head -1)   # 应完全相同
+# 2) 位级（对改机器码的批次）
+TAG=<new> BASE=<old> bash fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/scripts/gates/run_gate_all.sh <op> 6
+# 3) 性能 A/B
+python3 scripts/gates/perf_ab.py --op-dir <op> --compare --name <base_name> --tag <new>
+# 4) 形态审计（唯一剩余 FAIL 是已登记的 TORCH_MODE 例外）
+bash scripts/gates/convention_audit.sh <op>     # 期望：合计 FAIL=1
+```

@@ -456,6 +456,10 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 //   性能 T=1024 −3.7%、T=4096 −4.2%、模型 case −3.2%（3828.7 → 3707.6 µs）。
 // 置 1 可回退到"保留探读"的旧行为（若哪天出现跨核可见性症状，先开这个再查）。
 #ifndef PPFM_LEGACY_PROBE_READS
+// 默认 0 = 删除（依据 validation §20；950 上实测 −3.2~4.2%）。
+// R17 实验（§34）：把它们在 A2 上单独留回来试过——加上之后"A2 h 常驻 vs 基线"能到 5/5 位级一致，
+// 但同一 kernel 连跑 6 次 dump 之间仍有 1~2/5 文件抖动 ⇒ 探读只是**减小**那条窗口、没有关掉它。
+// 因此仍保持 0（A2 h 常驻继续默认关闭）。
 #define PPFM_LEGACY_PROBE_READS 0
 #endif
 #if !PPFM_TILE_MMAD
@@ -1832,9 +1836,12 @@ private:
 #if PPFM_TILE_MMAD
 #if PPFM_T1_FIXPIPE_BF16
         // fixpipe 直接把 T1 量化成 bf16 落 t1Bf_（mm4 的 B 操作数），AIV 侧不再往返
-        RunTiledNT(wTile, mBf_, t1Bf_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
+        // R18：A（=W）复用 mm1 已经搬进 L1 的那一份，省一次 16 KiB 的 GM→L1
+        RunTiledNT(wTile, mBf_, t1Bf_, CV_BT, static_cast<uint32_t>(cb_), CV_K,
+                   /*toUb=*/false, /*keepA=*/true);
 #else
-        RunTiledNT(wTile, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
+        RunTiledNT(wTile, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K,
+                   /*toUb=*/false, /*keepA=*/true);
 #endif
 #else
         RunMmadNT(wTile, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
@@ -1946,7 +1953,7 @@ private:
     template <class CT>
     __aicore__ inline void RunTiledNT(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
                                       GlobalTensor<CT> &gmC, uint32_t m, uint32_t n, uint32_t k,
-                                      bool toUb = false)
+                                      bool toUb = false, bool keepA = false)
     {
         Catlass::Arch::Resource<MmArchTag> res;
         auto l1A = res.l1Buf.template GetBufferByByte<bfloat16_t>(TILED_L1_A_OFF);
@@ -1973,7 +1980,10 @@ private:
             Catlass::Arch::PositionL1{});
         typename MmTileCopyNT::template CopyGmToL1A<decltype(bA)> copyG2LA;
         typename MmTileCopyNT::template CopyGmToL1B<decltype(bB)> copyG2LB;
-        copyG2LA(tL1A, bA);
+        // R18：mm1 与 mm3 的 A 操作数都是同一个 `W`（同 shape、同 L1 槽）⇒ 第二次不必重搬。
+        if (!keepA) {
+            copyG2LA(tL1A, bA);
+        }
         copyG2LB(tL1B, bB);
         // 跨流水必须用事件对（chunk_fwd_h_cube.h 的写法），PIPE_ALL 不保证 MTE1/M/FIX 次序
         SetFlag<HardEvent::MTE2_MTE1>(EVENT_ID0);

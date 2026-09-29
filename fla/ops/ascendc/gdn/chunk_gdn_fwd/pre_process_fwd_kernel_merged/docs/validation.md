@@ -1595,3 +1595,34 @@ k: 16 KiB 落盘），AIC 再从 workspace 读 48 KiB —— 看起来可以省�
 且容器 `/etc/hosts` 里补的 `github.com` 条目会丢（需要重新追加）。
 另外宿主盘写满后 `/home` 的 `statvfs.bavail` 会变成 0（ext4 5% 保留块），
 OPP 安装器的临时目录要指向 **tmpfs**（且 `TMPDIR`(pip) 与 `FLA_NPU_RUN_TMPDIR`(setup.py 会 rmtree) 必须分开）。
+---
+
+## 19. R0：可复现基线（2026-09-29，按 PPFM_OPT_ITERATION_PLAN §4/§5）
+
+### 19.1 平台与结论
+
+| 平台 | 机器 | commit | 结果 |
+| --- | --- | --- | --- |
+| 950 | **247** `admin123-ppfm-test`（8×Ascend950PR 全 OK，盘 6.4 TB 空闲） | `2925673` | L0 PASS、L1 dump `tip_base`、L2 10/10、**L4 41/41**、**L3 0/30**；T=1024/HV=8 **212.2 µs**、T=4096/HV=8 **623.6 µs**、模型 case **3828.7 µs** |
+| 910B | 221 `wym`（8×910B3） | `5d5df4a` | L0 PASS、**L1 `BIT_IDENTICAL`（vs `rev_910b`）**、L2 10/10、**L4 41/41**、**L3 0/30**；T=4096/HV=8 **653.0 µs**、模型 case **4075.1 µs（基线 dump `tip_base_910b`）** |
+
+- 950 的两个基线点（247 / 246）在同一 commit 上性能一致（212.2/623.6/3828.7 vs 211.6/624.8/3825.1 µs）⇒ **247 可以直接当 950 主力**。
+- 950 侧 `a/b`（247，两点拟合，`Nwork=8` 同 regime）：`a ≈ 212.2 − 16b`、`a ≈ 623.6 − 64b` ⇒ **b ≈ 8.57 µs/chunk，a ≈ 75.1 µs**（与计划 §1.2 的 8.61/73.9 一致）。
+- ⚠ 246 在本次会话内**重启 4 次**（容器 `ExitCode=255`、`RestartPolicy=no`；重启后 `npu-smi` 一度报 `dcmi module initialize failed -8005`）⇒ 950 实验改在 **247** 做，246 仅作备用/对照。
+
+### 19.2 本轮顺带修掉的两类"新容器不可复现"问题
+
+1. **`setup.py` 的 `FLA_NPU_RUN_TMPDIR` 钩子上游进仓库**（`5d5df4a`）：OPP `.run` 安装器按 `statvfs.bavail` 判断空间，
+   宿主盘写满时 `/home` 的 `bavail` 会变 0（ext4 5% 保留块）⇒ 必须能把它的临时目录指到 tmpfs；
+   在此之前该钩子只存在于 221 的未提交改动里，任何 `git checkout -f` 都会冲掉（计划 §0.1-4 已建议上游）。
+   用法：`TMPDIR=/home/barton_tmp FLA_NPU_RUN_TMPDIR=<tmpfs>/tmp`（两者必须是**不同**子目录，否则 setup.py 的 rmtree 会删掉 pip 正在用的目录）。
+2. **门禁脚本显式 `import torch_npu`**（`5dea527` + `2925673`）：`dump_hm/seq_probe/race_probe/npu_smoke/run_cases`
+   原来靠间接导入注册 `npu` device type，新容器（247）上会直接报
+   `Expected one of cpu, cuda, ... device type ... npu` ⇒ 现在在 `.to("npu")` 之前显式导入。
+3. 新增 `scripts/gates/race_probe_procs.sh`（`e949d23`）：**进程级**竞态探针（每次新进程跑固定用例序列，
+   `PROCS=20` 判据 `FAIL==0`），供 R9 用；`scripts/gates/exp_switch.sh`（`1dc20bd`）落计划 §0.5 的单算子 OPP 快路径。
+
+### 19.3 安全提醒
+
+247 的 `git remote origin` URL 里**内嵌了 GitHub token**（`https://ghp_...@github.com/...`）⇒ 建议轮换该 token 并改成
+credential helper / SSH（本次未改动该配置）。

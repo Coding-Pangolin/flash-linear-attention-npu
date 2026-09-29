@@ -368,7 +368,9 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #ifndef PPFM_M_UB
 #define PPFM_M_UB 1
 #endif
-#if PPFM_M_UB && !PPFM_H_UB
+// ⚠ m 常驻只实现于 950 的 CV 路径（A2 的 m 相位仍写 mF32_）⇒ 必须同时要求 DH_CV，
+//   否则会出现"epilogue 按 M_UB 去读 mUb_、而 m 相位根本没写它"的错配（R16 首测就是这么错的）。
+#if PPFM_M_UB && !(PPFM_H_UB && PPFM_DH_CV)
 #undef PPFM_M_UB
 #define PPFM_M_UB 0
 #endif
@@ -599,10 +601,15 @@ constexpr int32_t H_UB_ROWS = CV_K / PPFM_SUB;                        // 64
 constexpr int32_t UB_H_UB = ((UB_CV_END + 31) / 32) * 32;
 constexpr int32_t UB_H_UB_ELEM = UB_H_UB / 4;
 #if PPFM_H_UB
+#if PPFM_M_UB
 // R12：m 也常驻 UB（32 KiB），紧跟在 h 区之后
 constexpr int32_t UB_M_UB = UB_H_UB + H_UB_ROWS * CV_V * 4;
 constexpr int32_t UB_M_UB_ELEM = UB_M_UB / 4;
 constexpr int32_t PPFM_VEC_UB_BYTES = UB_M_UB + H_UB_ROWS * CV_V * 4;  // h + m 各 32768 B
+#else
+constexpr int32_t UB_M_UB_ELEM = 0;
+constexpr int32_t PPFM_VEC_UB_BYTES = UB_H_UB + H_UB_ROWS * CV_V * 4;  // 只有 h（A2 的 h 常驻）
+#endif
 #else
 constexpr int32_t UB_M_UB_ELEM = 0;
 constexpr int32_t PPFM_VEC_UB_BYTES = UB_CV_END;
@@ -734,8 +741,10 @@ public:
         // R7：h 的常驻半步。共享基址（不偏移）：每个 AIV 子核在自己的 bank 里用同一偏移，
         // 各自存自己那 64 行 —— 正是 R6 里 SPLIT_M 的同一套 bank 语义。
         hUb_ = ubBuf_.Get<float>()[UB_H_UB_ELEM];
+#if PPFM_M_UB
         // R12：m 的常驻半步（同上）
         mUb_ = ubBuf_.Get<float>()[UB_M_UB_ELEM];
+#endif
 #endif
         // ITER10：fixpipe SPLIT_M 把两半写到**同一偏移**（各自 bank），这里用共享基址视图
         vTmpUb_ = ubBuf_.Get<float>()[UB_EXT_F_ELEM];
@@ -1007,13 +1016,25 @@ private:
             AivWaitFromAic(kFlagDH);
             // 读别的核（AIC）写的 GM 前必须让本核缓存行失效，否则会读到过期数据
             // （与 CANN matmul_client.h 中"读跨核 GM flag 前先 DCCI"的用法一致）
+            // ⚠ R15：原来只失效了**偶数奇偶**的 dHF_/t2F_，而下面按 chunk 奇偶读的是
+            //   `dhBuf`/`t2Buf`（两份）⇒ 奇数 chunk 读的 `dHF1_`/`t2F1_` 从来没被失效过，
+            //   命中旧行就会把过期 T2 减进 m（表现为 m 半边小范围错、h 正常）。
+            //   这个缺口在 A2 上（PPFM_LEGACY_CACHEOPS=1）才暴露得出来；补齐两份。
 #if PPFM_LEGACY_CACHEOPS
             DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                      DcciDst::CACHELINE_OUT>(dHF_);
 #endif
 #if PPFM_LEGACY_CACHEOPS
             DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                     DcciDst::CACHELINE_OUT>(dHF1_);
+#endif
+#if PPFM_LEGACY_CACHEOPS
+            DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                      DcciDst::CACHELINE_OUT>(t2F_);
+#endif
+#if PPFM_LEGACY_CACHEOPS
+            DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                     DcciDst::CACHELINE_OUT>(t2F1_);
 #endif
 #ifdef PPFM_DEBUG_HEADER
             // [临时调试] 在各更新点之后立刻回读状态（fp32 标量直读，最可靠）

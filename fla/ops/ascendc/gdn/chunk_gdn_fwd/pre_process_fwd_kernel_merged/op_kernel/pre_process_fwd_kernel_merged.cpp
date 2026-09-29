@@ -63,12 +63,12 @@
 namespace GDN {
 using namespace AscendC;
 
-// R22b: 行缩放标量预取（位级不变）
+// 行缩放标量预取（位级不变）
 #ifndef PPFM_ROW_PREFETCH
 #define PPFM_ROW_PREFETCH 1
 #endif
 
-// R23a: glast 走 UB（省每 chunk 两次 GM 标量读）
+// glast 走 UB（省每 chunk 两次 GM 标量读）
 #ifndef PPFM_GLAST_UB
 #define PPFM_GLAST_UB 1
 #endif
@@ -78,12 +78,12 @@ using namespace AscendC;
 #define PPFM_KDA_VF_ROWS 1
 #endif
 
-// R25: epilogue 逐行 hm 写合并成一次跨步 DataCopy
+// epilogue 逐行 hm 写合并成一次跨步 DataCopy
 #ifndef PPFM_EP_MERGE
 #define PPFM_EP_MERGE 1
 #endif
 
-// R27: m=I 整块构造（行间零栅栏）
+// m=I 整块构造（行间零栅栏）
 #ifndef PPFM_M_INIT_BLOCK
 #define PPFM_M_INIT_BLOCK 1
 #endif
@@ -126,7 +126,7 @@ __simd_vf__ static inline void ApplyRowScaleInplaceRegbase(
         LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg0, rowScale + row);
         LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg1, rowScale + row + 1);
         for (uint16_t col = 0; col < cols; col += FP32_PER_REG) {
-            // ⚠ UpdateMask 会消耗 count 计数器：两行必须各用一个独立变量
+            // 注意： UpdateMask 会消耗 count 计数器：两行必须各用一个独立变量
             //   （照 ApplyKdaRowScaleRegbase 的 activeCount0/1 写法，否则第二个 mask 为空）
             uint32_t activeCount0 = static_cast<uint32_t>(cols - col);
             uint32_t activeCount1 = activeCount0;
@@ -188,7 +188,7 @@ constexpr int64_t WS_DH_F32_1 = WS_T2_F32 + 65536;     // dH 第二份 65536
 constexpr int64_t WS_T2_F32_1 = WS_DH_F32_1 + 65536;   // T2 第二份 65536
 constexpr int64_t WS_GATE = WS_T2_F32_1 + 65536;       // dg[BT] + decay[K] 1024
 constexpr int64_t WS_H_F32 = WS_GATE + 4096;           // h  [K,V] fp32 65536（最后一段）
-// ITER7（P3 跨 chunk 预取）：kBf_/lBf_ 的第二槽（chunk 奇偶选槽）
+// kBf_/lBf_ 的第二槽（chunk 奇偶选槽）
 constexpr int64_t WS_K_BF_1 = WS_H_F32 + 65536;        // k_c 第二槽 16384
 constexpr int64_t WS_L_BF_1 = WS_K_BF_1 + 16384;       // left 第二槽 16384
 constexpr int64_t WS_GATE_DG = 0;
@@ -211,11 +211,11 @@ constexpr uint16_t kFlagState = 2;    // AIV -> AIC：h/m 状态就位
 constexpr uint16_t kFlagHalf1 = 3;    // AIC -> AIV：vTmp 与 T1 就位
 constexpr uint16_t kFlagVNew = 4;     // AIV -> AIC：bf16(v_new) 与 bf16(T1) 就位
 constexpr uint16_t kFlagDH = 5;       // AIC -> AIV：dH 与 T2 就位
-// R6（dH 走 L0C->UB）：dH 的 UB 槽「归还」信用（AIV -> AIC）。槽 j 用 id + j，
+// （dH 走 L0C->UB）：dH 的 UB 槽「归还」信用（AIV -> AIC）。槽 j 用 id + j，
 // AIC 侧按 subblock 各等一次（id 与 id+PPFM_SUBFLAG_STRIDE），
 // 与仓内 arch35 的 MATRIX_CV_AIV_TO_AIC_FLAG_BEGIN/CV_SUBBLOCK_FLAG_STRIDE 同构。
 constexpr uint16_t kFlagDhFree = 8;
-// R6b：T2 的 UB 槽归还信用（AIV -> AIC），单槽。
+// T2 的 UB 槽归还信用（AIV -> AIC），单槽。
 constexpr uint16_t kFlagT2Free = 10;
 
 // AIV 子核：写自己本地 slot（硬件按子核自动映射到 id / id+16）
@@ -281,8 +281,8 @@ using MmBiasType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, float>;
 constexpr MatmulConfig CV_MM_CFG = GetNormalConfig(true);
 
 // ---------------- CATLASS BlockMmad（950 的核内 cube→vector 惯用法）----------------
-// 与仓内 chunk_scaled_dot_kkt 的 950 路径一致：BlockMmad + preSetFlags()/finalWaitFlags()
-// 才是"C 已写回 GM"的保证；MatmulImpl::IterateAll 不提供这个保证（见 docs/validation.md §12.11）。
+// 与仓内 chunk_scaled_dot_kkt 的 950 路径一致：BlockMmad + preSetFlags/finalWaitFlags
+// 才是"C 已写回 GM"的保证；MatmulImpl::IterateAll 不提供这个保证（见 docs/validation.md ）。
 #if PPFM_ARCH_IS_950
 using MmArchTag = Catlass::Arch::Ascend950;
 #else
@@ -330,11 +330,11 @@ using TiledCopyTA = Catlass::Gemm::Tile::PackedTileCopyTla<
     float, Catlass::layout::RowMajor>;
 #endif
 #if PPFM_ARCH_IS_950
-// ITER8（A2）：NT 形态的 C 直接落 UB，SPLIT_M（前一半行→低半区、后一半行→高半区）
+// NT 形态的 C 直接落 UB，SPLIT_M（前一半行→低半区、后一半行→高半区）
 using TiledCopyNTSplitUb = Common::Tile::PackedTileCopyTlaToUB<
     TiledArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor,
     float, Catlass::layout::RowMajor, void, Catlass::Gemm::Tile::CopyL0CToUBMode::SPLIT_M>;
-// R6：TA 形态（A 列主）的 C 直接落 UB，同样是 SPLIT_M
+// TA 形态（A 列主）的 C 直接落 UB，同样是 SPLIT_M
 // （A 列主 = 逻辑 [m,k] 在内存里按 [k,m] 存，正是「转置 A」的 mm2/mm4）
 using TiledCopyTASplitUb = Common::Tile::PackedTileCopyTlaToUB<
     TiledArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor,
@@ -371,7 +371,7 @@ constexpr int32_t TILED_L1_CAP_M = 128;
 constexpr int32_t TILED_L1_CAP_K = 128;
 constexpr int32_t TILED_L1_CAP_N = 128;
 // 手写 tile 级 mmad 开关：1=用 TileMmadTla 手拼，0=退回 BlockMmadTla
-// ✅ A1 数值已对齐（2026-09-28，241 device6 实测）：
+// （已验证） A1 数值已对齐（2026-09-28，241 device6 实测）：
 //   - 只 tile mm1（SEL=1）时 m 半边与基线逐位一致，只 tile mm3（SEL=2）时 h 半边逐位一致
 //     ⇒ 两个 matmul 各自的 tile 结果与 BlockMmad 等价；
 //   - 全 tile 时 5 轮 smoke 有 3 轮命中**已知的 GDN h 跨核可见性窗口**（TILE=0 基线 5/5 干净），
@@ -382,8 +382,8 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #ifndef PPFM_TILE_MMAD
 #define PPFM_TILE_MMAD 1
 #endif
-// ITER9：A2 优化方案（mm1 的 C 由 fixpipe SPLIT_M 直落 UB）开关。
-//   0 = A5 主线（C 落 GM，已验证）；1 = UB 落点（首测 h 半边崩，UB 语义待实测确认）。
+// A2 优化方案（mm1 的 C 由 fixpipe SPLIT_M 直落 UB）开关。
+//   0 = A5 主线（C 落 GM，已验证）；1 = UB 落点（首次测量 h 半边崩，UB 语义待测量确认）。
 #ifndef PPFM_VTMP_UB
 #define PPFM_VTMP_UB 1
 #endif
@@ -391,9 +391,9 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #ifndef PPFM_VTMP_UB_DIAG
 #define PPFM_VTMP_UB_DIAG 0
 #endif
-// R6（默认 950=1 / A2A3=0）：dH 的 C 由 fixpipe 直落 UB（L0C->UB，SPLIT_M），
+// （默认 950=1 / A2A3=0）：dH 的 C 由 fixpipe 直落 UB（L0C->UB，SPLIT_M），
 // 省掉 dH 每 chunk 的 GM 往返；0 = 旧路径（AIC 写 dHF_/dHF1_ GM，AIV 回读）。
-// ⚠ SPLIT_M 的语义是「M 方向对半、两半分别写进两个 AIV 子核各自 bank 的同一偏移」，
+// 注意： SPLIT_M 的语义是「M 方向对半、两半分别写进两个 AIV 子核各自 bank 的同一偏移」，
 //   所以 AIV 侧按**连续半区**（子核 i = 行 [i*K/2, (i+1)*K/2)）取自己那半。
 #ifndef PPFM_DH_CV
 #if PPFM_ARCH_IS_950
@@ -402,11 +402,11 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #define PPFM_DH_CV 0
 #endif
 #endif
-// R0.8（默认 1）：回收 UB 布局里"按子核切两份"的冗余。
-// 依据（R6 实测）：`SPLIT_M` 的 fixpipe 把 C 的 M 两半分别写进两个 AIV 子核
+// （默认 1）：回收 UB 布局里"按子核切两份"的冗余。
+// 依据（实测）：`SPLIT_M` 的 fixpipe 把 C 的 M 两半分别写进两个 AIV 子核
 // **各自 bank 的同一偏移**，且两个子核从**同一个 UB 偏移**读到了**不同**的数据
-// （R6 位级一致 ⇒ 只能是各自 bank）。⇒ 凡"两个子核都会写"的 scratch 都不需要
-// 再按 subIdx_ 切成两份，单份即可（省 ~39 KiB）。0 = 回退到历史的两份布局。
+// （位级一致 ⇒ 只能是各自 bank）。⇒ 凡"两个子核都会写"的 scratch 都不需要
+// 再按 subIdx_ 切成两份，单份即可（省 ~39 KiB）。0 = 改用历史的两份布局。
 #ifndef PPFM_UB_SHARE
 #define PPFM_UB_SHARE 1
 #endif
@@ -415,24 +415,24 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #else
 #define PPFM_NSLOT PPFM_SUB
 #endif
-// R7（默认 1）：**h 状态常驻 UB**，去掉 h 的 fp32 GM 往返。
-// 依据：R6 已证每个 AIV 子核有独立 UB bank，而状态更新的行分配（R6 起）是**连续半区**
+// （默认 1）：**h 状态常驻 UB**，去掉 h 的 fp32 GM 往返。
+// 依据：已证每个 AIV 子核有独立 UB bank，而状态更新的行分配（起）是**连续半区**
 // ⇒ 子核 i 只需要自己那 64 行 × cb_ 的 fp32（cb_=128 时 32 KiB/子核），不是整张 [K,V]。
 // 省掉每 chunk「h fp32 读 64 KiB + 写 64 KiB」，只保留 AIC 需要的 bf16(h) 落盘。
 #ifndef PPFM_H_UB
 #define PPFM_H_UB 1
 #endif
-// h 常驻 UB 依赖两件事，二者都由 R6 提供：① 状态更新的**连续半区**行分配；
+// h 常驻 UB 依赖两件事，二者都由 提供：① 状态更新的**连续半区**行分配；
 // ② dH 已经在 UB 里（否则还要额外一份 UB 拷贝）。没有 L0C→UB 的 A2/A3 上自动关闭。
-// R9（2026-09-29）：**A2/A3 的版本已实现但默认关闭**（`PPFM_H_UB_A2=0`）。
+// （2026-09-29）：**A2/A3 的版本已实现但当前不启用**（`PPFM_H_UB_A2=0`）。
 //   实现：那边 dH 仍从 GM 回读进 `extBlkF_` 暂存，h 本体不再往返 GM
 //   （省每 chunk「h fp32 读 64 KiB + 写 64 KiB」）；910B 的 `ub_size=262144`
 //   （按保守的 192 KiB 读也够）也放得下这 32 KiB。
-//   ⚠ **为什么默认关**：910B 上实测它**数值全对但非确定**（§28）——
+//   注意： **为什么当前不启用**：910B 上实测它**数值全对但非确定**——
 //     同一 kernel 连跑 4 次 dump，两两比较有 2/3 次出现差异（每次 3/5 个用例，
-//     64 个元素、bf16 舍入量级，集中在 `m` 半边某一行）。而 R8（本改动的父版本）
+//     64 个元素、bf16 舍入量级，集中在 `m` 半边某一行）。而 （本改动的父版本）
 //     连跑 4 次**完全确定**。⇒ 它改变了时序，把 A2 上"T2 走 GM"那条边的残余窗口
-//     顶到了表面（与 950 的 R6b 之前同源）。**先把那条边收口，再打开这个开关。**
+//     顶到了表面（与 950 的 之前同源）。**先把那条边收口，再打开这个开关。**
 #ifndef PPFM_H_UB_A2
 #define PPFM_H_UB_A2 0
 #endif
@@ -440,21 +440,21 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #undef PPFM_H_UB
 #define PPFM_H_UB 0
 #endif
-// R12（默认 1，仅 950）：**m 状态也常驻 UB**。R7 对 h 做过同样的事（省 128 KiB/chunk 的
-// fp32 往返）；m 的往返量完全一样，用 R11 回收出来的 32 KiB 放下。
-// 前提：状态相位的**连续半区**行分配（R6 起有）⇒ 每个 AIV 子核只持有自己那 64 行。
+// （默认 1，仅 950）：**m 状态也常驻 UB**。对 h 做过同样的事（省 128 KiB/chunk 的
+// fp32 往返）；m 的往返量完全一样，用 回收出来的 32 KiB 放下。
+// 前提：状态相位的**连续半区**行分配（起有）⇒ 每个 AIV 子核只持有自己那 64 行。
 #ifndef PPFM_M_UB
 #define PPFM_M_UB 1
 #endif
-// ⚠ m 常驻只实现于 950 的 CV 路径（A2 的 m 相位仍写 mF32_）⇒ 必须同时要求 DH_CV，
-//   否则会出现"epilogue 按 M_UB 去读 mUb_、而 m 相位根本没写它"的错配（R16 首测就是这么错的）。
+// 注意： m 常驻只实现于 950 的 CV 路径（A2 的 m 相位仍写 mF32_）⇒ 必须同时要求 DH_CV，
+//   否则会出现"epilogue 按 M_UB 去读 mUb_、而 m 相位根本没写它"的错配（首次测量就是这么错的）。
 #if PPFM_M_UB && !(PPFM_H_UB && PPFM_DH_CV)
 #undef PPFM_M_UB
 #define PPFM_M_UB 0
 #endif
-// R6b（默认 950=1）：**T2 也走 L0C→UB**（与 dH 同一套 SPLIT_M 落点）。
-// 动机不只是性能：R6 把 dH 挪进 UB 之后，T2 成了 m 链上**唯一**剩下的 "AIC→AIV 经 GM" 边，
-// 而 950 上这条边历史上就是薄弱点（validation §12.10 的九组排除实验）。
+// **T2 也走 L0C→UB**（与 dH 同一套 SPLIT_M 落点）。
+// 动机不只是性能：把 dH 挪进 UB 之后，T2 成了 m 链上**唯一**剩下的 "AIC→AIV 经 GM" 边，
+// 而 950 上这条边历史上就是薄弱点（validation 的九组排除实验）。
 // 顺带省掉每 chunk「T2 写 GM 64 KiB + 回读 64 KiB」。
 #ifndef PPFM_T2_CV
 #if PPFM_ARCH_IS_950
@@ -467,7 +467,7 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #undef PPFM_T2_CV
 #define PPFM_T2_CV 0
 #endif
-// 实验开关：1=保留手工 DCCI/DSB（历史做法）；0=只用跨核 flag（与生产算子一致）
+// 实验开关：1=保留手工 DCCI/DSB（此前实现）；0=只用跨核 flag（与生产算子一致）
 // 950：实测只用跨核 flag 就够（并且去掉 DCCI 后竞态由 3/6 降到 1/6），默认 0。
 // 910B/910_93：实测 AIC 会读到 AIV 尚未对其他核可见的 bf16(h)（chunk0 的 h≡0 探针
 //   仍得到 1.6e-2 的 h），故先按 A2 老做法启用 DCCI/DSB；若后续定位到更精确的边，
@@ -507,7 +507,7 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 // 满 chunk（rows == BT）时 AIC 直接读输入张量里的 w/k，省掉 AIV 每 chunk 的
 // w 载入(16KiB)+w 落盘(16KiB)+k 落盘(16KiB) 与对应事件对；尾块仍走 staging
 // 零填充路径。两侧都由 rows 判定，天然一致。
-// ⚠ 实测**净负收益**（2026-09-29，两平台一致），故默认 0：
+// 注意： 实测**净负收益**（2026-09-29，两平台一致），故默认 0：
 //   950  T=1024 211.6→217.7 µs(+2.9%)、T=4096 624.8→643.5 µs(+3.0%)、模型 case 3825→3891 µs(+1.7%)
 //   910B T=4096 651.3→661.7 µs(+1.6%)、模型 case 4055→4164 µs(+2.7%)
 //   猜测原因：AIV 的 staging 写在读侧把数据"预热"进了 L2（AIC 随后读的是热行），
@@ -515,12 +515,12 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #ifndef PPFM_AIC_DIRECT_INPUTS
 #define PPFM_AIC_DIRECT_INPUTS 0
 #endif
-// R14（**默认 0，实测负收益**）：**只让 AIC 直读 `w`，保留 `k` 的 staging**。
+// （**默认 0，实测更慢**）：**只让 AIC 直读 `w`，保留 `k` 的 staging**。
 // 动机：`w` 只有 AIC 用（`mm1/mm3` 的 A 操作数），AIV 侧只是"读了再写一遍"——
 // 每 chunk 每子核白搬 32 KiB（读 16 KiB + 写 16 KiB）；`k` 则不能省（AIV 要拿它算 `left`）。
 // 整体 `PPFM_AIC_DIRECT_INPUTS` 当年实测 +2~3%（归因：k/w 都变成 AIC 的冷行）⇒ 这里只把 w 拆出来，
 // k 仍由 AIV staging 保持 L2 热行。仅对**满 chunk** 生效（尾块需要 staging 的零填充）。
-// ❌ 实测（950/247，TAG=r14）：T=1024 150.53→153.33（+1.9%）、T=4096 459.12→476.97（+3.9%）、
+// （已否决） 实测（950/247，TAG=r14）：T=1024 150.53→153.33（+1.9%）、T=4096 459.12→476.97（+3.9%）、
 //    模型 case 2747.58→2805.84（+2.1%）⇒ **即使只去掉 w 的 staging 也变慢**，
 //    说明"AIV 写出 staging"对 AIC 的读就是**预热**：省下的 32 KiB 搬运抵不过 AIC 侧冷行延迟。
 //    ⇒ **staging 不要动**（这条边看起来"白搬"，实际是 L2 行为的一部分）。
@@ -528,16 +528,16 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #define PPFM_AIC_DIRECT_W 0
 #endif
 // 早期怀疑"C 的跨核可见性"时加的 4 处"过渡探读"（各读 8 个 fp32 并配一次 PIPE_ALL）。
-// 可见性结论已明确（见 validation §11/§13：hBf_ 写坏、T1 双写等），这些探读是纯开销。
-// **默认 0 = 删除**（依据 validation §20，2026-09-29，950/247）：
+// 可见性结论已明确（见 validation /：hBf_ 写坏、T1 双写等），这些探读是纯开销。
+// **默认 0 = 删除**（依据 validation ，2026-09-29，950/247）：
 //   位级 `BIT_IDENTICAL`、L2/L4/L3 全绿、**进程级竞态探针 0/20 CLEAN**（原来担心的 1/6 竞态未回归），
 //   性能 T=1024 −3.7%、T=4096 −4.2%、模型 case −3.2%（3828.7 → 3707.6 µs）。
-// 置 1 可回退到"保留探读"的旧行为（若哪天出现跨核可见性症状，先开这个再查）。
+// 置 1 可改用"保留探读"的此前实现（若哪天出现跨核可见性症状，先开这个再查）。
 #ifndef PPFM_LEGACY_PROBE_READS
-// 默认 0 = 删除（依据 validation §20；950 上实测 −3.2~4.2%）。
-// R17 实验（§34）：把它们在 A2 上单独留回来试过——加上之后"A2 h 常驻 vs 基线"能到 5/5 位级一致，
+// 默认 0 = 删除（依据 validation ；950 上实测 −3.2~4.2%）。
+// 实验：把它们在 A2 上单独留回来试过——加上之后"A2 h 常驻 vs 基线"能到 5/5 位级一致，
 // 但同一 kernel 连跑 6 次 dump 之间仍有 1~2/5 文件抖动 ⇒ 探读只是**减小**那条窗口、没有关掉它。
-// 因此仍保持 0（A2 h 常驻继续默认关闭）。
+// 因此仍保持 0（A2 h 常驻继续当前不启用）。
 #define PPFM_LEGACY_PROBE_READS 0
 #endif
 #if !PPFM_TILE_MMAD
@@ -545,14 +545,14 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #define PPFM_AIC_DIRECT_INPUTS 0
 #endif
 
-// ---------------- AIV 侧跨流水同步：事件对（P1a）----------------
+// ---------------- AIV 侧跨流水同步：事件对----------------
 // 热路径原来用 PipeBarrier<PIPE_ALL> 把所有流水排空；跨流水的依赖其实只需要"生产者→消费者"
 // 的事件对。PPFM_AIV_EVENTS=0 时退化成与原来等价的 PIPE_ALL（用于 A/B 与快速回退）。
 // 事件 ID 分工（每个 SET 都有同 ID 的 WAIT，成对消耗；AIC 侧用的是它自己的一套，互不影响）：
 //   ID0 MTE2->V   ID1 V->MTE3   ID2 MTE3->MTE2   ID3 MTE3->V
 //   ID4 V->MTE2   ID5 MTE2->MTE3   ID6 V->S      ID7 S->V
-// ⚠ 经验（见 docs/pipeline_parallel_plan.md §P1a）：**必须用事件对**，
-// 用 PipeBarrier<PIPE_X> 代替 PIPE_ALL 会丢跨流水依赖（ITER6 曾 6/6 全错）。
+// 注意： 经验（见 docs/pipeline_parallel_plan.md §P1a）：**必须用事件对**，
+// 用 PipeBarrier<PIPE_X> 代替 PIPE_ALL 会丢跨流水依赖（曾 6/6 全错）。
 #ifndef PPFM_AIV_EVENTS
 #define PPFM_AIV_EVENTS 1
 #endif
@@ -594,19 +594,19 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #endif
 
 // ---------------- AIV 侧 UB 布局（字节）----------------
-// ⚠ 历史结论（**R0.8 已修订**）：早期按"950 MIX 下 UB 由 AIC + 两个 AIV 子核共享"的
+// 注意： 历史结论（**已修订**）：早期按"950 MIX 下 UB 由 AIC + 两个 AIV 子核共享"的
 //   假设，把"两个子核都会写"的 scratch 按 subIdx_ 切成两份（每个常量 = 两份的总字节数）。
-//   但 `docs/validation.md` §23 的 R6 实测反证了这个假设：`SPLIT_M` 的 fixpipe 把 C 的 M
+//   但 `docs/validation.md` 的 实测反证了这个假设：`SPLIT_M` 的 fixpipe 把 C 的 M
 //   两半写进两个子核**各自 bank 的同一偏移**，而两个子核从**同一个 UB 偏移**读到了**不同**
-//   的数据（否则 R6 不可能位级一致）⇒ **每个 AIV 子核有独立 UB bank**（253952 B/子核，
-//   见 §22），按 subIdx_ 切两份是纯冗余。`PPFM_UB_SHARE=1`（默认）改为单份布局，省 ~39 KiB；
-//   置 0 可回退到历史两份布局。
+//   的数据（否则 不可能位级一致）⇒ **每个 AIV 子核有独立 UB bank**（253952 B/子核，
+//   见 ），按 subIdx_ 切两份是纯冗余。`PPFM_UB_SHARE=1`（默认）改为单份布局，省 ~39 KiB；
+//   置 0 可改用历史两份布局。
 //   仍然"按段（off）分区"共享的：kBlk/wBlk/vBlk/scr（两个子核用不同 off，互不相交）。
 constexpr int32_t PPFM_SUB = 2;      // AIV 子核数（UB 共享）
 constexpr int32_t PPFM_SEG = 16;     // left / v_new 的段长（行）
-constexpr int32_t PPFM_RB = 32;      // ITER3: 状态更新的行块（行）16->32，
+constexpr int32_t PPFM_RB = 32;      // 状态更新的行块（行）16->32，
                                       // 每 chunk 状态相位搬运/栅栏减半（UB +24K）
-// R13：h/m 都常驻 UB 后，状态相位按 32 行分两块已经没有意义（两块都不再搬运状态本体）
+// h/m 都常驻 UB 后，状态相位按 32 行分两块已经没有意义（两块都不再搬运状态本体）
 // ⇒ 并成**一块 64 行**：每 chunk 的 V 运算与同步对从 8 次降到 4 次（位级不变，只是把两块拼起来）。
 #if PPFM_M_UB && PPFM_H_UB
 constexpr int32_t PPFM_SBRB = CV_K / PPFM_SUB;   // 64
@@ -620,7 +620,7 @@ constexpr int32_t PPFM_SBRB = PPFM_RB;           // 32（A2 与回退路径）
 //   lane 0..3  = AIV 读到的 vTmpF_[0]（第 c 个 chunk）
 //   lane 8..11 = AIC 写出的 vTmpF_[0]（第 c 个 chunk）
 // 判读：两者不等 → AIV 读到别的代（跨核可见性/flag 提前）；相等但≠期望 → AIC 的 mm1 输入不对。
-// ⚠ 默认关闭：诊断收尾会把指纹写进 hm 的 m 半边【第 0 行】（见下），
+// 注意： 当前不启用：诊断收尾会把指纹写进 hm 的 m 半边【第 0 行】（见下），
 //   验收/对拍脚本不会排除该行 → 默认开启时表现为"m 只有第一行几个元素错、
 //   (0,0) 恒为 0"，曾被误判成算子精度缺陷（PPFM-31/33 的 m 坏点就是这么来的）。
 //   只在定位跨核可见性时临时打开，并对拍时排除 hm[..., 0, V:]。
@@ -630,7 +630,7 @@ constexpr int32_t PPFM_SBRB = PPFM_RB;           // 32（A2 与回退路径）
 constexpr int32_t PPFM_DIAG_CHUNKS = 4;
 constexpr int64_t WS_DIAG = 626688;               // 每核 4 KiB（AIC 写，AIV epilogue 搬到 hm）
 
-// PPFM_NSLOT = 1（R0.8，默认）时这些都是**单份**；= PPFM_SUB 时回退历史的两份布局。
+// PPFM_NSLOT = 1（默认）时这些都是**单份**；= PPFM_SUB 时回退历史的两份布局。
 constexpr int32_t UB_ROW0_BF = 0;                                  // [K] bf16
 constexpr int32_t UB_ROW1_BF = UB_ROW0_BF + PPFM_NSLOT * CV_K * 2;
 constexpr int32_t UB_ROW2_BF = UB_ROW1_BF + PPFM_NSLOT * CV_K * 2;
@@ -646,17 +646,17 @@ constexpr int32_t UB_STATE_F = UB_GBLK + PPFM_NSLOT * CV_BT * 4;   // [RB,K] fp3
 // extBlkF_：状态更新的 dH 暂存（RB 行）+ v_new 的 vTmp 暂存（2 段）→ 每子核取大者
 constexpr int32_t UB_EXT_F = UB_STATE_F + PPFM_NSLOT * PPFM_RB * CV_V * 4;
 constexpr int32_t UB_STATE_BF = UB_EXT_F + PPFM_NSLOT * 2 * PPFM_SEG * CV_V * 4;
-// 下面这些按"段"分区。R11 起改成**子核本地段**寻址（`lo`，每个子核只有自己那 32 行）
-// ⇒ 尺寸砍半（k/w/v/scr 合计省 48 KiB）。依据：每个 AIV 子核有独立 UB bank（§23/§24）。
+// 下面这些按"段"分区。起改成**子核本地段**寻址（`lo`，每个子核只有自己那 32 行）
+// ⇒ 尺寸砍半（k/w/v/scr 合计省 48 KiB）。依据：每个 AIV 子核有独立 UB bank（/）。
 constexpr int32_t PPFM_SEGROWS = CV_BT / PPFM_SUB;                             // 32
-// stateBlkBf_ 的尺寸按 PPFM_SBRB（R13 起 950 上是 64 行 ⇒ 16 KiB）
+// stateBlkBf_ 的尺寸按 PPFM_SBRB（起 950 上是 64 行 ⇒ 16 KiB）
 constexpr int32_t UB_KBLK_BF = UB_STATE_BF + PPFM_NSLOT * PPFM_SBRB * CV_V * 2;
 constexpr int32_t UB_WBLK_BF = UB_KBLK_BF + PPFM_SEGROWS * CV_K * 2;          // [SEGROWS,K] bf16
 constexpr int32_t UB_VBLK_BF = UB_WBLK_BF + PPFM_SEGROWS * CV_K * 2;          // [SEGROWS,V] bf16
 constexpr int32_t UB_SCR_F = UB_VBLK_BF + PPFM_SEGROWS * CV_V * 2;            // [SEGROWS,K] fp32
 constexpr int32_t UB_SCR_BF = UB_SCR_F + PPFM_SEGROWS * CV_K * 4;             // [SEGROWS,K] bf16
 constexpr int32_t UB_DBG = UB_SCR_BF + PPFM_SEGROWS * CV_K * 2;               // 诊断槽 ×2
-// ---- R6：dH 的 CV 落点（L0C->UB，2 槽 ping-pong，见 validation §22/§23）----
+// ---- dH 的 CV 落点（L0C->UB，2 槽 ping-pong，见 validation /）----
 // 每个 AIV 子核有**自己的 UB bank**（253952 B/子核），SPLIT_M 只把 C 的 M 两半分别写进
 // 两个 bank 的**同一偏移** ⇒ 单槽按「一个子核那一半的行数」算：CV_K/2 = 64 行 × CV_V × 4B
 // = 32768 B；2 槽 = 65536 B。188096 + 65536 = 253632 ≤ 253952（余 320 B）。
@@ -665,7 +665,7 @@ constexpr int32_t DH_CV_ROWS = CV_K / PPFM_SUB;                              // 
 constexpr int32_t UB_DH_CV_SLOT = DH_CV_ROWS * CV_V * 4;                     // 32768 B
 constexpr int32_t UB_DH_CV_ELEM = UB_DH_CV / 4;
 constexpr int32_t UB_DH_CV_SLOT_ELEM = UB_DH_CV_SLOT / 4;
-// ---- R6/R6b：dH 与 T2 的 CV 落点（各 **1 槽**）----
+// ---- /dH 与 T2 的 CV 落点（各 **1 槽**）----
 // 单槽就够，不需要 ping-pong：AIC 写 dH(c)/T2(c) 必然在 `AicWaitFromAiv(kFlagVNew(c))` 之后，
 // 而 AIV 早在迭代 c 开头就把 c-1 那一代消费完了 ⇒ 天然串行。显式 credit 保留做双保险
 // （计数：AIV set = 1(prime) + nt；AIC wait = nt + 1(尾 drain) ⇒ 逐链平衡）。
@@ -677,14 +677,14 @@ constexpr int32_t UB_CV_END = UB_T2_CV + (PPFM_T2_CV ? UB_DH_CV_SLOT : 0);
 #else
 constexpr int32_t UB_CV_END = UB_DH_CV;
 #endif
-// ---- R7：h 状态常驻 UB（每个子核只放自己那 64 行）----
-// ⚠ V 运算（Muls/Add/Cast/Duplicate）对 UB 偏移要求 32B 对齐（历史上的 error 340）⇒ 显式对齐。
+// ---- h 状态常驻 UB（每个子核只放自己那 64 行）----
+// 注意： V 运算（Muls/Add/Cast/Duplicate）对 UB 偏移要求 32B 对齐（历史上的 error 340）⇒ 显式对齐。
 constexpr int32_t H_UB_ROWS = CV_K / PPFM_SUB;                        // 64
 constexpr int32_t UB_H_UB = ((UB_CV_END + 31) / 32) * 32;
 constexpr int32_t UB_H_UB_ELEM = UB_H_UB / 4;
 #if PPFM_H_UB
 #if PPFM_M_UB
-// R12：m 也常驻 UB（32 KiB），紧跟在 h 区之后
+// m 也常驻 UB（32 KiB），紧跟在 h 区之后
 constexpr int32_t UB_M_UB = UB_H_UB + H_UB_ROWS * CV_V * 4;
 constexpr int32_t UB_M_UB_ELEM = UB_M_UB / 4;
 constexpr int32_t PPFM_VEC_UB_BYTES = UB_M_UB + H_UB_ROWS * CV_V * 4;  // h + m 各 32768 B
@@ -736,7 +736,7 @@ struct PpFwdCtx {
 // =====================================================================================
 
 // =====================================================================================
-// R21：任务号 → (n, hv, 列片)。整宽链 pieces=1；余数链按 hybridS 切列。
+// 任务号 → (n, hv, 列片)。整宽链 pieces=1；余数链按 hybridS 切列。
 // =====================================================================================
 struct PpFwdTaskPos {
     int64_t n;
@@ -805,8 +805,8 @@ public:
         wBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_W_BF), CV_BT * CV_K);
         kBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_K_BF), CV_BT * CV_K);
         lBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_L_BF), CV_BT * CV_K);
-        kBf1_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_K_BF_1), CV_BT * CV_K);  // ITER7
-        lBf1_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_L_BF_1), CV_BT * CV_K);  // ITER7
+        kBf1_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_K_BF_1), CV_BT * CV_K);  // 
+        lBf1_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_L_BF_1), CV_BT * CV_K);  // 
         vBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_V_BF), CV_BT * CV_V);
         vTmpF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_VTMP_F32), CV_BT * CV_V);
         vNewBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_VNEW_BF), CV_BT * CV_V);
@@ -831,7 +831,7 @@ public:
         pipe_.InitBuffer(ubBuf_, PPFM_VEC_UB_BYTES);
         // per-subcore 视图：两个 AIV 子核共享同一块 UB，凡"两个子核都会写"的 scratch
         // 都按 subIdx_ 偏移一份，段分区缓冲（kBlk/wBlk/vBlk/scr）保持不偏移。
-        // R0.8：PPFM_UB_SHARE=1 时不再偏移（每个 AIV 子核有独立 bank，见布局注释）。
+        // PPFM_UB_SHARE=1 时不再偏移（每个 AIV 子核有独立 bank，见布局注释）。
         const int32_t sbf = PPFM_UB_SHARE ? 0 : subIdx_ * CV_K;
         const int32_t sf = PPFM_UB_SHARE ? 0 : subIdx_ * CV_K;
         const int32_t sdg = PPFM_UB_SHARE ? 0 : subIdx_ * CV_BT;
@@ -853,15 +853,15 @@ public:
         stateBlkF_ = ubBuf_.Get<float>()[UB_STATE_F_ELEM + sstate];
         extBlkF_ = ubBuf_.Get<float>()[UB_EXT_F_ELEM + sext];
 #if PPFM_H_UB
-        // R7：h 的常驻半步。共享基址（不偏移）：每个 AIV 子核在自己的 bank 里用同一偏移，
-        // 各自存自己那 64 行 —— 正是 R6 里 SPLIT_M 的同一套 bank 语义。
+        // h 的常驻半步。共享基址（不偏移）：每个 AIV 子核在自己的 bank 里用同一偏移，
+        // 各自存自己那 64 行 —— 正是 里 SPLIT_M 的同一套 bank 语义。
         hUb_ = ubBuf_.Get<float>()[UB_H_UB_ELEM];
 #if PPFM_M_UB
-        // R12：m 的常驻半步（同上）
+        // m 的常驻半步（同上）
         mUb_ = ubBuf_.Get<float>()[UB_M_UB_ELEM];
 #endif
 #endif
-        // ITER10：fixpipe SPLIT_M 把两半写到**同一偏移**（各自 bank），这里用共享基址视图
+        // fixpipe SPLIT_M 把两半写到**同一偏移**（各自 bank），这里用共享基址视图
         vTmpUb_ = ubBuf_.Get<float>()[UB_EXT_F_ELEM];
         stateBlkBf_ = ubBuf_.Get<bfloat16_t>()[UB_STATE_BF_ELEM + sstate];
         kBlkBf_ = ubBuf_.Get<bfloat16_t>()[UB_KBLK_BF_ELEM];
@@ -873,13 +873,13 @@ public:
         dbgF_ = ubBuf_.Get<float>()[UB_DBG / 4 + subIdx_ * 16];
 #endif
 
-        // R21：任务空间 = 整宽链（前 hybridBase 条）+ 余数链的列片；hybridS<=1 时退化为原逻辑。
+        // 任务空间 = 整宽链（前 hybridBase 条）+ 余数链的列片；hybridS<=1 时退化为原逻辑。
         const int64_t nChain = t->nSeq * t->Hv;
         const int64_t taskNum = (t->hybridS > 1)
             ? (t->hybridBase + (nChain - t->hybridBase) * t->hybridS)
             : (nChain * static_cast<int64_t>(splitNum_));
         for (int64_t task = coreIdx; task < taskNum; task += static_cast<int64_t>(t->usedAicNum)) {
-            // P5/R21：工作项 = (n, hv, 列块)。s 变化最快 ⇒ 同一条链的两个列块尽量落在不同核上。
+            // P5/工作项 = (n, hv, 列块)。s 变化最快 ⇒ 同一条链的两个列块尽量落在不同核上。
             const PpFwdTaskPos pos_ = DecodePpFwdTask(t, splitNum_, task);
             const int64_t hv = pos_.hv;
             const int64_t n = pos_.n;
@@ -931,14 +931,14 @@ private:
         return expScratch_.GetValue(0);
     }
 
-    // R23a: glast 由调用方算好传入（原本这里又做了一次 GM 标量读）
+    // glast 由调用方算好传入（原本这里又做了一次 GM 标量读）
     __aicore__ inline void SetDecay(int64_t hv, int64_t tGlobal, float glastIn)
     {
         if (ctx_.tiling->gateMode == PPFM_GATE_USE_G) {
             const float glast = PPFM_GLAST_UB ? glastIn
                 : gGm_.GetValue(hv * ctx_.tiling->T + tGlobal);
             const float dc = Exp2Scalar(glast);
-            // ITER4：decayF_ 是全 128 项同值 ⇒ 一次 Duplicate 取代 128 次 SetValue
+            // decayF_ 是全 128 项同值 ⇒ 一次 Duplicate 取代 128 次 SetValue
             Duplicate(decayF_, dc, CV_K);
         } else {
 #if PPFM_KDA_DECAY_VEC
@@ -970,9 +970,9 @@ private:
         // ---- prologue：h = 0（950）----
         Duplicate(row0F_, 0.0f, cb_);
         Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
-        PipeBarrier<PIPE_ALL>();   // ITER4：V -> MTE3 只需一次（源行不变）
+        PipeBarrier<PIPE_ALL>();   // V -> MTE3 只需一次（源行不变）
 #if PPFM_H_UB
-        // R7：h 初值直接落在常驻 UB（本子核那 64 行），GM 上只留 bf16(h) 给 AIC 的 mm1
+        // h 初值直接落在常驻 UB（本子核那 64 行），GM 上只留 bf16(h) 给 AIC 的 mm1
         Duplicate(hUb_, 0.0f, H_UB_ROWS * cb_);
         PipeBarrier<PIPE_V>();
         for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
@@ -993,7 +993,7 @@ private:
         // 整条 h 链偏 1.5e-2；m 链因为用逐行写（见下）反而是对的。
         // 这里改成与 m 初值同款的逐行写法：每行重新 Cast，行间用 PIPE_ALL 隔离。
 #if PPFM_H_UB
-        // R9：h 初值落在常驻 UB；GM 上只留 bf16(h)（逐行写法保持不变，见上面的 A2 实测）
+        // h 初值落在常驻 UB；GM 上只留 bf16(h)（逐行写法保持不变，见上面的 A2 实测）
         Duplicate(hUb_, 0.0f, H_UB_ROWS * cb_);
         PipeBarrier<PIPE_ALL>();
         for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
@@ -1033,7 +1033,7 @@ private:
 #endif
         // m 初值 = I
         // 950：**逐行纯向量构造**（ArithProgression + |k-r| 造对角，省下 64 KiB UB）。
-        // ⚠ 不要用 row0F_.SetValue(r,1) 这类"标量写 UB + 向量写同一块 UB"的组合：
+        // 注意： 不要用 row0F_.SetValue(r,1) 这类"标量写 UB + 向量写同一块 UB"的组合：
         //   实测标量写的落盘顺序不受 PipeBarrier<PIPE_V> 保护，会让个别行丢掉对角 1
         //   （表现为 m 只有 ~0.05% 元素错、max_abs≈1）。
 #if PPFM_ARCH_IS_950
@@ -1043,9 +1043,9 @@ private:
         ArithProgression(row1F_, static_cast<float>(colBase_), 1.0f, cb_);   // row1F_[k] = k
         PipeBarrier<PIPE_V>();
 #if PPFM_M_UB
-        // R12：m 常驻 UB（本子核那 64 行），行范围改成连续半区（逐行 elementwise，数值等价）
+        // m 常驻 UB（本子核那 64 行），行范围改成连续半区（逐行 elementwise，数值等价）
 #if PPFM_M_INIT_BLOCK
-        // R27：每行直接写进块内自己的偏移 ⇒ 行间无 WAR、零栅栏；最后整块 Cast + 一次落盘
+        // 每行直接写进块内自己的偏移 ⇒ 行间无 WAR、零栅栏；最后整块 Cast + 一次落盘
         for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
             Adds(row0F_, row1F_, -static_cast<float>(r), cb_);
             Abs(row0F_, row0F_, cb_);
@@ -1097,7 +1097,7 @@ private:
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
             Duplicate(row0F_, 0.0f, cb_);
             PipeBarrier<PIPE_ALL>();
-            // 只在"本列块包含第 r 列"时写对角 1（P5 列块切分）
+            // 只在"本列块包含第 r 列"时写对角 1
             if (r >= colBase_ && r < colBase_ + cb_) {
                 row0F_.SetValue(r - colBase_, 1.0f);
             }
@@ -1109,7 +1109,7 @@ private:
             PipeBarrier<PIPE_ALL>();       // MTE3 读完才能下一轮覆盖
         }
 #endif
-        // 临时诊断（默认关）：给 AIC 即将写的 C 缓冲预置哨兵。
+        // 临时诊断（当前不启用）：给 AIC 即将写的 C 缓冲预置哨兵。
         //   vTmpF_ = 7.0、t1F_ = 5.0 ⇒ 若 AIC 的 fixpipe 正常覆盖，chunk0 的结果不受影响；
         //   若结果里出现 7/5 量级的残留，说明 AIC→AIV 的 C 落点/可见性有问题。
 #if PPFM_SENTINEL_PROBE
@@ -1122,10 +1122,10 @@ private:
         PipeBarrier<PIPE_ALL>();
 #endif
         const int64_t nt = (len + CV_BT - 1) / CV_BT;
-        // ITER7（P3）：先独立做 chunk 0 的 staging；循环内把 staging(c+1) 提到
+        // 先独立做 chunk 0 的 staging；循环内把 staging(c+1) 提到
         // 「等 dH/T2(c)」之前 ⇒ staging 与 AIC 的 mm2/mm4(c) 重叠（原来 AIV 在这里纯等）
 #if PPFM_DH_CV
-        // R6/R6b 首 credit：dH 与 T2 的槽各先归还一次，否则 AIC 第一次 CV 写入会死等。
+        // /首 credit：dH 与 T2 的槽各先归还一次，否则 AIC 第一次 CV 写入会死等。
         // 每个 AIV 子核各置一次（硬件映射到 id / id+PPFM_SUBFLAG_STRIDE），AIC 侧按 subblock 各等一次。
         CrossCoreSetFlag<0x4, PIPE_V>(static_cast<uint16_t>(kFlagDhFree));
 #if PPFM_T2_CV
@@ -1144,11 +1144,11 @@ private:
                 // dH/T2(c-1) 已在上一轮末尾等到；decayPrevF_ 此时是 decay(c-1)
                 ApplyStateUpdates(true, c - 1);
             }
-            // ITER5：staging 产物 + 本 chunk 状态一次通知（原来分 kFlagInputs / kFlagState 两次）
+            // staging 产物 + 本 chunk 状态一次通知（原来分 kFlagInputs / kFlagState 两次）
             AivSetToAic(kFlagInputs);
             UpdateVNew(hv, t0, rows);
             if (c + 1 < nt) {
-                // ITER7：保存本 chunk 的 decay（下一轮推迟状态更新要用），随后 staging 覆盖 decayF_
+                // 保存本 chunk 的 decay（下一轮推迟状态更新要用），随后 staging 覆盖 decayF_
                 Adds(decayPrevF_, decayF_, 0.0f, CV_K);
                 PipeBarrier<PIPE_ALL>();
                 const int64_t t0n = bos + (c + 1) * CV_BT;
@@ -1159,7 +1159,7 @@ private:
             AivWaitFromAic(kFlagDH);
             // 读别的核（AIC）写的 GM 前必须让本核缓存行失效，否则会读到过期数据
             // （与 CANN matmul_client.h 中"读跨核 GM flag 前先 DCCI"的用法一致）
-            // ⚠ R15：原来只失效了**偶数奇偶**的 dHF_/t2F_，而下面按 chunk 奇偶读的是
+            // 注意： 原来只失效了**偶数奇偶**的 dHF_/t2F_，而下面按 chunk 奇偶读的是
             //   `dhBuf`/`t2Buf`（两份）⇒ 奇数 chunk 读的 `dHF1_`/`t2F1_` 从来没被失效过，
             //   命中旧行就会把过期 T2 减进 m（表现为 m 半边小范围错、h 正常）。
             //   这个缺口在 A2 上（PPFM_LEGACY_CACHEOPS=1）才暴露得出来；补齐两份。
@@ -1195,7 +1195,7 @@ private:
         const int64_t hmBase = ((n * t->Hv + hv) * CV_K) * (CV_V + CV_K);
 #if PPFM_H_UB
 #if PPFM_EP_MERGE
-        // R25：h/m 各 1 次跨步 DataCopy 取代 64 次逐行搬 + 128 次 PIPE_ALL
+        // h/m 各 1 次跨步 DataCopy 取代 64 次逐行搬 + 128 次 PIPE_ALL
         PipeBarrier<PIPE_V>();   // 状态更新的 V 运算先落地
         {
             DataCopyParams epParams{
@@ -1221,7 +1221,7 @@ private:
         }
         PipeBarrier<PIPE_ALL>();
 #else
-        // R7/R12：h、m 都直接从常驻 UB 写 hm（同一套连续半区分配）
+        // /h、m 都直接从常驻 UB 写 hm（同一套连续半区分配）
         for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
             DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + colBase_],
                      hUb_[(r - subIdx_ * H_UB_ROWS) * cb_], cb_);
@@ -1342,7 +1342,7 @@ private:
     // staging：W / k / left / v（bf16，尾块零填充）+ dg / decay
     __aicore__ inline void StageChunk(int64_t n, int64_t hv, int64_t t0, int64_t rows, int32_t slot)
     {
-        // ITER7：k/left 按 chunk 奇偶写不同 GM 槽，使 staging 可与上一 chunk 的 mm2/mm4 重叠
+        // k/left 按 chunk 奇偶写不同 GM 槽，使 staging 可与上一 chunk 的 mm2/mm4 重叠
         GlobalTensor<bfloat16_t> &kOut = ((slot & 1) != 0) ? kBf1_ : kBf_;
         GlobalTensor<bfloat16_t> &lOut = ((slot & 1) != 0) ? lBf1_ : lBf_;
         const auto *t = ctx_.tiling;
@@ -1354,13 +1354,13 @@ private:
             glast = gGm_.GetValue(hv * t->T + (t0 + rows - 1));
 #endif
             // 向量化：dg[t] = exp2(glast - g[t])（整块一次算完，替代逐 token 标量 Exp）
-            // ⚠ 尾块 rows 不是 8（32B）的整数倍时：DataCopy 的长度必须 32B 对齐，
+            // 注意： 尾块 rows 不是 8（32B）的整数倍时：DataCopy 的长度必须 32B 对齐，
             //    否则是 UB（越界读）；这里改用 DataCopyPad（blockLen 按字节给）。
             DataCopyExtParams gParams{1, static_cast<uint32_t>(rows * sizeof(float)), 0, 0, 0};
             DataCopyPad(gBlkF_, gGm_[hv * t->T + t0], gParams, {false, 0, 0, 0});
             PipeBarrier<PIPE_ALL>();
 #if PPFM_GLAST_UB
-            // R23a: 同一个值已经在 UB 里（rows-1 就是本 chunk 最后一个 token 的 g）
+            // 同一个值已经在 UB 里（rows-1 就是本 chunk 最后一个 token 的 g）
             glast = gBlkF_.GetValue(rows - 1);
 #endif
             Muls(gBlkF_, gBlkF_, -1.0f, static_cast<int32_t>(rows));
@@ -1369,7 +1369,7 @@ private:
             PipeBarrier<PIPE_V>();
             Muls(gBlkF_, gBlkF_, 0.6931471805599453f, static_cast<int32_t>(rows));
             PipeBarrier<PIPE_V>();
-            // ⚠ 先整块清零再覆盖前 rows 个：Duplicate 的目的地址必须 32B 对齐，
+            // 注意： 先整块清零再覆盖前 rows 个：Duplicate 的目的地址必须 32B 对齐，
             //    rows=36 时 dgF_[rows] 落在 144B（非 32B 整数倍）→ VEC 访问 UB 非对齐
             //    （error code 340）直接 aicore exception。
             Duplicate(dgF_, 0.0f, static_cast<int32_t>(CV_BT));
@@ -1383,24 +1383,24 @@ private:
         PipeBarrier<PIPE_ALL>();
         SetDecay(hv, t0 + rows - 1, glast);
         // ---- staging：**按子核整半区（32 行）分配**，段内自己完成"清零/搬运/left 计算/落盘"----
-        // R19：原来切成 2×16 行是历史遗留 —— 子核 i 拿的是连续半区（`seg = i*SEG_PER_SUB + k`
-        // ⇒ 行 [i*32,(i+1)*32)），R11 之后缓冲也正好按 32 行分配 ⇒ **一段装齐**。
+        // 原来切成 2×16 行是历史遗留 —— 子核 i 拿的是连续半区（`seg = i*SEG_PER_SUB + k`
+        // ⇒ 行 [i*32,(i+1)*32)），之后缓冲也正好按 32 行分配 ⇒ **一段装齐**。
         // 依据：仿真流水显示 AIV 的 MTE3 占 53%、其中 UB→GM 的 `MOV_SRC_TO_DST_ALIGN` 平均
-        // ~520 cycle/条（纯 latency）⇒ 段数减半最直接（对应参考文档 §10.2"row tile 太小"）。
+        // ~520 cycle/条（纯 latency）⇒ 段数减半最直接（对应参考文档 "row tile 太小"）。
         constexpr int32_t SEG = PPFM_SEGROWS;                 // 32
-        // ITER8（A2）：段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
+        // 段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
         // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
         constexpr int32_t SEG_PER_SUB = (CV_BT / SEG) / PPFM_SUB;
         // 满 chunk 时 AIC 会直接读输入里的 w/k ⇒ 这里不必再 staging 它们
         const bool directInputs = (PPFM_AIC_DIRECT_INPUTS != 0) && (rows == CV_BT);
-        // R14：w 只在满 chunk 时交给 AIC 直读（省掉 AIV 的 w 读 + wBf_ 写）
+        // w 只在满 chunk 时交给 AIC 直读（省掉 AIV 的 w 读 + wBf_ 写）
         const bool directW = (PPFM_AIC_DIRECT_W != 0) && (rows == CV_BT);
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
-            // R11：**UB 侧一律用子核本地段偏移**（`lo`），只有 GM 侧才用全局行号 `off`。
-            // 依据：R6 已证每个 AIV 子核有独立 UB bank ⇒ 段分区缓冲（kBlk/wBlk/vBlk/scr）
+            // **UB 侧一律用子核本地段偏移**（`lo`），只有 GM 侧才用全局行号 `off`。
+            // 依据：已证每个 AIV 子核有独立 UB bank ⇒ 段分区缓冲（kBlk/wBlk/vBlk/scr）
             // 每个子核只需放自己那 `SEG_PER_SUB*SEG = 32` 行，尺寸直接砍半（省 48 KiB）。
-            // 这正是最初 R0.7 里被误判为"做不到"的那条（当时按共享 UB 推导）。
+            // 这正是最初 里被误判为"做不到"的那条（当时按共享 UB 推导）。
             const int32_t lo = off - subIdx_ * (CV_BT / PPFM_SUB);
             const int32_t valid = (rows > off) ? ((rows - off < SEG) ? (rows - off) : SEG) : 0;
             // P1a：段间复用同一组 UB（kBlk/wBlk/vBlk/scr）。事件语义是"该流水此前所有操作
@@ -1410,7 +1410,7 @@ private:
             AIV_WAIT_MTE3_MTE2();
             AIV_SET_MTE3_V();
             AIV_WAIT_MTE3_V();
-            // ITER2：只有尾块需要零填充（整段时下面的 DataCopy 会写满整段）
+            // 只有尾块需要零填充（整段时下面的 DataCopy 会写满整段）
             if (valid < SEG) {
                 Duplicate(kBlkBf_[lo * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
                 Duplicate(wBlkBf_[lo * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
@@ -1474,15 +1474,15 @@ private:
             // 段末：本段两次 MTE3（kOut/wBf_ 与 lOut）读完后，下一段才能覆盖对应 UB
         }
         PipeBarrier<PIPE_ALL>();
-        // ITER2：dg / decay 落 GM 只是调试用途（只有 PPFM_DIAG 下的 ProbeF32 会读），
-        //        默认关掉，每 chunk 省 2 次 DataCopy + 2 次全栅栏
+        // dg / decay 落 GM 只是调试用途（只有 PPFM_DIAG 下的 ProbeF32 会读），
+        //        当前不启用，每 chunk 省 2 次 DataCopy + 2 次全栅栏
 #if PPFM_DIAG
         DataCopy(gateF_[WS_GATE_DG / 4], dgF_, CV_BT);
         PipeBarrier<PIPE_ALL>();
         DataCopy(gateF_[WS_GATE_DECAY / 4], decayF_, CV_K);
         PipeBarrier<PIPE_ALL>();
 #endif
-        // ITER5：不再在这里发通知——与状态更新合并成一次（见 ProcessChain）
+        // 不再在这里发通知——与状态更新合并成一次（见 ProcessChain）
     }
 
     __aicore__ inline void UpdateVNew(int64_t hv, int64_t t0, int64_t rows)
@@ -1511,7 +1511,7 @@ private:
             PipeBarrier<PIPE_ALL>();
         }
 #endif
-        // ITER9：vTmp 走 GM 时保留过渡探读（A2 走 UB 时才省掉）
+        // vTmp 走 GM 时保留过渡探读（A2 走 UB 时才省掉）
 #if PPFM_LEGACY_PROBE_READS
 #if !PPFM_VTMP_UB
         DataCopy(row2F_, vTmpF_, 8);
@@ -1540,9 +1540,9 @@ private:
 #endif
         // v_new = (v - vTmp) · dg → bf16（逐行；整块版本会引入 ~0.4% 的 GDN 偏差，待查）
         // v_new = (v - vTmp)·dg → bf16：同样**按子核整半区（32 行）**，段内做完 Cast/Sub/缩放/Cast/落盘
-        // R19：同 StageLeft —— 2×16 合并成 1×32（少一半 UB→GM 小搬运与段间同步对）
+        // 同 StageLeft —— 2×16 合并成 1×32（少一半 UB→GM 小搬运与段间同步对）
         constexpr int32_t SEG = PPFM_SEGROWS;                 // 32
-        // ITER8（A2）：段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
+        // 段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
         // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
         constexpr int32_t SEG_PER_SUB = (CV_BT / SEG) / PPFM_SUB;
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
@@ -1562,11 +1562,11 @@ private:
             }
 #endif
 #endif
-            // R11：UB 侧用子核本地段偏移（GM 侧仍是全局 off）
+            // UB 侧用子核本地段偏移（GM 侧仍是全局 off）
             Cast(scrF_[lo * cb_], vBlkBf_[lo * cb_], RoundMode::CAST_NONE, SEG * cb_);
             PipeBarrier<PIPE_V>();
 #if PPFM_VTMP_UB
-            // ITER10：从共享基址视图读本子核那半（lo ∈ {0, SEG}）
+            // 从共享基址视图读本子核那半（lo ∈ {0, SEG}）
             Sub(scrF_[lo * cb_], scrF_[lo * cb_], vTmpUb_[lo * cb_], SEG * cb_);
 #else
             Sub(scrF_[lo * cb_], scrF_[lo * cb_], extBlkF_[lo * cb_], SEG * cb_);
@@ -1592,16 +1592,16 @@ private:
             Cast(scrBf_[lo * cb_], scrF_[lo * cb_], RoundMode::CAST_RINT, SEG * cb_);
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
-            // ⚠ R11：UB 源必须用子核本地段偏移（`lo`），只有 GM 目标用全局 `off`
+            // 注意： UB 源必须用子核本地段偏移（`lo`），只有 GM 目标用全局 `off`
             DataCopy(vNewBf_[off * cb_], scrBf_[lo * cb_], SEG * cb_);
         }
         // 各子核只写自己那两段（off 互不相交），循环内无需段间信用；
         // 出口保留一次全栅栏，供后面的 staging 复用 scrF_/scrBf_（跨函数边界）。
         PipeBarrier<PIPE_ALL>();
         // bf16(T1)：同样按段分配
-        // ITER8（A2）：段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
+        // 段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
         // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
-        // ITER8（A2）：SEG_PER_SUB 已在 v_new 循环前声明（同一函数内不能重复定义）
+        // SEG_PER_SUB 已在 v_new 循环前声明（同一函数内不能重复定义）
 #if !PPFM_T1_FIXPIPE_BF16
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
@@ -1639,7 +1639,7 @@ private:
         GlobalTensor<float> &dhBuf = evenChunk ? dHF_ : dHF1_;
         GlobalTensor<float> &t2Buf = evenChunk ? t2F_ : t2F1_;
 #if PPFM_DH_CV
-        // R6：dH 在本子核的 UB bank 里（单槽），不再从 GM 回读
+        // dH 在本子核的 UB bank 里（单槽），不再从 GM 回读
         LocalTensor<float> dHUb = ubBuf_.Get<float>()[UB_DH_CV_ELEM];
 #endif
         // 同 UpdateVNew 的过渡探读：dH / T2 也是 AIC 刚写、本核刚读的 GM
@@ -1650,17 +1650,17 @@ private:
         PipeBarrier<PIPE_ALL>();
 #endif  // PPFM_LEGACY_PROBE_READS
         // 每 RB 行一次搬运：块内逐行 Muls（廉价、无需栅栏），块级 Add/Sub/Cast
-        // R13：h/m 常驻 UB 时用 PPFM_SBRB（一块 64 行）；A2/回退路径仍是 PPFM_RB=32
+        // h/m 常驻 UB 时用 PPFM_SBRB（一块 64 行）；A2/回退路径仍是 PPFM_RB=32
         constexpr int32_t RB = PPFM_SBRB;
 #if PPFM_H_UB
-        // R7/R9：h 常驻 UB 时本子核只持有自己那 64 行 ⇒ h 相位必须按**连续半区**分配
+        // /h 常驻 UB 时本子核只持有自己那 64 行 ⇒ h 相位必须按**连续半区**分配
         // （子核 i 负责行 [i*CV_K/2, (i+1)*CV_K/2)）。状态更新是逐行 elementwise，
         // 换分法数值等价（GVA/KDA 的 decay 索引仍是全局行号）。
         const int32_t rbBeg = subIdx_ * H_UB_ROWS;
         const int32_t rbEnd = rbBeg + H_UB_ROWS;
         const int32_t rbStep = RB;
 #elif PPFM_DH_CV
-        // R6：SPLIT_M 是「连续半区」⇒ 子核 i 负责行 [i*CV_K/2, (i+1)*CV_K/2)。
+        // SPLIT_M 是「连续半区」⇒ 子核 i 负责行 [i*CV_K/2, (i+1)*CV_K/2)。
         const int32_t rbBeg = subIdx_ * (CV_K / PPFM_SUB);
         const int32_t rbEnd = rbBeg + (CV_K / PPFM_SUB);
         const int32_t rbStep = RB;
@@ -1671,12 +1671,12 @@ private:
 #endif
         for (int32_t rb = rbBeg; rb < rbEnd; rb += rbStep) {
 #if PPFM_H_UB
-            // R7：h 常驻 UB（本子核那 64 行）⇒ 就地更新，无 MTE2 载入、无 fp32 落盘。
+            // h 常驻 UB（本子核那 64 行）⇒ 就地更新，无 MTE2 载入、无 fp32 落盘。
             // 只有 bf16(h) 仍要写 GM —— 那是 AIC mm1 的输入。
             const int32_t lo = rb - rbBeg;
 #if !PPFM_DH_CV
-            // R9（A2/A3）：dH 仍从 GM 回读，但**提前发**（与下面 h 的 Muls 重叠）
-            // ⚠ 必须显式补 WAR 序：上一块（或上一相位）对 extBlkF_ 的 **V 读**要先完成，
+            // （A2/A3）：dH 仍从 GM 回读，但**提前发**（与下面 h 的 Muls 重叠）
+            // 注意： 必须显式补 WAR 序：上一块（或上一相位）对 extBlkF_ 的 **V 读**要先完成，
             //   否则这一个 MTE2 会覆盖它、dH 只写进去一部分 → h 的对应行整行错。
             //   （950 不踩这个坑是因为它的 dH 走 UB 槽，h 相位根本不碰 extBlkF_。）
             AIV_SET_MTE3_MTE2();
@@ -1720,7 +1720,7 @@ private:
             AIV_WAIT_V_MTE3();   // V -> MTE3
             DataCopy(hBf_[rb * cb_], stateBlkBf_, RB * cb_);
 #else
-            // ITER2：第一次搬运后的全栅栏冗余——紧随其后第二次搬运之后还有一次，
+            // 第一次搬运后的全栅栏冗余——紧随其后第二次搬运之后还有一次，
             //        足以保证两次 MTE2 都在 Muls/Add 之前完成
             // P1a：上一轮的 MTE3（写 hF32_/hBf_）读的是同一组 UB，先等它读完再覆盖
             AIV_SET_MTE3_MTE2();
@@ -1786,7 +1786,7 @@ private:
 #endif
         PipeBarrier<PIPE_ALL>();
 #if PPFM_T2_CV
-        // R6b：T2 也在本子核的 UB bank 里（单槽，同样 SPLIT_M 连续半区）⇒ 本相位必须
+        // T2 也在本子核的 UB bank 里（单槽，同样 SPLIT_M 连续半区）⇒ 本相位必须
         // 用与 h 相位一致的**连续半区**行分配（逐行 elementwise，数值等价）。
         LocalTensor<float> t2Ub = ubBuf_.Get<float>()[UB_T2_CV_ELEM];
         const int32_t mbBeg = subIdx_ * (CV_K / PPFM_SUB);
@@ -1794,7 +1794,7 @@ private:
         for (int32_t rb = mbBeg; rb < mbEnd; rb += RB) {
             const int32_t lo = rb - mbBeg;
 #if PPFM_M_UB
-            // R12：m 常驻 UB ⇒ 就地更新（无 MTE2 载入、无 fp32 落盘），只留 bf16(m) 给 AIC 的 mm3
+            // m 常驻 UB ⇒ 就地更新（无 MTE2 载入、无 fp32 落盘），只留 bf16(m) 给 AIC 的 mm3
             if (useG) {
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(mUb_[lo * cb_], mUb_[lo * cb_], dc, RB * cb_);
@@ -1930,12 +1930,12 @@ private:
     LocalTensor<float> stateBlkF_;
     LocalTensor<float> extBlkF_;
 #if PPFM_H_UB
-    LocalTensor<float> hUb_;          // R7：常驻 UB 的 h 半步（本子核的 64 行 × cb_）
+    LocalTensor<float> hUb_;          // 常驻 UB 的 h 半步（本子核的 64 行 × cb_）
 #endif
 #if PPFM_M_UB
-    LocalTensor<float> mUb_;          // R12：常驻 UB 的 m 半步（同上）
+    LocalTensor<float> mUb_;          // 常驻 UB 的 m 半步（同上）
 #endif
-    LocalTensor<float> vTmpUb_;   // ITER10（A2）：共享基址的 vTmp 落点视图
+    LocalTensor<float> vTmpUb_;   // 共享基址的 vTmp 落点视图
     LocalTensor<bfloat16_t> stateBlkBf_;
     LocalTensor<bfloat16_t> kBlkBf_;
     LocalTensor<bfloat16_t> wBlkBf_;
@@ -1947,7 +1947,7 @@ private:
     int32_t splitNum_ = 1;   // P5 列块数（1 或 2），由 tiling.colSplit 决定
     int32_t cb_ = CV_V;      // P5 本工作项的列宽（128 或 64）
     int32_t colBase_ = 0;    // P5 本工作项列块在整条链里的起始列
-    int64_t curN_ = 0;   // ITER11：UB 诊断探针要定位本链 hm 地址
+    int64_t curN_ = 0;   // UB 诊断探针要定位本链 hm 地址
     GlobalTensor<bfloat16_t> kGm_;
     GlobalTensor<bfloat16_t> wGm_;
     GlobalTensor<bfloat16_t> vGm_;
@@ -1962,8 +1962,8 @@ private:
     GlobalTensor<bfloat16_t> wBf_;
     GlobalTensor<bfloat16_t> kBf_;
     GlobalTensor<bfloat16_t> lBf_;
-    GlobalTensor<bfloat16_t> kBf1_;  // ITER7
-    GlobalTensor<bfloat16_t> lBf1_;  // ITER7
+    GlobalTensor<bfloat16_t> kBf1_;  // 
+    GlobalTensor<bfloat16_t> lBf1_;  // 
     GlobalTensor<bfloat16_t> vBf_;
     GlobalTensor<float> vTmpF_;
     GlobalTensor<bfloat16_t> vNewBf_;
@@ -2005,8 +2005,8 @@ public:
         wBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_W_BF), CV_BT * CV_K);
         kBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_K_BF), CV_BT * CV_K);
         lBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_L_BF), CV_BT * CV_K);
-        kBf1_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_K_BF_1), CV_BT * CV_K);  // ITER7
-        lBf1_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_L_BF_1), CV_BT * CV_K);  // ITER7
+        kBf1_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_K_BF_1), CV_BT * CV_K);  // 
+        lBf1_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_L_BF_1), CV_BT * CV_K);  // 
         hBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_H_BF), CV_K * CV_V);
 #if PPFM_DIAG
         diagG_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_DIAG), 16);
@@ -2025,7 +2025,7 @@ public:
         // PPFM_AIC_DIRECT_INPUTS：满 chunk 时直接读输入张量里的 w/k（省掉 AIV 的 staging）
         wIn_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ctx_.w));
         kIn_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ctx_.k));
-        // R21：与 AIV 侧同一套任务解码。
+        // 与 AIV 侧同一套任务解码。
         const int64_t nChain = t->nSeq * t->Hv;
         const int64_t taskNum = (t->hybridS > 1)
             ? (t->hybridBase + (nChain - t->hybridBase) * t->hybridS)
@@ -2046,9 +2046,9 @@ public:
                 ProcessChunk(c, hv, bos + c * CV_BT, rows);
             }
 #if PPFM_DH_CV
-            // R6/R6b 尾 drain：把本链 dH 槽与 T2 槽的归还信用收干净（每链 AIV prime 1 次、
+            // /尾 drain：把本链 dH 槽与 T2 槽的归还信用收干净（每链 AIV prime 1 次、
             // 每 chunk set 1 次、这里 wait 1 次 ⇒ 逐链平衡）。对手算子同构做法见 arch35 的
-            // DrainPipeFlags()。
+            // DrainPipeFlags。
             CrossCoreWaitFlag<0x4, PIPE_FIX>(static_cast<uint16_t>(kFlagDhFree));
             CrossCoreWaitFlag<0x4, PIPE_FIX>(
                 static_cast<uint16_t>(kFlagDhFree + PPFM_SUBFLAG_STRIDE));
@@ -2072,14 +2072,14 @@ private:
         const auto *tt = ctx_.tiling;
         const int64_t hk = hv / (tt->hvPerHk == 0 ? 1 : tt->hvPerHk);
         const bool directInputs = (PPFM_AIC_DIRECT_INPUTS != 0) && (rows == CV_BT);
-        // R14：w 由 AIC 直读输入（AIV 不再 staging w、也不写 wBf_）
+        // w 由 AIC 直读输入（AIV 不再 staging w、也不写 wBf_）
         const bool directW = (PPFM_AIC_DIRECT_W != 0) && (rows == CV_BT);
         GlobalTensor<bfloat16_t> wTile =
             directW ? wIn_[(hv * tt->T + t0) * CV_K] : wBf_;
         // ① vTmp[BT,V] = W_c[BT,K] @ bf16(h)[K,V]
-        // ITER5：inputs 与 state 已合并为同一次通知
+        // inputs 与 state 已合并为同一次通知
         AicWaitFromAiv(kFlagInputs);
-        // ⚠ 读别的核（AIV）刚写过的 GM 之前必须让本核的 cache 失效：h/m 每 chunk 都被
+        // 注意： 读别的核（AIV）刚写过的 GM 之前必须让本核的 cache 失效：h/m 每 chunk 都被
         //    AIV 重写，若 AIC 命中自己缓存的旧行，mm1/mm3 就会拿到过期的 h/m
         //    （实测表现为概率性的 h 半边大面积错、m 只是略偏，且随调度时好时坏）。
 #if PPFM_LEGACY_CACHEOPS
@@ -2096,18 +2096,18 @@ private:
 #endif
 #if PPFM_TILE_MMAD
         RunTiledNT(wTile, hBf_, vTmpF_, CV_BT, static_cast<uint32_t>(cb_), CV_K,
-                    /*toUb=*/(PPFM_VTMP_UB != 0));   // ITER9：按宏选择 A2 UB 落点
+                    /*toUb=*/(PPFM_VTMP_UB != 0));   // 按宏选择 A2 UB 落点
 #else
         RunMmadNT(wTile, hBf_, vTmpF_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #endif
 
 #if PPFM_T1_FIXPIPE_BF16
-        // ---- R20（P1-1「m 链错相」的等价低风险版）：**mm1 一做完就通知 AIV** ----
+        // ---- ：**mm1 一做完就通知 AIV** ----
         // 原实现是"mm1 + mm3 都做完才 set kFlagHalf1"。但 AIV 的 `v_new` 只需要 mm1 的 C（vTmp）；
         // T1（mm3 的 C）只有 AIC 自己用（mm4 的 B）⇒ 通知提前到 mm1 之后，
         // AIC 的 mm3/mm4 就落进 AIV 的 `v_new` 窗口里（正是"错相"要的效果，
         // 但**不动 m 链相位、flag 数量完全不变**）。
-        // ⚠ 仅当 `PPFM_T1_FIXPIPE_BF16=1`（T1 直接以 bf16 落 GM、AIV 不消费）时成立。
+        // 注意： 仅当 `PPFM_T1_FIXPIPE_BF16=1`（T1 直接以 bf16 落 GM、AIV 不消费）时成立。
 #if !PPFM_VTMP_UB
 #if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
@@ -2124,7 +2124,7 @@ private:
 #if PPFM_TILE_MMAD
 #if PPFM_T1_FIXPIPE_BF16
         // fixpipe 直接把 T1 量化成 bf16 落 t1Bf_（mm4 的 B 操作数），AIV 侧不再往返
-        // R18：A（=W）复用 mm1 已经搬进 L1 的那一份，省一次 16 KiB 的 GM→L1
+        // A（=W）复用 mm1 已经搬进 L1 的那一份，省一次 16 KiB 的 GM→L1
         RunTiledNT(wTile, mBf_, t1Bf_, CV_BT, static_cast<uint32_t>(cb_), CV_K,
                    /*toUb=*/false, /*keepA=*/true);
 #else
@@ -2134,7 +2134,7 @@ private:
 #else
         RunMmadNT(wTile, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #endif
-        // ⚠ 写侧也要 clean（写回），只靠读者 DCCI 不够：FIX 写回可能还停在写缓冲里，
+        // 注意： 写侧也要 clean（写回），只靠读者 DCCI 不够：FIX 写回可能还停在写缓冲里，
         //   此时 AIV 即便 DCCI 也会读到旧值。实测（PPFM_DIAG 指纹）：AIV 读到 vTmp 全 0，
         //   而 AIC 实际写了 -0.013/+0.0092 → v_new 退化成 v，h 半边随机整头崩（m 不受影响）。
 #if !PPFM_T1_FIXPIPE_BF16
@@ -2150,7 +2150,7 @@ private:
                                  DcciDst::CACHELINE_OUT>(t1F_);
 #endif
 #if !PPFM_T1_FIXPIPE_BF16
-        // ⚠ 正式原语：DDR 数据同步屏障——保证 C 的写回对其他核可见后再抬 flag。
+        // 注意： 正式原语：DDR 数据同步屏障——保证 C 的写回对其他核可见后再抬 flag。
         //   诊断版实验表明竞态是"flag 已到、写回仍在途"的时序窗口（加探针即掩盖）。
 #if PPFM_LEGACY_CACHEOPS
         DataSyncBarrier<MemDsbT::DDR>();
@@ -2158,8 +2158,8 @@ private:
         AicSetToAiv(kFlagHalf1);
 #endif
 
-        // ---- R8：把 **m 链的 mm4（T2）提前到「等 v_new」之前** ----
-        // 依据（§27 的 profile）：每 chunk 里 AIC 与 AIV 几乎完全串行 —— 两边的忙时都 ≈ 算子时长
+        // ---- 把 **m 链的 mm4（T2）提前到「等 v_new」之前** ----
+        // 依据（的 profile）：每 chunk 里 AIC 与 AIV 几乎完全串行 —— 两边的忙时都 ≈ 算子时长
         // （3069 / 3099 vs 3103 µs），而各自 pipe 只 52% / 92% 忙 ⇒ 卡在"乒乓"的关键路径上，不在吞吐。
         // mm4 = leftᵀ @ bf16(T1) 只依赖 left(c)（staging 已由 kFlagInputs 保证）与 T1(c)（刚算完），
         // **与 h 链的 v_new 无关** ⇒ 提前后可与 AIV 的 v_new 相位重叠，AIC 关键路径上少一个 MMAD；
@@ -2176,7 +2176,7 @@ private:
                                  DcciDst::CACHELINE_OUT>(t1Bf_);
 #endif
 #if PPFM_T2_CV
-        // R6b：T2 直落 UB 槽（单槽）
+        // T2 直落 UB 槽（单槽）
         RunTiledTAUb(lIn, t1Bf_, CV_K, static_cast<uint32_t>(cb_), CV_BT,
                      UB_T2_CV, static_cast<uint16_t>(kFlagT2Free));
 #else
@@ -2185,7 +2185,7 @@ private:
 
         // ② dH[K,V] = k_c^T @ bf16(v_new)[BT,V]
         AicWaitFromAiv(kFlagVNew);
-        // ITER7：按 chunk 奇偶取 k/left 槽（与 AIV staging 写入槽一致）
+        // 按 chunk 奇偶取 k/left 槽（与 AIV staging 写入槽一致）
         GlobalTensor<bfloat16_t> &kIn = ((c & 1) != 0) ? kBf1_ : kBf_;
 
         // 满 chunk：k 也直接来自输入（AIV 不再写 kBf_）
@@ -2199,7 +2199,7 @@ private:
                                  DcciDst::CACHELINE_OUT>(vNewBf_);
 #endif
 #if PPFM_DH_CV
-        // R6：dH 的 C 直落 UB 槽（单槽），不再写 GM dHF_
+        // dH 的 C 直落 UB 槽（单槽），不再写 GM dHF_
         RunTiledTAUb(kTile, vNewBf_, CV_K, static_cast<uint32_t>(cb_), CV_BT,
                      UB_DH_CV, static_cast<uint16_t>(kFlagDhFree));
 #else
@@ -2239,7 +2239,7 @@ private:
 #if PPFM_TILE_MMAD
     // ---- 手写 tile 级（增量 A1）：GM→L1→L0A/L0B→MMAD→C 回写（落点仍是 GM）----
     // 目的：先用与 BlockMmad 相同的落点验证 tile/MMAD 数值一致；A5 的 L0C→UB 在 A2 增量里接。
-    // ITER8（A2）：toUb=true 时 C 落 UB_EXT_F 区的共享槽（fixpipe SPLIT_M），否则仍落 gmC
+    // toUb=true 时 C 落 UB_EXT_F 区的共享槽（fixpipe SPLIT_M），否则仍落 gmC
     // CT = C 的元素类型：float（默认）或 bfloat16_t（fixpipe 直接按输入 dtype 量化，省掉
     // AIV 侧的"读回 fp32 → Cast → 写 bf16"整条回路，见 PPFM_T1_FIXPIPE_BF16）。
     template <class CT>
@@ -2272,7 +2272,7 @@ private:
             Catlass::Arch::PositionL1{});
         typename MmTileCopyNT::template CopyGmToL1A<decltype(bA)> copyG2LA;
         typename MmTileCopyNT::template CopyGmToL1B<decltype(bB)> copyG2LB;
-        // R18：mm1 与 mm3 的 A 操作数都是同一个 `W`（同 shape、同 L1 槽）⇒ 第二次不必重搬。
+        // mm1 与 mm3 的 A 操作数都是同一个 `W`（同 shape、同 L1 槽）⇒ 第二次不必重搬。
         if (!keepA) {
             copyG2LA(tL1A, bA);
         }
@@ -2305,7 +2305,7 @@ private:
             bool handled = false;
 #if PPFM_ARCH_IS_950
             if (toUb) {
-                // ITER8（A2）：写进 UB_EXT_F 区（64x128 fp32 = 32KB，正好是该区尺寸）。
+                // 写进 UB_EXT_F 区（64x128 fp32 = 32KB，正好是该区尺寸）。
                 // SPLIT_M 语义：整块的「前一半行」落在该地址的低半区、「后一半行」落高半区，
                 // 与「段按连续半区分配 subcore」对齐 ⇒ 两个子核各读自己那半。
                 AscendC::LocalTensor<float> vTmpUb(AscendC::TPosition::VECCALC, UB_EXT_F, CV_BT * CV_V);
@@ -2322,7 +2322,7 @@ private:
 #endif
             if (!handled) {
                 MmCopyL0CToGm<decltype(bC)> copyC;
-                // ⚠ 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
+                // 注意： 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
                 //    批处理变体，l0Batch=0 ⇒ fixpipe 一个块都不搬，C 恒为初值 0。
                 copyC(bC, tL0C, static_cast<uint8_t>(0));
             }
@@ -2391,7 +2391,7 @@ private:
         WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 
         MMTACopyL0CToGm<decltype(bC)> copyC;
-        // ⚠ 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
+        // 注意： 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
         //    批处理变体，l0Batch=0 ⇒ fixpipe 一个块都不搬，C 恒为初值 0。
         copyC(bC, tL0C, static_cast<uint8_t>(0));
         SetFlag<HardEvent::FIX_M>(EVENT_ID3);
@@ -2400,7 +2400,7 @@ private:
     }
 
 #if PPFM_DH_CV
-    // ---- R6/R6b：C 走 L0C->UB 的 TA 版本（mm2 = dH、mm4 = T2）----
+    // ---- /C 走 L0C->UB 的 TA 版本（mm2 = dH、mm4 = T2）----
     // L1/L0 装载与 MMAD 与 RunTiledTA 完全相同，只把出口从 GM 换成 UB 槽；
     // SPLIT_M 把 C 的 M 分成两半、分别写进两个 AIV 子核**各自 bank 的同一偏移**。
     __aicore__ inline void RunTiledTAUb(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
@@ -2521,8 +2521,8 @@ private:
     int32_t colBase_ = 0;    // P5 本工作项列块起始列（AIC 侧只用于诊断/一致性）
     GlobalTensor<bfloat16_t> wIn_;   // PPFM_AIC_DIRECT_INPUTS：输入 w 视图
     GlobalTensor<bfloat16_t> kIn_;   // PPFM_AIC_DIRECT_INPUTS：输入 k 视图
-    GlobalTensor<bfloat16_t> kBf1_;  // ITER7
-    GlobalTensor<bfloat16_t> lBf1_;  // ITER7
+    GlobalTensor<bfloat16_t> kBf1_;  // 
+    GlobalTensor<bfloat16_t> lBf1_;  // 
     GlobalTensor<bfloat16_t> hBf_;
     GlobalTensor<bfloat16_t> mBf_;
     GlobalTensor<bfloat16_t> vNewBf_;

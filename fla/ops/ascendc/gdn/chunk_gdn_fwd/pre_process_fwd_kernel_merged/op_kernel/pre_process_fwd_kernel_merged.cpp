@@ -5,15 +5,15 @@
  * ============================ Stage 表（每 chunk 一轮跨核流水）============================
  * | 阶段      | 执行 | 动作                                                      | 结束同步            |
  * | --------- | ---- | --------------------------------------------------------- | ------------------- |
- * | prologue  | AIV  | h ← 0、m ← I（fp32 常驻 UB，bf16 落 GM 供 AIC 的 mm1/mm3） | 并入 kFlagInputs(1) |
+ * | prologue | AIV | h←0、m←I（fp32 常驻 UB；bf16 落 GM 供 AIC） | 并入 kFlagInputs(1) |
  * | Stage c   | AIV  | 载入 W/k/v(+gate) → left/decay；尾块零填充                  | kFlagInputs(1)      |
  * | ①③        | AIC  | vTmp = W_c @ bf16(h)；T1 = W_c @ bf16(m)                    | kFlagHalf1(3)       |
  * | v_new     | AIV  | v_new = dg ⊙ (v − vTmp) → bf16(v_new)                       | kFlagVNew(4)        |
  * | ②         | AIC  | dH = k_c^T @ bf16(v_new)                                    | 与 ④ 合并           |
- * | h 相位    | AIV  | h = decay ⊙ h + dH（就地，bf16(h) 落 GM）                    | 并入 kFlagInputs(1) |
+ * | h 相位 | AIV | h = decay⊙h + dH（就地，bf16(h) 落 GM） | 并入 kFlagInputs(1) |
  * | ④         | AIC  | T2 = left^T @ bf16(T1)                                      | kFlagDH(5)          |
- * | m 相位    | AIV  | m = decay ⊙ m − T2（就地，bf16(m) 落 GM）                    | 并入 kFlagInputs(1) |
- * | epilogue  | AIV  | h/m 写 hm 输出（每个子核一次跨步 DataCopy）                  | —                   |
+ * | m 相位 | AIV | m = decay⊙m − T2（就地，bf16(m) 落 GM） | 并入 kFlagInputs(1) |
+ * | epilogue | AIV | h/m 写 hm 输出（每子核一次跨步 DataCopy） | — |
  *
  * ============================ 布局表 ============================
  * 形状（编译期常量）：BT=64（CV_BT）｜K=V=128（CV_K/CV_V）｜AIV 子核数 PPFM_SUB=2
@@ -22,7 +22,7 @@
  * UB（每个 AIV 核，见 UB_* 常量与 PPFM_VEC_UB_BYTES）：
  * | 区域                     | 用途                                        | 大小（950，cb_=128） |
  * | ------------------------ | ------------------------------------------- | -------------------- |
- * | UB_ROW0/1/2_BF,F32       | 行缓冲（对角构造/诊断/单行回读）            | 数个 128 元素        |
+ * | UB_ROW0/1/2_BF,F32 | 行缓冲（对角/诊断/单行回读） | 数个 128 元素 |
  * | UB_DG/UB_DECAY(_PREV)/…  | dg、decay、exp 标量槽                        | 128~512 B            |
  * | UB_STATE_F/BF            | 状态区块（非常驻路径用）                    | 16 KiB               |
  * | UB_EXT_F                 | vTmp 落点（L0C→UB，SPLIT_M 两半）            | 32 KiB               |
@@ -37,17 +37,17 @@
  *
  * ============================ 同步协议表 ============================
  * 跨核 flag（CrossCoreSetFlag<0x4, …>/WaitFlag；子核各占 id 与 id+PPFM_SUBFLAG_STRIDE）：
- * | id | 名称         | 方向      | 载荷                                        | 生产者 -> 消费者           |
+ * | id | 名称 | 方向 | 载荷 | 生产者 -> 消费者 |
  * | -- | ------------ | --------- | ------------------------------------------- | -------------------------- |
- * | 1  | kFlagInputs  | AIV → AIC | staging(W/k/left/v) + bf16(h/m) 就位         | StageChunk/h 相位 → mm1/mm3 |
- * | 2  | kFlagState   | AIV → AIC | prologue 的 h/m 初值（并入 kFlagInputs）      | prologue → mm1/mm3          |
- * | 3  | kFlagHalf1   | AIC → AIV | vTmp（mm1 的 C；950 上 mm1 一完成即发）        | mm1 → v_new                 |
+ * | 1 | kFlagInputs | AIV→AIC | staging(W/k/left/v)+bf16(h/m) 就位 | Stage/h → mm1/mm3 |
+ * | 2 | kFlagState | AIV→AIC | prologue 的 h/m 初值（并入 1） | prologue → mm1/mm3 |
+ * | 3 | kFlagHalf1 | AIC→AIV | vTmp（mm1 的 C；950 上 mm1 完成即发） | mm1 → v_new |
  * | 4  | kFlagVNew    | AIV → AIC | bf16(v_new)                                  | v_new → mm2                 |
- * | 5  | kFlagDH      | AIC → AIV | dH（mm2 的 C）与 T2（mm4 的 C），一次通知       | mm2/mm4 → h/m 相位          |
- * | 8  | kFlagDhFree  | AIV → AIC | dH 槽归还信用（CV 单槽）                       | h 相位 → mm2 写槽            |
- * | 10 | kFlagT2Free  | AIV → AIC | T2 槽归还信用（CV 单槽）                       | m 相位 → mm4 写槽            |
+ * | 5 | kFlagDH | AIC→AIV | dH(mm2) 与 T2(mm4)，一次通知 | mm2/mm4 → h/m 相位 |
+ * | 8 | kFlagDhFree | AIV→AIC | dH 槽归还信用（CV 单槽） | h 相位 → mm2 写槽 |
+ * | 10 | kFlagT2Free | AIV→AIC | T2 槽归还信用（CV 单槽） | m 相位 → mm4 写槽 |
  *
- * 核内事件对（AIV 侧，EVENT_ID 与"生产者->消费者"一一对应；A2 无事件对时退化为 PipeBarrier）：
+ * 核内事件对（AIV 侧；A2 无事件对时退化为 PipeBarrier）：
  * | EVENT_ID | 事件对           | 用途                                   |
  * | -------- | ---------------- | -------------------------------------- |
  * | 0        | MTE2_V           | 载入完成 -> 向量计算                    |
@@ -60,7 +60,7 @@
  * AIC 侧对 MTE1/M/FIX 用 SetFlag/WaitFlag 成对（CopyGmToL1 -> MMAD -> fixpipe）。
  *
  * 本文件由 kernel 主文件按"机械搬运"拆出（代码与拆分前逐字符相同）；
- * Stage/布局/同步协议的完整说明见 pre_process_fwd_kernel_merged_common.h 顶部注释与 docs/design.md。
+ * Stage/布局/同步协议详表见 *_common.h 顶部注释与 docs/design.md。
  */
 
 #include "pre_process_fwd_kernel_merged_common.h"
@@ -69,7 +69,7 @@
 #include "pre_process_fwd_kernel_merged_tiling_key.h"
 
 // ---- 入口常量自检（§4.4 ②/§7.7：常量集中处配 static_assert）----
-// tiling 结构由 host 写入、kernel 解析，两侧必须同源同尺寸（host 侧 TilingData 容量 4 KiB 量级）
+// tiling 结构由 host 写入、kernel 解析，两侧必须同源同尺寸
 static_assert(sizeof(GDN::PreProcessFwdKernelMergedTilingData) <= 4096,
               "tiling 结构超过预留容量，请检查 host/kernel 是否同源");
 static_assert(sizeof(GDN::PreProcessFwdKernelMergedTilingData) % 8 == 0,

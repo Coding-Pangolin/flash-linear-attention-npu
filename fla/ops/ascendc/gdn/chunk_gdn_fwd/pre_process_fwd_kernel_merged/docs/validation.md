@@ -2691,3 +2691,38 @@ L3 **0/42**（7 用例 x 6 轮）⇒ `GATE_ALL_DONE`。（因为是纯调度/发
 > **方法论**：这轮再次证明 950 的 AIV 瓶颈在**依赖/延迟**而不是指令条数
 > —— §29（加/减 V 指令只值 1%）与 §38.6 的探针说"指令数不是问题"，
 > 但本轮**只改发射顺序**就拿到 -8.9%。"指令数"与"指令间的依赖"是两件事。
+
+---
+
+## 40. R22b 之后的 `-g` 行号 profile（950，T=512/HV=8 仿真）
+
+### 40.1 新增能力：`PPFM_KERNEL_G=1` 出源码行号
+
+`op_host/CMakeLists.txt` 增加 env 门控的 `-g`（默认关闭）：
+
+| 构建 | kernel .o | 说明 |
+| --- | --- | --- |
+| 默认 | 169032 B，`md5 275dfeac…`（与 R22b 生产包**逐字节相同**） | 不影响交付 |
+| `PPFM_KERNEL_G=1` | 3829784 B，含 `.debug_line` x3 | 只给诊断用 |
+
+仿真产物里的 `core*.veccore0_code_exe.csv` 由 40 B（只有表头）变成 72 KB 的**逐行热点表**；
+配合 `addr2line -e <kernel.o> <pc - 0x10d14000>` 可以把 `instr_exe.csv` 的逐 PC 计数落到行。
+（脚本 `work/remote/line_attr2.py`、`work/remote/map_scalar_pcs.py`。）
+
+### 40.2 采到的事实
+
+| 观察 | 数字 |
+| --- | --- |
+| 动态指令总数 | ~7.3 k/chunk/子核；其中 **scalar+scalarldst ≈ 3.0 k（41%）** |
+| 标量指令的归属 | **99% 在编译器生成的 `*_kernel.cpp`**，我们的 .cpp 行几乎不产生标量 ⇒ 标量开销来自"内建调用的展开外壳" |
+| 向量寄存器操作单价 | ~8.5 cycle/op（Muls/Cast/VLD/VST 同一档） |
+| 阶段 cycles（含被调、有重叠） | `ProcessChain` 630 k / `vec.Run` 643 k / `ApplyStateUpdates` 153 k / `StageChunk(c+1)` 120 k / `UpdateVNew` 84 k |
+| 实现 cycles | DataCopy 839 k（13%）> Muls 500 k > Cast 451 k > reg-datacopy 294 k |
+
+### 40.3 这条 profiling 教我们的事
+
+1. **不要用行 profile 去找"哪几行 C++ 写得慢"**：热路径的标量几乎全是编译器外壳；
+   要看的是"**每 chunk 调用了多少次内建**、它们之间有什么依赖"，这正好是 §39 探针做的事。
+2. `code_exe.csv` 的 `cycles` 是**逐 pipe 累加、有重叠**的量，不能与 wall 时间相加；
+   要判断"谁是真瓶颈"仍要用 §39 那种"摘掉它、看 wall 差多少"的探针。
+3. 保留这套能力（env 开关 + 两个脚本）给后续每一轮：**先 -g 采一次定位，再用探针量化**。

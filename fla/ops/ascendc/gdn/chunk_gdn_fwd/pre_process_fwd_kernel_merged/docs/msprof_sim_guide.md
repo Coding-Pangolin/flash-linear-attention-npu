@@ -150,3 +150,48 @@ msopprof 仿真运行时初始化不通。若必须要 `visualize_data.bin`（Mi
 2. `run_sim_ppfm_cannsim.sh`（一条命令跑完 T/HV/variant 变体）
 3. `parse_ppfm_trace.py`（trace → 核×流水占比 + top 指令）
 4. 输出目录：`/data/admin123/ppfm-sim/out_ppfm_T64_HV1_gdn/`（含可复现的 `trace_core0.json.gz`）
+
+
+---
+
+## 9. `-g` 源码行号：怎么开、看到什么（2026-09-29 实测）
+
+### 9.1 打开方式（默认关闭，产物不受影响）
+
+kernel 的 `-g` 由 `op_host/CMakeLists.txt` 里的 **env 开关**控制：
+
+```bash
+# 单算子 OPP（~40 s）：注意 PPFM_KERNEL_G 要在 bash build.sh 之前
+PPFM_KERNEL_G=1 TAG=r22dbg bash scripts/gates/exp_switch.sh ascend950 <repo>
+```
+
+* 关闭时（默认）：kernel `.o` 与生产构建**逐字节相同**（实测 `md5 275dfeac…`、169032 B）；
+* 打开时：`.o` 变成 3.8 MB 且含 `.debug_line`（`readelf -S | grep debug_line` 有 3 段）。
+
+然后照本文的仿真命令采一次（`parsim=1`，T=512/HV=8 ≈ 6 min）。
+
+### 9.2 多了哪些产物
+
+| 文件 | 内容 |
+| --- | --- |
+| `core*.veccore0_code_exe.csv` | **按源码行**聚合：`code,call_count,cycles,running_time(us)`；关 `-g` 时只有表头（40 B） |
+| `core*.veccore0_instr_exe.csv` | 逐 PC：指令/addr/pipe/次数/cycles（关 `-g` 也有，但没有行号） |
+
+想看"某个 PC 是哪一行"，用 `addr2line -e <kernel.o> <addr - load_base>`；
+load base 由脚本猜（本机 = `0x10d14000`）。仓库里两个现成脚本：
+`work/remote/line_attr2.py`（按文件/行聚合某类 pipe）、`work/remote/map_scalar_pcs.py`。
+
+### 9.3 采到的事实（T=512/HV=8，core0.veccore0）
+
+| 观察 | 数字 |
+| --- | --- |
+| 动态指令总数（trace 事件数） | ~7.3 k/chunk/子核，其中 **scalar+scalarldst ≈ 3.0 k（41%）** |
+| 标量指令的源码归属 | **99% 落在 `*_kernel.cpp`（编译器生成的 wrapper），不是我们的 .cpp 行** |
+| 向量寄存器操作单价 | ~8.5 cycle/op（`Muls`/`Cast`/`VLD`/`VST` 都一样） |
+| 按阶段的 cycles（code_exe，含被调者、有重叠） | `ProcessChain` 630 k / `vec.Run` 643 k / `ApplyStateUpdates` 153 k / `StageChunk(c+1)` 120 k / `UpdateVNew` 84 k / `StageChunk(c0)` 70 k |
+| 按实现的 cycles | `DataCopy` 机制（intf+impl）**839 k（13%）**、`Muls` 500 k、`Cast` 451 k、`reg_compute_datacopy` 294 k |
+
+**结论（指导后续优化）**：AIV 的标量开销不是"我们写了太多标量代码"，而是
+**每个向量/搬运内建调用展开出来的地址计算与循环外壳**；要压它，方向是
+"更少、更大、依赖更松的内建调用"，不是微调某几行 C++。
+(§39 的 R22b 正是这条：只把标量读提前，就拿到 −8.9%。)

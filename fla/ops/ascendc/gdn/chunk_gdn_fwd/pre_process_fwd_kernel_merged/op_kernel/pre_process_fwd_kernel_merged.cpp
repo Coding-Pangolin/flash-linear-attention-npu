@@ -1836,6 +1836,25 @@ private:
         RunMmadNT(wTile, hBf_, vTmpF_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #endif
 
+#if PPFM_T1_FIXPIPE_BF16
+        // ---- R20（P1-1「m 链错相」的等价低风险版）：**mm1 一做完就通知 AIV** ----
+        // 原实现是"mm1 + mm3 都做完才 set kFlagHalf1"。但 AIV 的 `v_new` 只需要 mm1 的 C（vTmp）；
+        // T1（mm3 的 C）只有 AIC 自己用（mm4 的 B）⇒ 通知提前到 mm1 之后，
+        // AIC 的 mm3/mm4 就落进 AIV 的 `v_new` 窗口里（正是"错相"要的效果，
+        // 但**不动 m 链相位、flag 数量完全不变**）。
+        // ⚠ 仅当 `PPFM_T1_FIXPIPE_BF16=1`（T1 直接以 bf16 落 GM、AIV 不消费）时成立。
+#if !PPFM_VTMP_UB
+#if PPFM_LEGACY_CACHEOPS
+        DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(vTmpF_);
+#endif
+#endif
+#if PPFM_LEGACY_CACHEOPS
+        DataSyncBarrier<MemDsbT::DDR>();
+#endif
+        AicSetToAiv(kFlagHalf1);
+#endif
+
         // ③ T1[BT,K] = W_c[BT,K] @ bf16(m)[K,K]
 #if PPFM_TILE_MMAD
 #if PPFM_T1_FIXPIPE_BF16
@@ -1853,22 +1872,26 @@ private:
         // ⚠ 写侧也要 clean（写回），只靠读者 DCCI 不够：FIX 写回可能还停在写缓冲里，
         //   此时 AIV 即便 DCCI 也会读到旧值。实测（PPFM_DIAG 指纹）：AIV 读到 vTmp 全 0，
         //   而 AIC 实际写了 -0.013/+0.0092 → v_new 退化成 v，h 半边随机整头崩（m 不受影响）。
+#if !PPFM_T1_FIXPIPE_BF16
 #if !PPFM_VTMP_UB
 #if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(vTmpF_);
 #endif
 #endif
+#endif
 #if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1F_);
 #endif
+#if !PPFM_T1_FIXPIPE_BF16
         // ⚠ 正式原语：DDR 数据同步屏障——保证 C 的写回对其他核可见后再抬 flag。
         //   诊断版实验表明竞态是"flag 已到、写回仍在途"的时序窗口（加探针即掩盖）。
 #if PPFM_LEGACY_CACHEOPS
         DataSyncBarrier<MemDsbT::DDR>();
 #endif
         AicSetToAiv(kFlagHalf1);
+#endif
 
         // ---- R8：把 **m 链的 mm4（T2）提前到「等 v_new」之前** ----
         // 依据（§27 的 profile）：每 chunk 里 AIC 与 AIV 几乎完全串行 —— 两边的忙时都 ≈ 算子时长

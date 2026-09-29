@@ -29,6 +29,7 @@ import traceback
 from pathlib import Path
 
 import torch
+import torch_npu  # noqa: F401  显式导入：新容器/新进程里 npu device type 才注册
 
 DATA_VERSION = "v1"
 BT_DEFAULT = 64

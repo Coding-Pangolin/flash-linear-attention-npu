@@ -435,6 +435,18 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #ifndef PPFM_AIC_DIRECT_INPUTS
 #define PPFM_AIC_DIRECT_INPUTS 0
 #endif
+// R14（**默认 0，实测负收益**）：**只让 AIC 直读 `w`，保留 `k` 的 staging**。
+// 动机：`w` 只有 AIC 用（`mm1/mm3` 的 A 操作数），AIV 侧只是"读了再写一遍"——
+// 每 chunk 每子核白搬 32 KiB（读 16 KiB + 写 16 KiB）；`k` 则不能省（AIV 要拿它算 `left`）。
+// 整体 `PPFM_AIC_DIRECT_INPUTS` 当年实测 +2~3%（归因：k/w 都变成 AIC 的冷行）⇒ 这里只把 w 拆出来，
+// k 仍由 AIV staging 保持 L2 热行。仅对**满 chunk** 生效（尾块需要 staging 的零填充）。
+// ❌ 实测（950/247，TAG=r14）：T=1024 150.53→153.33（+1.9%）、T=4096 459.12→476.97（+3.9%）、
+//    模型 case 2747.58→2805.84（+2.1%）⇒ **即使只去掉 w 的 staging 也变慢**，
+//    说明"AIV 写出 staging"对 AIC 的读就是**预热**：省下的 32 KiB 搬运抵不过 AIC 侧冷行延迟。
+//    ⇒ **staging 不要动**（这条边看起来"白搬"，实际是 L2 行为的一部分）。
+#ifndef PPFM_AIC_DIRECT_W
+#define PPFM_AIC_DIRECT_W 0
+#endif
 // 早期怀疑"C 的跨核可见性"时加的 4 处"过渡探读"（各读 8 个 fp32 并配一次 PIPE_ALL）。
 // 可见性结论已明确（见 validation §11/§13：hBf_ 写坏、T1 双写等），这些探读是纯开销。
 // **默认 0 = 删除**（依据 validation §20，2026-09-29，950/247）：
@@ -1180,6 +1192,8 @@ private:
         constexpr int32_t SEG_PER_SUB = (CV_BT / SEG) / PPFM_SUB;
         // 满 chunk 时 AIC 会直接读输入里的 w/k ⇒ 这里不必再 staging 它们
         const bool directInputs = (PPFM_AIC_DIRECT_INPUTS != 0) && (rows == CV_BT);
+        // R14：w 只在满 chunk 时交给 AIC 直读（省掉 AIV 的 w 读 + wBf_ 写）
+        const bool directW = (PPFM_AIC_DIRECT_W != 0) && (rows == CV_BT);
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
             // R11：**UB 侧一律用子核本地段偏移**（`lo`），只有 GM 侧才用全局行号 `off`。
@@ -1207,7 +1221,7 @@ private:
             if (valid > 0) {
                 DataCopy(kBlkBf_[lo * CV_K], kGm_[(hk * t->T + t0 + off) * CV_K],
                          static_cast<uint32_t>(valid * CV_K));
-                if (!directInputs) {
+                if (!directW) {
                     DataCopy(wBlkBf_[lo * CV_K], wGm_[(hv * t->T + t0 + off) * CV_K],
                              static_cast<uint32_t>(valid * CV_K));
                 }
@@ -1223,6 +1237,8 @@ private:
             AIV_WAIT_MTE2_MTE3();
             if (!directInputs) {
                 DataCopy(kOut[off * CV_K], kBlkBf_[lo * CV_K], SEG * CV_K);
+            }
+            if (!directW) {
                 DataCopy(wBf_[off * CV_K], wBlkBf_[lo * CV_K], SEG * CV_K);
             }
             // 注意：v 不再落到 GM（v_new 直接从 UB 的 vBlkBf_ 读），省一份 16 KiB/chunk 的 MTE3
@@ -1762,8 +1778,10 @@ private:
         const auto *tt = ctx_.tiling;
         const int64_t hk = hv / (tt->hvPerHk == 0 ? 1 : tt->hvPerHk);
         const bool directInputs = (PPFM_AIC_DIRECT_INPUTS != 0) && (rows == CV_BT);
+        // R14：w 由 AIC 直读输入（AIV 不再 staging w、也不写 wBf_）
+        const bool directW = (PPFM_AIC_DIRECT_W != 0) && (rows == CV_BT);
         GlobalTensor<bfloat16_t> wTile =
-            directInputs ? wIn_[(hv * tt->T + t0) * CV_K] : wBf_;
+            directW ? wIn_[(hv * tt->T + t0) * CV_K] : wBf_;
         // ① vTmp[BT,V] = W_c[BT,K] @ bf16(h)[K,V]
         // ITER5：inputs 与 state 已合并为同一次通知
         AicWaitFromAiv(kFlagInputs);

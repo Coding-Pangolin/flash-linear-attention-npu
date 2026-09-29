@@ -50,8 +50,21 @@ echo "[exp] extract kernel .o md5:"
 find "$RUNBASE/${TAG}.extract" -name '*.o' | head -n 3 | xargs -r md5sum
 
 # 4) 装到包内实验目录并切软链
+# ⚠ 安装器**不会创建 --install-path 本身**：路径不存在时报
+#   `[ops_custom] ... create <path> failed` 然后**仍以 rc=0 退出**。若不管它，
+#   下面的 `ln -sT` 会造出**悬空软链**，之后 `import fla_npu` 直接抛
+#   FileNotFoundError（"Expected a regular package-local OPP..."），
+#   而且 `$(python3 -c 'import fla_npu...')` 会静默返回空串，把后续步骤的
+#   PKG 变成 `/`，错误现场完全走样。2026-09-29 在 247 上踩到，故这里补两道校验。
 rm -rf "$EXP"
-"$RUNBASE/${TAG}.run" --quiet --install-path="$EXP"
+mkdir -p "$EXP"
+if ! "$RUNBASE/${TAG}.run" --quiet --install-path="$EXP" > "/tmp/exp_install_${TAG}.log" 2>&1; then
+  echo "[exp] ✗ 安装器返回非 0，日志 /tmp/exp_install_${TAG}.log"; tail -n 15 "/tmp/exp_install_${TAG}.log"; exit 1
+fi
+if [ ! -d "$EXP/vendors/fla_npu_transformer" ]; then
+  echo "[exp] ✗ 安装产物缺失 $EXP/vendors/fla_npu_transformer（安装器 rc=0 但什么都没装）"
+  tail -n 15 "/tmp/exp_install_${TAG}.log"; exit 1
+fi
 mkdir -p "$EXP/vendors"
 echo "load_priority=fla_npu_transformer" > "$EXP/vendors/config.ini"
 rm -rf "$V"

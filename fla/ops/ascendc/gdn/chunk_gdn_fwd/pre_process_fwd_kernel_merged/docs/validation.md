@@ -2810,3 +2810,58 @@ GM 标量读是一整趟 DDR 访问（数百 cycle），且 `SetDecay` 里紧接
   "把 AIV 侧等待填满"要收益，而不是继续压 AIV 指令；
 * 与 950 共用的 R22b/R23a 已经吃到（A2 上 R22b 实测 -2.3%）；
 * 若后续要用 910B 的性能数据做判断，**必须先确认机器没有被其他租户压满**（本次就是被压满的例子）。
+
+---
+
+## 43. R24 探针重排 + R25：epilogue 的逐行 `PIPE_ALL` 是真凶（位级不变）
+
+### 43.1 R24：在 R22b/R23a 之后重排构件成本（模型 case 基线 1861.8 us）
+
+| 探针 | 摘掉 | 时间 (us) | 收益 |
+| --- | --- | --- | --- |
+| `noh` | h 状态更新 Muls+Add | 1790.3 | **-3.8%** |
+| `nom` | m 状态更新 Muls+Sub | 1790.2 | **-3.9%** |
+| **`noep`** | **epilogue 的 h 逐行 hm 写** | 1814.8 | **-2.5%（新）** |
+| `nol` | left 逐行缩放 | 1816.4 | -2.4%（R22b 前是 -9.8%） |
+| `nov` | v_new 逐行 dg | 1821.9 | -2.1%（R22b 前是 -9.0%） |
+| `nos` | staging 落盘(k/W/left) | 1853.9 | -0.4%（R22b 前 -2.0%） |
+
+两条结论：
+1. **R22b 把"依赖 stall"那一层吃掉了**：两个行缩放从 -18.8% 掉到 -4.5%，排名彻底变了；
+2. **新的第 3 名是 epilogue**，而它的成本几乎全在**同步**上，不在搬运量上（见下）。
+
+### 43.2 R25：epilogue 逐行 `PipeBarrier<PIPE_ALL>` ⇒ 一次跨步 DataCopy
+
+原实现（`PPFM_H_UB` 分支）：
+
+```cpp
+for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
+    DataCopy(hmGm_[... + r*(V+K) + colBase_], hUb_[...], cb_);
+    PipeBarrier<PIPE_ALL>();          // ← 每行一次全栅栏（h/m 各 64 行 = 128 次/子核/任务）
+    DataCopy(hmGm_[... + V + colBase_], mUb_[...], cb_);
+    PipeBarrier<PIPE_ALL>();
+}
+```
+
+UB 侧行连续、GM 侧按 `(V+K)` 跨步 ⇒ 完全可以一次搬完：
+
+```cpp
+DataCopyParams epParams{H_UB_ROWS, (cb_*4)/32, 0, ((V+K-cb_)*4)/32};   // 32B 单位
+DataCopy(hmGm_[hmBase + subIdx_*H_UB_ROWS*(V+K) + colBase_], hUb_, epParams);
+```
+（`PPFM_EP_MERGE`，默认 1；h、m 各一次，逐行栅栏全部去掉。）
+
+### 43.3 结果（950/247，dev=5）
+
+| 用例 | R23a | **R25** | 变化 | vs R0 |
+| --- | --- | --- | --- | --- |
+| T=1024/HV=8 | 119.50 us | **100.61 us** | **-15.8%** | 212.2 -> -52.6% |
+| T=4096/HV=8 | 337.54 us | **315.80 us** | **-6.4%** | 623.6 -> -49.4% |
+| 模型 case T=11264 | 1861.83 us | **1818.80 us** | **-2.3%（1.15x -> 1.12x H20）** | 3828.7 -> **-52.5%** |
+
+**验证**：L1 位级 vs `r23a` **`BIT_IDENTICAL`**、L0 PASS、smoke 10/10、41/41、L3 0/42 ⇒ `GATE_ALL_DONE`。
+
+> **为什么 T=1024 收益远大于模型 case**：epilogue 是**每条链一次**的固定开销，
+> 而每个核要跑 `taskNum/usedAicNum` 条链 —— T=1024 的 16 条链 / 16 核 ⇒ 1 条链/核，
+> 但每条链只有 16 个 chunk 分摊这份开销；模型 case 的链有 176 个 chunk ⇒ 被摊薄。
+> **教训：per-task 固定开销要用"小 shape"来暴露**，只看大 shape 会漏掉它。

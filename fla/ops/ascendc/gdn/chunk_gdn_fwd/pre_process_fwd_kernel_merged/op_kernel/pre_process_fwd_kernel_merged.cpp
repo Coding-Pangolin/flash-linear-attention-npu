@@ -73,6 +73,11 @@ using namespace AscendC;
 #define PPFM_GLAST_UB 1
 #endif
 
+// R25: epilogue 逐行 hm 写合并成一次跨步 DataCopy
+#ifndef PPFM_EP_MERGE
+#define PPFM_EP_MERGE 1
+#endif
+
 // ---------------- 目标 arch 分档 ----------------
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 #define PPFM_ARCH_IS_950 1
@@ -1105,6 +1110,33 @@ private:
         // ---- epilogue：写 hm ----
         const int64_t hmBase = ((n * t->Hv + hv) * CV_K) * (CV_V + CV_K);
 #if PPFM_H_UB
+#if PPFM_EP_MERGE
+        // R25：h/m 各 1 次跨步 DataCopy 取代 64 次逐行搬 + 128 次 PIPE_ALL
+        PipeBarrier<PIPE_V>();   // 状态更新的 V 运算先落地
+        {
+            DataCopyParams epParams{
+                static_cast<uint16_t>(H_UB_ROWS),
+                static_cast<uint16_t>((cb_ * 4) / 32),
+                0,
+                static_cast<uint16_t>(((CV_V + CV_K - cb_) * 4) / 32)};
+            const int64_t epRow0 = hmBase +
+                static_cast<int64_t>(subIdx_) * H_UB_ROWS * (CV_V + CV_K) + colBase_;
+            DataCopy(hmGm_[epRow0], hUb_, epParams);
+            AIV_SET_V_MTE3();
+            AIV_WAIT_V_MTE3();
+#if PPFM_M_UB
+            DataCopy(hmGm_[epRow0 + CV_V], mUb_, epParams);
+#else
+            for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
+                DataCopy(row0F_, mF32_[r * cb_], cb_);
+                PipeBarrier<PIPE_ALL>();
+                DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + CV_V + colBase_], row0F_, cb_);
+                PipeBarrier<PIPE_ALL>();
+            }
+#endif
+        }
+        PipeBarrier<PIPE_ALL>();
+#else
         // R7/R12：h、m 都直接从常驻 UB 写 hm（同一套连续半区分配）
         for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
             DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + colBase_],
@@ -1120,6 +1152,7 @@ private:
 #endif
             PipeBarrier<PIPE_ALL>();
         }
+#endif
 #else
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
             // P5：只写本工作项的列块（h 占 [0,V) 列、m 占 [V,V+K) 列，两者同一个 colBase_）

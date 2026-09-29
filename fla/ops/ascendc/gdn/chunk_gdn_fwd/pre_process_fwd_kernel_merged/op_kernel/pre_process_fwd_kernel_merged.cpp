@@ -339,11 +339,16 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #undef PPFM_T1_FIXPIPE_BF16
 #define PPFM_T1_FIXPIPE_BF16 0
 #endif
-// 满 chunk（rows == BT）时 AIC 直接读输入张量里的 w/k（省掉 AIV 每 chunk 的
-// w 载入(16KiB)+w 落盘(16KiB)+k 落盘(16KiB) 与对应事件对）；尾块仍走 staging
-// 零填充路径（mmad 靠零填充行把无效行贡献置 0）。两侧都由 rows 判定，天然一致。
+// 满 chunk（rows == BT）时 AIC 直接读输入张量里的 w/k，省掉 AIV 每 chunk 的
+// w 载入(16KiB)+w 落盘(16KiB)+k 落盘(16KiB) 与对应事件对；尾块仍走 staging
+// 零填充路径。两侧都由 rows 判定，天然一致。
+// ⚠ 实测**净负收益**（2026-09-29，两平台一致），故默认 0：
+//   950  T=1024 211.6→217.7 µs(+2.9%)、T=4096 624.8→643.5 µs(+3.0%)、模型 case 3825→3891 µs(+1.7%)
+//   910B T=4096 651.3→661.7 µs(+1.6%)、模型 case 4055→4164 µs(+2.7%)
+//   猜测原因：AIV 的 staging 写在读侧把数据"预热"进了 L2（AIC 随后读的是热行），
+//   改成读输入张量后 AIC 每次拿的是冷行；省下的 48 KiB MTE3 抵不过这次延迟变差。
 #ifndef PPFM_AIC_DIRECT_INPUTS
-#define PPFM_AIC_DIRECT_INPUTS 1
+#define PPFM_AIC_DIRECT_INPUTS 0
 #endif
 #if !PPFM_TILE_MMAD
 #undef PPFM_AIC_DIRECT_INPUTS

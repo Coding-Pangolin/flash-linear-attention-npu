@@ -1427,3 +1427,36 @@ TAG=after_p1a BASE=baseline_p1a bash $OP/scripts/gates/run_gate_all.sh $OP 6
 bash scripts/gates/run_msopprof.sh 1024:8 4096:8        # 910B / 通用
 bash /workspace/bartonfang/ppfm-sim/run_msopprof_246.sh 1024:8 4096:8   # 246 上的 950
 ```
+---
+
+## 15. KDA 逐 k 衰减向量化（950 + 910B，2026-09-29）
+
+### 15.1 问题
+
+`SetDecay()` 在 KDA（`USE_GK`）分支里逐 k 调 128 次 `Exp2Scalar()`，而 `Exp2Scalar()` 每次都是
+"标量写 UB → `PipeBarrier<PIPE_ALL>` → `Exp` → `PipeBarrier<PIPE_ALL>` → 标量读" ——
+**每 chunk 256 次全栅栏**，是 AIV scalar 流水的最大单一来源（P1a 后画像里 scalar 仍占 23%）。
+
+### 15.2 改法（`PPFM_KDA_DECAY_VEC`，默认 1）
+
+改成整块：`DataCopy` 取 `gk_last[k]` 一整行 → `Muls(×ln2)` → `Exp(decayF_)`，
+逐元素仍是 `exp(x·ln2)`（同一 `Exp` 指令、同样的 fp32 乘法），**逐位等价**。
+`=0` 可退回原逐点实现，便于 A/B。
+
+### 15.3 验收
+
+| 项 | 950 | 910B |
+| --- | --- | --- |
+| L0 / L2 / L4(41 条) / L3(0/30) | 全绿 | 全绿 |
+| **L1 位级回归（vs P1a 基线）** | **BIT_IDENTICAL** | **BIT_IDENTICAL** |
+
+性能（950，msprof `Task Duration`，1650 MHz，device 7）：
+
+| 用例 | 逐点（改前） | 向量化（改后） | 变化 |
+| --- | --- | --- | --- |
+| T=1024/HV=8（KDA） | 475.77 µs | **284.64 µs** | −40.2% |
+| T=4096/HV=8（KDA） | 1683.12 µs | **926.59 µs** | −44.9% |
+| KDA 成本模型 `a / b` | 73.4 µs / **25.15 µs·chunk⁻¹** | 70.7 µs / **13.37 µs·chunk⁻¹** | b **−46.8%** |
+
+对照：同一版本 GDN 路径 `b = 11.14 µs/chunk` ⇒ KDA 与 GDN 的每 chunk 差距从 14.0 µs 缩到 2.2 µs
+（剩下的差距来自 KDA 状态更新里"每行一个标量 decay"的逐行 `Muls`，属后续可优化项）。

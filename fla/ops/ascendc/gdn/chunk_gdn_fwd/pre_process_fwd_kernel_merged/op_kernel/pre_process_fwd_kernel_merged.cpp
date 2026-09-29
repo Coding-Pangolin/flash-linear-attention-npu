@@ -1209,9 +1209,12 @@ private:
         }
         PipeBarrier<PIPE_ALL>();
         SetDecay(hv, t0 + rows - 1);
-        // ---- staging：**按整段（16 行）分配 subcore**，段内自己完成"清零/搬运/left 计算/落盘"----
-        // 这样既没有两个 subcore 重复搬运，也不存在"块级算术读另一个 subcore 半成品"的竞态
-        constexpr int32_t SEG = 16;
+        // ---- staging：**按子核整半区（32 行）分配**，段内自己完成"清零/搬运/left 计算/落盘"----
+        // R19：原来切成 2×16 行是历史遗留 —— 子核 i 拿的是连续半区（`seg = i*SEG_PER_SUB + k`
+        // ⇒ 行 [i*32,(i+1)*32)），R11 之后缓冲也正好按 32 行分配 ⇒ **一段装齐**。
+        // 依据：仿真流水显示 AIV 的 MTE3 占 53%、其中 UB→GM 的 `MOV_SRC_TO_DST_ALIGN` 平均
+        // ~520 cycle/条（纯 latency）⇒ 段数减半最直接（对应参考文档 §10.2"row tile 太小"）。
+        constexpr int32_t SEG = PPFM_SEGROWS;                 // 32
         // ITER8（A2）：段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
         // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
         constexpr int32_t SEG_PER_SUB = (CV_BT / SEG) / PPFM_SUB;
@@ -1352,8 +1355,9 @@ private:
                                  DcciDst::CACHELINE_OUT>(t1F_);
 #endif
         // v_new = (v - vTmp) · dg → bf16（逐行；整块版本会引入 ~0.4% 的 GDN 偏差，待查）
-        // v_new = (v - vTmp)·dg → bf16：同样**按整段分配 subcore**，段内做完 Cast/Sub/缩放/Cast/落盘
-        constexpr int32_t SEG = 16;
+        // v_new = (v - vTmp)·dg → bf16：同样**按子核整半区（32 行）**，段内做完 Cast/Sub/缩放/Cast/落盘
+        // R19：同 StageLeft —— 2×16 合并成 1×32（少一半 UB→GM 小搬运与段间同步对）
+        constexpr int32_t SEG = PPFM_SEGROWS;                 // 32
         // ITER8（A2）：段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
         // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
         constexpr int32_t SEG_PER_SUB = (CV_BT / SEG) / PPFM_SUB;

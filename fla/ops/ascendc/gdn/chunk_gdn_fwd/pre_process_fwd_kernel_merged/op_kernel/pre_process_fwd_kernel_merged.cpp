@@ -362,6 +362,16 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #undef PPFM_H_UB
 #define PPFM_H_UB 0
 #endif
+// R12（默认 1，仅 950）：**m 状态也常驻 UB**。R7 对 h 做过同样的事（省 128 KiB/chunk 的
+// fp32 往返）；m 的往返量完全一样，用 R11 回收出来的 32 KiB 放下。
+// 前提：状态相位的**连续半区**行分配（R6 起有）⇒ 每个 AIV 子核只持有自己那 64 行。
+#ifndef PPFM_M_UB
+#define PPFM_M_UB 1
+#endif
+#if PPFM_M_UB && !PPFM_H_UB
+#undef PPFM_M_UB
+#define PPFM_M_UB 0
+#endif
 // R6b（默认 950=1）：**T2 也走 L0C→UB**（与 dH 同一套 SPLIT_M 落点）。
 // 动机不只是性能：R6 把 dH 挪进 UB 之后，T2 成了 m 链上**唯一**剩下的 "AIC→AIV 经 GM" 边，
 // 而 950 上这条边历史上就是薄弱点（validation §12.10 的九组排除实验）。
@@ -533,13 +543,15 @@ constexpr int32_t UB_STATE_F = UB_GBLK + PPFM_NSLOT * CV_BT * 4;   // [RB,K] fp3
 // extBlkF_：状态更新的 dH 暂存（RB 行）+ v_new 的 vTmp 暂存（2 段）→ 每子核取大者
 constexpr int32_t UB_EXT_F = UB_STATE_F + PPFM_NSLOT * PPFM_RB * CV_V * 4;
 constexpr int32_t UB_STATE_BF = UB_EXT_F + PPFM_NSLOT * 2 * PPFM_SEG * CV_V * 4;
-// 下面这些按"段"分区，两个子核用不同 off，可共享
+// 下面这些按"段"分区。R11 起改成**子核本地段**寻址（`lo`，每个子核只有自己那 32 行）
+// ⇒ 尺寸砍半（k/w/v/scr 合计省 48 KiB）。依据：每个 AIV 子核有独立 UB bank（§23/§24）。
+constexpr int32_t PPFM_SEGROWS = CV_BT / PPFM_SUB;                             // 32
 constexpr int32_t UB_KBLK_BF = UB_STATE_BF + PPFM_NSLOT * PPFM_RB * CV_V * 2;  // [BT,K] bf16
-constexpr int32_t UB_WBLK_BF = UB_KBLK_BF + CV_BT * CV_K * 2;                // [BT,K] bf16
-constexpr int32_t UB_VBLK_BF = UB_WBLK_BF + CV_BT * CV_K * 2;                // [BT,V] bf16
-constexpr int32_t UB_SCR_F = UB_VBLK_BF + CV_BT * CV_V * 2;                  // [BT,K] fp32
-constexpr int32_t UB_SCR_BF = UB_SCR_F + CV_BT * CV_K * 4;                   // [BT,K] bf16
-constexpr int32_t UB_DBG = UB_SCR_BF + CV_BT * CV_K * 2;                     // 诊断槽 ×2
+constexpr int32_t UB_WBLK_BF = UB_KBLK_BF + PPFM_SEGROWS * CV_K * 2;          // [SEGROWS,K] bf16
+constexpr int32_t UB_VBLK_BF = UB_WBLK_BF + PPFM_SEGROWS * CV_K * 2;          // [SEGROWS,V] bf16
+constexpr int32_t UB_SCR_F = UB_VBLK_BF + PPFM_SEGROWS * CV_V * 2;            // [SEGROWS,K] fp32
+constexpr int32_t UB_SCR_BF = UB_SCR_F + PPFM_SEGROWS * CV_K * 4;             // [SEGROWS,K] bf16
+constexpr int32_t UB_DBG = UB_SCR_BF + PPFM_SEGROWS * CV_K * 2;               // 诊断槽 ×2
 // ---- R6：dH 的 CV 落点（L0C->UB，2 槽 ping-pong，见 validation §22/§23）----
 // 每个 AIV 子核有**自己的 UB bank**（253952 B/子核），SPLIT_M 只把 C 的 M 两半分别写进
 // 两个 bank 的**同一偏移** ⇒ 单槽按「一个子核那一半的行数」算：CV_K/2 = 64 行 × CV_V × 4B
@@ -567,8 +579,12 @@ constexpr int32_t H_UB_ROWS = CV_K / PPFM_SUB;                        // 64
 constexpr int32_t UB_H_UB = ((UB_CV_END + 31) / 32) * 32;
 constexpr int32_t UB_H_UB_ELEM = UB_H_UB / 4;
 #if PPFM_H_UB
-constexpr int32_t PPFM_VEC_UB_BYTES = UB_H_UB + H_UB_ROWS * CV_V * 4;  // +32768 B
+// R12：m 也常驻 UB（32 KiB），紧跟在 h 区之后
+constexpr int32_t UB_M_UB = UB_H_UB + H_UB_ROWS * CV_V * 4;
+constexpr int32_t UB_M_UB_ELEM = UB_M_UB / 4;
+constexpr int32_t PPFM_VEC_UB_BYTES = UB_M_UB + H_UB_ROWS * CV_V * 4;  // h + m 各 32768 B
 #else
+constexpr int32_t UB_M_UB_ELEM = 0;
 constexpr int32_t PPFM_VEC_UB_BYTES = UB_CV_END;
 #endif
 
@@ -698,6 +714,8 @@ public:
         // R7：h 的常驻半步。共享基址（不偏移）：每个 AIV 子核在自己的 bank 里用同一偏移，
         // 各自存自己那 64 行 —— 正是 R6 里 SPLIT_M 的同一套 bank 语义。
         hUb_ = ubBuf_.Get<float>()[UB_H_UB_ELEM];
+        // R12：m 的常驻半步（同上）
+        mUb_ = ubBuf_.Get<float>()[UB_M_UB_ELEM];
 #endif
         // ITER10：fixpipe SPLIT_M 把两半写到**同一偏移**（各自 bank），这里用共享基址视图
         vTmpUb_ = ubBuf_.Get<float>()[UB_EXT_F_ELEM];
@@ -873,7 +891,12 @@ private:
         PipeBarrier<PIPE_V>();
         ArithProgression(row1F_, static_cast<float>(colBase_), 1.0f, cb_);   // row1F_[k] = k
         PipeBarrier<PIPE_V>();
+#if PPFM_M_UB
+        // R12：m 常驻 UB（本子核那 64 行），行范围改成连续半区（逐行 elementwise，数值等价）
+        for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
+#else
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
+#endif
             // ITER4：同一 pipe 内的 4 次 V 运算无需各自栅栏，只在 V->MTE3 与
             //        MTE3 读完（下一轮要覆盖 row0F_/row0Bf_）处各保留一次
             Adds(row0F_, row1F_, -static_cast<float>(r), cb_);   // k - r
@@ -882,7 +905,11 @@ private:
             Sub(row0F_, row2F_, row0F_, cb_);                    // 1 - min(|k-r|,1)
             Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
             PipeBarrier<PIPE_ALL>();
+#if PPFM_M_UB
+            Muls(mUb_[(r - subIdx_ * H_UB_ROWS) * cb_], row0F_, 1.0f, cb_);   // 精确搬移
+#else
             DataCopy(mF32_[r * cb_], row0F_, cb_);
+#endif
             DataCopy(mBf_[r * cb_], row0Bf_, cb_);
             PipeBarrier<PIPE_ALL>();
         }
@@ -983,14 +1010,19 @@ private:
         // ---- epilogue：写 hm ----
         const int64_t hmBase = ((n * t->Hv + hv) * CV_K) * (CV_V + CV_K);
 #if PPFM_H_UB
-        // R7：h 直接从常驻 UB 写 hm（与状态更新同一套连续半区分配）；m 仍从 GM 读。
+        // R7/R12：h、m 都直接从常驻 UB 写 hm（同一套连续半区分配）
         for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
             DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + colBase_],
                      hUb_[(r - subIdx_ * H_UB_ROWS) * cb_], cb_);
             PipeBarrier<PIPE_ALL>();
+#if PPFM_M_UB
+            DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + CV_V + colBase_],
+                     mUb_[(r - subIdx_ * H_UB_ROWS) * cb_], cb_);
+#else
             DataCopy(row0F_, mF32_[r * cb_], cb_);
             PipeBarrier<PIPE_ALL>();
             DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + CV_V + colBase_], row0F_, cb_);
+#endif
             PipeBarrier<PIPE_ALL>();
         }
 #else
@@ -1142,6 +1174,11 @@ private:
         const bool directInputs = (PPFM_AIC_DIRECT_INPUTS != 0) && (rows == CV_BT);
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
+            // R11：**UB 侧一律用子核本地段偏移**（`lo`），只有 GM 侧才用全局行号 `off`。
+            // 依据：R6 已证每个 AIV 子核有独立 UB bank ⇒ 段分区缓冲（kBlk/wBlk/vBlk/scr）
+            // 每个子核只需放自己那 `SEG_PER_SUB*SEG = 32` 行，尺寸直接砍半（省 48 KiB）。
+            // 这正是最初 R0.7 里被误判为"做不到"的那条（当时按共享 UB 推导）。
+            const int32_t lo = off - subIdx_ * (CV_BT / PPFM_SUB);
             const int32_t valid = (rows > off) ? ((rows - off < SEG) ? (rows - off) : SEG) : 0;
             // P1a：段间复用同一组 UB（kBlk/wBlk/vBlk/scr）。事件语义是"该流水此前所有操作
             // 都完成"，所以在这里成对 set/wait 即可覆盖"上一段的 MTE3 是否读完"，
@@ -1152,18 +1189,18 @@ private:
             AIV_WAIT_MTE3_V();
             // ITER2：只有尾块需要零填充（整段时下面的 DataCopy 会写满整段）
             if (valid < SEG) {
-                Duplicate(kBlkBf_[off * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
-                Duplicate(wBlkBf_[off * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
-                Duplicate(vBlkBf_[off * cb_], static_cast<bfloat16_t>(0), SEG * cb_);
+                Duplicate(kBlkBf_[lo * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
+                Duplicate(wBlkBf_[lo * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
+                Duplicate(vBlkBf_[lo * cb_], static_cast<bfloat16_t>(0), SEG * cb_);
                 PipeBarrier<PIPE_V>();
                 AIV_SET_V_MTE2();
                 AIV_WAIT_V_MTE2();
             }
             if (valid > 0) {
-                DataCopy(kBlkBf_[off * CV_K], kGm_[(hk * t->T + t0 + off) * CV_K],
+                DataCopy(kBlkBf_[lo * CV_K], kGm_[(hk * t->T + t0 + off) * CV_K],
                          static_cast<uint32_t>(valid * CV_K));
                 if (!directInputs) {
-                    DataCopy(wBlkBf_[off * CV_K], wGm_[(hv * t->T + t0 + off) * CV_K],
+                    DataCopy(wBlkBf_[lo * CV_K], wGm_[(hv * t->T + t0 + off) * CV_K],
                              static_cast<uint32_t>(valid * CV_K));
                 }
                 // P5：v 只搬本工作项需要的列窗 [colBase_, colBase_+cb_)（列间隔用 srcStride 跳过）
@@ -1171,32 +1208,32 @@ private:
                     static_cast<uint16_t>(valid),
                     static_cast<uint32_t>(cb_ * static_cast<int32_t>(sizeof(bfloat16_t))),
                     static_cast<uint32_t>((CV_V - cb_) * static_cast<int32_t>(sizeof(bfloat16_t))), 0, 0};
-                DataCopyPad(vBlkBf_[off * cb_], vGm_[(hv * t->T + t0 + off) * CV_V + colBase_],
+                DataCopyPad(vBlkBf_[lo * cb_], vGm_[(hv * t->T + t0 + off) * CV_V + colBase_],
                             vParams, {false, 0, 0, 0});
             }
             AIV_SET_MTE2_MTE3();
             AIV_WAIT_MTE2_MTE3();
             if (!directInputs) {
-                DataCopy(kOut[off * CV_K], kBlkBf_[off * CV_K], SEG * CV_K);
-                DataCopy(wBf_[off * CV_K], wBlkBf_[off * CV_K], SEG * CV_K);
+                DataCopy(kOut[off * CV_K], kBlkBf_[lo * CV_K], SEG * CV_K);
+                DataCopy(wBf_[off * CV_K], wBlkBf_[lo * CV_K], SEG * CV_K);
             }
             // 注意：v 不再落到 GM（v_new 直接从 UB 的 vBlkBf_ 读），省一份 16 KiB/chunk 的 MTE3
             AIV_SET_MTE2_V();
             AIV_WAIT_MTE2_V();
             // left：USE_G 为 bf16(k·dg)，USE_GK 为 k 本身
             if (useG) {
-                Cast(scrF_[off * CV_K], kBlkBf_[off * CV_K], RoundMode::CAST_NONE, SEG * CV_K);
+                Cast(scrF_[lo * CV_K], kBlkBf_[lo * CV_K], RoundMode::CAST_NONE, SEG * CV_K);
                 PipeBarrier<PIPE_V>();
                 for (int32_t i = 0; i < SEG; ++i) {
-                    Muls(scrF_[(off + i) * CV_K], scrF_[(off + i) * CV_K], dgF_.GetValue(off + i), CV_K);
+                    Muls(scrF_[(lo + i) * CV_K], scrF_[(lo + i) * CV_K], dgF_.GetValue(off + i), CV_K);
                 }
                 PipeBarrier<PIPE_V>();
-                Cast(scrBf_[off * CV_K], scrF_[off * CV_K], RoundMode::CAST_RINT, SEG * CV_K);
+                Cast(scrBf_[lo * CV_K], scrF_[lo * CV_K], RoundMode::CAST_RINT, SEG * CV_K);
                 AIV_SET_V_MTE3();
                 AIV_WAIT_V_MTE3();   // V -> MTE3
-                DataCopy(lOut[off * CV_K], scrBf_[off * CV_K], SEG * CV_K);
+                DataCopy(lOut[off * CV_K], scrBf_[lo * CV_K], SEG * CV_K);
             } else {
-                DataCopy(lOut[off * CV_K], kBlkBf_[off * CV_K], SEG * CV_K);
+                DataCopy(lOut[off * CV_K], kBlkBf_[lo * CV_K], SEG * CV_K);
             }
             // 段末：本段两次 MTE3（kOut/wBf_ 与 lOut）读完后，下一段才能覆盖对应 UB
         }
@@ -1288,25 +1325,27 @@ private:
             }
 #endif
 #endif
-            Cast(scrF_[off * cb_], vBlkBf_[off * cb_], RoundMode::CAST_NONE, SEG * cb_);
+            // R11：UB 侧用子核本地段偏移（GM 侧仍是全局 off）
+            Cast(scrF_[lo * cb_], vBlkBf_[lo * cb_], RoundMode::CAST_NONE, SEG * cb_);
             PipeBarrier<PIPE_V>();
 #if PPFM_VTMP_UB
             // ITER10：从共享基址视图读本子核那半（lo ∈ {0, SEG}）
-            Sub(scrF_[off * cb_], scrF_[off * cb_], vTmpUb_[lo * cb_], SEG * cb_);
+            Sub(scrF_[lo * cb_], scrF_[lo * cb_], vTmpUb_[lo * cb_], SEG * cb_);
 #else
-            Sub(scrF_[off * cb_], scrF_[off * cb_], extBlkF_[lo * cb_], SEG * cb_);
+            Sub(scrF_[lo * cb_], scrF_[lo * cb_], extBlkF_[lo * cb_], SEG * cb_);
 #endif
             PipeBarrier<PIPE_V>();
             if (useG) {
                 for (int32_t i = 0; i < SEG; ++i) {
-                    Muls(scrF_[(off + i) * cb_], scrF_[(off + i) * cb_], dgF_.GetValue(off + i), cb_);
+                    Muls(scrF_[(lo + i) * cb_], scrF_[(lo + i) * cb_], dgF_.GetValue(off + i), cb_);
                 }
                 PipeBarrier<PIPE_V>();
             }
-            Cast(scrBf_[off * cb_], scrF_[off * cb_], RoundMode::CAST_RINT, SEG * cb_);
+            Cast(scrBf_[lo * cb_], scrF_[lo * cb_], RoundMode::CAST_RINT, SEG * cb_);
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
-            DataCopy(vNewBf_[off * cb_], scrBf_[off * cb_], SEG * cb_);
+            // ⚠ R11：UB 源必须用子核本地段偏移（`lo`），只有 GM 目标用全局 `off`
+            DataCopy(vNewBf_[off * cb_], scrBf_[lo * cb_], SEG * cb_);
         }
         // 各子核只写自己那两段（off 互不相交），循环内无需段间信用；
         // 出口保留一次全栅栏，供后面的 staging 复用 scrF_/scrBf_（跨函数边界）。
@@ -1318,13 +1357,13 @@ private:
 #if !PPFM_T1_FIXPIPE_BF16
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
-            DataCopy(scrF_[off * cb_], t1F_[off * cb_], SEG * cb_);
+            DataCopy(scrF_[lo * cb_], t1F_[off * cb_], SEG * cb_);
             AIV_SET_MTE2_V();
             AIV_WAIT_MTE2_V();
-            Cast(scrBf_[off * cb_], scrF_[off * cb_], RoundMode::CAST_RINT, SEG * cb_);
+            Cast(scrBf_[lo * cb_], scrF_[lo * cb_], RoundMode::CAST_RINT, SEG * cb_);
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
-            DataCopy(t1Bf_[off * cb_], scrBf_[off * cb_], SEG * cb_);
+            DataCopy(t1Bf_[off * cb_], scrBf_[lo * cb_], SEG * cb_);
         }
         PipeBarrier<PIPE_ALL>();
 #endif
@@ -1479,6 +1518,26 @@ private:
         const int32_t mbEnd = mbBeg + (CV_K / PPFM_SUB);
         for (int32_t rb = mbBeg; rb < mbEnd; rb += RB) {
             const int32_t lo = rb - mbBeg;
+#if PPFM_M_UB
+            // R12：m 常驻 UB ⇒ 就地更新（无 MTE2 载入、无 fp32 落盘），只留 bf16(m) 给 AIC 的 mm3
+            if (useG) {
+                const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
+                Muls(mUb_[lo * cb_], mUb_[lo * cb_], dc, RB * cb_);
+            } else {
+                for (int32_t r = rb; r < rb + RB; ++r) {
+                    const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
+                    Muls(mUb_[(lo + (r - rb)) * cb_], mUb_[(lo + (r - rb)) * cb_], dc, cb_);
+                }
+            }
+            PipeBarrier<PIPE_V>();
+            Sub(mUb_[lo * cb_], mUb_[lo * cb_], t2Ub[lo * cb_], RB * cb_);
+            AIV_SET_MTE3_V();
+            AIV_WAIT_MTE3_V();
+            Cast(stateBlkBf_, mUb_[lo * cb_], RoundMode::CAST_RINT, RB * cb_);
+            AIV_SET_V_MTE3();
+            AIV_WAIT_V_MTE3();
+            DataCopy(mBf_[rb * cb_], stateBlkBf_, RB * cb_);
+#else
             AIV_SET_MTE3_MTE2();
             AIV_WAIT_MTE3_MTE2();
             DataCopy(stateBlkF_, mF32_[rb * cb_], RB * cb_);
@@ -1504,6 +1563,7 @@ private:
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();
             DataCopy(mBf_[rb * cb_], stateBlkBf_, RB * cb_);
+#endif  // PPFM_M_UB
         }
         CrossCoreSetFlag<0x4, PIPE_V>(static_cast<uint16_t>(kFlagT2Free));
 #else
@@ -1557,6 +1617,9 @@ private:
     LocalTensor<float> extBlkF_;
 #if PPFM_H_UB
     LocalTensor<float> hUb_;          // R7：常驻 UB 的 h 半步（本子核的 64 行 × cb_）
+#endif
+#if PPFM_M_UB
+    LocalTensor<float> mUb_;          // R12：常驻 UB 的 m 半步（同上）
 #endif
     LocalTensor<float> vTmpUb_;   // ITER10（A2）：共享基址的 vTmp 落点视图
     LocalTensor<bfloat16_t> stateBlkBf_;

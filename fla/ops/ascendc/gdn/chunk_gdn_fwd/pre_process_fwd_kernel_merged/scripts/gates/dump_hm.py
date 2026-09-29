@@ -11,6 +11,7 @@ import os
 import sys
 
 import torch
+import torch_npu  # noqa: F401  （必须在 .to("npu") 之前导入，否则新容器上 'npu' 未注册）
 
 CASES = [
     ("gdn-t256", 256, 2, 2, "gdn", [0, 256]),

@@ -2919,3 +2919,53 @@ epilogue 4 栅栏/行 —— 都是 64 行）⇒ **这是 910B 下一个确定�
 
 > 判据也要跟着改：**per-task 固定开销要用小 shape 暴露**（R25 在 T=1024 上 -15.8%、
 R27 在 T=1024 上 -11.5%，而模型 case 只有 -2.3%/-1.0%）。只看大 shape 会漏掉整类问题。
+
+---
+
+## 45. R28：并入 K2-vf —— KDA 的逐行 decay 改 VF/RegBase（**KDA -30.6%**，GDN 中性）
+
+> 来源：并行通道的 `outputs/PPFM_NEXT_ITERATION_PLAN_KDA.md` §9（补丁
+> `work/patches/k2vf_against_R25.diff`，123 行）。本节是**在本主线程口径下**的复测。
+
+### 45.1 改了什么
+
+KDA（`gateMode = USE_GK`）在 `ApplyStateUpdates` 里走 `else` 分支：**每个状态行一次窄 `Muls` +
+一次标量 `GetValue`**（h/m 各 64 行/子核/chunk = 128 次），而 GDN 每相位只有 1 条整块 `Muls`。
+并行通道的探针给出上界：**删掉这段逐行应用 = −35.7%**（KDA T=16384 HK=HV=64）。
+
+补丁把它换成 `__simd_vf__` 的 `ApplyRowScaleInplaceRegbase`（照仓内
+`kda/chunk_kda_fwd/op_kernel/arch35/chunk_kda_fwd_prepare.h` 的 `ApplyKdaRowScaleRegbase`）：
+两行一组，`LoadAlign<float, LoadDist::DIST_BRC_B32>` 把 factor 广播进 RegTensor，
+`Mul` 后 `StoreAlign`。**只替换 950 上的 2 处活路径**（h 的 `H_UB`、m 的 `M_UB`），
+A2/回退路径保持原实现 ⇒ 非 950 行为不变。开关 `PPFM_KDA_VF_ROWS`（默认 1）。
+
+### 45.2 结果（950/247 卡 5，同会话 A/B；tip = R27 + K2-vf）
+
+| 用例 | R27（基线） | **R28 = +K2-vf** | 变化 |
+| --- | --- | --- | --- |
+| **kda T=16384 HK=HV=64** | 6455.09 us | **4479.91 us** | **-30.6%** |
+| **kda T=2048 HK=HV=64** | 836.87 us | **591.62 us** | **-29.3%** |
+| gdn T=16384 HK=HV=32 | 2598.62 us | 2597.56 us | -0.04% |
+| gdn T=16384 HK=HV=8 | 1164.10 us | 1167.77 us | +0.32% |
+| gdn T=4096 HK=HV=8 | 305.05 us | 306.48 us | +0.47% |
+| gdn 模型 case T=11264 | 1798.03 us | 1797.18 us | -0.05% |
+
+**验证**：L1 位级 vs `r27` **`BIT_IDENTICAL`**（含 `kda-t256`）、L0 PASS、smoke 10/10、41/41、L3 0/42。
+
+**KDA 档 vs H20**：`kda_h64_hv64` 的 cp=8（T_rank=16384，H20 median 3329.4 us）
+—— 6467（R22b 时代）→ **4479.9 us ⇒ 1.94× → 1.35× H20**。
+
+### 45.3 两条重要修正（相对并行通道的结论）
+
+1. **GDN 的 +1.4~2.2% 回归在我们 tip 上不存在**（实测 ±0.5% 内）。
+   他们是在 `1011325` 基线上测的；而我们随后落地的 R25（epilogue 合并）与 R27（m=I 整块构造）
+   已经把热函数体积压小 ⇒ **icache 归因成立、但压力已被消掉** ⇒ **NF1（noinline 冷函数）不必做**。
+2. **K1-a 不必在 950 上采用**（它只是发射顺序，K2-vf 把整段逐行应用都替掉了）；
+   K1-a 的价值转给 **A2/910B**（`__simd_vf__` 只在 `__CCE_AICORE__ == 310` 可用）。
+
+### 45.4 坑（已写进验收清单）
+
+`UpdateMask` 会**消耗** count 计数器：两行必须各用一个独立变量（`activeCount0/1`）。
+并行通道第一版复用同一变量 ⇒ 第二个 mask 为空 + `ZEROING` ⇒ **每对里的第二行被整体清零**，
+现象是"**更快 + 位级挂**（`max|diff|` 1.1e-1、65506/65536 元素不同）"。
+> **教训：VF 化之后"变快 + 位级挂"要先怀疑"少算了"，不要先怀疑舍入。**

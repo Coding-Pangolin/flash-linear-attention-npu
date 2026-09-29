@@ -73,6 +73,11 @@ using namespace AscendC;
 #define PPFM_GLAST_UB 1
 #endif
 
+// K2-vf: KDA 逐行 decay 用 VF/RegBase（位级不变）
+#ifndef PPFM_KDA_VF_ROWS
+#define PPFM_KDA_VF_ROWS 1
+#endif
+
 // R25: epilogue 逐行 hm 写合并成一次跨步 DataCopy
 #ifndef PPFM_EP_MERGE
 #define PPFM_EP_MERGE 1
@@ -102,6 +107,59 @@ using namespace AscendC;
 constexpr int32_t PPFM_XCORE_MODE = 0x4;
 #else
 constexpr int32_t PPFM_XCORE_MODE = 0x2;
+#endif
+
+#if PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
+// matrix[row, :] *= rowScale[row]（逐元素 fp32 乘）
+__simd_vf__ static inline void ApplyRowScaleInplaceRegbase(
+    __ubuf__ float *matrix, __ubuf__ float *rowScale, uint16_t rows, uint16_t cols)
+{
+    using namespace AscendC::MicroAPI;
+    constexpr uint16_t FP32_PER_REG = AscendC::VECTOR_REG_WIDTH / sizeof(float);
+    RegTensor<float> matrixReg0;
+    RegTensor<float> matrixReg1;
+    RegTensor<float> scaleReg0;
+    RegTensor<float> scaleReg1;
+
+    uint16_t row = 0;
+    for (; row + 1 < rows; row += 2) {
+        LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg0, rowScale + row);
+        LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg1, rowScale + row + 1);
+        for (uint16_t col = 0; col < cols; col += FP32_PER_REG) {
+            // ⚠ UpdateMask 会消耗 count 计数器：两行必须各用一个独立变量
+            //   （照 ApplyKdaRowScaleRegbase 的 activeCount0/1 写法，否则第二个 mask 为空）
+            uint32_t activeCount0 = static_cast<uint32_t>(cols - col);
+            uint32_t activeCount1 = activeCount0;
+            MaskReg mask0 = UpdateMask<float>(activeCount0);
+            MaskReg mask1 = UpdateMask<float>(activeCount1);
+            uint32_t offset0 = static_cast<uint32_t>(row) * cols + col;
+            uint32_t offset1 = static_cast<uint32_t>(row + 1) * cols + col;
+            LoadAlign(matrixReg0, matrix + offset0);
+            LoadAlign(matrixReg1, matrix + offset1);
+            Mul(matrixReg0, matrixReg0, scaleReg0, mask0);
+            Mul(matrixReg1, matrixReg1, scaleReg1, mask1);
+            StoreAlign(matrix + offset0, matrixReg0, mask0);
+            StoreAlign(matrix + offset1, matrixReg1, mask1);
+        }
+    }
+    if (row < rows) {
+        LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg0, rowScale + row);
+        for (uint16_t col = 0; col < cols; col += FP32_PER_REG) {
+            uint32_t activeCount = static_cast<uint32_t>(cols - col);
+            MaskReg mask = UpdateMask<float>(activeCount);
+            uint32_t offset = static_cast<uint32_t>(row) * cols + col;
+            LoadAlign(matrixReg0, matrix + offset);
+            Mul(matrixReg0, matrixReg0, scaleReg0, mask);
+            StoreAlign(matrix + offset, matrixReg0, mask);
+        }
+    }
+}
+
+// LocalTensor 的行指针（PhyAddr 是字节地址，转 float* 后按元素步进）
+__aicore__ inline __ubuf__ float *RowScalePtr(LocalTensor<float> &t, int32_t rowOff)
+{
+    return (__ubuf__ float *)reinterpret_cast<uint64_t>(t.GetPhyAddr()) + rowOff;
+}
 #endif
 
 constexpr int32_t CV_BT = 64;
@@ -1630,10 +1688,23 @@ private:
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(hUb_[lo * cb_], hUb_[lo * cb_], dc, RB * cb_);
             } else {
+#if PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
+                {
+                    __ubuf__ float *dstPtr_ = RowScalePtr(hUb_, lo);
+                    if (usePrevDecay) {
+                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayPrevF_, rb),
+                                                      (uint16_t)RB, (uint16_t)cb_);
+                    } else {
+                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayF_, rb),
+                                                      (uint16_t)RB, (uint16_t)cb_);
+                    }
+                }
+#else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(hUb_[(lo + (r - rb)) * cb_], hUb_[(lo + (r - rb)) * cb_], dc, cb_);
                 }
+#endif
             }
             PipeBarrier<PIPE_V>();
 #if PPFM_DH_CV
@@ -1674,10 +1745,23 @@ private:
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(stateBlkF_, stateBlkF_, dc, RB * cb_);
             } else {
+#if PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
+                {
+                    __ubuf__ float *dstPtr_ = RowScalePtr(stateBlkF_, 0);
+                    if (usePrevDecay) {
+                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayPrevF_, rb),
+                                                      (uint16_t)RB, (uint16_t)cb_);
+                    } else {
+                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayF_, rb),
+                                                      (uint16_t)RB, (uint16_t)cb_);
+                    }
+                }
+#else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
+#endif
             }
             PipeBarrier<PIPE_V>();
 #if PPFM_DH_CV
@@ -1715,10 +1799,23 @@ private:
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(mUb_[lo * cb_], mUb_[lo * cb_], dc, RB * cb_);
             } else {
+#if PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
+                {
+                    __ubuf__ float *dstPtr_ = RowScalePtr(mUb_, lo);
+                    if (usePrevDecay) {
+                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayPrevF_, rb),
+                                                      (uint16_t)RB, (uint16_t)cb_);
+                    } else {
+                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayF_, rb),
+                                                      (uint16_t)RB, (uint16_t)cb_);
+                    }
+                }
+#else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(mUb_[(lo + (r - rb)) * cb_], mUb_[(lo + (r - rb)) * cb_], dc, cb_);
                 }
+#endif
             }
             PipeBarrier<PIPE_V>();
             Sub(mUb_[lo * cb_], mUb_[lo * cb_], t2Ub[lo * cb_], RB * cb_);
@@ -1738,10 +1835,23 @@ private:
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(stateBlkF_, stateBlkF_, dc, RB * cb_);
             } else {
+#if PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
+                {
+                    __ubuf__ float *dstPtr_ = RowScalePtr(stateBlkF_, 0);
+                    if (usePrevDecay) {
+                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayPrevF_, rb),
+                                                      (uint16_t)RB, (uint16_t)cb_);
+                    } else {
+                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayF_, rb),
+                                                      (uint16_t)RB, (uint16_t)cb_);
+                    }
+                }
+#else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
+#endif
             }
             PipeBarrier<PIPE_V>();
             Sub(stateBlkF_, stateBlkF_, t2Ub[lo * cb_], RB * cb_);
@@ -1769,10 +1879,23 @@ private:
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(stateBlkF_, stateBlkF_, dc, RB * cb_);
             } else {
+#if PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
+                {
+                    __ubuf__ float *dstPtr_ = RowScalePtr(stateBlkF_, 0);
+                    if (usePrevDecay) {
+                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayPrevF_, rb),
+                                                      (uint16_t)RB, (uint16_t)cb_);
+                    } else {
+                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayF_, rb),
+                                                      (uint16_t)RB, (uint16_t)cb_);
+                    }
+                }
+#else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
+#endif
             }
             PipeBarrier<PIPE_V>();
             Sub(stateBlkF_, stateBlkF_, extBlkF_, RB * cb_);

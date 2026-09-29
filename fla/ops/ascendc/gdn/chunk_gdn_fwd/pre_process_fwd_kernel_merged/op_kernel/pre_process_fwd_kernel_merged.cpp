@@ -133,6 +133,10 @@ constexpr uint16_t kFlagState = 2;    // AIV -> AIC：h/m 状态就位
 constexpr uint16_t kFlagHalf1 = 3;    // AIC -> AIV：vTmp 与 T1 就位
 constexpr uint16_t kFlagVNew = 4;     // AIV -> AIC：bf16(v_new) 与 bf16(T1) 就位
 constexpr uint16_t kFlagDH = 5;       // AIC -> AIV：dH 与 T2 就位
+// R6（dH 走 L0C->UB）：dH 的 UB 槽「归还」信用（AIV -> AIC）。槽 j 用 id + j，
+// AIC 侧按 subblock 各等一次（id 与 id+PPFM_SUBFLAG_STRIDE），
+// 与仓内 arch35 的 MATRIX_CV_AIV_TO_AIC_FLAG_BEGIN/CV_SUBBLOCK_FLAG_STRIDE 同构。
+constexpr uint16_t kFlagDhFree = 8;
 
 // AIV 子核：写自己本地 slot（硬件按子核自动映射到 id / id+16）
 __aicore__ inline void AivSetToAic(uint16_t id)
@@ -250,6 +254,11 @@ using TiledCopyTA = Catlass::Gemm::Tile::PackedTileCopyTla<
 using TiledCopyNTSplitUb = Common::Tile::PackedTileCopyTlaToUB<
     TiledArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor,
     float, Catlass::layout::RowMajor, void, Catlass::Gemm::Tile::CopyL0CToUBMode::SPLIT_M>;
+// R6：TA 形态（A 列主）的 C 直接落 UB，同样是 SPLIT_M
+// （A 列主 = 逻辑 [m,k] 在内存里按 [k,m] 存，正是「转置 A」的 mm2/mm4）
+using TiledCopyTASplitUb = Common::Tile::PackedTileCopyTlaToUB<
+    TiledArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor,
+    float, Catlass::layout::RowMajor, void, Catlass::Gemm::Tile::CopyL0CToUBMode::SPLIT_M>;
 #endif
 using TiledMmadNT = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
                                                      typename TiledCopyNT::LayoutTagL1A>;
@@ -301,6 +310,17 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 // UB 语义诊断（默认 0）：1=UB 落点同时再写一份 GM，并在 AIV 侧回采探针
 #ifndef PPFM_VTMP_UB_DIAG
 #define PPFM_VTMP_UB_DIAG 0
+#endif
+// R6（默认 950=1 / A2A3=0）：dH 的 C 由 fixpipe 直落 UB（L0C->UB，SPLIT_M），
+// 省掉 dH 每 chunk 的 GM 往返；0 = 旧路径（AIC 写 dHF_/dHF1_ GM，AIV 回读）。
+// ⚠ SPLIT_M 的语义是「M 方向对半、两半分别写进两个 AIV 子核各自 bank 的同一偏移」，
+//   所以 AIV 侧按**连续半区**（子核 i = 行 [i*K/2, (i+1)*K/2)）取自己那半。
+#ifndef PPFM_DH_CV
+#if PPFM_ARCH_IS_950
+#define PPFM_DH_CV 1
+#else
+#define PPFM_DH_CV 0
+#endif
 #endif
 // 实验开关：1=保留手工 DCCI/DSB（历史做法）；0=只用跨核 flag（与生产算子一致）
 // 950：实测只用跨核 flag 就够（并且去掉 DCCI 后竞态由 3/6 降到 1/6），默认 0。
@@ -461,7 +481,20 @@ constexpr int32_t UB_VBLK_BF = UB_WBLK_BF + CV_BT * CV_K * 2;                // 
 constexpr int32_t UB_SCR_F = UB_VBLK_BF + CV_BT * CV_V * 2;                  // [BT,K] fp32
 constexpr int32_t UB_SCR_BF = UB_SCR_F + CV_BT * CV_K * 4;                   // [BT,K] bf16
 constexpr int32_t UB_DBG = UB_SCR_BF + CV_BT * CV_K * 2;                     // 诊断槽 ×2
-constexpr int32_t PPFM_VEC_UB_BYTES = UB_DBG + PPFM_SUB * 16 * 4;
+// ---- R6：dH 的 CV 落点（L0C->UB，2 槽 ping-pong，见 validation §22/§23）----
+// 每个 AIV 子核有**自己的 UB bank**（253952 B/子核），SPLIT_M 只把 C 的 M 两半分别写进
+// 两个 bank 的**同一偏移** ⇒ 单槽按「一个子核那一半的行数」算：CV_K/2 = 64 行 × CV_V × 4B
+// = 32768 B；2 槽 = 65536 B。188096 + 65536 = 253632 ≤ 253952（余 320 B）。
+constexpr int32_t UB_DH_CV = UB_DBG + PPFM_SUB * 16 * 4;
+constexpr int32_t DH_CV_ROWS = CV_K / PPFM_SUB;                              // 64
+constexpr int32_t UB_DH_CV_SLOT = DH_CV_ROWS * CV_V * 4;                     // 32768 B
+constexpr int32_t UB_DH_CV_ELEM = UB_DH_CV / 4;
+constexpr int32_t UB_DH_CV_SLOT_ELEM = UB_DH_CV_SLOT / 4;
+#if PPFM_DH_CV
+constexpr int32_t PPFM_VEC_UB_BYTES = UB_DH_CV + 2 * UB_DH_CV_SLOT;
+#else
+constexpr int32_t PPFM_VEC_UB_BYTES = UB_DH_CV;
+#endif
 
 // 上面都是**字节**偏移，取 Tensor 时要按元素大小换算（bf16 → /2，fp32 → /4）
 constexpr int32_t UB_ROW0_BF_ELEM = UB_ROW0_BF / 2;
@@ -787,6 +820,13 @@ private:
         const int64_t nt = (len + CV_BT - 1) / CV_BT;
         // ITER7（P3）：先独立做 chunk 0 的 staging；循环内把 staging(c+1) 提到
         // 「等 dH/T2(c)」之前 ⇒ staging 与 AIC 的 mm2/mm4(c) 重叠（原来 AIV 在这里纯等）
+#if PPFM_DH_CV
+        // R6 首 credit：两个 dH 槽先各归还一次，否则 AIC 第一次 CV 写入会死等。
+        // 每个 AIV 子核各置一次（硬件映射到 id / id+PPFM_SUBFLAG_STRIDE），AIC 侧按 subblock 各等一次。
+        for (int32_t j = 0; j < 2; ++j) {
+            CrossCoreSetFlag<0x4, PIPE_V>(static_cast<uint16_t>(kFlagDhFree + j));
+        }
+#endif
         StageChunk(n, hv, bos, (len < CV_BT) ? len : CV_BT, 0);
         for (int64_t c = 0; c < nt; ++c) {
 #if PPFM_DIAG
@@ -1192,6 +1232,11 @@ private:
         const bool evenChunk = ((dataChunk & 1) == 0);
         GlobalTensor<float> &dhBuf = evenChunk ? dHF_ : dHF1_;
         GlobalTensor<float> &t2Buf = evenChunk ? t2F_ : t2F1_;
+#if PPFM_DH_CV
+        // R6：dH 在本子核的 UB bank 里（槽号 = 数据所属 chunk 的奇偶），不再从 GM 回读
+        const int32_t dhSlot = static_cast<int32_t>(dataChunk & 1);
+        LocalTensor<float> dHUb = ubBuf_.Get<float>()[UB_DH_CV_ELEM + dhSlot * UB_DH_CV_SLOT_ELEM];
+#endif
         // 同 UpdateVNew 的过渡探读：dH / T2 也是 AIC 刚写、本核刚读的 GM
 #if PPFM_LEGACY_PROBE_READS
         DataCopy(row2F_, dhBuf, 8);
@@ -1201,14 +1246,27 @@ private:
 #endif  // PPFM_LEGACY_PROBE_READS
         // 每 RB 行一次搬运：块内逐行 Muls（廉价、无需栅栏），块级 Add/Sub/Cast
         constexpr int32_t RB = PPFM_RB;   // ITER6a：真正用上 32 行（ITER3 只改了 UB 尺寸）
-        for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {
+#if PPFM_DH_CV
+        // R6：SPLIT_M 是「连续半区」⇒ 子核 i 负责行 [i*CV_K/2, (i+1)*CV_K/2)。
+        // 状态更新是逐行 elementwise，换分法数值等价（GVA/KDA 的 decay 索引仍是全局行号）。
+        const int32_t rbBeg = subIdx_ * (CV_K / PPFM_SUB);
+        const int32_t rbEnd = rbBeg + (CV_K / PPFM_SUB);
+        const int32_t rbStep = RB;
+#else
+        const int32_t rbBeg = subIdx_ * RB;
+        const int32_t rbEnd = CV_K;
+        const int32_t rbStep = subNum_ * RB;
+#endif
+        for (int32_t rb = rbBeg; rb < rbEnd; rb += rbStep) {
             // ITER2：第一次搬运后的全栅栏冗余——紧随其后第二次搬运之后还有一次，
             //        足以保证两次 MTE2 都在 Muls/Add 之前完成
             // P1a：上一轮的 MTE3（写 hF32_/hBf_）读的是同一组 UB，先等它读完再覆盖
             AIV_SET_MTE3_MTE2();
             AIV_WAIT_MTE3_MTE2();
             DataCopy(stateBlkF_, hF32_[rb * cb_], RB * cb_);
+#if !PPFM_DH_CV
             DataCopy(extBlkF_, dhBuf[rb * cb_], RB * cb_);
+#endif
             AIV_SET_MTE2_V();
             AIV_WAIT_MTE2_V();
 #if PPFM_RD_PROBE
@@ -1231,7 +1289,11 @@ private:
                 }
             }
             PipeBarrier<PIPE_V>();
+#if PPFM_DH_CV
+            Add(stateBlkF_, stateBlkF_, dHUb[(rb - rbBeg) * cb_], RB * cb_);
+#else
             Add(stateBlkF_, stateBlkF_, extBlkF_, RB * cb_);
+#endif
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
             DataCopy(hF32_[rb * cb_], stateBlkF_, RB * cb_);
@@ -1242,6 +1304,10 @@ private:
             AIV_WAIT_V_MTE3();   // V -> MTE3
             DataCopy(hBf_[rb * cb_], stateBlkBf_, RB * cb_);
         }
+#if PPFM_DH_CV
+        // 归还本代 dH 的槽（PIPE_V：保证上面所有读该槽的 V 运算都已发射完）
+        CrossCoreSetFlag<0x4, PIPE_V>(static_cast<uint16_t>(kFlagDhFree + dhSlot));
+#endif
         PipeBarrier<PIPE_ALL>();
         for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {
             AIV_SET_MTE3_MTE2();
@@ -1395,6 +1461,15 @@ public:
                 const int64_t rows = (leftLen < CV_BT) ? leftLen : CV_BT;
                 ProcessChunk(c, hv, bos + c * CV_BT, rows);
             }
+#if PPFM_DH_CV
+            // R6 尾 drain：把本链两个 dH 槽的归还信用收干净（每链 prime 2 次、set nt 次、
+            // wait nt+2 次 ⇒ 逐链平衡）。对手算子同构做法见 arch35 的 DrainPipeFlags()。
+            for (int32_t j = 0; j < 2; ++j) {
+                CrossCoreWaitFlag<0x4, PIPE_FIX>(static_cast<uint16_t>(kFlagDhFree + j));
+                CrossCoreWaitFlag<0x4, PIPE_FIX>(
+                    static_cast<uint16_t>(kFlagDhFree + j + PPFM_SUBFLAG_STRIDE));
+            }
+#endif
         }
     }
 
@@ -1490,13 +1565,21 @@ private:
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1Bf_);
 #endif
+#if PPFM_DH_CV
+        // R6：dH 的 C 直落 UB 槽（槽号 = chunk 奇偶），不再写 GM dHF_
+        RunTiledTAUb(kTile, vNewBf_, CV_K, static_cast<uint32_t>(cb_), CV_BT,
+                     static_cast<int32_t>(c & 1));
+#else
         RunMmadTA(kTile, vNewBf_, dhBuf, CV_K, static_cast<uint32_t>(cb_), CV_BT);
+#endif
 
         // ④ T2[K,K] = left^T @ bf16(T1)[BT,K]
         RunMmadTA(lIn, t1Bf_, t2Buf, CV_K, static_cast<uint32_t>(cb_), CV_BT);
+#if !PPFM_DH_CV
 #if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(dhBuf);
+#endif
 #endif
 #if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
@@ -1680,6 +1763,77 @@ private:
         WaitFlag<HardEvent::FIX_M>(EVENT_ID3);
         PipeBarrier<PIPE_ALL>();
     }
+
+#if PPFM_DH_CV
+    // ---- R6：C 走 L0C->UB 的 TA 版本（mm2 = dH）----
+    // L1/L0 装载与 MMAD 与 RunTiledTA 完全相同，只把出口从 GM 换成 UB 槽；
+    // SPLIT_M 把 C 的 M 分成两半、分别写进两个 AIV 子核**各自 bank 的同一偏移**。
+    __aicore__ inline void RunTiledTAUb(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
+                                        uint32_t m, uint32_t n, uint32_t k, int32_t slot)
+    {
+        Catlass::Arch::Resource<MmArchTag> res;
+        auto l1A = res.l1Buf.template GetBufferByByte<bfloat16_t>(TILED_L1_A_OFF);
+        auto l1B = res.l1Buf.template GetBufferByByte<bfloat16_t>(TILED_L1_B_OFF);
+        auto l0A = res.l0ABuf.template GetBufferByByte<bfloat16_t>(0);
+        auto l0B = res.l0BBuf.template GetBufferByByte<bfloat16_t>(0);
+        auto l0C = res.l0CBuf.template GetBufferByByte<float>(0);
+
+        auto tA = tla::MakeTensor(gmA[0], tla::MakeLayout<bfloat16_t, Catlass::layout::ColumnMajor>(m, k),
+                                  Catlass::Arch::PositionGM{});
+        auto tB = tla::MakeTensor(gmB[0], tla::MakeLayout<bfloat16_t, Catlass::layout::RowMajor>(k, n),
+                                  Catlass::Arch::PositionGM{});
+        auto bA = GetTile(tA, tla::MakeCoord(0, 0), tla::MakeShape(m, k));
+        auto bB = GetTile(tB, tla::MakeCoord(0, 0), tla::MakeShape(k, n));
+
+        auto tL1A = tla::MakeTensor(
+            l1A, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL1A>(TILED_L1_CAP_M, TILED_L1_CAP_K),
+            Catlass::Arch::PositionL1{});
+        auto tL1B = tla::MakeTensor(
+            l1B, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL1B>(TILED_L1_CAP_K, TILED_L1_CAP_N),
+            Catlass::Arch::PositionL1{});
+        typename MmTileCopyTA::template CopyGmToL1A<decltype(bA)> copyG2LA;
+        typename MmTileCopyTA::template CopyGmToL1B<decltype(bB)> copyG2LB;
+        copyG2LA(tL1A, bA);
+        copyG2LB(tL1B, bB);
+        SetFlag<HardEvent::MTE2_MTE1>(EVENT_ID0);
+        WaitFlag<HardEvent::MTE2_MTE1>(EVENT_ID0);
+
+        auto tL0A = tla::MakeTensor(
+            l0A, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL0A>(m, k),
+            Catlass::Arch::PositionL0A{});
+        auto tL0B = tla::MakeTensor(
+            l0B, tla::MakeLayout<bfloat16_t, typename MmTileCopyTA::LayoutTagL0B>(k, n),
+            Catlass::Arch::PositionL0B{});
+        typename MmTileCopyTA::CopyL1ToL0A copyL2L0A;
+        typename MmTileCopyTA::CopyL1ToL0B copyL2L0B;
+        copyL2L0A(tL0A, GetTile(tL1A, tla::MakeCoord(0, 0), tla::MakeShape(m, k)));
+        copyL2L0B(tL0B, GetTile(tL1B, tla::MakeCoord(0, 0), tla::MakeShape(k, n)));
+        SetFlag<HardEvent::MTE1_M>(EVENT_ID1);
+        WaitFlag<HardEvent::MTE1_M>(EVENT_ID1);
+
+        auto tL0C = tla::MakeTensor(l0C, tla::MakeLayoutL0C(m, n), Catlass::Arch::PositionL0C{});
+        MmTileMmadTA mmad;
+        mmad(tL0C, tL0A, tL0B, m, n, k);
+        SetFlag<HardEvent::M_FIX>(EVENT_ID2);
+        WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
+
+        // 槽归还信用：AIV 消费完上一代 dH 才置起（首 credit 由 AIV 侧 prime，尾 drain 在链末）
+        CrossCoreWaitFlag<0x4, PIPE_FIX>(static_cast<uint16_t>(kFlagDhFree + slot));
+        CrossCoreWaitFlag<0x4, PIPE_FIX>(
+            static_cast<uint16_t>(kFlagDhFree + slot + PPFM_SUBFLAG_STRIDE));
+
+        AscendC::LocalTensor<float> dHUb(AscendC::TPosition::VECCALC,
+                                         UB_DH_CV + slot * UB_DH_CV_SLOT, m * n);
+        auto layoutUb = tla::MakeLayout<float, Catlass::layout::RowMajor>(m, n);
+        auto tensorUb = tla::MakeTensor(dHUb, layoutUb, Catlass::Arch::PositionUB{});
+        typename TiledCopyTASplitUb::template CopyL0CToDst<decltype(tensorUb)> copyUb;
+        copyUb(tensorUb, tL0C);
+
+        SetFlag<HardEvent::FIX_M>(EVENT_ID3);
+        WaitFlag<HardEvent::FIX_M>(EVENT_ID3);
+        PipeBarrier<PIPE_ALL>();
+    }
+#endif  // PPFM_DH_CV
 #endif  // PPFM_TILE_MMAD
 
     __aicore__ inline void RunMmadNT(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,

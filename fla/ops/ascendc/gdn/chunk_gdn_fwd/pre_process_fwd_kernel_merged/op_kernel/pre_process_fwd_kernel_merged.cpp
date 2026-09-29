@@ -1701,11 +1701,36 @@ private:
 #endif
         AicSetToAiv(kFlagHalf1);
 
+        // ---- R8：把 **m 链的 mm4（T2）提前到「等 v_new」之前** ----
+        // 依据（§27 的 profile）：每 chunk 里 AIC 与 AIV 几乎完全串行 —— 两边的忙时都 ≈ 算子时长
+        // （3069 / 3099 vs 3103 µs），而各自 pipe 只 52% / 92% 忙 ⇒ 卡在"乒乓"的关键路径上，不在吞吐。
+        // mm4 = leftᵀ @ bf16(T1) 只依赖 left(c)（staging 已由 kFlagInputs 保证）与 T1(c)（刚算完），
+        // **与 h 链的 v_new 无关** ⇒ 提前后可与 AIV 的 v_new 相位重叠，AIC 关键路径上少一个 MMAD；
+        // m 链（m→T1→T2→m）也不再排在 h 链后面。
+        // 安全性：T2 槽的归还信用由 AIV 在**本迭代开头的 m 相位**里置起（早于 kFlagInputs(c)），
+        // 所以这里（kFlagInputs 之后）写槽一定在 AIV 消费完上一代之后。
+        GlobalTensor<bfloat16_t> &lIn = ((c & 1) != 0) ? lBf1_ : lBf_;
+#if PPFM_LEGACY_CACHEOPS
+        DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(lIn);
+#endif
+#if PPFM_LEGACY_CACHEOPS
+        DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(t1Bf_);
+#endif
+#if PPFM_T2_CV
+        // R6b：T2 直落 UB 槽（单槽）
+        RunTiledTAUb(lIn, t1Bf_, CV_K, static_cast<uint32_t>(cb_), CV_BT,
+                     UB_T2_CV, static_cast<uint16_t>(kFlagT2Free));
+#else
+        RunMmadTA(lIn, t1Bf_, t2Buf, CV_K, static_cast<uint32_t>(cb_), CV_BT);
+#endif
+
         // ② dH[K,V] = k_c^T @ bf16(v_new)[BT,V]
         AicWaitFromAiv(kFlagVNew);
         // ITER7：按 chunk 奇偶取 k/left 槽（与 AIV staging 写入槽一致）
         GlobalTensor<bfloat16_t> &kIn = ((c & 1) != 0) ? kBf1_ : kBf_;
-        GlobalTensor<bfloat16_t> &lIn = ((c & 1) != 0) ? lBf1_ : lBf_;
+
         // 满 chunk：k 也直接来自输入（AIV 不再写 kBf_）
         GlobalTensor<bfloat16_t> kTile = directInputs ? kIn_[(hk * tt->T + t0) * CV_K] : kIn;
 #if PPFM_LEGACY_CACHEOPS
@@ -1714,15 +1739,7 @@ private:
 #endif
 #if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
-                                 DcciDst::CACHELINE_OUT>(lIn);
-#endif
-#if PPFM_LEGACY_CACHEOPS
-        DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(vNewBf_);
-#endif
-#if PPFM_LEGACY_CACHEOPS
-        DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
-                                 DcciDst::CACHELINE_OUT>(t1Bf_);
 #endif
 #if PPFM_DH_CV
         // R6：dH 的 C 直落 UB 槽（单槽），不再写 GM dHF_
@@ -1732,14 +1749,7 @@ private:
         RunMmadTA(kTile, vNewBf_, dhBuf, CV_K, static_cast<uint32_t>(cb_), CV_BT);
 #endif
 
-        // ④ T2[K,K] = left^T @ bf16(T1)[BT,K]
-#if PPFM_T2_CV
-        // R6b：T2 同样直落 UB 槽（单槽）—— 去掉 m 链上最后一条 "AIC→AIV 经 GM" 的边
-        RunTiledTAUb(lIn, t1Bf_, CV_K, static_cast<uint32_t>(cb_), CV_BT,
-                     UB_T2_CV, static_cast<uint16_t>(kFlagT2Free));
-#else
-        RunMmadTA(lIn, t1Bf_, t2Buf, CV_K, static_cast<uint32_t>(cb_), CV_BT);
-#endif
+        // ④ T2 已在上面（kFlagHalf1 之后）提前算完
 #if !PPFM_DH_CV
 #if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,

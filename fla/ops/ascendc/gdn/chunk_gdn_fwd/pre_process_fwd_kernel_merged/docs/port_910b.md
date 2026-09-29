@@ -15,8 +15,11 @@
 | L3 序列探针（独立进程复跑） | 最近一轮 0/30 | **0/20** |
 | h 半边 max_abs（T=256 同用例） | 9.537e-07 | **9.537e-07**（同档） |
 | m 半边 max_abs | 2.766e-05 | **2.766e-05**（同档） |
-| 成本模型 `a / b`（msprof `Task Duration`） | 74.5 µs / 14.08 µs·chunk⁻¹ | **72.0 µs / 12.27 µs·chunk⁻¹** |
-| 模型 case T=11264/HK=HV=32 | 5.10 ms（3.15× H20） | **4.53 ms（2.79× H20）** |
+| 成本模型 `a / b`（msprof `Task Duration`） | 71.7 µs / 12.91 µs·chunk⁻¹（P1a 前）→ **72.8 / 11.14**（P1a 后） | 72.0 / 12.27（P1a 前）→ **73.9 / 11.32**（P1a 后） |
+| 模型 case T=11264/HK=HV=32 | 5.10 ms（3.15×）→ **4.05 ms（2.50× H20）** | 4.53 ms（2.79×）→ **4.18 ms（2.58× H20）** |
+
+> P1a（AIV 热路径 `PipeBarrier<PIPE_ALL>` → 跨流水事件对，见 `docs/validation.md` §14）
+> 在两平台都做了 **L1 位级回归：`BIT_IDENTICAL`**，属于"只改调度、不改数值"。
 
 ## 2. 平台分档表（都在 `op_kernel/pre_process_fwd_kernel_merged.cpp` 头部）
 

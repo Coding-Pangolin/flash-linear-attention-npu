@@ -1374,3 +1374,56 @@ GDN h 可见性窗口）；③ 压 prologue 的 99 µs（T=64 时占 79%）；�
    改用逐行 `Duplicate + SetValue`；m 从 9.7e-01 修到 5.96e-08；
 4. **`bf16(h)` 落盘被写坏**（`a65df3e`）：A2 上"一次 `Cast` + 循环内 128 次复用同一 UB 行"会写脏 bf16 落点，
    改用逐行写法；h 从 1.5e-02 修到 9.537e-07。
+---
+
+## 14. P1a：AIV 热路径跨流水事件化（950 + 910B，2026-09-29）
+
+出处：`PIPELINE_PARALLEL_AND_PRECISION_GATE.md` §P1a（"先做、风险最低"）。
+
+### 14.1 改动
+
+AIV 的 staging 段循环、`UpdateVNew` 的两段循环、`ApplyStateUpdates` 的 h/m 循环里，
+把跨流水的 `PipeBarrier<PIPE_ALL>` 换成**成对**的 `SetFlag/WaitFlag<HardEvent>`：
+
+| 边 | ID | 用在哪 |
+| --- | --- | --- |
+| `MTE2_V` | 0 | GM→UB 载入 → Cast/Sub/Muls |
+| `V_MTE3` | 1 | Cast/Add/Sub → UB→GM 落盘 |
+| `MTE3_MTE2` | 2 | 上一轮落盘读完 → 本轮覆盖同一 UB |
+| `MTE3_V` | 3 | 同上（覆盖方是 V） |
+| `V_MTE2` | 4 | 零填充（V）→ MTE2 覆盖 |
+| `MTE2_MTE3` | 5 | MTE2 载入 → MTE3 直接搬运（k/w 的 GM→GM 路径） |
+| `V_S`/`S_V` | 6/7 | 向量写 → 标量读，标量写 → 向量读 |
+
+事件语义是"该流水**此前所有操作**完成"，因此成对 set/wait 放在消费者之前即可，
+循环携带依赖不需要额外的信用记账（不会出现"多 set 少 wait"的不平衡）。
+开关 `PPFM_AIV_EVENTS`（默认 1，置 0 退回原 `PipeBarrier<PIPE_ALL>` 语义，便于 A/B 与回退）。
+函数出口仍保留一次全栅栏（跨函数复用 UB 的边界）。
+
+### 14.2 验收（两平台，改前 → 改后）
+
+| 项 | 950 | 910B |
+| --- | --- | --- |
+| L0 静态 | PASS | PASS |
+| **L1 位级回归** | **BIT_IDENTICAL**（5 用例逐元素为 0 差异） | **BIT_IDENTICAL** |
+| L2 smoke 10 形状 | 全部通过 | 全部通过 |
+| L4 41 条（`--repeats 2`） | 0 失败 | 0 失败 |
+| L3 序列探针 | 0/30 | 0/30 |
+| `b`（µs/chunk） | 12.91 → **11.14（−13.7%）** | 12.27 → **11.32（−7.7%）** |
+| T=1024/HV=8 | 278.22 → **251.01 µs** | 268.39 → **255.07 µs** |
+| T=4096/HV=8 | 898.04 → **785.89 µs** | 857.42 → **798.42 µs** |
+| 模型 case T=11264/HK=HV=32 | 5.10 ms（3.15× H20）→ **4.05 ms（2.50×）** | 4.53 ms（2.79×）→ **4.18 ms（2.58×）** |
+
+固定开销 `a` 基本不变（71.7→72.8 / 72.0→73.9 µs，噪声内），收益全部来自每 chunk 成本。
+
+### 14.3 复现
+
+```bash
+# 改前先采 L1 基线
+python3 $OP/scripts/gates/dump_hm.py $OP baseline_p1a
+# 改后一键全门禁（含位级比对）
+TAG=after_p1a BASE=baseline_p1a bash $OP/scripts/gates/run_gate_all.sh $OP 6
+# 性能 A/B
+bash scripts/gates/run_msopprof.sh 1024:8 4096:8        # 910B / 通用
+bash /workspace/bartonfang/ppfm-sim/run_msopprof_246.sh 1024:8 4096:8   # 246 上的 950
+```

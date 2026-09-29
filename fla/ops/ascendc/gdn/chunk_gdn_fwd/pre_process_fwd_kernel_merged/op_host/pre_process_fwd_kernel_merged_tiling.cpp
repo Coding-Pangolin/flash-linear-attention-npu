@@ -22,6 +22,7 @@
 #include <register/op_impl_registry.h>
 #include "platform/soc_spec.h"
 #include "tiling_base/tiling_templates_registry.h"
+#include <cstdlib>   // std::getenv / std::atoll（PPFM_FORCE_COLSPLIT 测试钩子）
 
 namespace optiling {
 
@@ -188,7 +189,26 @@ ge::graphStatus Tiling4PreProcessFwdKernelMerged(gert::TilingContext *context)
 
     const auto ascendcPlatform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
     const int64_t aicNum = static_cast<int64_t>(ascendcPlatform.GetCoreNumAic());
-    const int64_t taskNum = nSeq * Hv;
+    // ---- P5 列块切分：把"链"按列切成 colSplit 份（h 切 V 列、m 切 K 列，两侧独立） ----
+    // 实测（950，msprof，见 docs/validation.md §16）：
+    //   * Nwork=8 / aic=28：切 2 份仍是 1 波，16 个核干活 ⇒ 783 → 653 µs（−16.7%）✅
+    //   * Nwork=32 / aic=28：切 2 份把波数从 2 抬到 3，而每项成本**并不减半**
+    //     （staging/left/decay 被两半重复、状态更新的逐行回路条数不变）
+    //     ⇒ 4027 → 4976 µs（+23.6%）❌
+    // 因此只在一波放得下时切：2·Nwork ≤ aicNum。cube 的 N 维此时是 64（仍够宽）。
+    const int64_t hwItems = nSeq * Hv;
+    int64_t colSplit = 1;
+    if (aicNum > 0 && hwItems * 2 <= aicNum) {
+        colSplit = 2;
+    }
+    // 测试/调试钩子：环境变量可强制列块切分因子（1 或 2），用于位级 A/B 与回归。
+    if (const char *forceSplit = std::getenv("PPFM_FORCE_COLSPLIT")) {
+        const int64_t v = std::atoll(forceSplit);
+        if (v == 1 || v == 2) {
+            colSplit = v;
+        }
+    }
+    const int64_t taskNum = hwItems * colSplit;
 
     tiling->B = B;
     tiling->Hk = Hk;
@@ -204,6 +224,7 @@ ge::graphStatus Tiling4PreProcessFwdKernelMerged(gert::TilingContext *context)
     tiling->isVariedLen = 1;
     tiling->usedAicNum = (taskNum < aicNum) ? taskNum : aicNum;
     tiling->taskNum = taskNum;
+    tiling->colSplit = colSplit;
 
     OP_CHECK_IF(context->GetRawTilingData() == nullptr ||
                     context->GetRawTilingData()->GetCapacity() <

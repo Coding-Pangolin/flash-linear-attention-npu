@@ -335,7 +335,12 @@ def _install_run_package(run_file, install_path):
         pass
 
     cmd = [str(run_file), "--quiet", f"--install-path={Path(install_path).resolve()}"]
-    tmp_dir = Path(install_path).resolve().parent / ".run-installer-tmp"
+    # OPP `.run` 安装器按 statvfs 的 bavail 判断"有没有空间解包"；当宿主盘/工作区落在
+    # "free < ext4 5% 保留块"的文件系统上时 bavail == 0（root 其实仍可写），安装器会直接
+    # 报 `Not enough space left in ... (0 KB)`。这里允许用环境变量把它的临时目录指到
+    # 真正有余量的路径（例如 tmpfs）。默认行为不变。
+    tmp_dir = Path(os.environ.get("FLA_NPU_RUN_TMPDIR",
+                                 str(Path(install_path).resolve().parent / ".run-installer-tmp")))
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)

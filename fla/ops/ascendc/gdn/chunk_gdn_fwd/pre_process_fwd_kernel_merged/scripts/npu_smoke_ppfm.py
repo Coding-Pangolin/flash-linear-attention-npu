@@ -17,6 +17,7 @@ import sys
 import traceback
 
 import torch
+import torch_npu  # noqa: F401  显式导入：新容器/新进程里 npu device type 才注册
 
 
 def build_case(seed: int, T: int, HK: int, HV: int, K: int, V: int, variant: str,

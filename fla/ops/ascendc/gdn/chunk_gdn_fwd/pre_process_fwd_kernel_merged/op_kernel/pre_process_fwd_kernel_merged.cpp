@@ -323,6 +323,54 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #define PPFM_RD_PROBE 0
 #endif
 
+// ---------------- AIV 侧跨流水同步：事件对（P1a）----------------
+// 热路径原来用 PipeBarrier<PIPE_ALL> 把所有流水排空；跨流水的依赖其实只需要"生产者→消费者"
+// 的事件对。PPFM_AIV_EVENTS=0 时退化成与原来等价的 PIPE_ALL（用于 A/B 与快速回退）。
+// 事件 ID 分工（每个 SET 都有同 ID 的 WAIT，成对消耗；AIC 侧用的是它自己的一套，互不影响）：
+//   ID0 MTE2->V   ID1 V->MTE3   ID2 MTE3->MTE2   ID3 MTE3->V
+//   ID4 V->MTE2   ID5 MTE2->MTE3   ID6 V->S      ID7 S->V
+// ⚠ 经验（见 docs/pipeline_parallel_plan.md §P1a）：**必须用事件对**，
+// 用 PipeBarrier<PIPE_X> 代替 PIPE_ALL 会丢跨流水依赖（ITER6 曾 6/6 全错）。
+#ifndef PPFM_AIV_EVENTS
+#define PPFM_AIV_EVENTS 1
+#endif
+#if PPFM_AIV_EVENTS
+#define AIV_SET_MTE2_V()     SetFlag<HardEvent::MTE2_V>(EVENT_ID0)
+#define AIV_WAIT_MTE2_V()    WaitFlag<HardEvent::MTE2_V>(EVENT_ID0)
+#define AIV_SET_V_MTE3()     SetFlag<HardEvent::V_MTE3>(EVENT_ID1)
+#define AIV_WAIT_V_MTE3()    WaitFlag<HardEvent::V_MTE3>(EVENT_ID1)
+#define AIV_SET_MTE3_MTE2()  SetFlag<HardEvent::MTE3_MTE2>(EVENT_ID2)
+#define AIV_WAIT_MTE3_MTE2() WaitFlag<HardEvent::MTE3_MTE2>(EVENT_ID2)
+#define AIV_SET_MTE3_V()     SetFlag<HardEvent::MTE3_V>(EVENT_ID3)
+#define AIV_WAIT_MTE3_V()    WaitFlag<HardEvent::MTE3_V>(EVENT_ID3)
+#define AIV_SET_V_MTE2()     SetFlag<HardEvent::V_MTE2>(EVENT_ID4)
+#define AIV_WAIT_V_MTE2()    WaitFlag<HardEvent::V_MTE2>(EVENT_ID4)
+#define AIV_SET_MTE2_MTE3()  SetFlag<HardEvent::MTE2_MTE3>(EVENT_ID5)
+#define AIV_WAIT_MTE2_MTE3() WaitFlag<HardEvent::MTE2_MTE3>(EVENT_ID5)
+#define AIV_SET_V_S()        SetFlag<HardEvent::V_S>(EVENT_ID6)
+#define AIV_WAIT_V_S()       WaitFlag<HardEvent::V_S>(EVENT_ID6)
+#define AIV_SET_S_V()        SetFlag<HardEvent::S_V>(EVENT_ID7)
+#define AIV_WAIT_S_V()       WaitFlag<HardEvent::S_V>(EVENT_ID7)
+#else
+// 回退：SET 侧放一次全栅栏，WAIT 侧空操作 —— 与改造前的语义一致
+#define AIV_SET_MTE2_V()     do { PipeBarrier<PIPE_ALL>(); } while (0)
+#define AIV_WAIT_MTE2_V()    do { } while (0)
+#define AIV_SET_V_MTE3()     do { PipeBarrier<PIPE_ALL>(); } while (0)
+#define AIV_WAIT_V_MTE3()    do { } while (0)
+#define AIV_SET_MTE3_MTE2()  do { PipeBarrier<PIPE_ALL>(); } while (0)
+#define AIV_WAIT_MTE3_MTE2() do { } while (0)
+#define AIV_SET_MTE3_V()     do { PipeBarrier<PIPE_ALL>(); } while (0)
+#define AIV_WAIT_MTE3_V()    do { } while (0)
+#define AIV_SET_V_MTE2()     do { PipeBarrier<PIPE_ALL>(); } while (0)
+#define AIV_WAIT_V_MTE2()    do { } while (0)
+#define AIV_SET_MTE2_MTE3()  do { PipeBarrier<PIPE_ALL>(); } while (0)
+#define AIV_WAIT_MTE2_MTE3() do { } while (0)
+#define AIV_SET_V_S()        do { PipeBarrier<PIPE_ALL>(); } while (0)
+#define AIV_WAIT_V_S()       do { } while (0)
+#define AIV_SET_S_V()        do { PipeBarrier<PIPE_ALL>(); } while (0)
+#define AIV_WAIT_S_V()       do { } while (0)
+#endif
+
 // ---------------- AIV 侧 UB 布局（字节）----------------
 // ⚠ 950 MIX 下 UB 由**一个 AIC + 两个 AIV 子核共享**（同 chunk_fwd_h / KDA fwd_h 的
 //   架构约定）：任何"两个子核都会写"的 scratch 必须按 subIdx_ 切成两份，否则会出现
@@ -867,12 +915,21 @@ private:
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
             const int32_t valid = (rows > off) ? ((rows - off < SEG) ? (rows - off) : SEG) : 0;
+            // P1a：段间复用同一组 UB（kBlk/wBlk/vBlk/scr）。事件语义是"该流水此前所有操作
+            // 都完成"，所以在这里成对 set/wait 即可覆盖"上一段的 MTE3 是否读完"，
+            // 不需要额外的信用记账。
+            AIV_SET_MTE3_MTE2();
+            AIV_WAIT_MTE3_MTE2();
+            AIV_SET_MTE3_V();
+            AIV_WAIT_MTE3_V();
             // ITER2：只有尾块需要零填充（整段时下面的 DataCopy 会写满整段）
             if (valid < SEG) {
                 Duplicate(kBlkBf_[off * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
                 Duplicate(wBlkBf_[off * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
                 Duplicate(vBlkBf_[off * CV_V], static_cast<bfloat16_t>(0), SEG * CV_V);
                 PipeBarrier<PIPE_V>();
+                AIV_SET_V_MTE2();
+                AIV_WAIT_V_MTE2();
             }
             if (valid > 0) {
                 DataCopy(kBlkBf_[off * CV_K], kGm_[(hk * t->T + t0 + off) * CV_K],
@@ -882,11 +939,13 @@ private:
                 DataCopy(vBlkBf_[off * CV_V], vGm_[(hv * t->T + t0 + off) * CV_V],
                          static_cast<uint32_t>(valid * CV_V));
             }
-            PipeBarrier<PIPE_ALL>();
+            AIV_SET_MTE2_MTE3();
+            AIV_WAIT_MTE2_MTE3();
             DataCopy(kOut[off * CV_K], kBlkBf_[off * CV_K], SEG * CV_K);
             DataCopy(wBf_[off * CV_K], wBlkBf_[off * CV_K], SEG * CV_K);
             // 注意：v 不再落到 GM（v_new 直接从 UB 的 vBlkBf_ 读），省一份 16 KiB/chunk 的 MTE3
-            PipeBarrier<PIPE_ALL>();
+            AIV_SET_MTE2_V();
+            AIV_WAIT_MTE2_V();
             // left：USE_G 为 bf16(k·dg)，USE_GK 为 k 本身
             if (useG) {
                 Cast(scrF_[off * CV_K], kBlkBf_[off * CV_K], RoundMode::CAST_NONE, SEG * CV_K);
@@ -896,13 +955,13 @@ private:
                 }
                 PipeBarrier<PIPE_V>();
                 Cast(scrBf_[off * CV_K], scrF_[off * CV_K], RoundMode::CAST_RINT, SEG * CV_K);
-                PipeBarrier<PIPE_ALL>();   // V -> MTE3
+                AIV_SET_V_MTE3();
+                AIV_WAIT_V_MTE3();   // V -> MTE3
                 DataCopy(lOut[off * CV_K], scrBf_[off * CV_K], SEG * CV_K);
-                PipeBarrier<PIPE_ALL>();
             } else {
                 DataCopy(lOut[off * CV_K], kBlkBf_[off * CV_K], SEG * CV_K);
-                PipeBarrier<PIPE_ALL>();
             }
+            // 段末：本段两次 MTE3（kOut/wBf_ 与 lOut）读完后，下一段才能覆盖对应 UB
         }
         PipeBarrier<PIPE_ALL>();
         // ITER2：dg / decay 落 GM 只是调试用途（只有 PPFM_DIAG 下的 ProbeF32 会读），
@@ -979,7 +1038,8 @@ private:
 #if !PPFM_VTMP_UB
             // A5 主线：vTmp 仍从 GM 回读
             DataCopy(extBlkF_[lo * CV_V], vTmpF_[off * CV_V], SEG * CV_V);
-            PipeBarrier<PIPE_ALL>();
+            AIV_SET_MTE2_V();
+            AIV_WAIT_MTE2_V();
 #if PPFM_RD_PROBE
         // 诊断：把本子核读到的 vTmp 第 0 行原样存到 GM 暂存（首个 chunk，子核 0）
             if (probeCnt_ == 0 && subIdx_ == 0) {
@@ -1005,10 +1065,13 @@ private:
                 PipeBarrier<PIPE_V>();
             }
             Cast(scrBf_[off * CV_V], scrF_[off * CV_V], RoundMode::CAST_RINT, SEG * CV_V);
-            PipeBarrier<PIPE_ALL>();   // V -> MTE3
+            AIV_SET_V_MTE3();
+            AIV_WAIT_V_MTE3();   // V -> MTE3
             DataCopy(vNewBf_[off * CV_V], scrBf_[off * CV_V], SEG * CV_V);
-            PipeBarrier<PIPE_ALL>();
         }
+        // 各子核只写自己那两段（off 互不相交），循环内无需段间信用；
+        // 出口保留一次全栅栏，供后面的 staging 复用 scrF_/scrBf_（跨函数边界）。
+        PipeBarrier<PIPE_ALL>();
         // bf16(T1)：同样按段分配
         // ITER8（A2）：段按**连续半区**分配给子核（子核 i 处理段 [i*2,(i+1)*2)），
         // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
@@ -1016,12 +1079,14 @@ private:
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
             DataCopy(scrF_[off * CV_K], t1F_[off * CV_K], SEG * CV_K);
-            PipeBarrier<PIPE_ALL>();
+            AIV_SET_MTE2_V();
+            AIV_WAIT_MTE2_V();
             Cast(scrBf_[off * CV_K], scrF_[off * CV_K], RoundMode::CAST_RINT, SEG * CV_K);
-            PipeBarrier<PIPE_ALL>();   // V -> MTE3
+            AIV_SET_V_MTE3();
+            AIV_WAIT_V_MTE3();   // V -> MTE3
             DataCopy(t1Bf_[off * CV_K], scrBf_[off * CV_K], SEG * CV_K);
-            PipeBarrier<PIPE_ALL>();
         }
+        PipeBarrier<PIPE_ALL>();
 #if PPFM_RD_PROBE
         // 诊断：vNewBf_ 第 0 行（bf16→fp32）读回，确认 AIV 写出的 B 内容
         if (probeCnt_ == 1 && subIdx_ == 0) {
@@ -1055,9 +1120,13 @@ private:
         for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {
             // ITER2：第一次搬运后的全栅栏冗余——紧随其后第二次搬运之后还有一次，
             //        足以保证两次 MTE2 都在 Muls/Add 之前完成
+            // P1a：上一轮的 MTE3（写 hF32_/hBf_）读的是同一组 UB，先等它读完再覆盖
+            AIV_SET_MTE3_MTE2();
+            AIV_WAIT_MTE3_MTE2();
             DataCopy(stateBlkF_, hF32_[rb * CV_V], RB * CV_V);
             DataCopy(extBlkF_, dhBuf[rb * CV_V], RB * CV_V);
-            PipeBarrier<PIPE_ALL>();
+            AIV_SET_MTE2_V();
+            AIV_WAIT_MTE2_V();
 #if PPFM_RD_PROBE
             // 诊断：首个 RB 块里，把"读到的 h 状态"和"读到的 dH"各留一行
             if (rb == subIdx_ * RB && subIdx_ == 0) {
@@ -1079,18 +1148,24 @@ private:
             }
             PipeBarrier<PIPE_V>();
             Add(stateBlkF_, stateBlkF_, extBlkF_, RB * CV_V);
-            PipeBarrier<PIPE_ALL>();   // V -> MTE3
+            AIV_SET_V_MTE3();
+            AIV_WAIT_V_MTE3();   // V -> MTE3
             DataCopy(hF32_[rb * CV_V], stateBlkF_, RB * CV_V);
-            PipeBarrier<PIPE_ALL>();
+            AIV_SET_MTE3_V();
+            AIV_WAIT_MTE3_V();   // 上一次 MTE3 读完 stateBlkF_/stateBlkBf_ 才能覆盖
             Cast(stateBlkBf_, stateBlkF_, RoundMode::CAST_RINT, RB * CV_V);
-            PipeBarrier<PIPE_ALL>();   // V -> MTE3
+            AIV_SET_V_MTE3();
+            AIV_WAIT_V_MTE3();   // V -> MTE3
             DataCopy(hBf_[rb * CV_V], stateBlkBf_, RB * CV_V);
-            PipeBarrier<PIPE_ALL>();
         }
+        PipeBarrier<PIPE_ALL>();
         for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {
+            AIV_SET_MTE3_MTE2();
+            AIV_WAIT_MTE3_MTE2();
             DataCopy(stateBlkF_, mF32_[rb * CV_K], RB * CV_K);
             DataCopy(extBlkF_, t2Buf[rb * CV_K], RB * CV_K);
-            PipeBarrier<PIPE_ALL>();
+            AIV_SET_MTE2_V();
+            AIV_WAIT_MTE2_V();
             if (useG) {
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(stateBlkF_, stateBlkF_, dc, RB * CV_K);
@@ -1102,14 +1177,17 @@ private:
             }
             PipeBarrier<PIPE_V>();
             Sub(stateBlkF_, stateBlkF_, extBlkF_, RB * CV_K);
-            PipeBarrier<PIPE_ALL>();   // V -> MTE3
+            AIV_SET_V_MTE3();
+            AIV_WAIT_V_MTE3();   // V -> MTE3
             DataCopy(mF32_[rb * CV_K], stateBlkF_, RB * CV_K);
-            PipeBarrier<PIPE_ALL>();
+            AIV_SET_MTE3_V();
+            AIV_WAIT_MTE3_V();
             Cast(stateBlkBf_, stateBlkF_, RoundMode::CAST_RINT, RB * CV_K);
-            PipeBarrier<PIPE_ALL>();   // V -> MTE3
+            AIV_SET_V_MTE3();
+            AIV_WAIT_V_MTE3();   // V -> MTE3
             DataCopy(mBf_[rb * CV_K], stateBlkBf_, RB * CV_K);
-            PipeBarrier<PIPE_ALL>();
         }
+        PipeBarrier<PIPE_ALL>();
     }
 
     const PpFwdCtx &ctx_;

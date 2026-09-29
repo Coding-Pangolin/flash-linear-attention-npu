@@ -1770,3 +1770,104 @@ vs 整包 ~5 min）。
 接着 `ln -sT` 造出**悬空软链** ⇒ 之后 `import fla_npu` 抛 `FileNotFoundError`，而
 `$(python3 -c 'import fla_npu...')` 静默返回空串把 `PKG` 变成 `/`，错误现场完全走样
 （本次就是这样把 probe 2~5 的结论全带偏的）。已在 `20ae3c0` 补 `mkdir -p "$EXP"` + 产物校验。
+
+---
+
+## 23. R6：dH 走 L0C→UB（950，`PPFM_DH_CV` 默认 1）
+
+**依据**：计划 §9.4/§13.2 —— 改前 `dH[K,cb]` fp32 每 chunk 由 AIC 写 GM（`dHF_/dHF1_` 双缓冲）、
+AIV 再回读，每 chunk 一次 64 KiB 的双向往返（`cb_=128` 时）。
+
+### 23.1 改法
+
+- 新增 `RunTiledTAUb()`：L1/L0 装载与 MMAD 与 `RunTiledTA` 完全相同，**只把 C 的出口从 GM 换成 UB 槽**，
+  用新类型 `TiledCopyTASplitUb`（`Common::Tile::PackedTileCopyTlaToUB<..., ColumnMajor, ..., SPLIT_M>`）。
+- **UB 加 2 个槽（ping-pong）**：`UB_DH_CV = 188096`，单槽 `DH_CV_ROWS(CV_K/2=64) × CV_V × 4B = 32768 B`，
+  `PPFM_VEC_UB_BYTES` 188096 → **253632**（≤ 物理上限 253952，余 320 B）。
+  单槽只按"一个子核那一半"的行数算 —— 因为 `SPLIT_M` 把 C 的 M 两半分别写进两个子核
+  **各自 bank 的同一偏移**（见 §22/§24 的 bank 结论）。
+- **子核行分配：交错 → 连续半区**。`SPLIT_M` 只给子核 i 行 `[i·K/2, (i+1)·K/2)`，
+  所以 `ApplyStateUpdates` 的 h 相位从 `rb = subIdx·RB; rb += subNum·RB` 改成
+  `rb ∈ [subIdx·K/2, (subIdx+1)·K/2)`（步长仍是 RB）。状态更新是逐行 elementwise，
+  换分法数值等价（`decay` 索引仍是全局行号）。m 相位（T2）仍走 GM，未改。
+- **信用协议照抄对手算子**（`bwd_dhu` 的 `InitPipeFlags` prime / `DrainPipeFlags` drain，
+  见 `arch35/chunk_gated_delta_rule_bwd_dhu_cube.h:822-825`、`..._vector.h:694-696`）：
+
+  | 方向 | 位置 | 动作 |
+  | --- | --- | --- |
+  | AIV→AIC | `ProcessChain` 链首 | **prime**：两个槽各 `CrossCoreSetFlag<0x4,PIPE_V>(kFlagDhFree+j)` |
+  | AIV→AIC | `ApplyStateUpdates` 消费完 | 归还：`CrossCoreSetFlag<0x4,PIPE_V>(kFlagDhFree+slot)` |
+  | AIC | 每次 `RunTiledTAUb` 写槽前 | `CrossCoreWaitFlag<0x4,PIPE_FIX>(kFlagDhFree+slot)` 与 `+PPFM_SUBFLAG_STRIDE`（按 subblock 各等一次） |
+  | AIC | 链末 | **drain**：两个槽 × 两个 subblock 各等一次 |
+
+  计数（按 (槽 j, subblock s) 这一条 flag）：AIV `set = 1(prime) + n_j(消费次数)`，
+  AIC `wait = n_j(每 chunk 一次) + 1(drain)` ⇒ **逐链平衡**，不留悬挂 credit
+  （对手算子的 `cross_core_sync.hpp` 明确"同一 flag 连续 set 超 15 次会挂死"）。
+
+### 23.2 验证（247，950，TAG=`r6cv`，BASE=`tip_base`）
+
+| 门禁 | 结果 |
+| --- | --- |
+| L0 静态 | PASS |
+| **L1 位级（vs `tip_base`）** | **BIT_IDENTICAL**（5/5 用例 `max\|diff\| = 0`） |
+| L2 smoke | **10/10**（含 `max_abs ≤ 0.05`） |
+| L4 全量 41 条（repeats 2） | **41/41** |
+| L3 序列探针 6 轮 | **0/30** |
+| **进程级 soak（`PROCS=30`）** | **0/30 失败（`RACE_PROBE_CLEAN`）** —— 不劣于 §21 台账 |
+
+> L1 `BIT_IDENTICAL` 这一条同时**反证**了"UB 是两个子核共享"的历史假设：若共享，
+> 子核 1 会在同一偏移读到子核 0 的那半 dH，h 必然错，不可能逐位一致。
+
+### 23.3 性能（247，msprof `Task Duration`）
+
+| 用例 | R9 基线 | R6 | 变化 |
+| --- | --- | --- | --- |
+| T=1024/HV=8 | 204.43 µs | **203.09 µs** | −0.7% |
+| T=4096/HV=8 | 597.28 µs | **591.31 µs** | −1.0% |
+| 模型 case T=11264/HK=HV=32 | 3707.62 µs | **3587.61 µs** | **−3.2%（2.21× H20）** |
+
+镜像 pipe 画像（模型 case，`PipeUtilization.csv`）：AIV `vec 910 / scalar 807 / mte2 969 / mte3 659 µs`
+（合计 ≈93% busy）⇒ **AIV 接近饱和，后面要减"工作量"而不是只调顺序**；AIV `mte2` 仍最大。
+
+**回退开关**：`PPFM_DH_CV=0`（A2/A3 恒 0，该平台没有 L0C→UB 通道）。
+
+---
+
+## 24. R0.8：回收 UB 布局里"按子核切两份"的冗余（`PPFM_UB_SHARE` 默认 1）
+
+**前提（由 §23 反证得到）**：每个 AIV 子核有**独立的 UB bank**（253952 B/子核，§22），
+因此历史上"两个子核都会写的 scratch 必须按 `subIdx_` 切两份"的做法是**纯冗余**。
+
+**改法**：把 per-subcore 的 10 个 scratch（`row0/1/2Bf_`、`row0/1/2F_`、`dgF_`、`decayF_`、
+`expScratch_`、`decayPrevF_`、`gBlkF_`、`stateBlkF_`、`extBlkF_`、`stateBlkBf_`）
+从"两份"改成"单份"（布局尺寸 `PPFM_NSLOT = 1`，取 Tensor 不再加 `subIdx_` 偏移）。
+
+| 量 | 前 | 后 |
+| --- | --- | --- |
+| 布局到 `UB_KBLK_BF` 为止的占用 | 89664 B | 49832 B |
+| `UB_DH_CV`（含 R6 前） | 188096 B | **148264 B** |
+| `PPFM_VEC_UB_BYTES`（含 R6 的 2 槽） | 253632 B | **213800 B** |
+| **物理余量** | 320 B | **40152 B ≈ 39.2 KiB** |
+
+**验证（247，950，TAG=`r08`，BASE=`tip_base`，纯布局改动 ⇒ 必须位级一致）**
+
+| 门禁 | 结果 |
+| --- | --- |
+| L0 静态 | PASS |
+| **L1 位级（vs `tip_base`）** | **BIT_IDENTICAL** |
+| L2 smoke | 10/10 |
+| L4 全量 41 条 | **41/41** |
+| L3 序列探针 6 轮 | **0/30** |
+
+**结论**：×2 冗余回收成功且位级无损 ⇒ 后面 R6b（T2 也走 CV）与 A4（状态常驻/双槽）终于有 UB 可用。
+回退开关 `PPFM_UB_SHARE=0`。
+
+**性能（247，msprof，确认"纯布局"不应有回退）**：
+
+| 用例 | R6 | R0.8 | 变化 |
+| --- | --- | --- | --- |
+| T=1024/HV=8 | 203.09 µs | **201.31 µs** | −0.9% |
+| T=4096/HV=8 | 591.31 µs | **592.20 µs** | +0.15%（噪声） |
+| 模型 case T=11264 | 3587.61 µs | **3586.81 µs** | −0.02%（噪声） |
+
+⇒ 中性，保留（默认 1）。**⚠ 该改动同时作用于 910B/910_93 的布局**，需在 221 上过一遍门禁才算收口。

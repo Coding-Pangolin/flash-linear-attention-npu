@@ -322,6 +322,19 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #define PPFM_DH_CV 0
 #endif
 #endif
+// R0.8（默认 1）：回收 UB 布局里"按子核切两份"的冗余。
+// 依据（R6 实测）：`SPLIT_M` 的 fixpipe 把 C 的 M 两半分别写进两个 AIV 子核
+// **各自 bank 的同一偏移**，且两个子核从**同一个 UB 偏移**读到了**不同**的数据
+// （R6 位级一致 ⇒ 只能是各自 bank）。⇒ 凡"两个子核都会写"的 scratch 都不需要
+// 再按 subIdx_ 切成两份，单份即可（省 ~39 KiB）。0 = 回退到历史的两份布局。
+#ifndef PPFM_UB_SHARE
+#define PPFM_UB_SHARE 1
+#endif
+#if PPFM_UB_SHARE
+#define PPFM_NSLOT 1
+#else
+#define PPFM_NSLOT PPFM_SUB
+#endif
 // 实验开关：1=保留手工 DCCI/DSB（历史做法）；0=只用跨核 flag（与生产算子一致）
 // 950：实测只用跨核 flag 就够（并且去掉 DCCI 后竞态由 3/6 降到 1/6），默认 0。
 // 910B/910_93：实测 AIC 会读到 AIV 尚未对其他核可见的 bf16(h)（chunk0 的 h≡0 探针
@@ -433,11 +446,14 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #endif
 
 // ---------------- AIV 侧 UB 布局（字节）----------------
-// ⚠ 950 MIX 下 UB 由**一个 AIC + 两个 AIV 子核共享**（同 chunk_fwd_h / KDA fwd_h 的
-//   架构约定）：任何"两个子核都会写"的 scratch 必须按 subIdx_ 切成两份，否则会出现
-//   跨子核数据竞争（实测表现：h 状态被写坏、且随调度时快时慢 → 概率性错）。
-//   只有"按段（off）分区"的缓冲（kBlk/wBlk/vBlk/scr）才可以被子核共享。
-//   每个 per-subcore 常量都是**两份的总字节数**，取 Tensor 时按 subIdx_ 偏移一份。
+// ⚠ 历史结论（**R0.8 已修订**）：早期按"950 MIX 下 UB 由 AIC + 两个 AIV 子核共享"的
+//   假设，把"两个子核都会写"的 scratch 按 subIdx_ 切成两份（每个常量 = 两份的总字节数）。
+//   但 `docs/validation.md` §23 的 R6 实测反证了这个假设：`SPLIT_M` 的 fixpipe 把 C 的 M
+//   两半写进两个子核**各自 bank 的同一偏移**，而两个子核从**同一个 UB 偏移**读到了**不同**
+//   的数据（否则 R6 不可能位级一致）⇒ **每个 AIV 子核有独立 UB bank**（253952 B/子核，
+//   见 §22），按 subIdx_ 切两份是纯冗余。`PPFM_UB_SHARE=1`（默认）改为单份布局，省 ~39 KiB；
+//   置 0 可回退到历史两份布局。
+//   仍然"按段（off）分区"共享的：kBlk/wBlk/vBlk/scr（两个子核用不同 off，互不相交）。
 constexpr int32_t PPFM_SUB = 2;      // AIV 子核数（UB 共享）
 constexpr int32_t PPFM_SEG = 16;     // left / v_new 的段长（行）
 constexpr int32_t PPFM_RB = 32;      // ITER3: 状态更新的行块（行）16->32，
@@ -459,23 +475,24 @@ constexpr int32_t PPFM_RB = 32;      // ITER3: 状态更新的行块（行）16-
 constexpr int32_t PPFM_DIAG_CHUNKS = 4;
 constexpr int64_t WS_DIAG = 626688;               // 每核 4 KiB（AIC 写，AIV epilogue 搬到 hm）
 
-constexpr int32_t UB_ROW0_BF = 0;                                  // [K] bf16 ×2
-constexpr int32_t UB_ROW1_BF = UB_ROW0_BF + PPFM_SUB * CV_K * 2;   // [K] bf16 ×2
-constexpr int32_t UB_ROW2_BF = UB_ROW1_BF + PPFM_SUB * CV_K * 2;   // [K] bf16 ×2
-constexpr int32_t UB_ROW0_F32 = UB_ROW2_BF + PPFM_SUB * CV_K * 2;  // [K] fp32 ×2
-constexpr int32_t UB_ROW1_F32 = UB_ROW0_F32 + PPFM_SUB * CV_K * 4;
-constexpr int32_t UB_ROW2_F32 = UB_ROW1_F32 + PPFM_SUB * CV_K * 4;
-constexpr int32_t UB_DG = UB_ROW2_F32 + PPFM_SUB * CV_K * 4;       // [BT] fp32 ×2
-constexpr int32_t UB_DECAY = UB_DG + PPFM_SUB * CV_BT * 4;         // [K] fp32 ×2
-constexpr int32_t UB_EXP = UB_DECAY + PPFM_SUB * CV_K * 4;         // [8] fp32 ×2
-constexpr int32_t UB_DECAY_PREV = UB_EXP + PPFM_SUB * CV_LANES * 4;  // [K] fp32 ×2
-constexpr int32_t UB_GBLK = UB_DECAY_PREV + PPFM_SUB * CV_K * 4;   // [BT] fp32 ×2
-constexpr int32_t UB_STATE_F = UB_GBLK + PPFM_SUB * CV_BT * 4;     // [RB,K] fp32 ×2
+// PPFM_NSLOT = 1（R0.8，默认）时这些都是**单份**；= PPFM_SUB 时回退历史的两份布局。
+constexpr int32_t UB_ROW0_BF = 0;                                  // [K] bf16
+constexpr int32_t UB_ROW1_BF = UB_ROW0_BF + PPFM_NSLOT * CV_K * 2;
+constexpr int32_t UB_ROW2_BF = UB_ROW1_BF + PPFM_NSLOT * CV_K * 2;
+constexpr int32_t UB_ROW0_F32 = UB_ROW2_BF + PPFM_NSLOT * CV_K * 2;
+constexpr int32_t UB_ROW1_F32 = UB_ROW0_F32 + PPFM_NSLOT * CV_K * 4;
+constexpr int32_t UB_ROW2_F32 = UB_ROW1_F32 + PPFM_NSLOT * CV_K * 4;
+constexpr int32_t UB_DG = UB_ROW2_F32 + PPFM_NSLOT * CV_K * 4;     // [BT] fp32
+constexpr int32_t UB_DECAY = UB_DG + PPFM_NSLOT * CV_BT * 4;       // [K] fp32
+constexpr int32_t UB_EXP = UB_DECAY + PPFM_NSLOT * CV_K * 4;       // [8] fp32
+constexpr int32_t UB_DECAY_PREV = UB_EXP + PPFM_NSLOT * CV_LANES * 4;
+constexpr int32_t UB_GBLK = UB_DECAY_PREV + PPFM_NSLOT * CV_K * 4;  // [BT] fp32
+constexpr int32_t UB_STATE_F = UB_GBLK + PPFM_NSLOT * CV_BT * 4;   // [RB,K] fp32
 // extBlkF_：状态更新的 dH 暂存（RB 行）+ v_new 的 vTmp 暂存（2 段）→ 每子核取大者
-constexpr int32_t UB_EXT_F = UB_STATE_F + PPFM_SUB * PPFM_RB * CV_V * 4;
-constexpr int32_t UB_STATE_BF = UB_EXT_F + PPFM_SUB * 2 * PPFM_SEG * CV_V * 4;
+constexpr int32_t UB_EXT_F = UB_STATE_F + PPFM_NSLOT * PPFM_RB * CV_V * 4;
+constexpr int32_t UB_STATE_BF = UB_EXT_F + PPFM_NSLOT * 2 * PPFM_SEG * CV_V * 4;
 // 下面这些按"段"分区，两个子核用不同 off，可共享
-constexpr int32_t UB_KBLK_BF = UB_STATE_BF + PPFM_SUB * PPFM_RB * CV_V * 2;  // [BT,K] bf16
+constexpr int32_t UB_KBLK_BF = UB_STATE_BF + PPFM_NSLOT * PPFM_RB * CV_V * 2;  // [BT,K] bf16
 constexpr int32_t UB_WBLK_BF = UB_KBLK_BF + CV_BT * CV_K * 2;                // [BT,K] bf16
 constexpr int32_t UB_VBLK_BF = UB_WBLK_BF + CV_BT * CV_K * 2;                // [BT,V] bf16
 constexpr int32_t UB_SCR_F = UB_VBLK_BF + CV_BT * CV_V * 2;                  // [BT,K] fp32
@@ -597,13 +614,14 @@ public:
         pipe_.InitBuffer(ubBuf_, PPFM_VEC_UB_BYTES);
         // per-subcore 视图：两个 AIV 子核共享同一块 UB，凡"两个子核都会写"的 scratch
         // 都按 subIdx_ 偏移一份，段分区缓冲（kBlk/wBlk/vBlk/scr）保持不偏移。
-        const int32_t sbf = subIdx_ * CV_K;
-        const int32_t sf = subIdx_ * CV_K;
-        const int32_t sdg = subIdx_ * CV_BT;
-        const int32_t sdecay = subIdx_ * CV_K;
-        const int32_t sexp = subIdx_ * CV_LANES;
-        const int32_t sstate = subIdx_ * PPFM_RB * CV_V;
-        const int32_t sext = subIdx_ * 2 * PPFM_SEG * CV_V;
+        // R0.8：PPFM_UB_SHARE=1 时不再偏移（每个 AIV 子核有独立 bank，见布局注释）。
+        const int32_t sbf = PPFM_UB_SHARE ? 0 : subIdx_ * CV_K;
+        const int32_t sf = PPFM_UB_SHARE ? 0 : subIdx_ * CV_K;
+        const int32_t sdg = PPFM_UB_SHARE ? 0 : subIdx_ * CV_BT;
+        const int32_t sdecay = PPFM_UB_SHARE ? 0 : subIdx_ * CV_K;
+        const int32_t sexp = PPFM_UB_SHARE ? 0 : subIdx_ * CV_LANES;
+        const int32_t sstate = PPFM_UB_SHARE ? 0 : subIdx_ * PPFM_RB * CV_V;
+        const int32_t sext = PPFM_UB_SHARE ? 0 : subIdx_ * 2 * PPFM_SEG * CV_V;
         row0Bf_ = ubBuf_.Get<bfloat16_t>()[UB_ROW0_BF_ELEM + sbf];
         row1Bf_ = ubBuf_.Get<bfloat16_t>()[UB_ROW1_BF_ELEM + sbf];
         row2Bf_ = ubBuf_.Get<bfloat16_t>()[UB_ROW2_BF_ELEM + sbf];

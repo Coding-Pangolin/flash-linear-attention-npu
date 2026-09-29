@@ -92,6 +92,10 @@ using namespace AscendC;
 #define PPFM_M_INIT_BLOCK 1
 #endif
 
+#ifndef PPFM_A2_BLOCKWISE
+#define PPFM_A2_BLOCKWISE 1
+#endif
+
 // ---------------- 目标 arch 分档 ----------------
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
 #define PPFM_ARCH_IS_950 1

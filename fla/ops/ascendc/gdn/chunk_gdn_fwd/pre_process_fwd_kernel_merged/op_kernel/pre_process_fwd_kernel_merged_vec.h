@@ -256,6 +256,25 @@ private:
             PipeBarrier<PIPE_ALL>();
         }
 #else
+#if PPFM_A2_BLOCKWISE
+        {
+            const int32_t rowsPerSub_ = CV_K / PPFM_SUB;
+            Duplicate(extBlkF_, 0.0f, rowsPerSub_ * cb_);
+            PipeBarrier<PIPE_ALL>();
+            Cast(stateBlkBf_, extBlkF_, RoundMode::CAST_RINT, rowsPerSub_ * cb_);
+            AIV_SET_V_MTE3();
+            AIV_WAIT_V_MTE3();
+            DataCopyParams hpF_{static_cast<uint16_t>(rowsPerSub_),
+                               static_cast<uint16_t>((cb_ * 4) / 32), 0,
+                               static_cast<uint16_t>((cb_ * 4) / 32)};
+            DataCopyParams hpB_{static_cast<uint16_t>(rowsPerSub_),
+                               static_cast<uint16_t>((cb_ * 2) / 32), 0,
+                               static_cast<uint16_t>((cb_ * 2) / 32)};
+            DataCopy(hF32_[subIdx_ * cb_], extBlkF_, hpF_);
+            DataCopy(hBf_[subIdx_ * cb_], stateBlkBf_, hpB_);
+            PipeBarrier<PIPE_ALL>();
+        }
+#else
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
             Duplicate(row0F_, 0.0f, cb_);
             PipeBarrier<PIPE_ALL>();
@@ -265,6 +284,7 @@ private:
             DataCopy(hBf_[r * cb_], row0Bf_, cb_);
             PipeBarrier<PIPE_ALL>();
         }
+#endif
 #endif
 #endif
 #if PPFM_RD_PROBE
@@ -345,20 +365,47 @@ private:
         //   这里改成最朴素、逐行可验证的构造：整行清零 + 单点写 1，
         //   标量写与搬运之间一律用 PIPE_ALL 全栅栏隔离（KDA 的逐点 SetValue 路径
         //   在 A2 上实测正确，说明标量写本身没问题）。
+#if PPFM_A2_BLOCKWISE
+        {
+            const int32_t rowsPerSub_ = CV_K / PPFM_SUB;
+            Duplicate(extBlkF_, 0.0f, rowsPerSub_ * cb_);
+            PipeBarrier<PIPE_ALL>();
+            for (int32_t i = 0; i < rowsPerSub_; ++i) {
+                const int32_t r = subIdx_ + i * subNum_;
+                const int32_t c = r - colBase_;
+                if (c >= 0 && c < cb_) {
+                    extBlkF_.SetValue(i * cb_ + c, 1.0f);
+                }
+            }
+            PipeBarrier<PIPE_ALL>();
+            Cast(stateBlkBf_, extBlkF_, RoundMode::CAST_RINT, rowsPerSub_ * cb_);
+            AIV_SET_V_MTE3();
+            AIV_WAIT_V_MTE3();
+            DataCopyParams mpF_{static_cast<uint16_t>(rowsPerSub_),
+                               static_cast<uint16_t>((cb_ * 4) / 32), 0,
+                               static_cast<uint16_t>((cb_ * 4) / 32)};
+            DataCopyParams mpB_{static_cast<uint16_t>(rowsPerSub_),
+                               static_cast<uint16_t>((cb_ * 2) / 32), 0,
+                               static_cast<uint16_t>((cb_ * 2) / 32)};
+            DataCopy(mF32_[subIdx_ * cb_], extBlkF_, mpF_);
+            DataCopy(mBf_[subIdx_ * cb_], stateBlkBf_, mpB_);
+            PipeBarrier<PIPE_ALL>();
+        }
+#else
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
             Duplicate(row0F_, 0.0f, cb_);
             PipeBarrier<PIPE_ALL>();
-            // 只在"本列块包含第 r 列"时写对角 1
             if (r >= colBase_ && r < colBase_ + cb_) {
                 row0F_.SetValue(r - colBase_, 1.0f);
             }
-            PipeBarrier<PIPE_ALL>();       // S -> V/MTE3
+            PipeBarrier<PIPE_ALL>();
             Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
-            PipeBarrier<PIPE_ALL>();       // V -> MTE3
+            PipeBarrier<PIPE_ALL>();
             DataCopy(mF32_[r * cb_], row0F_, cb_);
             DataCopy(mBf_[r * cb_], row0Bf_, cb_);
-            PipeBarrier<PIPE_ALL>();       // MTE3 读完才能下一轮覆盖
+            PipeBarrier<PIPE_ALL>();
         }
+#endif
 #endif
         // 临时诊断（当前不启用）：给 AIC 即将写的 C 缓冲预置哨兵。
         //   vTmpF_ = 7.0、t1F_ = 5.0 ⇒ 若 AIC 的 fixpipe 正常覆盖，chunk0 的结果不受影响；
@@ -491,8 +538,27 @@ private:
         }
 #endif
 #else
+#if PPFM_A2_BLOCKWISE
+        {
+            const int32_t rowsPerSub_ = CV_K / PPFM_SUB;
+            DataCopyParams rd_{static_cast<uint16_t>(rowsPerSub_),
+                              static_cast<uint16_t>((cb_ * 4) / 32),
+                              static_cast<uint16_t>((cb_ * 4) / 32), 0};
+            DataCopyParams wr_{static_cast<uint16_t>(rowsPerSub_),
+                              static_cast<uint16_t>((cb_ * 4) / 32), 0,
+                              static_cast<uint16_t>(((2 * (CV_V + CV_K) - cb_) * 4) / 32)};
+            const int64_t epRow0_ = hmBase + static_cast<int64_t>(subIdx_) * (CV_V + CV_K);
+            DataCopy(extBlkF_, hF32_[subIdx_ * cb_], rd_);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(hmGm_[epRow0_ + colBase_], extBlkF_, wr_);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(extBlkF_, mF32_[subIdx_ * cb_], rd_);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(hmGm_[epRow0_ + CV_V + colBase_], extBlkF_, wr_);
+            PipeBarrier<PIPE_ALL>();
+        }
+#else
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
-            // P5：只写本工作项的列块（h 占 [0,V) 列、m 占 [V,V+K) 列，两者同一个 colBase_）
             DataCopy(row0F_, hF32_[r * cb_], cb_);
             PipeBarrier<PIPE_ALL>();
             DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + colBase_], row0F_, cb_);
@@ -502,6 +568,7 @@ private:
             DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + CV_V + colBase_], row0F_, cb_);
             PipeBarrier<PIPE_ALL>();
         }
+#endif
 #endif
 #if PPFM_RD_PROBE
         // 诊断：把探针各行搬到 hm 的 m 半边第 0..4 行（验收时排除这些行）

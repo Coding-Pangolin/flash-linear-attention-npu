@@ -93,7 +93,7 @@ inline ge::graphStatus PreProcessFwdTilingProcessor(gert::TilingContext *context
     const auto ascendcPlatform = platform_ascendc::PlatformAscendC(context->GetPlatformInfo());
     const int64_t aicNum = static_cast<int64_t>(ascendcPlatform.GetCoreNumAic());
     // ---- P5 列块切分：把"链"按列切成 colSplit 份（h 切 V 列、m 切 K 列，两侧独立） ----
-    // 实测（950，msprof，见 docs/validation.md §16）：
+    // 实测（950，msprof op Task Duration）：
     //   * Nwork=8 / aic=28：切 2 份仍是 1 波，16 个核干活 ⇒ 783 → 653 µs（−16.7%）✅
     //   * Nwork=32 / aic=28：切 2 份把波数从 2 抬到 3，而每项成本**并不减半**
     //     （staging/left/decay 被两半重复、状态更新的逐行回路条数不变）

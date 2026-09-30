@@ -28,8 +28,7 @@
 ### 1.1 目标与范围
 
 - **目标 SoC**：`Ascend950PR_9579`，`NpuArch=3510`（`CATLASS_ARCH=3510`），`AIC_version=AIC-C-310`。
-  平台参数取自 `docs/precheck.md` 与
-  `${ASCEND_HOME_PATH}/../latest/acllib/data/platform_config/Ascend950PR_9579.ini`：
+  平台参数取自 `${ASCEND_HOME_PATH}/../latest/acllib/data/platform_config/Ascend950PR_9579.ini`：
   Cube 核 **28**、Vector 核 **56**（`cube_vector_combine=split`）、L1 **512 KiB**、
   单 AIV UB **248 KiB**（253952 B）、L0A/L0B **64 KiB**、L0C **256 KiB**、L2 128 MiB、
   约 1.5 TB/s HBM、`cube_freq=1650 MHz`、BF16 峰值约 378 TFLOPS（28 核档）。
@@ -428,7 +427,7 @@ head 可以并行**"，第 4~5 条："每核按 head round 推进一个 chunk…
 4. **实测依据（2026-09-22，H20，`benchmarks/cp/check_cp_alignment.py`）**：kernel 的
    `MULTI_SEQS` 与逐段调用**逐位相等**（A3 `max_abs=0.000e+00`，三个 case 含非 64 倍数段
    与 GVA），所以"sequence 进 grid 第三维"是竞品**已有且已验证**的能力，不是我们新造的语义；
-   CP 级（part 级 wrap 的等价性）待 H20 重跑，见 `validation.md`「CP 语义对齐实测」。
+   CP 级（part 级 wrap 的等价性）待 H20 重跑。
 
 **`Nseq = 1` 且 `HV` 小时会严重用不满核**：`Nseq=1, HV=8` 只有 8 个工作项，28 个 AIC 里 20 个空转
 （`GDN泛化用例表` 里 V1/V2 就是单序列配 `HV=16/8`；但 C1~C16 是 `B=8~128` 配 `HV=4~32`，
@@ -903,7 +902,7 @@ Stage3AIV(hv, c, part):
 
 ### 3.1 L1 / UB / L0 地址与容量
 
-预算上限取 `docs/precheck.md` 的实测值：L1 512 KiB、单 AIV UB 248 KiB、
+预算上限取 §1.1 的平台参数：L1 512 KiB、单 AIV UB 248 KiB、
 L0A/L0B 64 KiB、L0C 256 KiB。地址单位是 KiB 半开区间，全部按 512 B 对齐；
 下表按固定规格 `K=V=128` 给出具体数字。`h_c` 的 FP32 主副本放 UB，`m_c` 放 L1，
 两者不共用存储。
@@ -1115,18 +1114,18 @@ kernel 入参：Nwork=HV, blockDim, NT, M(c), 各张量 stride
 
 | 常量 | 本设计取值 | 来源 | 换硬件时 |
 | --- | --- | --- | --- |
-| `AIC_NUM`（可用 Cube 核数） | 28 | `docs/precheck.md` 的 `cube_core_cnt`；**host 侧改为运行时从设备读**（`aclrtGetDeviceInfo` 一类接口）后经 tiling 传入 | **不写死在 kernel**：`blockDim = min(AIC_NUM, Nwork)`，换硬件自动跟随 |
+| `AIC_NUM`（可用 Cube 核数） | 28 | 平台 ini 的 `cube_core_cnt`（§1.1）；**host 侧改为运行时从设备读**（`aclrtGetDeviceInfo` 一类接口）后经 tiling 传入 | **不写死在 kernel**：`blockDim = min(AIC_NUM, Nwork)`，换硬件自动跟随 |
 | `AIV_NUM` | 56（每 AIC 配 2 AIV） | 同上 `vector_core_cnt` | 核配比变化要换 kernel 类型（当前是 `KERNEL_TYPE_MIX_AIC_1_2`） |
 | `L1` | 512 KiB | 同上 `l1_size` | 编译期常量；换 SoC 必须重算 3.1.1 的地址图 |
 | `UB`（每 AIV） | 248 KiB（253952 B） | 同上 `ub_size` | 同上，重算 3.1.2 |
 | `L0A` / `L0B` | 64 KiB / 64 KiB | 同上 | 同上，重算 3.1.3；`M_c` 与 `m` 各占满 L0A/L0B 是**本规格下**的结论 |
 | `L0C` | 256 KiB | 同上 | 同上 |
-| 设计预留 | L1 按 448 KiB、UB 按 224 KiB 计 | **本设计自定**（512−64 / 248−24），留给对齐空隙与组件临时区 | ⚠️ **两个名词分开**：**硬上限**取平台实测值（L1 512 / UB 248 KiB，来源 `docs/precheck.md` 与平台 ini）；**设计预算**（448 / 224）是本设计拍的余量、没有硬件依据。**实际占用一律按目标芯片 + 目标 CANN 版本的组件实际用量核对**（04 落地时用真机实测重算 3.1.1/3.1.2 的地址图），不能按比例缩放或跨芯片套用 |
+| 设计预留 | L1 按 448 KiB、UB 按 224 KiB 计 | **本设计自定**（512−64 / 248−24），留给对齐空隙与组件临时区 | ⚠️ **两个名词分开**：**硬上限**取平台 ini 的实测值（L1 512 / UB 248 KiB，§1.1）；**设计预算**（448 / 224）是本设计拍的余量、没有硬件依据。**实际占用一律按目标芯片 + 目标 CANN 版本的组件实际用量核对**（04 落地时用真机实测重算 3.1.1/3.1.2 的地址图），不能按比例缩放或跨芯片套用 |
 | 对齐 | 512 B | 搬运 API 与 L1 分型要求 | 按目标 CANN 版本核对 |
 | NZ 分型 | BF16 16 列 / FP32 16×8 | `NpuArch=3510` 的 L0 分型 | 与 `CATLASS_ARCH` 绑定；换架构要重核 S1 的手工 NZ 构造（2.3） |
 | CrossCore flag | 8 个 | 逻辑边数量（2.7.1） | 需对照目标版本的 flag 上限，换硬件先看上限 |
 | 片上事件 | 9 个 | 2.7.2 的表 | 同上 |
-| `ArchTag` | `Arch::Ascend950`（`CATLASS_ARCH=3510`） | `docs/precheck.md` | 换 SoC 换模板参数 |
+| `ArchTag` | `Arch::Ascend950`（`CATLASS_ARCH=3510`） | §1.1 平台参数 | 换 SoC 换模板参数 |
 | 性能用参数 | `cube_freq=1650 MHz`、BF16 约 378 TFLOPS、HBM 约 1.5 TB/s、H20 脊点对比值 | 同上 | **只用于估算**（4.2 的 281 us 下界、3.2 的 138 us），不参与 kernel 逻辑 |
 
 不在这张表里的数字都不是硬件绑定：`K = V = 128`、`BT = 64`、`layout = BNSD` 是算子接口规格；
@@ -1152,10 +1151,10 @@ kernel 入参：Nwork=HV, blockDim, NT, M(c), 各张量 stride
 | `hm` | 最终输出 | FP32，不再舍入 | `[K,V+K]` |
 
 统一策略：`atol=1.5e-2 / rtol=2e-3 / max_abs_limit=0.05`（`reference/precision-policy.json`）。
-依据见 `docs/validation.md`：`m` 半边在 `atol=1e-6` 下与 CPU 标杆全过（强检查）；
+量级依据：`m` 半边在 `atol=1e-6` 下与 CPU 标杆全过（强检查）；
 `h` 半边存在 9.5e-3 的内在散布（`bf16(h)` 量化不连续在反馈环里放大，弱检查）。
 分区至少覆盖 `ALL`、`h` 半边、`m` 半边、`head0`、`head_last`。
-结构性错误、数值误差、padding/无效区与非确定性问题按 `docs/validation.md` 的分类分别定位。
+结构性错误、数值误差、padding/无效区与非确定性问题分别定位（分类见 `tests/atk/` 的用例分组）。
 
 **验收顺序：先精度、后性能。** 04 阶段按 `S0 -> S1 -> S2 -> S3 -> S4` 逐 Stage 打通并与 CPU
 标杆比对，整算子精度全部通过后才进入 05 的性能验收；性能不达标时先按 4.2.3 的瓶颈判定顺序
@@ -1292,8 +1291,7 @@ GVA 只存在于 g-only 路径，DPLR 本轮不进用例）。
 > **第 0 项与第 10 项现在有实测支撑（2026-09-22，H20）**：竞品 kernel 的 `MULTI_SEQS`
 > （段号进 grid dim2）与"每段单独调用"**逐位相等**（`max_abs=0.000e+00`），所以"一次调用吃
 > 多段、每段一条链"不是新语义；竞品 CP 层"每 part 只喂末段"在多段 part 下也验证正确
-> （唯一非零项被独立探针定量复现为分块口径带来的 bf16 量化差异）。详见
-> `validation.md`「CP 语义对齐实测」。
+> （唯一非零项被独立探针定量复现为分块口径带来的 bf16 量化差异）。
 
 **已定稿（用户确认，2026-09-22）**
 
@@ -1339,9 +1337,10 @@ GVA 只存在于 g-only 路径，DPLR 本轮不进用例）。
   已按用户明确要求在 `docs/api.md` 第 8 节记录。
 - 回退顺序：`SYNC_L1_HANDOFF -> SYNC_GM_QUEUE`（R14 兜底）；
   `PIPE_SERIAL -> PIPE_PACK_OVERLAP` 为正向候选，失败即恢复已验证的 `PIPE_SERIAL` 基线。
-- 设计调整统一回写本文第 1/2/3/6 章再改代码；实验过程写入 `docs/validation.md`。
+- 设计调整统一回写本文第 1/2/3/6 章再改代码。
 - 交付物：`docs/design.md`（本文）、`docs/api.md`、`reference/reference.py` 与
-  `reference/definition.json`、`reference/precision-policy.json`、`docs/validation.md`。
+  `reference/definition.json`、`reference/precision-policy.json`、
+  `tests/atk/pre_process_fwd_kernel_merged/`（ATK 单算子验收工程）。
 
 ---
 
@@ -1351,7 +1350,7 @@ GVA 只存在于 g-only 路径，DPLR 本轮不进用例）。
 | --- | --- | --- |
 | R01 | 满足 | 2.1.2、2.1.4：先按数据依赖/计算类型/生命周期/精度观察点划 5 个 Stage，再映射 AIC（S0/S2/S4）与 AIV（S1/S3）；AIV 分工为同 head 分片并给出列段与 K 行范围 |
 | R02 | 满足 | 2.1.2 前驱列、2.1.3：每条边的消费者都等待生产者；S2 与 S4 同为 Cube，但因 S4 读 S2 的 Cube 输出而保持两个 Stage |
-| R03 | 满足 | 3.1、3.5：按 `docs/precheck.md` 的 L1 512 KiB / UB 248 KiB / L0A-B 64 KiB / L0C 256 KiB 核算，L1 与 UB 分别计预算；容量与预留的平台来源见 3.5 |
+| R03 | 满足 | 3.1、3.5：按 §1.1 平台参数的 L1 512 KiB / UB 248 KiB / L0A-B 64 KiB / L0C 256 KiB 核算，L1 与 UB 分别计预算；容量与预留的平台来源见 3.5 |
 | R04 | 满足 | 2.2、3.1：`P` 由 Fixpipe 按列段写两个 AIV 的 UB，`P_ready` 在 Fixpipe 之后发布 |
 | R05 | 满足 | 2.5、3.1：`h` 分片与 `dH`/`Kw` 行块驻 UB；`decay`、mask 计入 UB 峰值 |
 | R06 | 不适用 | 采用 `SYNC_L1_HANDOFF`，Vector -> Cube 走 L1 直写，不经过 GM；R14 兜底路径见 5.1、5.3 |

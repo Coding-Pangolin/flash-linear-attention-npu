@@ -3,8 +3,8 @@
 CP（context parallel）前处理算子：把一个 token 窗口压成仿射链 `(h | m)`，与竞品
 `fla/ops/cp/chunk_delta_h.py::pre_process_fwd_kernel_merged` 数值对齐（对标 1.0x H20）。
 
-完整语义、Stage 划分、内存分配、用例与验证记录见 `docs/`（`api.md` / `design.md` /
-`precheck.md` / `validation.md`）。
+完整语义、Stage 划分、内存分配与验收工程见 `docs/`（`api.md` / `design.md`）与
+`tests/atk/pre_process_fwd_kernel_merged/`。
 
 ## 当前进度（2026-09-28）
 

@@ -457,7 +457,7 @@ constexpr MatmulConfig CV_MM_CFG = GetNormalConfig(true);
 
 // ---------------- CATLASS BlockMmad（950 的核内 cube→vector 惯用法）----------------
 // 与仓内 chunk_scaled_dot_kkt 的 950 路径一致：BlockMmad + preSetFlags/finalWaitFlags
-// 才是"C 已写回 GM"的保证；MatmulImpl::IterateAll 不提供这个保证（见 docs/validation.md ）。
+// 才是"C 已写回 GM"的保证；MatmulImpl::IterateAll 不提供这个保证。
 #if PPFM_ARCH_IS_950
 using MmArchTag = Catlass::Arch::Ascend950;
 #else
@@ -650,7 +650,7 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 // 950：实测只用跨核 flag 就够（并且去掉 DCCI 后竞态由 3/6 降到 1/6），默认 0。
 // 910B/910_93：实测 AIC 会读到 AIV 尚未对其他核可见的 bf16(h)（chunk0 的 h≡0 探针
 //   仍得到 1.6e-2 的 h），故先按 A2 老做法启用 DCCI/DSB；若后续定位到更精确的边，
-//   可只保留必要的那一条（见 docs/a2_opt_status.md 的定位方法）。
+//   可只保留必要的那一条。
 #ifndef PPFM_LEGACY_CACHEOPS
 #if PPFM_ARCH_IS_950
 #define PPFM_LEGACY_CACHEOPS 0
@@ -784,7 +784,7 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 // 注意： 历史结论（**已修订**）：早期按"950 MIX 下 UB 由 AIC + 两个 AIV 子核共享"的
 //   假设，把"两个子核都会写"的 scratch 按 subIdx_ 切成两份（每个常量 =
 // 两份的总字节数）。
-//   但 `docs/validation.md` 的 实测反证了这个假设：`SPLIT_M` 的 fixpipe 把 C 的 M
+//   但实测反证了这个假设：`SPLIT_M` 的 fixpipe 把 C 的 M
 //   两半写进两个子核**各自 bank 的同一偏移**，而两个子核从**同一个 UB
 // 偏移**读到了**不同**
 //   的数据（否则 不可能位级一致）⇒ **每个 AIV 子核有独立 UB bank**（253952 B/子核，
@@ -891,7 +891,7 @@ constexpr int32_t PPFM_VEC_UB_BYTES = UB_CV_END;
 #endif
 
 // ---- 编译期自检（§7.7：常量集中 + 空间上限配 static_assert）----
-// 950 的 AIV UB 上限 256 KiB；A2/910B 为 192 KiB（见 docs/port_910b.md 的 UB 预算表）。
+// 950 的 AIV UB 上限 256 KiB；A2/910B 为 192 KiB。
 static_assert(PPFM_VEC_UB_BYTES <= (PPFM_ARCH_IS_950 ? 256 * 1024 : 192 * 1024),
               "AIV UB 用量超上限：950=256KiB / A2=192KiB，请按 UB_* 布局重算");
 // 状态常驻区：每个 AIV 子核 64 行 x cb_（cb_ 最大 CV_V）fp32 x h/m 两份

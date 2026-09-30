@@ -62,8 +62,7 @@ CP（context parallel）场景下 GDN / KDA（/ DPLR）前向的 **pre-process �
 
 YAML 元信息覆盖 `ascend910b`、`ascend910_93`、`ascend950`，可配合统一脚本的
 `-soc=ascend910b|ascend910_93|ascend950` 使用（默认 `auto` 由 `npu-smi` 探测）。
-本算子当前验收平台为 **A5 / Ascend950**；A2/A3 侧 910B 已通过编译与门禁（见算子
-`docs/validation.md` §52）。
+本算子当前验收平台为 **A5 / Ascend950**；A2/A3 侧 910B 已通过编译与门禁。
 
 ## 泛化与用例生成
 
@@ -144,8 +143,8 @@ bash tests/atk/run_test_cpu.sh -op=pre_process_fwd_kernel_merged -scope=gen_case
 运行前按 `tests/atk/README.md`「运行前准备」准备 `ATK_ENV / CANN_ENV / FLA_NPU_ENV`，
 并确认 `atk --version` ≥ `26.8.8`。
 
-> **验收前先做「同包自比」**：本算子此前的位级判据发现过"只在 colSplit=1 的形状上不一致"
-> 的现象（算子 `docs/validation.md` §50.6）。ATK 的 `-scope=determinism`（`accuracy_dc`）
+> **验收前先做「同包自比」**：本算子此前的位级判据发现过"只在 colSplit=1（`cb_=CV_V`）的形状上
+> 不一致"的现象。ATK 的 `-scope=determinism`（`accuracy_dc`）
 > 正好覆盖这一点，建议在 `all` 之前先单独跑一次 `-scope=determinism`。
 
 ## 验收结果记录
@@ -172,8 +171,8 @@ bash tests/atk/run_test_cpu.sh -op=pre_process_fwd_kernel_merged -scope=gen_case
 | `PPFM-40` | GDN `T=5632, HK=16 HV=32` | ascend950/bf16 | — | — | 待测 | — | 待测 |
 | `PPFM-41` | GDN `T=16384, HK=HV=32` | ascend950/bf16 | — | — | 待测 | — | 待测 |
 
-> 参考：上电前在 950/247 上用 `msprof op` 实测的 Task Duration 为
-> gdn 模型 case ≈1726 µs、kda `T=16384/HK=HV=64` ≈4227 µs（详见算子 `docs/validation.md`）。
+> 参考：开发期在 Ascend950 上用 `msprof op` 实测的 Task Duration 为
+> gdn 模型 case ≈1726 µs、kda `T=16384/HK=HV=64` ≈4227 µs。
 > ATK 的 performance 阶段用的是它自己的统计口径，回填时请注明统计方式。
 
 ## 提交前检查

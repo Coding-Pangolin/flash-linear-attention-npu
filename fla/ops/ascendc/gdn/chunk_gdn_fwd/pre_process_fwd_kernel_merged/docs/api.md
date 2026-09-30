@@ -14,7 +14,7 @@ rank 的**一个序列窗口（一个 part）**计算窗口边界状态 `h` 与�
 | 2026-09-21 | `K` 收敛为 `<= 128`、`V` 收敛为 `<= 128`、`chunk_size` 固定 64；布局定为 BNSD（与仓内其他 AscendC 算子一致）；GVA（`HK` 与 `HV` 成倍数）保留 | 用户明确要求 |
 | 2026-09-21 | 进一步把 `K`、`V` 都**写死为 128**（与仓内 `chunk_fwd_h` 等同规格），host 拦截非 128；TilingKey 随之收敛到 6 个 | 用户侧核查结论（仓内所有 AscendC 算子的 `K` 都是 128，模型 case 的 `Kdim` 全是 128） |
 | 2026-09-21 | **恢复标准的序列表达**：定长 = `cu_seqlens` 缺省且序列数 `= B`；变长 = `B = 1` + `cu_seqlens` 多段、序列数 `= len(cu_seqlens)-1`。取消"单窗口 `N = 1`"的收窄 | 用户澄清；与仓内 `chunk_fwd_h`、上游 `chunk_delta_h` 的 `N = B if cu_seqlens is None else len(cu_seqlens)-1` 一致 |
-| 2026-09-22 | 定稿：`hm` 前导维 = **链条数 `Nseq`**（定长 `= B`；变长 `= len(cu_seqlens)-1`）；`M_c@m` 取 **FP32 原生**；DPLR **注册 6 个 TilingKey / 本轮验收 4 个**；新增 §3.5 Python 调用示例 | 用户确认（结合 CP 语义实测与竞品源码复核，见 `docs/validation.md`） |
+| 2026-09-22 | 定稿：`hm` 前导维 = **链条数 `Nseq`**（定长 `= B`；变长 `= len(cu_seqlens)-1`）；`M_c@m` 取 **FP32 原生**；DPLR **注册 6 个 TilingKey / 本轮验收 4 个**；新增 §3.5 Python 调用示例 | 用户确认（结合 CP 语义实测与竞品源码复核） |
 | 2026-09-22 | **收掉 `B > 1`**：序列表达只保留 varlen 打包窗口（`B ≡ 1`、`cu_seqlens` 必给、`Nseq = len(cu_seqlens)-1`）；等长 batch 由调用方打包成等长多段。与竞品 CP 契约（"CP expects `B == 1` for varlen"）完全一致；`hm` 前导维保留（= 链条数），`Nseq=1` 时与竞品跨卡调用逐字节相同 | 用户要求"全量对齐竞品" |
 | 2026-09-23 | **支持"子区间窗口"**：`cu_seqlens` 允许 `0 ≤ cu[0] < cu[-1] ≤ T`（即 `bos > 0`、`eos < T` 都合法），算子在**整根张量**上只处理该子区间 —— 与竞品调用形态（`cu_seqlens[-2:]` / `cu_seqlens[fns-1:fns+1]`）**1:1 一致**，零拷贝零浪费；相应放宽 host 校验（仍拒绝 `B != 1`、零长段、越界、非递增） | 用户要求"用法与竞品保持一致"；内核尚未实现，此时纳入成本最低 |
 
@@ -190,8 +190,8 @@ S4 按 `[V, V+K)` 写 `m` 的原因（`design.md` 2.5/2.6）。
 **前导维 = 链条数 `Nseq`**（2026-09-22 定稿）：`Nseq = len(cu_seqlens) - 1`（`B ≡ 1`，
 唯一形态）。语义等价说法：
 **竞品一次调用产出一份 `hm`，我们一次调用产出 `Nseq` 份，第 i 份与竞品针对第 i 段单独调用
-一次逐位相同**（竞品 kernel 的 `MULTI_SEQS` 与逐段调用实测逐位相等，见 `docs/validation.md`
-「CP 语义对齐实测」）。CP 场景下本 rank 的窗口常是单段（`Nseq = 1`），此时去掉 size-1 维后
+一次逐位相同**（竞品 kernel 的 `MULTI_SEQS` 与逐段调用实测逐位相等）。
+CP 场景下本 rank 的窗口常是单段（`Nseq = 1`），此时去掉 size-1 维后
 与竞品的 `[HV, K, V+K]` 内存布局逐字节相同。
 
 **竞品 `hm` 的形状（逐处核对源码）**：

@@ -804,7 +804,16 @@ private:
                 DataCopy(lOut[off * CV_K], scrBf_[lo * CV_K], SEG * CV_K);
 #endif  // PPFM_LEFT_FUSE
             } else {
+#if PPFM_KDA_LEFT_ALIAS
+                // KDA（USE_GK）下 left ≡ k ⇒ 这里不再重复写一份 lBf_，
+                // AIC 侧 mm4 直接读 k 的槽（同 chunk 奇偶、同形状）。
+                // directInputs 打开时 AIV 不写 kOut，保持原样。
+                if (directInputs) {
+                    DataCopy(lOut[off * CV_K], kBlkBf_[lo * CV_K], SEG * CV_K);
+                }
+#else
                 DataCopy(lOut[off * CV_K], kBlkBf_[lo * CV_K], SEG * CV_K);
+#endif
             }
             // 段末：本段两次 MTE3（kOut/wBf_ 与 lOut）读完后，下一段才能覆盖对应 UB
         }

@@ -201,7 +201,17 @@ private:
         // 安全性：T2 槽的归还信用由 AIV 在**本迭代开头的 m 相位**里置起（早于
         // kFlagInputs(c)），
         // 所以这里（kFlagInputs 之后）写槽一定在 AIV 消费完上一代之后。
+#if PPFM_KDA_LEFT_ALIAS
+        // KDA（USE_GK）下 left ≡ k：AIV 已不再单独写 lBf_（见 _vec.h 的 staging），
+        // 这里直接复用 k 的槽。AIC_DIRECT_INPUTS 打开时不别名（那时仍走 lBf_ 旧路径）。
+        const bool aliasLeft_ = (PPFM_AIC_DIRECT_INPUTS == 0) &&
+                                (ctx_.tiling->gateMode != PPFM_GATE_USE_G);
+        GlobalTensor<bfloat16_t> &lIn = aliasLeft_
+            ? (((c & 1) != 0) ? kBf1_ : kBf_)
+            : (((c & 1) != 0) ? lBf1_ : lBf_);
+#else
         GlobalTensor<bfloat16_t> &lIn = ((c & 1) != 0) ? lBf1_ : lBf_;
+#endif
 #if PPFM_LEGACY_CACHEOPS
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(lIn);

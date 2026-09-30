@@ -92,6 +92,11 @@ using namespace AscendC;
 #define PPFM_LEFT_FUSE 1
 #endif
 
+// P2-1: KDA(USE_GK) 下 left ≡ k ⇒ 复用 k 的 GM 槽，AIV 不再重复写一份 lBf_（位级不变）
+#ifndef PPFM_KDA_LEFT_ALIAS
+#define PPFM_KDA_LEFT_ALIAS 1
+#endif
+
 // epilogue 逐行 hm 写合并成一次跨步 DataCopy
 #ifndef PPFM_EP_MERGE
 #define PPFM_EP_MERGE 1

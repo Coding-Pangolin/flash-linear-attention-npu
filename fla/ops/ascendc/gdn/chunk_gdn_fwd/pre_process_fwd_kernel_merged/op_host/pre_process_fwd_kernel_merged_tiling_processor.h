@@ -116,9 +116,16 @@ inline ge::graphStatus PreProcessFwdTilingProcessor(gert::TilingContext *context
     // 把余数链按列切成 S 片（成本模型 c(s)=α+(1-α)/s，实测 α≈0.72），
     // S 片分给 S*r 个核的第二个任务 ⇒ 尾巴从「整宽」变「1/S 宽」。约束 r*S <= aicNum。
     // 实测：模型 case（hwItems=32/A=28）S=2 −7.2%、S=4 −9.84%（vs colSplit=1）。
+    // ⚠ 平台门控（2026-09-30）：hybridS>1 的分片任务路径在 A2/910B 上存在低频偶发
+    //   （gdn-hy30：hwItems=30/A=20 ⇒ S=2；见 outputs/PPFM_910B_A2FIX_OPS_20260930.md §6.3）。
+    //   A2 的模型 case（hwItems=32/A=20）本来就不满足 r*S <= aicNum，吃不到该收益，
+    //   故本调度**仅在 A5/ASCEND950 上启用**，A2/A3 一律 hybridS=1。
+    //   复现/诊断：环境变量 PPFM_HYBRID_S 在门控之后生效，可强制打开。
+    const bool hybridEnabled =
+        ascendcPlatform.GetSocVersion() == platform_ascendc::SocVersion::ASCEND950;
     int64_t hybridS = 1;
     int64_t hybridBase = 0;
-    if (colSplit == 1 && aicNum > 1 && hwItems > aicNum) {
+    if (hybridEnabled && colSplit == 1 && aicNum > 1 && hwItems > aicNum) {
         const int64_t base = (hwItems / aicNum) * aicNum;
         const int64_t rem = hwItems - base;
         int64_t s = 1;

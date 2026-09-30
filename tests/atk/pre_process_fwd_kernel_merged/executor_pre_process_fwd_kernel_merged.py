@@ -9,7 +9,7 @@ CPU 标杆：本目录 `scripts/pre_process_fwd_kernel_merged_cpu.py`
 （纯 PyTorch，token-major `[T,H,D]`），本文件只做布局搬运与逐段调用。
 
 精度口径（重要）：本算子的**验收基线是"契约版"标杆** —— `accum_dtype=fp32` +
-三个舍入点开关全开。`reference.py` 的模块文档写明：kernel 的 h/m 累加器是 FP32，
+三个舍入点开关全开。`scripts/pre_process_fwd_kernel_merged_cpu.py` 的模块文档写明：kernel 的 h/m 累加器是 FP32，
 用 FP64 基准会让任何忠实实现平白多出 ~9.4e-3 的绝对偏差（与 H20 `ieee` 对齐时实测）。
 因此 **`high_precision=True` 只用于参考侧的灵敏度对照（ATK 的 benchmark 节点），
 不作为本算子的验收真值**；验收真值走 `high_precision=False`。
@@ -196,7 +196,8 @@ class FunctionApi(BaseApi):
     def __init__(self, task_result: TaskResult):
         super(FunctionApi, self).__init__(task_result)
         self.is_benchmark_task = bool(task_result.is_benchmark_task)
-        self.high_precision = self.device in {"cpu", "gpu"} and self.is_benchmark_task
+        # 仓内 ATK 约定：精度 = NPU DUT + CPU golden（本算子不提供 GPU 标杆）。
+        self.high_precision = self.device == "cpu" and self.is_benchmark_task
 
     def __call__(self, input_data: InputDataset, with_output: bool = False):
         spec = _case_spec(input_data, OP_NAME)
@@ -204,12 +205,10 @@ class FunctionApi(BaseApi):
             outputs = run_npu(spec, input_data)
         elif self.device == "cpu":
             outputs = run_cpu(spec, self.high_precision)
-        elif self.device == "gpu":
-            # 本算子没有 GPU 参考实现；GPU 节点只用于与 CPU 同一套标杆做加速。
-            outputs = run_cpu(spec, self.high_precision)
         else:
             raise RuntimeError(
-                f"{OP_NAME} needs an NPU DUT and a CPU reference, device={self.device!r}, "
+                f"{OP_NAME} 只提供 CPU 标杆（仓内约定：精度 = NPU DUT + CPU golden），"
+                f"positive 用例需要 NPU DUT 或 CPU golden 节点；device={self.device!r}, "
                 f"benchmark={self.is_benchmark_task}"
             )
         return _finite_tuple(outputs, golden=(self.device != "npu"))

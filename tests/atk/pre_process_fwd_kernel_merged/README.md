@@ -49,11 +49,18 @@ CP（context parallel）场景下 GDN / KDA（/ DPLR）前向的 **pre-process �
 `executor_*.py` 按相对路径**加载**上面那份参考实现（`importlib`），不复制副本，
 避免出现两份会分叉的标杆；输入构造 / `run_cpu` / `run_npu` / `FunctionApi` 都在本目录。
 
+**没有 GPU 标杆，也不打算加。** 本工程只支持两个角色：**NPU DUT** 与 **CPU golden**
+（`FunctionApi` 对其它 device 直接报错）—— 这与仓内 `tests/atk/README.md` 的精度路线一致
+（该文档通篇不提 GPU）。上游虽然有一份 Triton 参考实现
+（`fla/ops/cp/chunk_delta_h.py`），但它需要额外的 GPU server，而本算子的 CPU 标杆
+已经与 H20 `ieee` 逐项对齐（见上表"上游语义来源"与下面"精度口径"），
+精度验收不需要 GPU 节点；若将来只是想要更快的参考节点，可再按需扩展 executor。
+
 ### 精度口径（重要）
 
 - **验收基线 = 契约版标杆**：`accum_dtype=fp32` + 三个舍入点开关全开
   （`h`/`v_new` 进 MMAD 前降到输入 dtype、`M_c@m` 每 chunk 回落 fp32）。
-- `reference.py` 的模块文档写明：kernel 的 h/m 累加器是 **FP32**，用 FP64 基准会让任何
+- `scripts/pre_process_fwd_kernel_merged_cpu.py` 的模块文档写明：kernel 的 h/m 累加器是 **FP32**，用 FP64 基准会让任何
   忠实实现平白多出 **~9.4e-3** 的绝对偏差（与 H20 `ieee` 对齐时实测）。
   ⇒ 本工程的 **`high_precision=True`（ATK benchmark 节点）只作参考侧灵敏度对照**，
   不作为验收真值；验收真值走 `high_precision=False`。

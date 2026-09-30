@@ -129,7 +129,8 @@ hm[i_h, 0:K, 0:V]   = FP32(h_{NT})
 hm[i_h, 0:K, V:V+K] = FP32(m_{NT})
 ```
 
-与 `reference/reference.py` 的对应关系与**必须保持的舍入点**（见 `docs/api.md` 第 4 节）：
+与 CPU 标杆（`tests/atk/pre_process_fwd_kernel_merged/scripts/pre_process_fwd_kernel_merged_cpu.py`）
+的对应关系与**必须保持的舍入点**（见 `docs/api.md` 第 4 节）：
 
 1. S0 的右操作数 `h` 先降 BF16 再入 Cube；S1 产出的 `v_new` 在进入 S2 前量化 BF16；
 2. `h` 的累加 `decay*h + dH` 在 FP32 上完成，chunk 之间不降精度；
@@ -887,7 +888,7 @@ Stage3AIV(hv, c, part):
   再切一刀，属于退回第一步的结构性改动。
   H20 的 `default`（NVIDIA TF32）只是**性能对标**口径（同 case 实测 `default` 1620.7 us vs
   `ieee` 18321.6 us，差 11×）；**精度验收**按 `precision-policy.json` 对 CPU 契约标杆
-  （`reference/reference.py`：FP32 累加 + 四个舍入点）。FP32 原生比 H20 `default` 更接近真值，
+（CPU 标杆：FP32 累加 + 四个舍入点）。FP32 原生比 H20 `default` 更接近真值，
   因此这条口径在精度与性能两侧都不吃亏。若目标 CANN 版本的 Cube 不支持 FP32 原生或吞吐不达
   预期，回退候选顺序为**单遍 HF32 → BF16 三分拆**，04 用核内循环实测单步成本后决定。
 - **合法分支组合**：`K = V = 128`、`BT = 64`、`layout = BNSD`、
@@ -1320,7 +1321,7 @@ GVA 只存在于 g-only 路径，DPLR 本轮不进用例）。
    `npu_chunk_kda_fwd_finalize` 的 canonical 布局都是 head-major `[B, HV, T, D]`，且
    `npu_chunk_fwd_h` 还显式覆盖 descriptor 为 `ACL_FORMAT_ND`；本算子接在 `chunk_fwd_h`
    之前、共用同一批输入张量，保持 BNSD 是**零转置**选择。
-2. 上游竞品（以及 `reference/reference.py`）是 token-major `[B, T, H, D]`。这一层差异由
+2. 上游竞品（以及 CPU 标杆）是 token-major `[B, T, H, D]`。这一层差异由
    调用方吸收，不进本算子契约；`docs/api.md` 第 3 节的 BNSD 约定同时是 01 阶段的已冻结接口。
 3. 仓内 `npu_chunk_gated_delta_rule_bwd`、`npu_chunk_fwd_o`、`npu_chunk_kda_fwd_finalize`
    提供 `layout` / `output_layout` 参数接受 BSND，做法是**在 host 侧显式转置**，KDA bwd 还用
@@ -1338,9 +1339,9 @@ GVA 只存在于 g-only 路径，DPLR 本轮不进用例）。
 - 回退顺序：`SYNC_L1_HANDOFF -> SYNC_GM_QUEUE`（R14 兜底）；
   `PIPE_SERIAL -> PIPE_PACK_OVERLAP` 为正向候选，失败即恢复已验证的 `PIPE_SERIAL` 基线。
 - 设计调整统一回写本文第 1/2/3/6 章再改代码。
-- 交付物：`docs/design.md`（本文）、`docs/api.md`、`reference/reference.py` 与
-  `reference/definition.json`、`reference/precision-policy.json`、
-  `tests/atk/pre_process_fwd_kernel_merged/`（ATK 单算子验收工程）。
+- 交付物：`docs/design.md`（本文）、`docs/api.md`、`reference/definition.json`、
+  `reference/precision-policy.json`、`tests/atk/pre_process_fwd_kernel_merged/`
+  （ATK 单算子验收工程，含 CPU 标杆 `scripts/pre_process_fwd_kernel_merged_cpu.py`）。
 
 ---
 

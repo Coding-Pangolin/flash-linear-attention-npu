@@ -23,7 +23,7 @@
  *   AIC  ④        : T2 = left^T @ bf16(T1)                    → kFlagT2
  *   AIV           : m = decay⊙m - T2（同步存 bf16(m)）          → kFlagState（下一 chunk）
  *
- * 语义与竞品/标杆对齐（见 docs/api.md、reference/reference.py）：
+ * 语义与竞品/标杆对齐（见 docs/api.md、tests/atk/pre_process_fwd_kernel_merged/scripts/）：
  *   * h 项用**未加门控的 k**，门控只作用在 v_new 上；m 项用 left = k·2^(g_last-g_t)；
  *   * h/m 的衰减：USE_G 为标量 2^(g_last)，USE_GK 为逐 k 的 2^(gk_last[k])；
  *   * m 链在 FP32 上做（这里的乘积把 m 量化到 bf16，与竞品 default/TF32 口径一致，

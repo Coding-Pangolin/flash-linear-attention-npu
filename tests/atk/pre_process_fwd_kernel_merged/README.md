@@ -22,8 +22,8 @@ CP（context parallel）场景下 GDN / KDA（/ DPLR）前向的 **pre-process �
 - **`k` 恒为 `[1, HK, T, K]`**（即使 gk/GVA 路径）；`w`/`u`/`v`/`g`/`gk` 在 `HV` 维。
   `HK` 与 `HV` 必须成倍数（`HV % HK == 0`），`hk = hv // (HV/HK)`；**GVA（`HK < HV`）合法**。
 - `gk` 路径（KDA/DPLR）仍是 `gk[1, HV, T, K]`（**按 value head 给门控**），`k` 按 HK 头。
-  ⚠ 不要因为"KDA"就把 `k` 建成 `HV` 头 —— `scripts/npu_smoke_ppfm.py::build_case` 与
-  `reference/reference.py` 都是"k 按 HK、gate 按 HV"。
+  ⚠ 不要因为"KDA"就把 `k` 建成 `HV` 头 —— 本工程 `scripts/pre_process_fwd_kernel_merged_cpu.py`
+  与 `executor_*.py` 都是"k 按 HK、gate 按 HV"。
 - `g` / `gk` **二选一**（互斥）；`g` 是 `[1, HV, T]`、`gk` 是 `[1, HV, T, K]`，
   两者都是 **base-2 的 chunk 内累积对数衰减**，dtype 支持 FP32 / BF16。
 - `K = V = 128`、`chunk_size = 64` 为固定规格（host 拦截其它值）；`k/w/u/v` 支持 BF16 / FP16。
@@ -33,7 +33,7 @@ CP（context parallel）场景下 GDN / KDA（/ DPLR）前向的 **pre-process �
 ### ⚠ 用例数据的形态要求（不是可选项）
 
 `w` 必须取**模型同构**分布：`k` 逐行归一化、`w = beta · k`（`beta ~ U(0, 0.02)`）。
-这与 `scripts/npu_smoke_ppfm.py::build_case` 一致；若改用满幅随机 `w`，
+这与本工程 `executor_*.py` 的构造一致；若改用满幅随机 `w`，
 `m = Π M_c` 会把 fp32 求和顺序的 1 ulp 差异放大到 O(1)（`|m| ~ 1e7`）——
 那是**用例病态**，不是实现缺陷。本工程的 `executor_*.py` 已经按模型同构构造输入。
 
@@ -41,9 +41,9 @@ CP（context parallel）场景下 GDN / KDA（/ DPLR）前向的 **pre-process �
 
 | 项 | 内容 |
 | --- | --- |
-| CPU 标杆（唯一真源） | `fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/reference/reference.py` |
+| CPU 标杆 | 本工程 `scripts/pre_process_fwd_kernel_merged_cpu.py`（纯 PyTorch，token-major） |
 | 上游语义来源 | `fla-org/flash-linear-attention@e52dbc0e` → `fla/ops/cp/chunk_delta_h.py::pre_process_fwd_kernel_merged` |
-| 算子自身用例表 | `fla/ops/.../pre_process_fwd_kernel_merged/cases.json`（41 条：37 精度 + 4 性能） |
+| 用例表 | 本工程 `gen_pre_process_fwd_kernel_merged.py` 内置的冻结用例（37 条逻辑精度 + 4 条性能） |
 | 接口与约束 | `fla/ops/.../pre_process_fwd_kernel_merged/docs/api.md` §3 |
 
 `executor_*.py` 按相对路径**加载**上面那份参考实现（`importlib`），不复制副本，
@@ -72,7 +72,7 @@ YAML 元信息覆盖 `ascend910b`、`ascend910_93`、`ascend950`，可配合统�
 
 | 文件 | 条数 | 来源 |
 | --- | ---: | --- |
-| `atk_pre_process_fwd_kernel_merged.json` | **37** | 算子 `cases.json` 的 PPFM-01..37（逻辑分支/边界/变长/GVA/gate dtype/并行度/子区间） |
+| `atk_pre_process_fwd_kernel_merged.json` | **111** | PPFM-01..37 每条 **3 个固定种子**（逻辑分支/边界/变长/GVA/gate dtype/并行度/子区间） |
 | `atk_pre_process_fwd_kernel_merged_perf.json` | **4** | 用户模型 case（PPFM-38..41：model-g / model-gk / CP=2+GVA / 长窗口） |
 | `atk_pre_process_fwd_kernel_merged_mss.json` | **5** | 按**可达 TilingKey** 人工构造（4 个 key + 1 条变长段枚举） |
 
@@ -80,7 +80,7 @@ YAML 元信息覆盖 `ascend910b`、`ascend910_93`、`ascend950`，可配合统�
 
 ```bash
 python gen_pre_process_fwd_kernel_merged.py --summary
-# accuracy=37 perf=4 mss=5 tiling_keys=4 -> [('g','bf16'), ('g','fp32'), ('gk','bf16'), ('gk','fp32')]
+# logical=37 accuracy=111 perf=4 mss=5 tiling_keys=4 -> [('g','bf16'), ('g','fp32'), ('gk','bf16'), ('gk','fp32')]
 ```
 
 `atk case -f pre_process_fwd_kernel_merged.yaml -p gen_pre_process_fwd_kernel_merged.py -dt 100 -en 0`
@@ -154,12 +154,12 @@ bash tests/atk/run_test_cpu.sh -op=pre_process_fwd_kernel_merged -scope=gen_case
 
 | 项 | 内容 |
 | --- | --- |
-| CPU 标杆版本 | `reference/reference.py`（SHA256 待回填） |
+| CPU 标杆版本 | `scripts/pre_process_fwd_kernel_merged_cpu.py`（SHA256 待回填） |
 | 三份测试文件版本 | `atk_*.json` / `_perf.json` / `_mss.json`（见 git 版本） |
 | 被测代码版本 | `feat/ppfm-tile-a5` @ 待回填 |
 | 目标 SoC | ascend950（A5） |
 | 执行的测试动作 | `accuracy` / `performance` / `determinism` / `mssanitizer` |
-| 精度用例总数 / 失败数 | 37 / 待回填 |
+| 精度用例总数 / 失败数 | **111**（=37 条逻辑用例 × 3 个固定种子）/ 待回填 |
 | 逻辑分支/边界/异常/TilingKey/确定性/内存覆盖结论 | 待回填 |
 
 **性能用例（`_perf.json`）逐 case 结果**：

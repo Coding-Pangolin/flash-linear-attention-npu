@@ -1,9 +1,10 @@
 """pre_process_fwd_kernel_merged 的 ATK 用例生成器（把算子自带的 41 条用例表冻结成 ATK 用例）。
 
-用例来源：算子目录里的 `cases.json`（41 条：37 条精度 + 4 条性能），
+用例来源：算子开发期冻结的 41 条用例（37 条精度 + 4 条性能），
 以及 `docs/design.md` 3.2.1 的 TilingKey 清单。
 
-- `atk_pre_process_fwd_kernel_merged.json`      ：37 条精度用例（逻辑分支/边界/变长/GVA/dtype/并行度/子区间）
+- `atk_pre_process_fwd_kernel_merged.json`      ：37 条精度用例 × **3 个固定种子** = 111 条
+  （逻辑分支/边界/变长/GVA/dtype/并行度/子区间）
 - `atk_pre_process_fwd_kernel_merged_perf.json` ：4 条性能用例（用户模型 case）
 - `atk_pre_process_fwd_kernel_merged_mss.json`  ：每个**可达 TilingKey** 一条精简用例（确定性/内存检测）
 
@@ -40,26 +41,17 @@ BT = 64
 SEED0 = 20260818
 
 STANDARD = {
-    "acc": {
-        "cv_fused_double_benchmark": {
-            "max_re_ratio": 5,
-            "avg_re_ratio": 1.5,
-            "root_mean_squared_ratio": 1.5,
-        }
-    },
+    "acc": "mixed_tolerance_bm",
     "perf": "not_key",
 }
 MSS_STANDARD = {
-    "acc": {
-        "cv_fused_double_benchmark": {
-            "max_re_ratio": 5,
-            "avg_re_ratio": 1.5,
-            "root_mean_squared_ratio": 1.5,
-        }
-    },
+    "acc": "mixed_tolerance_bm",
     "perf": "not_key",
     "mem": 1.1,
 }
+
+# 每个精度用例至少 3 个固定种子（tests/atk/README.md「正式验收用例包」）。
+SEEDS_PER_CASE = 3
 
 
 def _eq_cu(total: int, seg: int) -> list[int]:
@@ -77,11 +69,11 @@ def _p(name, gate, gate_dtype, hk, hv, t, cu, dtype="bf16", note="", group="精�
 
 
 def accuracy_profiles() -> list[dict]:
-    """37 条精度用例（对应 `cases.json` 的 PPFM-01..37）。"""
+    """37 条精度用例（PPFM-01..37）。"""
     out: list[dict] = []
     # -- 窗口规模（GDN / KDA）: T=1 / 1023 / 4096 / 8191 / 32767
     for i, t in enumerate([1, 1023, 4096, 8191, 32767]):
-        out.append(_p(f"PPFM-{i:02d}_win_g_t{t}", "g", "fp32", 32, 32, t, [0, t], note="窗口规模/GDN"))
+        out.append(_p(f"PPFM-{i+1:02d}_win_g_t{t}", "g", "fp32", 32, 32, t, [0, t], note="窗口规模/GDN"))
     for i, t in enumerate([1, 1023, 4096, 8191, 32767]):
         out.append(_p(f"PPFM-{i+6:02d}_win_gk_t{t}", "gk", "fp32", 32, 32, t, [0, t], note="窗口规模/KDA"))
     # -- 变长（2/3 段、非整除边界、单段大 T）
@@ -120,7 +112,7 @@ def accuracy_profiles() -> list[dict]:
 
 
 def perf_profiles() -> list[dict]:
-    """4 条性能用例（对应 `cases.json` 的 PPFM-38..41，用户模型 case）。"""
+    """4 条性能用例（PPFM-38..41，用户模型 case）。"""
     return [
         _p("PPFM-38_perf_kda_model", "gk", "fp32", 32, 32, 11264, [0, 11264], note="对齐 H20 model-gk"),
         _p("PPFM-39_perf_gdn_model", "g", "fp32", 32, 32, 11264, [0, 11264], note="对齐 H20 model-g"),
@@ -144,10 +136,8 @@ def mss_profiles() -> list[dict]:
     ]
 
 
-def _spec(profile: dict, case_id: int) -> dict:
+def _spec(profile: dict, case_id: int, seed: int) -> dict:
     """把一条用例描述展开成完整的 case_spec（写进 JSON 与 attrs）。"""
-    # 每条用例 3 个固定种子（README「每个精度用例至少包含 3 个固定种子」）。
-    seed = SEED0 + case_id
     return {
         "name": profile["name"],
         "group": profile.get("group", "精度"),
@@ -186,9 +176,9 @@ def _input(name, dtype, range_values, input_type="attr", shape=None):
     }
 
 
-def _case_payload(case_id: int, profile: dict, standard: dict) -> dict:
-    spec = _spec(profile, case_id)
-    marker_dtype = "fp16" if spec["dtype"] == "fp16" else "bf16"
+def _case_payload(case_id: int, profile: dict, standard: dict, seed: int) -> dict:
+    spec = _spec(profile, case_id, seed)
+    marker_dtype = "bf16"
     inputs = [
         _input("low_precision_marker", marker_dtype, [0, 0], input_type="tensor", shape=[1]),
         _input("fp32_marker", "fp32", [0, 0], input_type="tensor", shape=[1]),
@@ -246,17 +236,28 @@ def _write_json(path: Path, payloads: list) -> None:
     Path(path).write_text(json.dumps(payloads, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def expand_seeds(profiles: list[dict], n: int = SEEDS_PER_CASE) -> list[tuple]:
+    """把每条逻辑用例展开成 `n` 条（不同固定种子），种子按顺序唯一分配。"""
+    out: list[tuple] = []
+    for profile in profiles:
+        for _ in range(n):
+            out.append((profile, SEED0 + len(out)))
+    return out
+
+
 def _emit(acc, perf, mss, out_acc: Path, out_perf: Path, out_mss: Path) -> None:
     """三份 JSON 来源不同、不能互相替代（见 tests/atk/README.md「正式验收用例包」）。"""
-    _write_json(out_acc, [_case_payload(i, p, STANDARD) for i, p in enumerate(acc)])
-    _write_json(out_perf, [_case_payload(i, p, STANDARD) for i, p in enumerate(perf)])
-    _write_json(out_mss, [_case_payload(i, p, MSS_STANDARD) for i, p in enumerate(mss)])
+    expanded = expand_seeds(acc)
+    _write_json(out_acc, [_case_payload(i, p, STANDARD, s) for i, (p, s) in enumerate(expanded)])
+    _write_json(out_perf, [_case_payload(i, p, STANDARD, SEED0 + i) for i, p in enumerate(perf)])
+    _write_json(out_mss, [_case_payload(i, p, MSS_STANDARD, SEED0 + i) for i, p in enumerate(mss)])
 
 
 def build_cases() -> list:
     if CaseConfig is None:
         raise RuntimeError("ATK and PyTorch are required to instantiate CaseConfig objects.")
-    return [CaseConfig(**_case_payload(i, p, STANDARD)) for i, p in enumerate(accuracy_profiles())]
+    expanded = expand_seeds(accuracy_profiles())
+    return [CaseConfig(**_case_payload(i, p, STANDARD, s)) for i, (p, s) in enumerate(expanded)]
 
 
 if GENERATOR_REGISTRY is not None:
@@ -288,7 +289,8 @@ def main() -> None:
     _emit(acc, perf, mss, args.output, args.perf, args.mss)
     if args.summary:
         keys = sorted({(p["gate"], p["gate_dtype"]) for p in mss})
-        print(f"accuracy={len(acc)} perf={len(perf)} mss={len(mss)} tiling_keys={len(keys)} -> {keys}")
+        print(f"logical={len(acc)} accuracy={len(acc) * SEEDS_PER_CASE} perf={len(perf)} "
+              f"mss={len(mss)} tiling_keys={len(keys)} -> {keys}")
 
 
 if __name__ == "__main__":

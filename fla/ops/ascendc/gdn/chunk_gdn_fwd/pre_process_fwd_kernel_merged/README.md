@@ -10,7 +10,7 @@ CP（context parallel）前处理算子：把一个 token 窗口压成仿射链 
 
 | 部分 | 状态 |
 | --- | --- |
-| 01 接口 / 02 标杆 / 03 设计 | ✅ 冻结（见 `docs/`；标杆 `reference/reference.py` 已与 H20 `ieee` 对齐） |
+| 01 接口 / 02 标杆 / 03 设计 | ✅ 冻结（见 `docs/`；标杆 `tests/atk/pre_process_fwd_kernel_merged/scripts/pre_process_fwd_kernel_merged_cpu.py` 已与 H20 `ieee` 对齐） |
 | Python 接入（ctypes） | ✅ 已在 `torch_custom/fla_npu/fla_npu/ops/ascendc/_aclnn_ctypes.py` 落地（`aclnnPreProcessFwdKernelMerged` + `npu_pre_process_fwd_kernel_merged`），10 条离线单测通过 |
 | op_host | 🚧 已写 `*_def.cpp` / `*_tiling.{h,cpp}` / `op_api/*`（含 aclnn 两段式）；**尚未接线进构建** |
 | op_kernel | 🚧 待写（v1 计划：AIV-only 向量版先把数值打通，再换 Cube/tile 版做性能） |
@@ -24,7 +24,7 @@ CP（context parallel）前处理算子：把一个 token 窗口压成仿射链 
 2. 加 `op_kernel/pre_process_fwd_kernel_merged.cpp`（kernel 入口，`TILING_KEY_IS(1..3)` 分派 gate 模式）
    与其实现头文件；
 3. `bash build.sh` 编译，按错误逐条清；
-4. 用 `reference/reference.py` 对拍精度，再与 H20 基线比性能。
+4. 用 ATK 工程里的 CPU 标杆对拍精度（`tests/atk/pre_process_fwd_kernel_merged/`），再与 H20 基线比性能。
 
 **只编译本算子（快）**：`build.sh` 支持 `--ops=` 白名单，例如
 

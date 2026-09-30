@@ -5,8 +5,8 @@
 输出 `hm[Nseq, HV, K, V+K]`（左 `[0,V)` 为 `h`，右 `[V,V+K)` 为 `m`）。
 
 输入布局：**BNSD `[B,H,T,D]`**（与仓内其它 AscendC 算子一致），`B ≡ 1`。
-CPU 标杆：`fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/reference/reference.py`
-（唯一可编辑的 PyTorch 标杆源码，token-major `[T,H,D]`），本文件只做布局搬运与逐段调用。
+CPU 标杆：本目录 `scripts/pre_process_fwd_kernel_merged_cpu.py`
+（纯 PyTorch，token-major `[T,H,D]`），本文件只做布局搬运与逐段调用。
 
 精度口径（重要）：本算子的**验收基线是"契约版"标杆** —— `accum_dtype=fp32` +
 三个舍入点开关全开。`reference.py` 的模块文档写明：kernel 的 h/m 累加器是 FP32，
@@ -35,7 +35,6 @@ from _ascendc_common_executor import (
     _calc_dtype,
     _case_spec,
     _finite_tuple,
-    _int_list,
     _marker_device,
     _orig_dtype,
 )
@@ -48,16 +47,14 @@ K_DIM = 128
 V_DIM = 128
 BT = 64
 
-# 标杆源码（唯一真源）在算子目录里，这里按相对路径加载，避免复制一份产生分叉。
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+# CPU 标杆放在本算子 ATK 目录的 scripts/ 下（与仓内其它算子的约定一致）。
 _REFERENCE_PY = (
-    _REPO_ROOT
-    / "fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/reference/reference.py"
+    Path(__file__).resolve().parent / "scripts" / "pre_process_fwd_kernel_merged_cpu.py"
 )
 
 
 def _load_reference():
-    """加载算子目录里的 CPU 标杆（缓存）。"""
+    """加载本目录 scripts/ 下的 CPU 标杆。"""
     if not _REFERENCE_PY.is_file():
         raise FileNotFoundError(f"找不到 CPU 标杆：{_REFERENCE_PY}")
     spec = importlib.util.spec_from_file_location("_ppfm_reference", _REFERENCE_PY)
@@ -68,12 +65,12 @@ def _load_reference():
 
 
 def build_inputs(spec: dict[str, Any], device: torch.device, high_precision: bool = False) -> dict[str, Any]:
-    """按 **token-major** 构造本算子的输入（与标杆、与 `scripts/npu_smoke_ppfm.py::build_case` 同分布）。
+    """按 **token-major** 构造本算子的输入（与 `scripts/pre_process_fwd_kernel_merged_cpu.py` 同分布）。
 
     spec 字段：dtype / B(=1) / HK / HV / T / K(=128) / V(=128) / chunk_size(=64)
               / cu_seqlens(可选, list[int]) / gate(g|gk) / gate_dtype(fp32|bf16) / route / soc
 
-    **数据分布必须与 `scripts/npu_smoke_ppfm.py` 一致（模型同构）**：
+    **数据分布必须是模型同构的**：
     `k` 归一化、`w = beta · k`（`beta ~ U(0, 0.02)`），使 `|Kw| << 1`、`m` 链良态。
     若改用满幅随机 `w`，`m = Π M_c` 会把 fp32 求和顺序的 1 ulp 差异放大到 O(1)
     （`|m| ~ 1e7`），那是**用例病态**、不是实现缺陷 —— 交付件里不允许出现这种用例。
@@ -95,9 +92,8 @@ def build_inputs(spec: dict[str, Any], device: torch.device, high_precision: boo
     gate_kind = str(spec.get("gate", "g")).lower()
     gate_dtype = str(spec.get("gate_dtype", "fp32")).lower()
 
-    cu = _int_list(spec.get("cu_seqlens"))
-    if cu is None:
-        cu = [0, T]
+    cu_raw = spec.get("cu_seqlens")
+    cu = [int(x) for x in cu_raw] if cu_raw else [0, T]
 
     gen = torch.Generator(device="cpu")
     gen.manual_seed(seed)

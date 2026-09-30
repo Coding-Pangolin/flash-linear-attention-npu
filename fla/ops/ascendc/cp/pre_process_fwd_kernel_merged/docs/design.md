@@ -893,7 +893,7 @@ Stage3AIV(hv, c, part):
   `M_c` 的 L0A 占用从 64 KiB 涨到 96 KiB（**超过 L0A 的 64 KiB 上限**），必须把 `M_c` 按 K 行
   再切一刀，属于退回第一步的结构性改动。
   H20 的 `default`（NVIDIA TF32）只是**性能对标**口径（同 case 实测 `default` 1620.7 us vs
-  `ieee` 18321.6 us，差 11×）；**精度验收**按 `precision-policy.json` 对 CPU 契约标杆
+  `ieee` 18321.6 us，差 11×）；**精度验收**按 ATK 双标杆（`tests/atk/pre_process_fwd_kernel_merged/`）对 CPU 契约标杆
 （CPU 标杆：FP32 累加 + 四个舍入点）。FP32 原生比 H20 `default` 更接近真值，
   因此这条口径在精度与性能两侧都不吃亏。若目标 CANN 版本的 Cube 不支持 FP32 原生或吞吐不达
   预期，回退候选顺序为**单遍 HF32 → BF16 三分拆**，04 用核内循环实测单步成本后决定。
@@ -1157,7 +1157,8 @@ kernel 入参：Nwork=HV, blockDim, NT, M(c), 各张量 stride
 | `m_c` | S4 内 | FP32xFP32、FP32 累加，chunk 间不降精度 | `[K,K]` |
 | `hm` | 最终输出 | FP32，不再舍入 | `[K,V+K]` |
 
-统一策略：`atol=1.5e-2 / rtol=2e-3 / max_abs_limit=0.05`（`reference/precision-policy.json`）。
+统一策略：`atol=1.5e-2 / rtol=2e-3 / max_abs_limit=0.05`（开发期自测口径；
+库上看护走 ATK 双标杆，见 `tests/atk/pre_process_fwd_kernel_merged/`）。
 量级依据：`m` 半边在 `atol=1e-6` 下与 CPU 标杆全过（强检查）；
 `h` 半边存在 9.5e-3 的内在散布（`bf16(h)` 量化不连续在反馈环里放大，弱检查）。
 分区至少覆盖 `ALL`、`h` 半边、`m` 半边、`head0`、`head_last`。
@@ -1346,7 +1347,7 @@ GVA 只出现在 g-only 路径，DPLR 不支持、不进用例）。
   `PIPE_SERIAL -> PIPE_PACK_OVERLAP` 为正向候选，失败即恢复已验证的 `PIPE_SERIAL` 基线。
 - 设计调整统一回写本文第 1/2/3/6 章再改代码。
 - 交付物：`docs/design.md`（本文）、`docs/api.md`、
-  `reference/precision-policy.json`（数值精度策略）、`tests/atk/pre_process_fwd_kernel_merged/`
+  `tests/atk/pre_process_fwd_kernel_merged/`
   （ATK 单算子验收工程，含 CPU 标杆 `scripts/pre_process_fwd_kernel_merged_cpu.py`）。
 
 ---

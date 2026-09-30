@@ -28,7 +28,7 @@ rank 的**一个序列窗口（一个 part）**计算窗口边界状态 `h` 与�
 | 参考文件 | `fla/ops/cp/chunk_delta_h.py`，`pre_process_fwd_kernel_merged`（第 42 行起） |
 | 参考文件 SHA256 | `a6ed6aaaf0bc6c7dc8c9235a5a9346d14a0bbeb3630b8baf8f1c2bc7ac92435c` |
 | 许可证 | MIT（上游仓库根目录 `LICENSE`） |
-| 本地归档 | `/home/npu_user7/BartonFang/refs/fla_pinned/`（含 `PIN.txt` 与逐文件 SHA256） |
+| 本地归档 | 开发机上按上面的 commit 固定了一份只读快照（`PIN.txt` + 逐文件 SHA256），不在仓库内 |
 | 用户需求来源 | 用户指定该 kernel 作为本 AscendC 算子的对标接口 |
 
 同一 commit 下的调用方（决定各分支的实际语义）：
@@ -77,7 +77,7 @@ rank 的**一个序列窗口（一个 part）**计算窗口边界状态 `h` 与�
 | 算子名（snake） | `pre_process_fwd_kernel_merged` |
 | OP TYPE | `PreProcessFwdKernelMerged` |
 | aclnn 接口 | `aclnnPreProcessFwdKernelMerged` |
-| 工程目录 | `fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/` |
+| 工程目录 | `fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/`（CP 算子统一放在 `fla/ops/ascendc/cp/`，与 `chunk_delta_h_bwd_preprocess` 同目录） |
 | Python 调用 | `from fla_npu.ops.ascendc import pre_process_fwd_kernel_merged`（同时提供 `npu_pre_process_fwd_kernel_merged`） |
 | 接入方式 | **走 ctypes（2026-09-28 指定）**：仓内 AscendC 算子 + `torch_custom/fla_npu/fla_npu/ops/ascendc/_aclnn_ctypes.py` 的 Python ctypes wrapper + `ops/ascendc/__init__.py` 的 `_ASCENDC_OPS` 注册。**三处改动**见 §3.1.1 |
 | 目标 SoC | Ascend950（`NpuArch=3510`，`CATLASS_ARCH=3510`） |

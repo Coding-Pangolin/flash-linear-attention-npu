@@ -116,16 +116,20 @@ inline ge::graphStatus PreProcessFwdTilingProcessor(gert::TilingContext *context
     // 把余数链按列切成 S 片（成本模型 c(s)=α+(1-α)/s，实测 α≈0.72），
     // S 片分给 S*r 个核的第二个任务 ⇒ 尾巴从「整宽」变「1/S 宽」。约束 r*S <= aicNum。
     // 实测：模型 case（hwItems=32/A=28）S=2 −7.2%、S=4 −9.84%（vs colSplit=1）。
-    // ⚠ 平台门控（2026-09-30）：hybridS>1 的分片任务路径在 A2/910B 上存在低频偶发
-    //   （gdn-hy30：hwItems=30/A=20 ⇒ S=2；见 outputs/PPFM_910B_A2FIX_OPS_20260930.md §6.3）。
-    //   A2 的模型 case（hwItems=32/A=20）本来就不满足 r*S <= aicNum，吃不到该收益，
-    //   故本调度**仅在 A5/ASCEND950 上启用**，A2/A3 一律 hybridS=1。
-    //   复现/诊断：环境变量 PPFM_HYBRID_S 在门控之后生效，可强制打开。
-    const bool hybridEnabled =
+    // ⚠ 平台门控（2026-09-30）：hybridS>1 的分片任务路径在 A2/910B 上有低频偶发，
+    //   实测只在 **S=2** 的组合上被观察到（gdn-hy30：hwItems=30/A=20 ⇒ S=2；
+    //   见 outputs/PPFM_910B_A2FIX_OPS_20260930.md §6.3）。
+    //   而 S=4 在 A2 上已有两组证据：
+    //     ① `kda T=256/HK=HV=64` 强制 S=4 × 30 个独立进程 vs CPU 标杆：0 失败、单一取值；
+    //     ② `dump_hm` 的 `gdn-hy64`（A2 上 rem=4 ⇒ S=4）与 S=1 的结果**逐位相同**
+    //        （列切分不改任何 MMAD 的 K 累加顺序）。
+    //   ⇒ A5/ASCEND950 全开；A2/A3 **只放行 S=4**，S=2 仍禁用（回收 KDA 档约 5%）。
+    //   复现/诊断：环境变量 PPFM_HYBRID_S 在门控之后生效，可强制打开任意 S。
+    const bool hybridAll =
         ascendcPlatform.GetSocVersion() == platform_ascendc::SocVersion::ASCEND950;
     int64_t hybridS = 1;
     int64_t hybridBase = 0;
-    if (hybridEnabled && colSplit == 1 && aicNum > 1 && hwItems > aicNum) {
+    if (colSplit == 1 && aicNum > 1 && hwItems > aicNum) {
         const int64_t base = (hwItems / aicNum) * aicNum;
         const int64_t rem = hwItems - base;
         int64_t s = 1;
@@ -134,6 +138,10 @@ inline ge::graphStatus PreProcessFwdTilingProcessor(gert::TilingContext *context
             // 成本模型 c(s) = α + (1-α)/s，实测 α≈0.72 ⇒ s 越大越好，但 cb_=16 风险大，封顶 4。
             const int64_t sMax = aicNum / rem;
             s = (sMax >= 4) ? 4 : ((sMax >= 2) ? 2 : 1);
+            // A2/A3：S=2 的分片任务路径有低频偶发（gdn-hy30），S=4 已验证 ⇒ 只放行 S=4。
+            if (!hybridAll && s == 2) {
+                s = 1;
+            }
         }
         if (s >= 2) {
             hybridS = s;

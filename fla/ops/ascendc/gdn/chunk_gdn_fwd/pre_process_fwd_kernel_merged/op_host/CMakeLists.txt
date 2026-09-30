@@ -30,7 +30,7 @@ if("${ASCEND_COMPUTE_UNIT}" STREQUAL "ascend950")
 endif()
 # 诊断开关（默认关闭）：需要源码行号 / code hotspot 时
 #   PPFM_KERNEL_G=1 bash build.sh --pkg --soc=ascend950 ...
-# 只影响 kernel 的调试信息，不改变算子语义；见 docs/msprof_sim_guide.md。
+# 只影响 kernel 的调试信息，不改变算子语义。
 if(DEFINED ENV{PPFM_KERNEL_G})
     add_ops_compile_options(
         OP_NAME PreProcessFwdKernelMerged

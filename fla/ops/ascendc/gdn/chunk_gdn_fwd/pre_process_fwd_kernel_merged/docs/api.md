@@ -342,8 +342,7 @@ hm = pre_process_fwd_kernel_merged(k_loc, w_loc, u_loc, gk=gk_loc, cu_seqlens=wi
 ```
 
 > CP 相关的取舍（`layout` 感知、`is_first_rank` / `is_last_rank` 的跳过判断、`all_gather`
-> 与 `merge`、`compress_h0`）都在**编排层**，不在本算子接口里；完整链路见
-> `docs/pre_process_fwd_kernel_merged_integration_flow.md`。
+> 与 `merge`、`compress_h0`）都在**编排层**，不在本算子接口里。
 
 ### 3.6 与竞品 kernel 参数的一一对应
 

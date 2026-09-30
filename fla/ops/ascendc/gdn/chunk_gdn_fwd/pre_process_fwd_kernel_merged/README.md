@@ -4,7 +4,7 @@ CP（context parallel）前处理算子：把一个 token 窗口压成仿射链 
 `fla/ops/cp/chunk_delta_h.py::pre_process_fwd_kernel_merged` 数值对齐（对标 1.0x H20）。
 
 完整语义、Stage 划分、内存分配、用例与验证记录见 `docs/`（`api.md` / `design.md` /
-`validation.md` / `integration_flow.md` / `*_泛化用例.xlsx`）。
+`precheck.md` / `validation.md`）。
 
 ## 当前进度（2026-09-28）
 
@@ -24,8 +24,7 @@ CP（context parallel）前处理算子：把一个 token 窗口压成仿射链 
 2. 加 `op_kernel/pre_process_fwd_kernel_merged.cpp`（kernel 入口，`TILING_KEY_IS(1..3)` 分派 gate 模式）
    与其实现头文件；
 3. `bash build.sh` 编译，按错误逐条清；
-4. 用 `reference/reference.py` + `scripts/compare_with_gpu.py` 对拍（精度），
-   再用 `scripts/bench_pre_process_h20.py` 采到的 H20 基线比性能。
+4. 用 `reference/reference.py` 对拍精度，再与 H20 基线比性能。
 
 **只编译本算子（快）**：`build.sh` 支持 `--ops=` 白名单，例如
 

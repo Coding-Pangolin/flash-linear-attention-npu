@@ -2,6 +2,11 @@
 
 本文件是开发期记录，收敛到算子验收 README 后删除。
 
+> 注：本文引用的部分**过程文档与一次性调试脚本**（`docs/port_910b.md`、`docs/race_status_*.md`、
+> `docs/precision_gate_findings.md`、`scripts/compare_with_gpu.py`、`scripts/npu_dbg*.py`、
+> `scripts/npu_diag*.py` 等）已随交付清理，历史版本见 git。算子验收请走
+> `tests/atk/pre_process_fwd_kernel_merged/`。
+
 ## 01 接口修订（2026-09-21）
 
 用户在 03 阶段提出三条要求，触发**接口与支持范围变化**，按主 Skill 的恢复矩阵回到 01：

@@ -14,8 +14,9 @@
 //   u  [1, HV, T, V] BF16
 //   g? [1, HV, T]      FP32   —— 与 gk 二选一
 //   gk?[1, HV, T, K]   FP32   —— 与 g 二选一
-//   bg?[1, HK, T, K]   BF16   —— DPLR 预留，必须与 gk 配套
-//   v? [1, HV, T, V]   BF16   —— DPLR 用；GDN/KDA 传 None 表示复用 u
+//   bg?[1, HK, T, K]   BF16   —— DPLR 专用位；本版本不支持 DPLR，必须传 None
+//   v? [1, HV, T, V]   BF16   —— DPLR 专用位；本版本不支持 DPLR，必须传 None
+//   （两者留在 schema 里只为保持参数顺序；aclnn 与 tiling 都会拒绝非空值）
 //   cu_seqlens?  host int64 数组（严格递增，0 <= cu[0] < cu[-1] <= T）
 //   chunk_size   int（本算子固定 64）
 

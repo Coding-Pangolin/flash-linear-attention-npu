@@ -12,6 +12,9 @@
 确定性子集（`frozen_by_gen`），`case_spec` 足额写入每个字段，不再依赖随机采样。
 
 可用 `python gen_pre_process_fwd_kernel_merged.py` 直接落地三份 JSON（不需要 ATK 环境）。
+`--standard` 选择写入三份 JSON 的 `standard.acc`：默认 `mixed_tolerance_bm`（仓内统一标准，
+NPU DUT + CPU 高精度 golden）；做 **GPU 双标杆**验收时用 `--standard cv_fused_double_benchmark`
+（阈值与交付仓 `FLA_ATK` 的 `chunk_gated_delta_rule_fwd_h` 一致：5 / 1.5 / 1.5）。
 """
 
 from __future__ import annotations
@@ -49,6 +52,37 @@ MSS_STANDARD = {
     "perf": "not_key",
     "mem": 1.1,
 }
+
+# GPU 双标杆（DUT + 同精度标杆 vs FP64 真值）用 ATK 的 `cv_fused_double_benchmark`，
+# 阈值与交付仓 `FLA_ATK` 里 `chunk_gated_delta_rule_fwd_h` / `chunk_kda_fwd` 一致。
+DOUBLE_BENCHMARK_STANDARD = {
+    "acc": {
+        "cv_fused_double_benchmark": {
+            "max_re_ratio": 5,
+            "avg_re_ratio": 1.5,
+            "root_mean_squared_ratio": 1.5,
+        }
+    },
+    "perf": "not_key",
+}
+DOUBLE_BENCHMARK_MSS_STANDARD = {
+    "acc": {
+        "cv_fused_double_benchmark": {
+            "max_re_ratio": 5,
+            "avg_re_ratio": 1.5,
+            "root_mean_squared_ratio": 1.5,
+        }
+    },
+    "perf": "not_key",
+    "mem": 1.1,
+}
+
+# `--standard` 的取值：仓内统一标准（CPU 单标杆）与 GPU 双标杆标准各一套。
+STANDARD_CHOICES = {
+    "mixed_tolerance_bm": (STANDARD, MSS_STANDARD),
+    "cv_fused_double_benchmark": (DOUBLE_BENCHMARK_STANDARD, DOUBLE_BENCHMARK_MSS_STANDARD),
+}
+DEFAULT_STANDARD = "mixed_tolerance_bm"
 
 # 每个精度用例至少 3 个固定种子（tests/atk/README.md「正式验收用例包」）。
 SEEDS_PER_CASE = 3
@@ -152,7 +186,6 @@ def _spec(profile: dict, case_id: int, seed: int) -> dict:
         "chunk_size": BT,
         "gate": profile.get("gate", "g"),
         "gate_dtype": profile.get("gate_dtype", "fp32"),
-        "use_bg": False,
         "cu_seqlens": [int(x) for x in profile["cu"]],
         "op": OP_NAME,
         "case_id": case_id,
@@ -193,7 +226,6 @@ def _case_payload(case_id: int, profile: dict, standard: dict, seed: int) -> dic
         _input("chunk_size", "int", spec["chunk_size"]),
         _input("gate", "string", spec["gate"]),
         _input("gate_dtype", "string", spec["gate_dtype"]),
-        _input("use_bg", "bool", spec["use_bg"]),
         _input("soc", "string", spec["soc"]),
         _input("route", "string", spec["route"]),
     ]
@@ -245,12 +277,14 @@ def expand_seeds(profiles: list[dict], n: int = SEEDS_PER_CASE) -> list[tuple]:
     return out
 
 
-def _emit(acc, perf, mss, out_acc: Path, out_perf: Path, out_mss: Path) -> None:
+def _emit(acc, perf, mss, out_acc: Path, out_perf: Path, out_mss: Path,
+          standard: str = DEFAULT_STANDARD) -> None:
     """三份 JSON 来源不同、不能互相替代（见 tests/atk/README.md「正式验收用例包」）。"""
+    acc_standard, mss_standard = STANDARD_CHOICES[standard]
     expanded = expand_seeds(acc)
-    _write_json(out_acc, [_case_payload(i, p, STANDARD, s) for i, (p, s) in enumerate(expanded)])
-    _write_json(out_perf, [_case_payload(i, p, STANDARD, SEED0 + i) for i, p in enumerate(perf)])
-    _write_json(out_mss, [_case_payload(i, p, MSS_STANDARD, SEED0 + i) for i, p in enumerate(mss)])
+    _write_json(out_acc, [_case_payload(i, p, acc_standard, s) for i, (p, s) in enumerate(expanded)])
+    _write_json(out_perf, [_case_payload(i, p, acc_standard, SEED0 + i) for i, p in enumerate(perf)])
+    _write_json(out_mss, [_case_payload(i, p, mss_standard, SEED0 + i) for i, p in enumerate(mss)])
 
 
 def build_cases() -> list:
@@ -280,17 +314,23 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path(__file__).with_name(f"atk_{OP_NAME}.json"))
     parser.add_argument("--perf", type=Path, default=Path(__file__).with_name(f"atk_{OP_NAME}_perf.json"))
     parser.add_argument("--mss", type=Path, default=Path(__file__).with_name(f"atk_{OP_NAME}_mss.json"))
+    parser.add_argument(
+        "--standard",
+        choices=sorted(STANDARD_CHOICES),
+        default=DEFAULT_STANDARD,
+        help="写入三份 JSON 的 standard.acc；GPU 双标杆验收用 cv_fused_double_benchmark",
+    )
     parser.add_argument("--summary", action="store_true")
     args = parser.parse_args()
 
     acc = accuracy_profiles()
     perf = perf_profiles()
     mss = mss_profiles()
-    _emit(acc, perf, mss, args.output, args.perf, args.mss)
+    _emit(acc, perf, mss, args.output, args.perf, args.mss, args.standard)
     if args.summary:
         keys = sorted({(p["gate"], p["gate_dtype"]) for p in mss})
         print(f"logical={len(acc)} accuracy={len(acc) * SEEDS_PER_CASE} perf={len(perf)} "
-              f"mss={len(mss)} tiling_keys={len(keys)} -> {keys}")
+              f"mss={len(mss)} tiling_keys={len(keys)} -> {keys} standard={args.standard}")
 
 
 if __name__ == "__main__":

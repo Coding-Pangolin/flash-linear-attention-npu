@@ -55,18 +55,25 @@ inline ge::graphStatus PreProcessFwdTilingProcessor(gert::TilingContext *context
     OP_CHECK_IF(uShape.GetDim(0) != 1 || uShape.GetDim(2) != T || uShape.GetDim(3) != V,
                 OP_LOGE(context->GetNodeName(), "u must be [1,Hv,T,V] and match k's T"), return ge::GRAPH_FAILED);
 
-    // gate 二选一 + bg 与 gk 配套
+    // gate 二选一；DPLR（bg / v）本版本不支持：显式拒绝，保证 TilingKey 3（USE_BG）永不被下发
     auto gTensor = context->GetOptionalInputTensor(INPUT_G_IDX);
     auto gkTensor = context->GetOptionalInputTensor(INPUT_GK_IDX);
     auto bgTensor = context->GetOptionalInputTensor(INPUT_BG_IDX);
     const bool hasG = gTensor != nullptr;
     const bool hasGk = gkTensor != nullptr;
     const bool hasBg = bgTensor != nullptr;
+    const bool hasV = context->GetOptionalInputTensor(INPUT_V_IDX) != nullptr;
     OP_CHECK_IF(hasG == hasGk, OP_LOGE(context->GetNodeName(), "exactly one of g / gk must be given"),
                 return ge::GRAPH_FAILED);
-    OP_CHECK_IF(hasBg && !hasGk, OP_LOGE(context->GetNodeName(), "DPLR requires bg paired with gk"),
+    OP_CHECK_IF(hasBg,
+                OP_LOGE(context->GetNodeName(),
+                        "bg is not supported: DPLR is not implemented in this release (GDN/KDA only)"),
                 return ge::GRAPH_FAILED);
-    const int64_t gateMode = hasBg ? GDN::PPFM_GATE_USE_BG : (hasGk ? GDN::PPFM_GATE_USE_GK : GDN::PPFM_GATE_USE_G);
+    OP_CHECK_IF(hasV,
+                OP_LOGE(context->GetNodeName(),
+                        "v is not supported: it is DPLR-only; GDN/KDA takes the values from u"),
+                return ge::GRAPH_FAILED);
+    const int64_t gateMode = hasGk ? GDN::PPFM_GATE_USE_GK : GDN::PPFM_GATE_USE_G;
     const ge::DataType gateDtype = hasG ? gTensor->GetDataType() : gkTensor->GetDataType();
 
     // cu_seqlens：host int 数组，必给；校验 0 <= cu[0] < ... < cu[-1] <= T

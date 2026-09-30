@@ -61,7 +61,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-01_win_g_t1\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":0,\"seed\":20260818,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-01_win_g_t1\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":0,\"seed\":20260818,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -172,17 +172,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -284,7 +273,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-01_win_g_t1\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":1,\"seed\":20260819,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-01_win_g_t1\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":1,\"seed\":20260819,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -395,17 +384,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -507,7 +485,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-01_win_g_t1\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":2,\"seed\":20260820,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-01_win_g_t1\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":2,\"seed\":20260820,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -618,17 +596,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -730,7 +697,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-02_win_g_t1023\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1023,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1023],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":3,\"seed\":20260821,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-02_win_g_t1023\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1023,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1023],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":3,\"seed\":20260821,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -841,17 +808,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -953,7 +909,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-02_win_g_t1023\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1023,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1023],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":4,\"seed\":20260822,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-02_win_g_t1023\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1023,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1023],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":4,\"seed\":20260822,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -1064,17 +1020,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -1176,7 +1121,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-02_win_g_t1023\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1023,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1023],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":5,\"seed\":20260823,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-02_win_g_t1023\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1023,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1023],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":5,\"seed\":20260823,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -1287,17 +1232,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -1399,7 +1333,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-03_win_g_t4096\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":6,\"seed\":20260824,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-03_win_g_t4096\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":6,\"seed\":20260824,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -1510,17 +1444,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -1622,7 +1545,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-03_win_g_t4096\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":7,\"seed\":20260825,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-03_win_g_t4096\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":7,\"seed\":20260825,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -1733,17 +1656,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -1845,7 +1757,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-03_win_g_t4096\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":8,\"seed\":20260826,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-03_win_g_t4096\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":8,\"seed\":20260826,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -1956,17 +1868,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -2068,7 +1969,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-04_win_g_t8191\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":8191,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,8191],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":9,\"seed\":20260827,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-04_win_g_t8191\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":8191,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,8191],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":9,\"seed\":20260827,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -2179,17 +2080,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -2291,7 +2181,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-04_win_g_t8191\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":8191,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,8191],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":10,\"seed\":20260828,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-04_win_g_t8191\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":8191,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,8191],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":10,\"seed\":20260828,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -2402,17 +2292,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -2514,7 +2393,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-04_win_g_t8191\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":8191,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,8191],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":11,\"seed\":20260829,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-04_win_g_t8191\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":8191,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,8191],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":11,\"seed\":20260829,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -2625,17 +2504,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -2737,7 +2605,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-05_win_g_t32767\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":32767,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,32767],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":12,\"seed\":20260830,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-05_win_g_t32767\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":32767,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,32767],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":12,\"seed\":20260830,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -2848,17 +2716,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -2960,7 +2817,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-05_win_g_t32767\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":32767,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,32767],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":13,\"seed\":20260831,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-05_win_g_t32767\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":32767,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,32767],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":13,\"seed\":20260831,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -3071,17 +2928,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -3183,7 +3029,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-05_win_g_t32767\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":32767,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,32767],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":14,\"seed\":20260832,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-05_win_g_t32767\",\"group\":\"精度\",\"note\":\"窗口规模/GDN\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":32767,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,32767],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":14,\"seed\":20260832,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -3294,17 +3140,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -3406,7 +3241,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-06_win_gk_t1\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":15,\"seed\":20260833,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-06_win_gk_t1\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":15,\"seed\":20260833,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -3517,17 +3352,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -3629,7 +3453,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-06_win_gk_t1\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":16,\"seed\":20260834,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-06_win_gk_t1\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":16,\"seed\":20260834,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -3740,17 +3564,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -3852,7 +3665,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-06_win_gk_t1\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":17,\"seed\":20260835,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-06_win_gk_t1\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":17,\"seed\":20260835,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -3963,17 +3776,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -4075,7 +3877,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-07_win_gk_t1023\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1023,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1023],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":18,\"seed\":20260836,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-07_win_gk_t1023\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1023,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1023],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":18,\"seed\":20260836,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -4186,17 +3988,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -4298,7 +4089,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-07_win_gk_t1023\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1023,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1023],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":19,\"seed\":20260837,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-07_win_gk_t1023\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1023,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1023],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":19,\"seed\":20260837,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -4409,17 +4200,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -4521,7 +4301,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-07_win_gk_t1023\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1023,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1023],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":20,\"seed\":20260838,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-07_win_gk_t1023\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":1023,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1023],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":20,\"seed\":20260838,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -4637,17 +4417,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -4744,7 +4513,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-08_win_gk_t4096\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":21,\"seed\":20260839,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-08_win_gk_t4096\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":21,\"seed\":20260839,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -4855,17 +4624,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -4967,7 +4725,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-08_win_gk_t4096\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":22,\"seed\":20260840,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-08_win_gk_t4096\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":22,\"seed\":20260840,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -5078,17 +4836,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -5190,7 +4937,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-08_win_gk_t4096\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":23,\"seed\":20260841,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-08_win_gk_t4096\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":23,\"seed\":20260841,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -5301,17 +5048,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -5413,7 +5149,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-09_win_gk_t8191\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":8191,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,8191],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":24,\"seed\":20260842,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-09_win_gk_t8191\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":8191,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,8191],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":24,\"seed\":20260842,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -5524,17 +5260,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -5636,7 +5361,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-09_win_gk_t8191\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":8191,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,8191],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":25,\"seed\":20260843,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-09_win_gk_t8191\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":8191,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,8191],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":25,\"seed\":20260843,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -5747,17 +5472,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -5859,7 +5573,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-09_win_gk_t8191\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":8191,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,8191],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":26,\"seed\":20260844,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-09_win_gk_t8191\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":8191,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,8191],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":26,\"seed\":20260844,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -5975,17 +5689,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -6082,7 +5785,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-10_win_gk_t32767\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":32767,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,32767],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":27,\"seed\":20260845,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-10_win_gk_t32767\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":32767,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,32767],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":27,\"seed\":20260845,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -6193,17 +5896,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -6305,7 +5997,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-10_win_gk_t32767\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":32767,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,32767],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":28,\"seed\":20260846,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-10_win_gk_t32767\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":32767,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,32767],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":28,\"seed\":20260846,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -6416,17 +6108,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -6528,7 +6209,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-10_win_gk_t32767\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":32767,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,32767],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":29,\"seed\":20260847,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-10_win_gk_t32767\",\"group\":\"精度\",\"note\":\"窗口规模/KDA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":32767,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,32767],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":29,\"seed\":20260847,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -6644,17 +6325,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -6751,7 +6421,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-11_varlen_g_2seg\",\"group\":\"精度\",\"note\":\"变长 2 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,256,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":30,\"seed\":20260848,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-11_varlen_g_2seg\",\"group\":\"精度\",\"note\":\"变长 2 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,256,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":30,\"seed\":20260848,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -6862,17 +6532,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -6974,7 +6633,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-11_varlen_g_2seg\",\"group\":\"精度\",\"note\":\"变长 2 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,256,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":31,\"seed\":20260849,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-11_varlen_g_2seg\",\"group\":\"精度\",\"note\":\"变长 2 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,256,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":31,\"seed\":20260849,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -7085,17 +6744,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -7197,7 +6845,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-11_varlen_g_2seg\",\"group\":\"精度\",\"note\":\"变长 2 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,256,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":32,\"seed\":20260850,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-11_varlen_g_2seg\",\"group\":\"精度\",\"note\":\"变长 2 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,256,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":32,\"seed\":20260850,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -7308,17 +6956,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -7420,7 +7057,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-12_varlen_g_3seg\",\"group\":\"精度\",\"note\":\"变长 3 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,512,1024,1536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":33,\"seed\":20260851,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-12_varlen_g_3seg\",\"group\":\"精度\",\"note\":\"变长 3 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,512,1024,1536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":33,\"seed\":20260851,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -7531,17 +7168,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -7643,7 +7269,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-12_varlen_g_3seg\",\"group\":\"精度\",\"note\":\"变长 3 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,512,1024,1536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":34,\"seed\":20260852,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-12_varlen_g_3seg\",\"group\":\"精度\",\"note\":\"变长 3 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,512,1024,1536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":34,\"seed\":20260852,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -7754,17 +7380,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -7866,7 +7481,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-12_varlen_g_3seg\",\"group\":\"精度\",\"note\":\"变长 3 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,512,1024,1536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":35,\"seed\":20260853,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-12_varlen_g_3seg\",\"group\":\"精度\",\"note\":\"变长 3 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,512,1024,1536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":35,\"seed\":20260853,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -7977,17 +7592,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -8089,7 +7693,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-13_varlen_g_3seg_uneven\",\"group\":\"精度\",\"note\":\"变长 3 段/非整除\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,64,320,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":36,\"seed\":20260854,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-13_varlen_g_3seg_uneven\",\"group\":\"精度\",\"note\":\"变长 3 段/非整除\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,64,320,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":36,\"seed\":20260854,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -8200,17 +7804,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -8312,7 +7905,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-13_varlen_g_3seg_uneven\",\"group\":\"精度\",\"note\":\"变长 3 段/非整除\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,64,320,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":37,\"seed\":20260855,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-13_varlen_g_3seg_uneven\",\"group\":\"精度\",\"note\":\"变长 3 段/非整除\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,64,320,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":37,\"seed\":20260855,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -8423,17 +8016,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -8535,7 +8117,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-13_varlen_g_3seg_uneven\",\"group\":\"精度\",\"note\":\"变长 3 段/非整除\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,64,320,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":38,\"seed\":20260856,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-13_varlen_g_3seg_uneven\",\"group\":\"精度\",\"note\":\"变长 3 段/非整除\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,64,320,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":38,\"seed\":20260856,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -8646,17 +8228,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -8758,7 +8329,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-14_varlen_g_1seg_big\",\"group\":\"精度\",\"note\":\"变长 1 段/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":39,\"seed\":20260857,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-14_varlen_g_1seg_big\",\"group\":\"精度\",\"note\":\"变长 1 段/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":39,\"seed\":20260857,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -8869,17 +8440,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -8981,7 +8541,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-14_varlen_g_1seg_big\",\"group\":\"精度\",\"note\":\"变长 1 段/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":40,\"seed\":20260858,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-14_varlen_g_1seg_big\",\"group\":\"精度\",\"note\":\"变长 1 段/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":40,\"seed\":20260858,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -9092,17 +8652,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -9204,7 +8753,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-14_varlen_g_1seg_big\",\"group\":\"精度\",\"note\":\"变长 1 段/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":41,\"seed\":20260859,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-14_varlen_g_1seg_big\",\"group\":\"精度\",\"note\":\"变长 1 段/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":41,\"seed\":20260859,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -9315,17 +8864,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -9427,7 +8965,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-15_varlen_gk_2seg\",\"group\":\"精度\",\"note\":\"变长 2 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,256,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":42,\"seed\":20260860,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-15_varlen_gk_2seg\",\"group\":\"精度\",\"note\":\"变长 2 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,256,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":42,\"seed\":20260860,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -9538,17 +9076,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -9650,7 +9177,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-15_varlen_gk_2seg\",\"group\":\"精度\",\"note\":\"变长 2 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,256,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":43,\"seed\":20260861,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-15_varlen_gk_2seg\",\"group\":\"精度\",\"note\":\"变长 2 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,256,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":43,\"seed\":20260861,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -9761,17 +9288,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -9873,7 +9389,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-15_varlen_gk_2seg\",\"group\":\"精度\",\"note\":\"变长 2 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,256,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":44,\"seed\":20260862,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-15_varlen_gk_2seg\",\"group\":\"精度\",\"note\":\"变长 2 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,256,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":44,\"seed\":20260862,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -9984,17 +9500,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -10096,7 +9601,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-16_varlen_gk_3seg\",\"group\":\"精度\",\"note\":\"变长 3 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,512,1024,1536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":45,\"seed\":20260863,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-16_varlen_gk_3seg\",\"group\":\"精度\",\"note\":\"变长 3 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,512,1024,1536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":45,\"seed\":20260863,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -10207,17 +9712,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -10319,7 +9813,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-16_varlen_gk_3seg\",\"group\":\"精度\",\"note\":\"变长 3 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,512,1024,1536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":46,\"seed\":20260864,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-16_varlen_gk_3seg\",\"group\":\"精度\",\"note\":\"变长 3 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,512,1024,1536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":46,\"seed\":20260864,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -10430,17 +9924,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -10542,7 +10025,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-16_varlen_gk_3seg\",\"group\":\"精度\",\"note\":\"变长 3 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,512,1024,1536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":47,\"seed\":20260865,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-16_varlen_gk_3seg\",\"group\":\"精度\",\"note\":\"变长 3 段\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,512,1024,1536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":47,\"seed\":20260865,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -10658,17 +10141,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -10765,7 +10237,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-17_varlen_gk_3seg_uneven\",\"group\":\"精度\",\"note\":\"变长 3 段/非整除\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,64,320,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":48,\"seed\":20260866,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-17_varlen_gk_3seg_uneven\",\"group\":\"精度\",\"note\":\"变长 3 段/非整除\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,64,320,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":48,\"seed\":20260866,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -10876,17 +10348,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -10988,7 +10449,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-17_varlen_gk_3seg_uneven\",\"group\":\"精度\",\"note\":\"变长 3 段/非整除\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,64,320,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":49,\"seed\":20260867,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-17_varlen_gk_3seg_uneven\",\"group\":\"精度\",\"note\":\"变长 3 段/非整除\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,64,320,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":49,\"seed\":20260867,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -11099,17 +10560,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -11211,7 +10661,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-17_varlen_gk_3seg_uneven\",\"group\":\"精度\",\"note\":\"变长 3 段/非整除\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,64,320,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":50,\"seed\":20260868,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-17_varlen_gk_3seg_uneven\",\"group\":\"精度\",\"note\":\"变长 3 段/非整除\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,64,320,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":50,\"seed\":20260868,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -11322,17 +10772,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -11434,7 +10873,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-18_varlen_gk_1seg_big\",\"group\":\"精度\",\"note\":\"变长 1 段/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":51,\"seed\":20260869,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-18_varlen_gk_1seg_big\",\"group\":\"精度\",\"note\":\"变长 1 段/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":51,\"seed\":20260869,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -11545,17 +10984,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -11657,7 +11085,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-18_varlen_gk_1seg_big\",\"group\":\"精度\",\"note\":\"变长 1 段/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":52,\"seed\":20260870,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-18_varlen_gk_1seg_big\",\"group\":\"精度\",\"note\":\"变长 1 段/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":52,\"seed\":20260870,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -11768,17 +11196,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -11880,7 +11297,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-18_varlen_gk_1seg_big\",\"group\":\"精度\",\"note\":\"变长 1 段/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":53,\"seed\":20260871,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-18_varlen_gk_1seg_big\",\"group\":\"精度\",\"note\":\"变长 1 段/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":53,\"seed\":20260871,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -11991,17 +11408,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -12103,7 +11509,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-19_gva_2x1\",\"group\":\"精度\",\"note\":\"GVA 2:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":54,\"seed\":20260872,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-19_gva_2x1\",\"group\":\"精度\",\"note\":\"GVA 2:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":54,\"seed\":20260872,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -12214,17 +11620,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -12326,7 +11721,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-19_gva_2x1\",\"group\":\"精度\",\"note\":\"GVA 2:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":55,\"seed\":20260873,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-19_gva_2x1\",\"group\":\"精度\",\"note\":\"GVA 2:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":55,\"seed\":20260873,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -12437,17 +11832,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -12549,7 +11933,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-19_gva_2x1\",\"group\":\"精度\",\"note\":\"GVA 2:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":56,\"seed\":20260874,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-19_gva_2x1\",\"group\":\"精度\",\"note\":\"GVA 2:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":56,\"seed\":20260874,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -12660,17 +12044,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -12772,7 +12145,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-20_gva_3x1_odd\",\"group\":\"精度\",\"note\":\"GVA 3:1/奇数 head\",\"dtype\":\"bf16\",\"B\":1,\"HK\":21,\"HV\":63,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":57,\"seed\":20260875,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-20_gva_3x1_odd\",\"group\":\"精度\",\"note\":\"GVA 3:1/奇数 head\",\"dtype\":\"bf16\",\"B\":1,\"HK\":21,\"HV\":63,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":57,\"seed\":20260875,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -12883,17 +12256,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -12995,7 +12357,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-20_gva_3x1_odd\",\"group\":\"精度\",\"note\":\"GVA 3:1/奇数 head\",\"dtype\":\"bf16\",\"B\":1,\"HK\":21,\"HV\":63,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":58,\"seed\":20260876,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-20_gva_3x1_odd\",\"group\":\"精度\",\"note\":\"GVA 3:1/奇数 head\",\"dtype\":\"bf16\",\"B\":1,\"HK\":21,\"HV\":63,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":58,\"seed\":20260876,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -13106,17 +12468,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -13218,7 +12569,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-20_gva_3x1_odd\",\"group\":\"精度\",\"note\":\"GVA 3:1/奇数 head\",\"dtype\":\"bf16\",\"B\":1,\"HK\":21,\"HV\":63,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":59,\"seed\":20260877,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-20_gva_3x1_odd\",\"group\":\"精度\",\"note\":\"GVA 3:1/奇数 head\",\"dtype\":\"bf16\",\"B\":1,\"HK\":21,\"HV\":63,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":59,\"seed\":20260877,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -13329,17 +12680,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -13441,7 +12781,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-21_gva_4x1\",\"group\":\"精度\",\"note\":\"GVA 4:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":60,\"seed\":20260878,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-21_gva_4x1\",\"group\":\"精度\",\"note\":\"GVA 4:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":60,\"seed\":20260878,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -13552,17 +12892,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -13664,7 +12993,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-21_gva_4x1\",\"group\":\"精度\",\"note\":\"GVA 4:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":61,\"seed\":20260879,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-21_gva_4x1\",\"group\":\"精度\",\"note\":\"GVA 4:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":61,\"seed\":20260879,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -13775,17 +13104,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -13887,7 +13205,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-21_gva_4x1\",\"group\":\"精度\",\"note\":\"GVA 4:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":62,\"seed\":20260880,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-21_gva_4x1\",\"group\":\"精度\",\"note\":\"GVA 4:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":62,\"seed\":20260880,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -13998,17 +13316,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -14110,7 +13417,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-22_gva_8x1\",\"group\":\"精度\",\"note\":\"GVA 8:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":4,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":63,\"seed\":20260881,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-22_gva_8x1\",\"group\":\"精度\",\"note\":\"GVA 8:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":4,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":63,\"seed\":20260881,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -14221,17 +13528,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -14333,7 +13629,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-22_gva_8x1\",\"group\":\"精度\",\"note\":\"GVA 8:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":4,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":64,\"seed\":20260882,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-22_gva_8x1\",\"group\":\"精度\",\"note\":\"GVA 8:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":4,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":64,\"seed\":20260882,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -14444,17 +13740,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -14556,7 +13841,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-22_gva_8x1\",\"group\":\"精度\",\"note\":\"GVA 8:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":4,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":65,\"seed\":20260883,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-22_gva_8x1\",\"group\":\"精度\",\"note\":\"GVA 8:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":4,\"HV\":32,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":65,\"seed\":20260883,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -14672,17 +13957,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -14779,7 +14053,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-23_gva_32x1\",\"group\":\"精度\",\"note\":\"GVA 32:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":2,\"HV\":64,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":66,\"seed\":20260884,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-23_gva_32x1\",\"group\":\"精度\",\"note\":\"GVA 32:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":2,\"HV\":64,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":66,\"seed\":20260884,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -14890,17 +14164,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -15002,7 +14265,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-23_gva_32x1\",\"group\":\"精度\",\"note\":\"GVA 32:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":2,\"HV\":64,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":67,\"seed\":20260885,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-23_gva_32x1\",\"group\":\"精度\",\"note\":\"GVA 32:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":2,\"HV\":64,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":67,\"seed\":20260885,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -15113,17 +14376,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -15225,7 +14477,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-23_gva_32x1\",\"group\":\"精度\",\"note\":\"GVA 32:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":2,\"HV\":64,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":68,\"seed\":20260886,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-23_gva_32x1\",\"group\":\"精度\",\"note\":\"GVA 32:1\",\"dtype\":\"bf16\",\"B\":1,\"HK\":2,\"HV\":64,\"T\":2048,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,2048],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":68,\"seed\":20260886,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -15341,17 +14593,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -15448,7 +14689,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-24_gva_1x2_multiseg\",\"group\":\"精度\",\"note\":\"变长 + GVA 1:2\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":8192,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1024,2048,3072,4096,5120,6144,7168,8192],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":69,\"seed\":20260887,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-24_gva_1x2_multiseg\",\"group\":\"精度\",\"note\":\"变长 + GVA 1:2\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":8192,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1024,2048,3072,4096,5120,6144,7168,8192],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":69,\"seed\":20260887,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -15559,17 +14800,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -15671,7 +14901,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-24_gva_1x2_multiseg\",\"group\":\"精度\",\"note\":\"变长 + GVA 1:2\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":8192,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1024,2048,3072,4096,5120,6144,7168,8192],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":70,\"seed\":20260888,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-24_gva_1x2_multiseg\",\"group\":\"精度\",\"note\":\"变长 + GVA 1:2\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":8192,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1024,2048,3072,4096,5120,6144,7168,8192],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":70,\"seed\":20260888,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -15782,17 +15012,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -15894,7 +15113,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-24_gva_1x2_multiseg\",\"group\":\"精度\",\"note\":\"变长 + GVA 1:2\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":8192,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1024,2048,3072,4096,5120,6144,7168,8192],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":71,\"seed\":20260889,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-24_gva_1x2_multiseg\",\"group\":\"精度\",\"note\":\"变长 + GVA 1:2\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":8192,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1024,2048,3072,4096,5120,6144,7168,8192],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":71,\"seed\":20260889,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -16010,17 +15229,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -16117,7 +15325,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-25_gva_1x3_big\",\"group\":\"精度\",\"note\":\"GVA 1:3/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":21,\"HV\":63,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":72,\"seed\":20260890,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-25_gva_1x3_big\",\"group\":\"精度\",\"note\":\"GVA 1:3/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":21,\"HV\":63,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":72,\"seed\":20260890,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -16228,17 +15436,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -16340,7 +15537,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-25_gva_1x3_big\",\"group\":\"精度\",\"note\":\"GVA 1:3/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":21,\"HV\":63,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":73,\"seed\":20260891,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-25_gva_1x3_big\",\"group\":\"精度\",\"note\":\"GVA 1:3/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":21,\"HV\":63,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":73,\"seed\":20260891,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -16451,17 +15648,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -16563,7 +15749,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-25_gva_1x3_big\",\"group\":\"精度\",\"note\":\"GVA 1:3/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":21,\"HV\":63,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":74,\"seed\":20260892,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-25_gva_1x3_big\",\"group\":\"精度\",\"note\":\"GVA 1:3/大 T\",\"dtype\":\"bf16\",\"B\":1,\"HK\":21,\"HV\":63,\"T\":16387,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,16387],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":74,\"seed\":20260892,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -16679,17 +15865,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -16786,7 +15961,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-26_gate_fp32\",\"group\":\"精度\",\"note\":\"g FP32\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":75,\"seed\":20260893,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-26_gate_fp32\",\"group\":\"精度\",\"note\":\"g FP32\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":75,\"seed\":20260893,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -16897,17 +16072,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -17009,7 +16173,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-26_gate_fp32\",\"group\":\"精度\",\"note\":\"g FP32\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":76,\"seed\":20260894,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-26_gate_fp32\",\"group\":\"精度\",\"note\":\"g FP32\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":76,\"seed\":20260894,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -17120,17 +16284,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -17232,7 +16385,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-26_gate_fp32\",\"group\":\"精度\",\"note\":\"g FP32\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":77,\"seed\":20260895,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-26_gate_fp32\",\"group\":\"精度\",\"note\":\"g FP32\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":77,\"seed\":20260895,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -17343,17 +16496,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -17455,7 +16597,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-27_gate_bf16\",\"group\":\"精度\",\"note\":\"g BF16\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"bf16\",\"use_bg\":false,\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":78,\"seed\":20260896,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-27_gate_bf16\",\"group\":\"精度\",\"note\":\"g BF16\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"bf16\",\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":78,\"seed\":20260896,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -17566,17 +16708,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "bf16",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -17678,7 +16809,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-27_gate_bf16\",\"group\":\"精度\",\"note\":\"g BF16\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"bf16\",\"use_bg\":false,\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":79,\"seed\":20260897,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-27_gate_bf16\",\"group\":\"精度\",\"note\":\"g BF16\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"bf16\",\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":79,\"seed\":20260897,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -17789,17 +16920,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "bf16",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -17901,7 +17021,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-27_gate_bf16\",\"group\":\"精度\",\"note\":\"g BF16\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"bf16\",\"use_bg\":false,\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":80,\"seed\":20260898,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-27_gate_bf16\",\"group\":\"精度\",\"note\":\"g BF16\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"bf16\",\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":80,\"seed\":20260898,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -18012,17 +17132,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "bf16",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -18124,7 +17233,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-28_gk_fp32\",\"group\":\"精度\",\"note\":\"gk FP32\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":81,\"seed\":20260899,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-28_gk_fp32\",\"group\":\"精度\",\"note\":\"gk FP32\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":81,\"seed\":20260899,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -18235,17 +17344,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -18347,7 +17445,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-28_gk_fp32\",\"group\":\"精度\",\"note\":\"gk FP32\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":82,\"seed\":20260900,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-28_gk_fp32\",\"group\":\"精度\",\"note\":\"gk FP32\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":82,\"seed\":20260900,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -18458,17 +17556,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -18570,7 +17657,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-28_gk_fp32\",\"group\":\"精度\",\"note\":\"gk FP32\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":83,\"seed\":20260901,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-28_gk_fp32\",\"group\":\"精度\",\"note\":\"gk FP32\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":83,\"seed\":20260901,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -18681,17 +17768,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -18793,7 +17869,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-29_gk_bf16\",\"group\":\"精度\",\"note\":\"gk BF16\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"bf16\",\"use_bg\":false,\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":84,\"seed\":20260902,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-29_gk_bf16\",\"group\":\"精度\",\"note\":\"gk BF16\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"bf16\",\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":84,\"seed\":20260902,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -18904,17 +17980,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "bf16",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -19016,7 +18081,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-29_gk_bf16\",\"group\":\"精度\",\"note\":\"gk BF16\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"bf16\",\"use_bg\":false,\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":85,\"seed\":20260903,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-29_gk_bf16\",\"group\":\"精度\",\"note\":\"gk BF16\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"bf16\",\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":85,\"seed\":20260903,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -19127,17 +18192,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "bf16",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -19239,7 +18293,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-29_gk_bf16\",\"group\":\"精度\",\"note\":\"gk BF16\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"bf16\",\"use_bg\":false,\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":86,\"seed\":20260904,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-29_gk_bf16\",\"group\":\"精度\",\"note\":\"gk BF16\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":1024,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"bf16\",\"cu_seqlens\":[0,1024],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":86,\"seed\":20260904,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -19355,17 +18409,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -19462,7 +18505,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-30_par_hv8\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":87,\"seed\":20260905,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-30_par_hv8\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":87,\"seed\":20260905,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -19573,17 +18616,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -19685,7 +18717,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-30_par_hv8\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":88,\"seed\":20260906,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-30_par_hv8\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":88,\"seed\":20260906,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -19796,17 +18828,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -19908,7 +18929,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-30_par_hv8\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":89,\"seed\":20260907,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-30_par_hv8\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":89,\"seed\":20260907,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -20019,17 +19040,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -20131,7 +19141,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-31_par_hv16_gva\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=16（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":16,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":90,\"seed\":20260908,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-31_par_hv16_gva\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=16（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":16,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":90,\"seed\":20260908,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -20242,17 +19252,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -20354,7 +19353,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-31_par_hv16_gva\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=16（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":16,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":91,\"seed\":20260909,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-31_par_hv16_gva\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=16（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":16,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":91,\"seed\":20260909,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -20465,17 +19464,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -20577,7 +19565,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-31_par_hv16_gva\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=16（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":16,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":92,\"seed\":20260910,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-31_par_hv16_gva\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=16（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":16,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":92,\"seed\":20260910,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -20693,17 +19681,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -20800,7 +19777,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-32_par_hv32\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=32（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":93,\"seed\":20260911,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-32_par_hv32\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=32（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":93,\"seed\":20260911,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -20911,17 +19888,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -21023,7 +19989,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-32_par_hv32\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=32（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":94,\"seed\":20260912,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-32_par_hv32\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=32（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":94,\"seed\":20260912,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -21134,17 +20100,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -21246,7 +20201,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-32_par_hv32\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=32（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":95,\"seed\":20260913,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-32_par_hv32\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=32（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":32,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":95,\"seed\":20260913,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -21362,17 +20317,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -21469,7 +20413,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-33_par_hv64_gva\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=64（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":64,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":96,\"seed\":20260914,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-33_par_hv64_gva\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=64（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":64,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":96,\"seed\":20260914,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -21580,17 +20524,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -21692,7 +20625,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-33_par_hv64_gva\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=64（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":64,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":97,\"seed\":20260915,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-33_par_hv64_gva\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=64（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":64,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":97,\"seed\":20260915,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -21803,17 +20736,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -21915,7 +20837,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-33_par_hv64_gva\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=64（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":64,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":98,\"seed\":20260916,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-33_par_hv64_gva\",\"group\":\"精度\",\"note\":\"Nseq=1 × HV=64（GVA）\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":64,\"T\":4096,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":98,\"seed\":20260916,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -22031,17 +20953,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -22138,7 +21049,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-34_par_16seg\",\"group\":\"精度\",\"note\":\"Nseq=16 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":65536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248,57344,61440,65536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":99,\"seed\":20260917,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-34_par_16seg\",\"group\":\"精度\",\"note\":\"Nseq=16 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":65536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248,57344,61440,65536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":99,\"seed\":20260917,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -22249,17 +21160,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -22361,7 +21261,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-34_par_16seg\",\"group\":\"精度\",\"note\":\"Nseq=16 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":65536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248,57344,61440,65536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":100,\"seed\":20260918,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-34_par_16seg\",\"group\":\"精度\",\"note\":\"Nseq=16 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":65536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248,57344,61440,65536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":100,\"seed\":20260918,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -22472,17 +21372,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -22584,7 +21473,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-34_par_16seg\",\"group\":\"精度\",\"note\":\"Nseq=16 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":65536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248,57344,61440,65536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":101,\"seed\":20260919,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-34_par_16seg\",\"group\":\"精度\",\"note\":\"Nseq=16 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":65536,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248,57344,61440,65536],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":101,\"seed\":20260919,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -22700,17 +21589,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -22807,7 +21685,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-35_par_64seg\",\"group\":\"精度\",\"note\":\"Nseq=64 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":262144,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248,57344,61440,65536,69632,73728,77824,81920,86016,90112,94208,98304,102400,106496,110592,114688,118784,122880,126976,131072,135168,139264,143360,147456,151552,155648,159744,163840,167936,172032,176128,180224,184320,188416,192512,196608,200704,204800,208896,212992,217088,221184,225280,229376,233472,237568,241664,245760,249856,253952,258048,262144],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":102,\"seed\":20260920,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-35_par_64seg\",\"group\":\"精度\",\"note\":\"Nseq=64 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":262144,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248,57344,61440,65536,69632,73728,77824,81920,86016,90112,94208,98304,102400,106496,110592,114688,118784,122880,126976,131072,135168,139264,143360,147456,151552,155648,159744,163840,167936,172032,176128,180224,184320,188416,192512,196608,200704,204800,208896,212992,217088,221184,225280,229376,233472,237568,241664,245760,249856,253952,258048,262144],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":102,\"seed\":20260920,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -22918,17 +21796,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -23030,7 +21897,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-35_par_64seg\",\"group\":\"精度\",\"note\":\"Nseq=64 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":262144,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248,57344,61440,65536,69632,73728,77824,81920,86016,90112,94208,98304,102400,106496,110592,114688,118784,122880,126976,131072,135168,139264,143360,147456,151552,155648,159744,163840,167936,172032,176128,180224,184320,188416,192512,196608,200704,204800,208896,212992,217088,221184,225280,229376,233472,237568,241664,245760,249856,253952,258048,262144],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":103,\"seed\":20260921,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-35_par_64seg\",\"group\":\"精度\",\"note\":\"Nseq=64 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":262144,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248,57344,61440,65536,69632,73728,77824,81920,86016,90112,94208,98304,102400,106496,110592,114688,118784,122880,126976,131072,135168,139264,143360,147456,151552,155648,159744,163840,167936,172032,176128,180224,184320,188416,192512,196608,200704,204800,208896,212992,217088,221184,225280,229376,233472,237568,241664,245760,249856,253952,258048,262144],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":103,\"seed\":20260921,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -23141,17 +22008,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -23253,7 +22109,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-35_par_64seg\",\"group\":\"精度\",\"note\":\"Nseq=64 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":262144,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248,57344,61440,65536,69632,73728,77824,81920,86016,90112,94208,98304,102400,106496,110592,114688,118784,122880,126976,131072,135168,139264,143360,147456,151552,155648,159744,163840,167936,172032,176128,180224,184320,188416,192512,196608,200704,204800,208896,212992,217088,221184,225280,229376,233472,237568,241664,245760,249856,253952,258048,262144],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":104,\"seed\":20260922,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-35_par_64seg\",\"group\":\"精度\",\"note\":\"Nseq=64 × HV=8\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":262144,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,4096,8192,12288,16384,20480,24576,28672,32768,36864,40960,45056,49152,53248,57344,61440,65536,69632,73728,77824,81920,86016,90112,94208,98304,102400,106496,110592,114688,118784,122880,126976,131072,135168,139264,143360,147456,151552,155648,159744,163840,167936,172032,176128,180224,184320,188416,192512,196608,200704,204800,208896,212992,217088,221184,225280,229376,233472,237568,241664,245760,249856,253952,258048,262144],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":104,\"seed\":20260922,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -23369,17 +22225,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -23476,7 +22321,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-36_subinterval_tail\",\"group\":\"精度\",\"note\":\"子区间 [40,512)\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[40,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":105,\"seed\":20260923,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-36_subinterval_tail\",\"group\":\"精度\",\"note\":\"子区间 [40,512)\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[40,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":105,\"seed\":20260923,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -23587,17 +22432,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -23699,7 +22533,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-36_subinterval_tail\",\"group\":\"精度\",\"note\":\"子区间 [40,512)\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[40,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":106,\"seed\":20260924,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-36_subinterval_tail\",\"group\":\"精度\",\"note\":\"子区间 [40,512)\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[40,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":106,\"seed\":20260924,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -23810,17 +22644,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -23922,7 +22745,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-36_subinterval_tail\",\"group\":\"精度\",\"note\":\"子区间 [40,512)\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[40,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":107,\"seed\":20260925,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-36_subinterval_tail\",\"group\":\"精度\",\"note\":\"子区间 [40,512)\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[40,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":107,\"seed\":20260925,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -24038,17 +22861,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -24145,7 +22957,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-37_subinterval_tail_gk\",\"group\":\"精度\",\"note\":\"子区间 [444,512)\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[444,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":108,\"seed\":20260926,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-37_subinterval_tail_gk\",\"group\":\"精度\",\"note\":\"子区间 [444,512)\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[444,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":108,\"seed\":20260926,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -24256,17 +23068,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -24368,7 +23169,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-37_subinterval_tail_gk\",\"group\":\"精度\",\"note\":\"子区间 [444,512)\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[444,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":109,\"seed\":20260927,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-37_subinterval_tail_gk\",\"group\":\"精度\",\"note\":\"子区间 [444,512)\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[444,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":109,\"seed\":20260927,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -24479,17 +23280,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -24591,7 +23381,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-37_subinterval_tail_gk\",\"group\":\"精度\",\"note\":\"子区间 [444,512)\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[444,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":110,\"seed\":20260928,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-37_subinterval_tail_gk\",\"group\":\"精度\",\"note\":\"子区间 [444,512)\",\"dtype\":\"bf16\",\"B\":1,\"HK\":8,\"HV\":8,\"T\":512,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[444,512],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":110,\"seed\":20260928,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -24702,17 +23492,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null

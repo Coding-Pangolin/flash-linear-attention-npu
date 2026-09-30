@@ -17,6 +17,7 @@ rank 的**一个序列窗口（一个 part）**计算窗口边界状态 `h` 与�
 | 2026-09-22 | 定稿：`hm` 前导维 = **链条数 `Nseq`**（定长 `= B`；变长 `= len(cu_seqlens)-1`）；`M_c@m` 取 **FP32 原生**；DPLR **注册 6 个 TilingKey / 本轮验收 4 个**；新增 §3.5 Python 调用示例 | 用户确认（结合 CP 语义实测与竞品源码复核） |
 | 2026-09-22 | **收掉 `B > 1`**：序列表达只保留 varlen 打包窗口（`B ≡ 1`、`cu_seqlens` 必给、`Nseq = len(cu_seqlens)-1`）；等长 batch 由调用方打包成等长多段。与竞品 CP 契约（"CP expects `B == 1` for varlen"）完全一致；`hm` 前导维保留（= 链条数），`Nseq=1` 时与竞品跨卡调用逐字节相同 | 用户要求"全量对齐竞品" |
 | 2026-09-23 | **支持"子区间窗口"**：`cu_seqlens` 允许 `0 ≤ cu[0] < cu[-1] ≤ T`（即 `bos > 0`、`eos < T` 都合法），算子在**整根张量**上只处理该子区间 —— 与竞品调用形态（`cu_seqlens[-2:]` / `cu_seqlens[fns-1:fns+1]`）**1:1 一致**，零拷贝零浪费；相应放宽 host 校验（仍拒绝 `B != 1`、零长段、越界、非递增） | 用户要求"用法与竞品保持一致"；内核尚未实现，此时纳入成本最低 |
+| 2026-09-30 | **去掉 DPLR**：`bg` / `v` 退回"仅占 ABI 槽位"，非空值在 host tiling、aclnn、ctypes 与 stable 四个入口**一致地直接拒绝**（不再存在"bg 配上 gk 就放行"的通道）；算法族收敛为 GDN（`g`）+ KDA（`gk`）；TilingKey 可达 **4 个**（`USE_G`/`USE_GK` × gate `BF16`/`FP32`），`USE_BG` 位保留但 host 永不产生 | PR 评审意见（DPLR 分支多入口判据不一致）+ 用户确认"不需要支持 DPLR" |
 
 ## 1. 参考资料与固定版本
 
@@ -36,7 +37,7 @@ rank 的**一个序列窗口（一个 part）**计算窗口边界状态 `h` 与�
 | --- | --- | --- |
 | KDA `fla/ops/kda/chunk_fwd.py` | `k=kg, w=w, u=u, gk=g, v=None` | `USE_GK`，`v` 复用 `u` |
 | GDN `fla/ops/gated_delta_rule/chunk.py` | `k=k, w=w, u=u, g=g, v=None` | `USE_G`，`v` 复用 `u`，`HK` 可小于 `HV` |
-| DPLR `fla/ops/generalized_delta_rule/dplr/chunk.py` | `k=kg, w=w, u=u, gk=gi, bg=bg, v=v` | `USE_GK` + `USE_BG`，`v`/`u` 为不同张量 |
+| DPLR `fla/ops/generalized_delta_rule/dplr/chunk.py` | `k=kg, w=w, u=u, gk=gi, bg=bg, v=v` | `USE_GK` + `USE_BG`，`v`/`u` 为不同张量 —— **本算子不支持**（见 §2、§6） |
 
 上游 Python 包装的窗口切分：`cp_context.layout == 'zigzag'` 时按 `front`/`back` 两个 part
 分别取 `cu_seqlens[fns-1:fns+1]` 与 `cu_seqlens[-2:]`，对每个 part 调用一次本 kernel
@@ -45,13 +46,17 @@ rank 的**一个序列窗口（一个 part）**计算窗口边界状态 `h` 与�
 ## 2. 本次范围
 
 **做**：一次调用处理**一个打包窗口**（窗口内可含多段序列，段边界由 `cu_seqlens` 给出），
-给定该窗口的 `k/v/u/w/g/gk/bg/cu_seqlens`，输出完整 `hm[Nseq, HV, K, V+K]`
+给定该窗口的 `k/w/u/g/gk/cu_seqlens`，输出完整 `hm[Nseq, HV, K, V+K]`
 （`Nseq` = 链条数，定义见 §3.4）。上游的 `all_gather_into_tensor` + `merge_fwd_bwd_kernel`
 是**编排层**的事，不由本算子承担（§2"不做"）。
-算法族覆盖 GDN（`g`）、KDA（`gk`）、DPLR（`gk` + `bg`）三条路径。
+算法族覆盖 **GDN（`g`）与 KDA（`gk`）两条路径**。
 
 **不做**（由框架侧或后续版本承担）：
 
+- **DPLR（`gk` + `bg`，`v` 与 `u` 分离）**：上游 kernel 的 `USE_BG` 分支、`bg` 的 L1/L0 槽位与
+  `M_c` 的 `+` 号都不在本版本内。`bg` / `v` 两个入参**保留在 ABI 参数位上但必须为空**：
+  传非空会在这四个入口被拒绝（host tiling / aclnn / ctypes / stable），
+  不会静默按 GDN/KDA 计算，也不会下发未实现的 TilingKey 3；
 - CP 多卡编排：`all_gather_into_tensor`、`merge_fwd_bwd_kernel`、zigzag 的 part 选择与
   `is_last_by_part` 判定；
 - `MULTI_SEQS` 路径（上游包装恒传 `False`）；
@@ -84,15 +89,15 @@ rank 的**一个序列窗口（一个 part）**计算窗口边界状态 `h` 与�
 
 | # | 文件 | 改动 |
 | --- | --- | --- |
-| ① | `torch_custom/fla_npu/fla_npu/ops/ascendc/_aclnn_ctypes.py` | 加 `_GET_WORKSPACE_ARGTYPES["aclnnPreProcessFwdKernelMerged"]`（8 个 descriptor 指针 + `int64 chunkSize` + `hmOut` + `workspaceSize*` + `executor*`）；加 `def npu_pre_process_fwd_kernel_merged(k, w, u, g=None, *, gk=None, bg=None, v=None, cu_seqlens=None, chunk_size=64)`，内部做参数契约校验、用 `_zeros` 预分配 `hm[Nseq,HV,K,V+K]` fp32、经 `_call_aclnn` 两段式调用 |
+| ① | `torch_custom/fla_npu/fla_npu/ops/ascendc/_aclnn_ctypes.py` | 加 `_GET_WORKSPACE_ARGTYPES["aclnnPreProcessFwdKernelMerged"]`（8 个 descriptor 指针 + `int64 chunkSize` + `hmOut` + `workspaceSize*` + `executor*`）；加 `def npu_pre_process_fwd_kernel_merged(k, w, u, g=None, *, gk=None, bg=None, v=None, cu_seqlens=None, chunk_size=64)`（`bg`/`v` 只保留签名位，传非空抛 `NotImplementedError`），内部做参数契约校验、用 `_zeros` 预分配 `hm[Nseq,HV,K,V+K]` fp32、经 `_call_aclnn` 两段式调用 |
 | ② | `torch_custom/fla_npu/fla_npu/ops/ascendc/__init__.py` | 在 `_ASCENDC_OPS` 元组里加 `"npu_pre_process_fwd_kernel_merged"`（自动导出带/不带前缀两个名字） |
-| ③ | `torch_custom/fla_npu/test/test_pre_process_fwd_kernel_merged.py` | 新增 10 条**离线**单测（FakeTensor/FakeCallContext，不需要 NPU）：子区间 `[40,512]`→`hm[1,…]`、多段 `[0,88,188,512]`→`hm[3,…]`、`B!=1`/缺 `cu_seqlens`/门控冲突/`bg` 不配套/越界拒绝、`ARGTYPES` 与签名核对 |
+| ③ | `torch_custom/fla_npu/test/test_pre_process_fwd_kernel_merged.py` | 新增 **11 条离线**单测（FakeTensor/FakeCallContext，不需要 NPU）：子区间 `[40,512]`→`hm[1,…]`、多段 `[0,88,188,512]`→`hm[3,…]`、`B!=1`/缺 `cu_seqlens`/门控冲突/越界拒绝、**`bg` 与 `v` 传非空被拒（DPLR 不支持）**、`ARGTYPES` 与签名核对 |
 
 验证命令与结果（本地 Windows，无 NPU 也可跑）：
 
 ```bash
 cd torch_custom/fla_npu/test
-python -m unittest test_pre_process_fwd_kernel_merged    # Ran 10 tests ... OK
+python -m unittest test_pre_process_fwd_kernel_merged    # Ran 11 tests ... OK
 python -m unittest test_aclnn_ctypes_abi                 # 回归：Ran 8 tests ... OK
 ```
 
@@ -130,19 +135,20 @@ aclnn 再返回 —— 既与竞品"调用方预分配 `hm` buffer"的用法一�
 h 维 stride 用 `shape[2]`，内核地址表达式不变形（见 `docs/design.md` 1.4.1 C1）。
 
 **head 约定**：`HK` 与 `HV` **可以不一致，但必须成倍数**（`HV >= HK` 且 `HV % HK == 0`），
-这正是 GVA 的形态：`k` 在 `HK` 维，`w/v/u/g/gk` 在 `HV` 维，算子内部按
+这正是 GVA 的形态：`k` 在 `HK` 维，`w/u/g` 在 `HV` 维，算子内部按
 `hk = hv // (HV/HK)` 取对应的 key head。输出 `hm` 与两个状态都在 `HV` 维。
-`gk` 路径（KDA/DPLR）要求 `HK == HV`，即 `k` 已经是按 value head 展开好的 `kg`。
+`gk` 路径（KDA）的 gate **按 value head 给**（`[1, HV, T, K]`），`k` **仍按 `HK` 头**，
+因此 `HK < HV`（GVA）在 gk 路径同样合法 —— 与竞品 `gk` 的 head 语义一致。
 
 | 名称 | 必选 | shape | dtype | 语义 |
 | --- | --- | --- | --- | --- |
-| `k` | 是 | g-only `[1, HK, T, K]`；gk 路径 `[1, HV, T, K]`（要求 `HK == HV`） | BF16 | g-only 为 raw key，按 `hk = hv // (HV/HK)` 复用；gk 路径为已完成 gate 准备的 `kg`，本算子不再乘 gate |
-| `w` | 是 | GDN/KDA `[1, HV, T, K]`；DPLR `[1, HK, T, K]` | BF16 | erase/WY 输出，h 与 m 的左矩阵 |
-| `u` | 是 | `[1, HV, T, V]` | BF16 | GDN/KDA 下与 `v` 为同一张量（仅在 DPLR 分支被读取） |
-| `v` | 是 | `[1, HV, T, V]` | BF16 | DPLR 下独立于 `u`；GDN/KDA 下等于 `u` |
+| `k` | 是 | `[1, HK, T, K]`（g 与 gk 路径同形；GVA 时 `HK < HV`） | BF16 | raw key，按 `hk = hv // (HV/HK)` 复用；`gk` 路径同样按 `HK` 头，gate 侧才按 `HV` |
+| `w` | 是 | `[1, HV, T, K]` | BF16 | erase/WY 输出，h 与 m 的左矩阵 |
+| `u` | 是 | `[1, HV, T, V]` | BF16 | 取值来源（GDN/KDA 的 `v` 与 `u` 为同一张量，故只收 `u`） |
+| `v` | **否** | `[1, HV, T, V]` | BF16 | **DPLR 专用位，本版本不支持**：必须传 `None`（或省略），传非空直接拒绝 |
 | `g` | 二选一 | `[1, HV, T]` | FP32 或 BF16 | 标量 gate，**base-2 的 chunk 内累积对数衰减**；与 `gk` 互斥 |
 | `gk` | 二选一 | `[1, HV, T, K]` | FP32 或 BF16 | 逐 K gate，同为 base-2 chunk 内累积量；与 `g` 互斥 |
-| `bg` | 仅 DPLR | `[1, HK, T, K]` | BF16 | DPLR 的 K 侧项，同时作为 h 的第二个左矩阵与 m 的 K 矩阵 |
+| `bg` | **否** | `[1, HK, T, K]` | BF16 | **DPLR 专用位，本版本不支持**：必须传 `None`（或省略），传非空直接拒绝 |
 | `cu_seqlens` | **是** | `[N+1]` | **Python `list[int]`**（torch schema `int[]?`） | 本窗口内的段边界（T 轴打包多段），`N = Nseq >= 1`；严格递增，`0 ≤ cu[0] < cu[-1] ≤ T`（**允许子区间**：`cu[0] > 0` 或 `cu[-1] < T`） |
 
 `cu_seqlens` 与仓内其它 AscendC 算子一致：**是 host 侧的整型数组，不是张量**（Python `list[int]`
@@ -155,7 +161,6 @@ h 维 stride 用 `shape[2]`，内核地址表达式不变形（见 `docs/design.
 | 名称 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `chunk_size` | int | `64` | 本轮固定 `64`，其它值在 host 侧拒绝 |
-| `use_bg` | bool | `false` | 由 `bg` 是否存在推导；仅 DPLR 为真 |
 | `AFFINE_CHAIN_PRECISION` | - | `ieee` | 固定 FP32 累加；`tf32x3` 不支持 |
 
 ### 3.4 输出
@@ -217,7 +222,7 @@ CP 场景下本 rank 的窗口常是单段（`Nseq = 1`），此时去掉 size-1
 
 **为什么带前导维**（而不是照抄上游的 `[HV, K, V+K]`）：
 
-1. **输入输出对称**：`k/w/u/v/g/gk` 都是 `[B, H, T, D]`，输出不带前导维则"一次调用处理多条
+1. **输入输出对称**：`k/w/u/g/gk` 都是 `[B, H, T, (D)]`，输出不带前导维则"一次调用处理多条
    序列 / 多段"无法表达。
 2. **与仓内约定一致**：仓内 `npu_chunk_fwd_h` 的输出 `h` 是 `[B, HV, NT, K, V]`，带前导维；
    本算子接在它之前，接口形态保持一致，落点无需额外适配（见 `docs/design.md` 1.4）。
@@ -242,15 +247,15 @@ from fla_npu.ops.ascendc import pre_process_fwd_kernel_merged
 # 等价：torch.ops.npu.npu_pre_process_fwd_kernel_merged(...)
 ```
 
-签名（输入布局统一 BNSD `[B, H, T, D]`，`k` 在 `HK` 维、`w/u/v/g/gk/bg` 在 `HV` 维）：
+签名（输入布局统一 BNSD `[B, H, T, D]`，`k` 在 `HK` 维、`w/u/g/gk` 在 `HV` 维）：
 
 ```python
 hm = pre_process_fwd_kernel_merged(
     k, w, u,
-    v=None,          # GDN/KDA：与 u 同一张量（传 None 即复用 u）；DPLR：必须显式给独立张量
     g=None,          # 与 gk 二选一（GDN 路径）
-    gk=None,         # 与 g 二选一（KDA/DPLR 路径）
-    bg=None,         # 仅 DPLR，且必须与 gk 配套
+    gk=None,         # 与 g 二选一（KDA 路径；gate 按 HV 头给，k 仍按 HK 头）
+    bg=None,         # DPLR 专用（不支持）：必须为 None，传非空直接抛 NotImplementedError
+    v=None,          # DPLR 专用（不支持）：必须为 None，取值走 u
     cu_seqlens=None, # 必给：list[int]（host 数组，非张量），[N+1]，严格递增，0 <= cu[0] < cu[-1] <= T
                      #       允许子区间（cu[0] > 0 或 cu[-1] < T），即竞品"整根张量 + [bos,eos]"的用法
     chunk_size=64,   # 固定 64
@@ -319,7 +324,7 @@ T = 1024
 k = torch.randn(1, 32, T, K, device=dev, dtype=dt)
 w = torch.randn(1, 32, T, K, device=dev, dtype=dt)
 u = torch.randn(1, 32, T, V, device=dev, dtype=dt)
-gk = torch.randn(1, 32, T, K, device=dev, dtype=torch.float32)   # KDA：逐 K gate（HK == HV）
+gk = torch.randn(1, 32, T, K, device=dev, dtype=torch.float32)   # KDA：逐 K gate（按 HV 头给）
 
 hm = pre_process_fwd_kernel_merged(k, w, u, gk=gk, cu_seqlens=[0, 256, 512, 1024])
 assert hm.shape == (3, 32, 128, 256)      # Nseq = 3，每段一条链
@@ -350,14 +355,14 @@ hm = pre_process_fwd_kernel_merged(k_loc, w_loc, u_loc, gk=gk_loc, cu_seqlens=wi
 
 | 竞品形参 | 本算子 | 说明 |
 | --- | --- | --- |
-| `k`, `v`, `w`, `u` | 输入 ✓ | `v`：GDN/KDA 下与 `u` 别名（调用方传 `v=None` 即复用 `u`），DPLR 下独立——与上游包装 `v = u if v is None else v` 一致 |
-| `g`, `gk`, `bg` | 输入 ✓ | `g`/`gk` 二选一；`bg` 仅 DPLR 且与 `gk` 配套；由它们推导 `USE_G`/`USE_GK`/`USE_BG` |
+| `k`, `v`, `w`, `u` | 输入 ✓ | 本算子收 `k`/`w`/`u`；`v` 是 DPLR 专用位（本版本必须为 `None`）。GDN/KDA 下 `v` 与 `u` 是同一张量，故只收 `u`——与上游包装 `v = u if v is None else v` 等价 |
+| `g`, `gk`, `bg` | 输入 ✓ | `g`/`gk` 二选一（推导 `USE_G`/`USE_GK`）；`bg` 是 DPLR 专用位（本版本必须为 `None`），因此 `USE_BG` 不会被选中 |
 | `cu_seqlens` | 输入 ✓ | 竞品是 device tensor、kernel 用 `tl.load` 读；本算子是 **host `list[int]`**（§3.2）：边界校验与每段 `bos/T_win/NT` 的展开在 host tiling 做，不占 GM 带宽 |
 | `hm` | **返回值** | 竞品的 `hm` 是包装内部的预分配 buffer（`k.new_zeros(...)`；zigzag 用 `hm=hm[part]` 复用）；本算子返回 `[Nseq,HV,K,V+K]`——**与仓内其它 AscendC 算子一致**（`npu_chunk_fwd_h` 也是返回 `(h, v_new, final_state)`）。若框架侧要求"直接写进 `all_gather` 的目标 buffer"，再加可选 `hm_out` 作为扩展（5.2 第 7 项） |
 | `T` | **不暴露** | varlen 分支里 kernel 用 `eos-bos` 覆盖它；本算子只走 varlen，窗口长 = 张量的 T 轴长度，每段长度由 `cu_seqlens` 给出（校验见 §6） |
 | `H`, `HV`, `K`, `V`, `BT` | **不暴露** | `HK`/`HV` 由张量形状给出；`K=V=128`、`BT=64` 是固定规格（编译期，host 拦截其它值） |
 | `BLOCK_SIZE`, `BK1` | **不暴露** | 上游的列分块宽与 `next_power_of_2(K)`；本设计不拆列段，这两个量在 host tiling 里推导（`design.md` 3.1/3.4） |
-| `USE_G`, `USE_GK`, `USE_BG` | **不暴露**（= `TilingKey`） | 由 `g`/`gk`/`bg` 是否给推导，映射到 6 个 `TilingKey`（`design.md` 3.2.1；本轮验收 4 个） |
+| `USE_G`, `USE_GK`, `USE_BG` | **不暴露**（= `TilingKey`） | 由 `g`/`gk` 是否给推导，**可达 4 个 `TilingKey`**（2 个门控 × gate `BF16`/`FP32`，`design.md` 3.2.1）；`USE_BG` 位保留但 host 永不产生（`bg` 非空被拒） |
 | `IS_VARLEN` | **不暴露**（恒 True） | 竞品有定长/变长两个分支；本算子只有 varlen 打包窗口（§3.2），恒等价于 `IS_VARLEN=True` 那一支 |
 | `MULTI_SEQS` | **不暴露**（恒 True） | 竞品跨卡包装恒传 `False`（一次一段）；本算子恒按"一次可多段"实现，`hm[Nseq,...]` 的段前导维就是它的产物。**这不是我们额外发明的语义**——竞品 kernel 的 `MULTI_SEQS` 分支与卡内 `intracard_pre_scan` 用的就是这一支 |
 | `AFFINE_CHAIN_PRECISION` | **不暴露**（固定 FP32 原生） | 竞品可为 `tf32x3`/`None`；本算子固定 `ieee`（FP32 原生），见 `design.md` 2.8 |
@@ -431,7 +436,6 @@ v_decay = W_c @ bf16(h)
 
 # 2) 形成本 chunk 的“新 v”
 GDN/KDA:  v_new = V_c - v_decay
-DPLR:     v2    = v_decay + U_c ;  v_new = v2
 
 # 3) chunk 内逐 token 衰减
 USE_G:    v_new *= E(g[last] - g[t])   # 逐行，t 为 chunk 内全局 token 下标
@@ -440,18 +444,16 @@ USE_GK:   h[k, :] *= E(gk[last, k])    # 逐 K 行衰减（此时 v_new 不再�
 
 # 4) 累积本 chunk 的贡献（右矩阵降为 BF16 后做 Cube 乘累加）
 GDN/KDA:  h += K_c^T @ bf16(v_new)
-DPLR:     h += K_c^T @ bf16(V_c) + bg_c^T @ bf16(v_new)
 
 # 5) 仿射链 m 的推进（全 FP32）
 USE_G:    K_c = K_c * E(g[last] - g[t])[:, None]
           M_c = diag(E(g[last])) - K_c^T @ W_c
 USE_GK:   M_c = diag(E(gk[last, :])) - K_c^T @ W_c
-DPLR:     M_c = diag(...)            + bg_c^T @ W_c     # 注意为 “+”
 m = M_c @ m        # 按 chunk 顺序左乘，m 初值为 I
 ```
 
-其中 `K_c` 在 DPLR 下即 `bg_c`，在其余分支为 `k_c`（g-only 时 `k_c` 复用的是
-`HV` 侧展开后的 key head `hk = i_h // (HV / HK)`）。
+其中 `K_c = k_c`（g-only 时 `k_c` 复用的是 `HV` 侧展开后的 key head
+`hk = i_h // (HV / HK)`）。上游 DPLR 分支的 `bg_c` 与 `M_c` 的 `+` 号不在本版本内（§2）。
 
 写回：
 
@@ -471,14 +473,14 @@ hm[i_h, 0:K, V:V+K]   = m
 
 | 维度 | 范围 |
 | --- | --- |
-| 算法族 | **本轮：GDN（`g`）+ KDA（`gk`）**；DPLR（`gk` + `bg`）**预留**——接口、TilingKey 分支与 03 设计均已覆盖，本轮不实现、不验收 |
+| 算法族 | **GDN（`g`）+ KDA（`gk`）**；DPLR（`gk` + `bg`）**不支持**：`bg` / `v` 必须在接口上为空，非空在这里（以及 host/aclnn/ctypes/stable）直接拒绝 |
 | `K` | **固定 128**（编译期规格，host 拦截其它值） |
 | `V` | **固定 128**（同上） |
 | `BT` | **固定 64**（同上） |
 | `B` | **恒为 1**（CP 契约）。需要处理多条序列时由调用方打包进 T 轴（§3.2） |
 | 序列 | **唯一形态：varlen 打包窗口**（`B ≡ 1` + `cu_seqlens` 必给，`Nseq = len(cu_seqlens) - 1 >= 1`），支持单段、等长多段、不等长多段、尾块与不满一个 chunk 的尾部；`hm` 前导维 = 链条数 `Nseq`（§3.4） |
 | CP 场景 | 竞品在 CP 下**恒为 `B = 1`（varlen 打包）**：一个 rank 的局部窗口是打包轴上的切片，可能含多段；每段各自从零状态开始，只有"被左边界切开的那条"需要非零初始状态。本算子只负责产出各段的链，接续/复合由编排层做 |
-| dtype | `k/w/u/v/bg` BF16；`g/gk` FP32 或 BF16；`hm` FP32 |
+| dtype | `k/w/u` BF16；`g/gk` FP32 或 BF16；`hm` FP32 |
 | head | `HV >= HK` 且 `HV % HK == 0`；GVA 支持，`k` 在 `HK` 维、其余在 `HV` 维 |
 | SoC | Ascend950 / `NpuArch=3510` |
 
@@ -489,7 +491,8 @@ hm[i_h, 0:K, V:V+K]   = m
 - `V != 128`：host 侧拒绝。
 - `chunk_size != 64`：host 侧拒绝。
 - `g` 与 `gk` 同时提供或同时缺失：host 侧拒绝。
-- 提供 `bg` 但未提供 `gk`（或反之）：DPLR 要求两者同时存在，host 侧拒绝。
+- 提供 `bg`（DPLR 的 K 侧项）：host 侧拒绝（`DPLR is not implemented in this release`）；
+  提供 `v`：同样拒绝（它是 DPLR 专用位，GDN/KDA 的取值来自 `u`）。
 - `cu_seqlens` 非严格递增、`cu_seqlens[i] >= T`（该段起点越界）、或 `cu_seqlens[-1] > T`：host 侧拒绝。
   **注意 `cu_seqlens[0] > 0` 与 `cu_seqlens[-1] < T` 都是合法的**（子区间窗口 = 竞品用法，见 §3.2）。
 - 变长模式下存在**零长段**（`cu_seqlens[i] == cu_seqlens[i+1]`）：host 侧拒绝（要处理多段不等于允许空段）。
@@ -499,9 +502,7 @@ hm[i_h, 0:K, V:V+K]   = m
   竞品同样如此——它的 CP 路径恒要求 `B=1`（README 原文 "CP expects `B == 1` for varlen"），
   非 CP 定长根本不调 pre_process。
 - `cu_seqlens` 缺失（`nullptr`）：host 侧拒绝（唯一形态要求必给）。
-- `u` 与 `v` 非同一张量且未提供 `bg`：host 侧拒绝（GDN/KDA 规定 `v` 复用 `u`）。
 - `HK > HV` 或 `HV % HK != 0`：host 侧拒绝。
-- gk 路径（KDA/DPLR）下 `k` 的 head 维不等于 `HV`：host 侧拒绝。
 - K 或 V 非 `BLOCK_SIZE` 整数倍：允许，由尾块掩码处理，`hm` 越界区域不写。
 - `hm` 的非有效区域（`k >= K` 或列越界）不写、不参与比较。
 
@@ -536,8 +537,8 @@ shape、采集口径与基线数值必须在 03 阶段进入设计前固定下�
 4. **`g`/`gk` 数值域**：上游无条件使用 `exp2`（base-2 chunk 内累积）；本仓 `chunk_fwd_h` 有
    `use_exp2` 开关、默认自然对数。本算子暂固定 base-2（与上游一致），请确认是否需要在
    Python 适配层做换算。
-5. **`u`/`v` 接口形态**：保留两个入参并在 host 校验别名（本文件采用的方案），还是对
-   GDN/KDA 直接收敛为单一入参。
+5. **`u`/`v` 接口形态**：**已定稿** —— `v` 随 DPLR 一起退场（本版本不支持 DPLR），
+   取值统一由 `u` 给出；`v` / `bg` 只保留 ABI 参数位并对非空值报错（§0 2026-09-30、§6）。
 6. **测试落点**：本流程默认在算子工程内用 `test/` + `scripts/compare_precision.py`；本仓另有
    `tests/atk/<op>/` 的 ATK 验收工程。需要在 02/05 阶段确定两套入口的分工（建议：开发期用
    流程自带入口，最终验收补 `tests/atk/pre_process_fwd_kernel_merged/`）。

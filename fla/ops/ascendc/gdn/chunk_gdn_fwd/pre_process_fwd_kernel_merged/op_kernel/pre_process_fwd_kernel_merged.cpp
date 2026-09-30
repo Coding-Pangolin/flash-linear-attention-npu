@@ -94,7 +94,7 @@ __global__ __aicore__ void pre_process_fwd_kernel_merged(
     if (userWS == nullptr) {
         return;
     }
-    (void)bg;   // DPLR（USE_BG）本轮不实现
+    (void)bg;   // DPLR（USE_BG）不支持：host 侧已拒绝非空 bg，这里只是占位
     GDN::PpFwdCtx ctx;
     ctx.k = k;
     ctx.w = w;

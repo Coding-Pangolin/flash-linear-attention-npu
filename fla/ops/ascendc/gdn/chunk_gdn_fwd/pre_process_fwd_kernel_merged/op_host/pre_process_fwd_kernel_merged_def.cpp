@@ -12,8 +12,11 @@
  * \brief Op def for pre_process_fwd_kernel_merged (CP pre-process: window -> (h | m) affine chain).
  *
  * 输入输出语义见算子目录 docs/api.md。
- * dtype 组合只有一条：k/w/u/v/bg BF16、g/gk **FP32**（BF16 gate 由 aclnn 层先 Cast 成 FP32）、
- * cu_seqlens INT64、hm FP32；gate 路径由 TilingKey（1=USE_G / 2=USE_GK / 3=USE_BG 预留）区分。
+ * dtype 组合只有一条：k/w/u BF16、g/gk **FP32**（BF16 gate 由 aclnn 层先 Cast 成 FP32）、
+ * cu_seqlens INT64、hm FP32；gate 路径由 TilingKey（1=USE_G / 2=USE_GK）区分。
+ *
+ * v / bg 是 DPLR 专用的可选输入位：本版本不支持 DPLR（bg，DPLR 的 K 侧项），
+ * 两者必须为空——host tiling 与 aclnn 都会对非空值直接报错，不会下发 TilingKey 3。
  */
 
 #include "register/op_def_registry.h"
@@ -57,14 +60,14 @@ public:
             .Format(nd)
             .UnknownShapeFormat(nd)
             .AutoContiguous();
-        // bg：DPLR 预留（[1, HK, T, K]），必须与 gk 配套
+        // bg：DPLR 专用的 K 侧项（[1, HK, T, K]）——本版本不支持 DPLR，必须为空
         this->Input("bg")
             .ParamType(OPTIONAL)
             .DataType(bf16)
             .Format(nd)
             .UnknownShapeFormat(nd)
             .AutoContiguous();
-        // v：DPLR 下独立于 u；GDN/KDA 下不传（复用 u）
+        // v：DPLR 专用（独立于 u）——本版本不支持 DPLR，必须为空；GDN/KDA 的取值来自 u
         this->Input("v")
             .ParamType(OPTIONAL)
             .DataType(bf16)

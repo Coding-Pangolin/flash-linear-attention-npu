@@ -12,8 +12,10 @@
 覆盖：
   1) 子区间窗口（竞品调用形态）：张量 T=512、`cu_seqlens=[40,512]` → `hm[1,HV,K,V+K]`；
   2) 多段窗口：`cu_seqlens=[0,88,188,512]` → `hm[3,...]`，段序与 cu 一致；
-  3) 参数契约：`B != 1`、缺 `cu_seqlens`、`g`/`gk` 同缺或同给、`bg` 缺 `gk`、`cu` 越界都在启动前抛错；
-  4) ABI：`_GET_WORKSPACE_ARGTYPES` 与 aclnn 头文件逐参对应。
+  3) 参数契约：`B != 1`、缺 `cu_seqlens`、`g`/`gk` 同缺或同给、`cu` 越界都在启动前抛错；
+  4) DPLR 不支持：`bg` / `v` 传非空时与 host 校验同判据（NotImplementedError），
+     不会静默按 GDN/KDA 计算；
+  5) ABI：`_GET_WORKSPACE_ARGTYPES` 与 aclnn 头文件逐参对应。
 """
 from __future__ import annotations
 
@@ -178,15 +180,26 @@ class PreProcessFwdKernelMergedCtypesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._run(k, w, u, g=g, gk=gk, cu_seqlens=[0, 512])
 
-    def test_requires_bg_to_be_paired_with_gk(self):
+    def test_rejects_dplr_bg(self):
+        """DPLR 不支持：bg 传非空直接拒绝（不再有"只要配上 gk 就放行"的通道）。"""
         fake = FAKE_TORCH
         k = FakeTensor((1, 8, 512, 128), fake.bfloat16)
         w = FakeTensor((1, 8, 512, 128), fake.bfloat16)
         u = FakeTensor((1, 8, 512, 128), fake.bfloat16)
-        g = FakeTensor((1, 8, 512), fake.float32)
+        gk = FakeTensor((1, 8, 512, 128), fake.float32)
         bg = FakeTensor((1, 8, 512, 128), fake.bfloat16)
-        with self.assertRaises(ValueError):
-            self._run(k, w, u, g=g, bg=bg, v=u, cu_seqlens=[0, 512])
+        with self.assertRaises(NotImplementedError):
+            self._run(k, w, u, gk=gk, bg=bg, v=u, cu_seqlens=[0, 512])
+
+    def test_rejects_dplr_v(self):
+        """DPLR 不支持：v 传非空直接拒绝（GDN/KDA 的取值来自 u）。"""
+        fake = FAKE_TORCH
+        k = FakeTensor((1, 8, 512, 128), fake.bfloat16)
+        w = FakeTensor((1, 8, 512, 128), fake.bfloat16)
+        u = FakeTensor((1, 8, 512, 128), fake.bfloat16)
+        gk = FakeTensor((1, 8, 512, 128), fake.float32)
+        with self.assertRaises(NotImplementedError):
+            self._run(k, w, u, gk=gk, v=u, cu_seqlens=[0, 512])
 
     def test_rejects_out_of_range_sub_interval(self):
         fake = FAKE_TORCH

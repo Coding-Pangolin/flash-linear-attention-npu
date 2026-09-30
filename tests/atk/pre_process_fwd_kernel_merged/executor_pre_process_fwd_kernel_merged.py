@@ -8,16 +8,33 @@
 CPU 标杆：本目录 `scripts/pre_process_fwd_kernel_merged_cpu.py`
 （纯 PyTorch，token-major `[T,H,D]`），本文件只做布局搬运与逐段调用。
 
+本 executor 支持三种 ATK 节点角色：
+
+- **NPU DUT**（`device=npu`）：仓内 `fla_npu.ops.ascendc.pre_process_fwd_kernel_merged`；
+- **高精度 golden**（`is_benchmark_task=True`，CPU 或远端 GPU）：FP64 小算子拼接；
+- **同精度 benchmark**（`is_benchmark_task=False`，CPU 或远端 GPU）：契约版 FP32 标杆；
+  GPU 节点上优先用上游 Triton kernel，不可用时回落 GPU torch 契约精度标杆。
+
+**GPU 双标杆**（A5/A910 侧发起，远端 GPU server 承载参考节点）：同一 seed 下参考节点被
+调用两次 —— FP64 真值（golden）与同精度标杆（benchmark），三路比较由
+`cv_fused_double_benchmark` 完成。GPU 标杆用上游
+`fla/ops/cp/chunk_delta_h.py::pre_process_fwd_kernel_merged` **直接按窗口启动**
+（需要 `FLACPContext` / 进程组的编排层 `chunk_gated_delta_rule_fwd_h_pre_process`
+本身不参与比较）。CPU 双标杆同样可用，但真值与同精度标杆都在 CPU 上跑，更慢。
+
 精度口径（重要）：本算子的**验收基线是"契约版"标杆** —— `accum_dtype=fp32` +
 三个舍入点开关全开。`scripts/pre_process_fwd_kernel_merged_cpu.py` 的模块文档写明：kernel 的 h/m 累加器是 FP32，
 用 FP64 基准会让任何忠实实现平白多出 ~9.4e-3 的绝对偏差（与 H20 `ieee` 对齐时实测）。
-因此 **`high_precision=True` 只用于参考侧的灵敏度对照（ATK 的 benchmark 节点），
-不作为本算子的验收真值**；验收真值走 `high_precision=False`。
+因此 **FP64 结果（`high_precision=True`）只作参考侧灵敏度对照（ATK golden 节点）**，
+与 DUT 同精度类的对照是约定容差下的混合容差比较；本工程的输入构造（模型同构分布）
+与逐段调用约定不随之改变。
 """
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -47,10 +64,38 @@ K_DIM = 128
 V_DIM = 128
 BT = 64
 
+# 上游 Triton kernel（token-major `[B,T,H,*]`）：`<python_module>:<callable>`。
+# 该 kernel 是 `@triton.jit`，调用方式是 `kernel[grid](...)`，因此走 `_triton_hm` 直接启动。
+_DEFAULT_TRITON_CALLABLE = "fla.ops.cp.chunk_delta_h:pre_process_fwd_kernel_merged"
+_TRITON_ENV = "PPFM_ATK_TRITON"
+_TRITON_CALLABLE_ENV = "PPFM_ATK_TRITON_CALLABLE"
+
 # CPU 标杆放在本算子 ATK 目录的 scripts/ 下（与仓内其它算子的约定一致）。
 _REFERENCE_PY = (
     Path(__file__).resolve().parent / "scripts" / "pre_process_fwd_kernel_merged_cpu.py"
 )
+
+
+def _cuda_device() -> torch.device:
+    """GPU 参考节点使用的设备；远端 ATK GPU server 按 `CUDA_VISIBLE_DEVICES` 暴露。"""
+    return torch.device("cuda")
+
+
+def _load_triton_callable():
+    """加载上游 GPU Triton kernel；不可用（未安装 / 导入失败 / 被禁用）时返回 None，
+    由调用方回落到 GPU torch 契约精度标杆。"""
+    if os.environ.get(_TRITON_ENV, "1").strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    target = os.environ.get(_TRITON_CALLABLE_ENV, _DEFAULT_TRITON_CALLABLE).strip()
+    module_name, separator, attribute = target.partition(":")
+    if not separator or not module_name or not attribute:
+        raise RuntimeError(f"{_TRITON_CALLABLE_ENV} 必须使用 '<python_module>:<callable>' 语法")
+    try:
+        module = importlib.import_module(module_name)
+        callable_obj = getattr(module, attribute, None)
+    except (ImportError, AttributeError):
+        return None
+    return callable_obj if callable(callable_obj) else None
 
 
 def _load_reference():
@@ -139,17 +184,17 @@ def _to_bnsd(x: torch.Tensor) -> torch.Tensor:
     return x.movedim(1, 0).unsqueeze(0).contiguous()
 
 
-def run_cpu(spec: dict[str, Any], high_precision: bool = False):
-    """CPU 标杆：按 `cu_seqlens` **逐段**调用 reference，再 stack 成 `[Nseq, HV, K, V+K]`。
+def _reference_hm(inputs: dict[str, Any], *, high_precision: bool) -> torch.Tensor:
+    """在 `inputs` 所在设备上按 `cu_seqlens` **逐段**调用标杆，再 stack 成 `[Nseq, HV, K, V+K]`。
 
-    与算子契约一一对应：算子的 `hm[i]` == 竞品/标杆对第 i 段单独调用一次的结果。
+    与算子契约一一对应：算子的 `hm[i]` == 标杆对第 i 段单独调用一次的结果。
+    设备无关：同一份实现同时服务 CPU/GPU 的 golden 与 benchmark 角色。
     """
     ref = _load_reference()
-    inputs = build_inputs(spec, torch.device("cpu"), high_precision)
     cu = [int(x) for x in inputs["cu_seqlens"]]
     chunk_size = int(inputs["chunk_size"])
 
-    # 契约版（验收基线）与高精度对照版：只有 accum_dtype 与三个舍入开关不同。
+    # 契约版（同精度对照）与高精度真值：只有 accum_dtype 与三个舍入开关不同。
     if high_precision:
         accum_dtype = torch.float64
         round_h = round_vnew = round_affine = False
@@ -174,6 +219,80 @@ def run_cpu(spec: dict[str, Any], high_precision: bool = False):
     return torch.stack(outs, dim=0)
 
 
+def run_cpu(spec: dict[str, Any], high_precision: bool = False):
+    """CPU 标杆：`high_precision=True` 为 FP64 真值，`False` 为契约版同精度标杆。"""
+    inputs = build_inputs(spec, torch.device("cpu"), high_precision)
+    return _reference_hm(inputs, high_precision=high_precision)
+
+
+def run_gpu_truth(spec: dict[str, Any]):
+    """GPU 双标杆的**真值**：FP64 小算子拼接，真跑在 CUDA 上。"""
+    inputs = build_inputs(spec, _cuda_device(), high_precision=True)
+    return _reference_hm(inputs, high_precision=True)
+
+
+def _triton_hm(callable_obj, inputs: dict[str, Any]) -> torch.Tensor:
+    """逐段启动上游 Triton kernel，返回 `[Nseq, HV, K, V+K]`。
+
+    上游 kernel 是 token-major `[B,T,H,*]`、以 `MULTI_SEQS=False` 处理**一个窗口**，
+    与本算子的 DUT 契约（`hm[i]` = 第 i 段单独调用）逐段对应。
+    `AFFINE_CHAIN_PRECISION="ieee"` 对齐契约里"`M_c @ m` 每 chunk 回落 FP32"的口径。
+    """
+    import triton  # 与上游 kernel 同环境；缺失时 _load_triton_callable 已经返回 None
+
+    k, v, w, u = inputs["k"], inputs["v"], inputs["w"], inputs["u"]
+    g, gk = inputs["g"], inputs["gk"]
+    T, HK, K = k.shape
+    HV, V = u.shape[1], u.shape[2]
+    chunk_size = int(inputs["chunk_size"])
+    dev = k.device
+    cu = [int(x) for x in inputs["cu_seqlens"]]
+
+    block = 32 if K <= 64 else 64
+    grid = (triton.cdiv(V, block) + triton.cdiv(K, block), HV)
+
+    outs = []
+    for i in range(len(cu) - 1):
+        hm = torch.zeros((HV, K, V + K), dtype=torch.float32, device=dev)
+        callable_obj[grid](
+            k=k.unsqueeze(0).contiguous(),
+            v=v.unsqueeze(0).contiguous(),
+            w=w.unsqueeze(0).contiguous(),
+            g=(None if g is None else g.unsqueeze(0).contiguous()),
+            gk=(None if gk is None else gk.unsqueeze(0).contiguous()),
+            bg=None,
+            u=u.unsqueeze(0).contiguous(),
+            hm=hm,
+            cu_seqlens=torch.tensor([cu[i], cu[i + 1]], dtype=torch.int32, device=dev),
+            T=T,
+            H=HK,
+            HV=HV,
+            K=K,
+            V=V,
+            BT=chunk_size,
+            BLOCK_SIZE=block,
+            BK1=triton.next_power_of_2(K),
+            MULTI_SEQS=False,
+            AFFINE_CHAIN_PRECISION="ieee",
+        )
+        outs.append(hm)
+    return torch.stack(outs, dim=0)
+
+
+def run_gpu_control(spec: dict[str, Any]):
+    """GPU 双标杆的**同精度标杆**：优先上游 Triton，失败回落 GPU torch 契约精度标杆。"""
+    inputs = build_inputs(spec, _cuda_device(), high_precision=False)
+    triton_callable = _load_triton_callable()
+    if triton_callable is not None:
+        try:
+            return _triton_hm(triton_callable, inputs)
+        except Exception as exc:  # noqa: BLE001
+            import warnings
+
+            warnings.warn(f"上游 GPU Triton 标杆不可用，回落 GPU torch 契约精度标杆：{exc!r}")
+    return _reference_hm(inputs, high_precision=False)
+
+
 def run_npu(spec: dict[str, Any], input_data: InputDataset):
     """NPU DUT：BNSD 输入，调用仓内 `fla_npu.ops.ascendc.pre_process_fwd_kernel_merged`。"""
     dev = _marker_device(input_data)
@@ -196,8 +315,8 @@ class FunctionApi(BaseApi):
     def __init__(self, task_result: TaskResult):
         super(FunctionApi, self).__init__(task_result)
         self.is_benchmark_task = bool(task_result.is_benchmark_task)
-        # 仓内 ATK 约定：精度 = NPU DUT + CPU golden（本算子不提供 GPU 标杆）。
-        self.high_precision = self.device == "cpu" and self.is_benchmark_task
+        # CPU / 远端 GPU 参考节点都会以两种角色各被调用一次：golden（真值）与 benchmark（同精度）。
+        self.high_precision = self.device in {"cpu", "gpu"} and self.is_benchmark_task
 
     def __call__(self, input_data: InputDataset, with_output: bool = False):
         spec = _case_spec(input_data, OP_NAME)
@@ -205,10 +324,12 @@ class FunctionApi(BaseApi):
             outputs = run_npu(spec, input_data)
         elif self.device == "cpu":
             outputs = run_cpu(spec, self.high_precision)
+        elif self.device == "gpu":
+            outputs = run_gpu_truth(spec) if self.high_precision else run_gpu_control(spec)
         else:
             raise RuntimeError(
-                f"{OP_NAME} 只提供 CPU 标杆（仓内约定：精度 = NPU DUT + CPU golden），"
-                f"positive 用例需要 NPU DUT 或 CPU golden 节点；device={self.device!r}, "
+                f"{OP_NAME} 需要 NPU DUT 和 CPU/GPU 参考节点，"
+                f"device={self.device!r}, "
                 f"benchmark={self.is_benchmark_task}"
             )
         return _finite_tuple(outputs, golden=(self.device != "npu"))

@@ -19,7 +19,9 @@
 
 namespace GDN {
 
-// 与 op_host 的 TilingKey 取值一致：1=USE_G（GDN 标量门控）/ 2=USE_GK（KDA 逐 k 门控）/ 3=USE_BG（DPLR，暂未实现）
+// 与 op_host 的 TilingKey 取值一致：1=USE_G（GDN 标量门控）/ 2=USE_GK（KDA 逐 k 门控）。
+// 3=USE_BG（DPLR）只保留模板槽位、host 永不产生该 key：本版本不支持 DPLR，
+// host 校验对非空 bg/v 直接报错（见 docs/api.md §3.4），详见 tiling_processor.h。
 #define PPFM_TPL_GATE_G  1
 #define PPFM_TPL_GATE_GK 2
 #define PPFM_TPL_GATE_BG 3

@@ -1973,9 +1973,11 @@ def npu_pre_process_fwd_kernel_merged(k, w, u, g=None, *, gk=None, bg=None,
     """CP 前处理：把 token 窗口压成仿射链 (h | m)。
 
     与 aclnn 头文件逐参对齐（stream 固定在最后）：
-    k/w/u 必给；g 与 gk 二选一；bg 仅 DPLR 且必须配 gk；v 仅 DPLR 用，
-    GDN/KDA 传 None 表示复用 u；cu_seqlens 必给（varlen 打包窗口，
+    k/w/u 必给；g 与 gk 二选一；cu_seqlens 必给（varlen 打包窗口，
     也允许子区间 0 <= cu[0] < cu[-1] <= T）。返回 hm[Nseq, HV, K, V+K] FP32。
+
+    bg 与 v 是 DPLR 专用参数，本版本不支持 DPLR：必须传 None，
+    传非空直接抛 NotImplementedError（与 ctypes 入口、host 校验判据一致）。
     """
 
     if cu_seqlens is None:
@@ -1986,9 +1988,13 @@ def npu_pre_process_fwd_kernel_merged(k, w, u, g=None, *, gk=None, bg=None,
     if (g is None) == (gk is None):
         raise ValueError("exactly one of g / gk must be provided.")
     if bg is not None:
-        # TilingKey 3（USE_BG）只注册未实现：传进来会静默按 GDN/KDA 语义算，宁可明确拒绝。
+        # TilingKey 3（USE_BG）不支持：传进来会静默按 GDN/KDA 语义算，宁可明确拒绝。
         raise NotImplementedError(
-            "DPLR (bg) is reserved and not implemented in this release."
+            "bg is not supported: DPLR is not implemented in this release (GDN/KDA only)."
+        )
+    if v is not None:
+        raise NotImplementedError(
+            "v is not supported: it is DPLR-only; GDN/KDA takes the values from u."
         )
     if chunk_size not in (None, 64):
         raise ValueError(

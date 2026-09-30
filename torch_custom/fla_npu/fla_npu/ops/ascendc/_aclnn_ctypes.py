@@ -1498,10 +1498,11 @@ def npu_pre_process_fwd_kernel_merged(
     ``m``（K×K）。``k`` 在 ``HK`` 维、其余在 ``HV`` 维（GVA：``HV % HK == 0``）。
 
     约定（详见算子目录 ``docs/api.md``）：
-      * ``B ≡ 1``（varlen 打包），``k/w/u/v/g/gk/bg`` 形状首维必须是 1；
-      * ``g`` 与 ``gk`` 二选一；``bg`` 仅 DPLR 且必须与 ``gk`` 配套；
+      * ``B ≡ 1``（varlen 打包），``k/w/u`` 形状首维必须是 1；
+      * ``g`` 与 ``gk`` 二选一；
       * ``cu_seqlens`` 必给，严格递增，``0 <= cu[0] < cu[-1] <= T``；
-      * GDN/KDA 下 ``v`` 复用 ``u``（传 ``None`` 即可），DPLR 必须显式给 ``v``。
+      * ``bg`` / ``v`` 是 DPLR 专用参数，**本版本不支持 DPLR**：必须传 ``None``。
+        传非空时这里与 host 校验（aclnn / tiling）都会直接报错，不会静默按 GDN/KDA 计算。
     """
     cu = _as_int_list(cu_seqlens)
     if cu is None or len(cu) < 2:
@@ -1511,8 +1512,15 @@ def npu_pre_process_fwd_kernel_merged(
         )
     if (g is None) == (gk is None):
         raise ValueError("exactly one of g / gk must be provided.")
-    if bg is not None and gk is None:
-        raise ValueError("DPLR requires bg to be paired with gk.")
+    # DPLR 不支持：bg / v 是它的专用输入，留参数只为保持调用签名与 ABI 槽位一致。
+    if bg is not None:
+        raise NotImplementedError(
+            "bg is not supported: DPLR is not implemented in this release (GDN/KDA only)."
+        )
+    if v is not None:
+        raise NotImplementedError(
+            "v is not supported: it is DPLR-only; GDN/KDA takes the values from u."
+        )
     chunk_size = _optional_int(chunk_size, 64)
 
     batch, head_key, seqlen, key_dim = _shape(k)

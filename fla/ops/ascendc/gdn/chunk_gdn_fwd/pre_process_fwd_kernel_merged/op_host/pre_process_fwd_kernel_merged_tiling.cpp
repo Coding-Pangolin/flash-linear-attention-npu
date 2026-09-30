@@ -12,7 +12,8 @@
  * \brief Host tiling：校验契约 + 填 tiling 结构 + 选 TilingKey（gate 模式）。
  *
  * 契约（docs/api.md）：
- *   k [1,HK,T,K] / w [1,HV,T,K] / u [1,HV,T,V] / v(可选) [1,HV,T,V] / bg(可选) [1,HK,T,K]
+ *   k [1,HK,T,K] / w [1,HV,T,K] / u [1,HV,T,V]；v / bg 是 DPLR 专用输入位，本版本不支持 DPLR，
+ *   必须为空（传非空直接拒绝，见 api.md §3.4）
  *   g 或 gk 二选一；cu_seqlens 必给（host int 数组 → INT64 tensor），严格递增、0<=cu[0]<cu[-1]<=T
  *   K = V = 128、chunk_size = 64；hm [Nseq,HV,K,V+K] FP32
  */

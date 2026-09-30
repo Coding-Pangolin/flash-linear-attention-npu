@@ -68,18 +68,17 @@ aclnnStatus CheckDtype(PreProcessFwdKernelMergedParams params)
     CHECK_COND(params.k->GetDataType() == bf16, ACLNN_ERR_PARAM_INVALID, "k must be BF16.");
     CHECK_COND(params.w->GetDataType() == bf16, ACLNN_ERR_PARAM_INVALID, "w must be BF16.");
     CHECK_COND(params.u->GetDataType() == bf16, ACLNN_ERR_PARAM_INVALID, "u must be BF16.");
-    if (params.v != nullptr) {
-        CHECK_COND(params.v->GetDataType() == bf16, ACLNN_ERR_PARAM_INVALID, "v must be BF16.");
-    }
-    if (params.bg != nullptr) {
-        CHECK_COND(params.bg->GetDataType() == bf16, ACLNN_ERR_PARAM_INVALID, "bg must be BF16.");
-    }
+    // DPLR 不支持：bg / v 是 DPLR 专用输入。两者留着 ABI 槽位，但必须为空——否则会被带到
+    // 只注册未实现的 USE_BG 分派上，或者被静默当成 GDN/KDA 算错。host 侧显式拒绝。
+    CHECK_COND(params.bg == nullptr, ACLNN_ERR_PARAM_INVALID,
+               "bg must be nullptr: DPLR is not implemented in this release (GDN/KDA only).");
+    CHECK_COND(params.v == nullptr, ACLNN_ERR_PARAM_INVALID,
+               "v must be nullptr: it is DPLR-only; GDN/KDA takes the values from u.");
     const bool gOk = params.g != nullptr &&
                      (params.g->GetDataType() == DataType::DT_FLOAT || params.g->GetDataType() == bf16);
     const bool gkOk = params.gk != nullptr &&
                       (params.gk->GetDataType() == DataType::DT_FLOAT || params.gk->GetDataType() == bf16);
     CHECK_COND(gOk != gkOk, ACLNN_ERR_PARAM_INVALID, "exactly one of g / gk must be given.");
-    CHECK_COND(params.bg == nullptr || gkOk, ACLNN_ERR_PARAM_INVALID, "DPLR requires bg paired with gk.");
     CHECK_COND(params.hmOut->GetDataType() == DataType::DT_FLOAT, ACLNN_ERR_PARAM_INVALID, "hm must be FP32.");
     return ACLNN_SUCCESS;
 }

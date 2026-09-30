@@ -6,25 +6,31 @@ CP（context parallel）前处理算子：把一个 token 窗口压成仿射链 
 完整语义、Stage 划分、内存分配与验收工程见 `docs/`（`api.md` / `design.md`）与
 `tests/atk/pre_process_fwd_kernel_merged/`。
 
-## 当前进度（2026-09-28）
+## 当前进度（2026-09-30）
 
 | 部分 | 状态 |
 | --- | --- |
-| 01 接口 / 02 标杆 / 03 设计 | ✅ 冻结（见 `docs/`；标杆 `tests/atk/pre_process_fwd_kernel_merged/scripts/pre_process_fwd_kernel_merged_cpu.py` 已与 H20 `ieee` 对齐） |
-| Python 接入（ctypes） | ✅ 已在 `torch_custom/fla_npu/fla_npu/ops/ascendc/_aclnn_ctypes.py` 落地（`aclnnPreProcessFwdKernelMerged` + `npu_pre_process_fwd_kernel_merged`），10 条离线单测通过 |
-| op_host | 🚧 已写 `*_def.cpp` / `*_tiling.{h,cpp}` / `op_api/*`（含 aclnn 两段式）；**尚未接线进构建** |
-| op_kernel | 🚧 待写（v1 计划：AIV-only 向量版先把数值打通，再换 Cube/tile 版做性能） |
+| 01 接口 / 02 标杆 / 03 设计 | ✅ 冻结（`docs/api.md`、`docs/design.md`；标杆 `tests/atk/pre_process_fwd_kernel_merged/scripts/pre_process_fwd_kernel_merged_cpu.py` 已与 H20 `ieee` 对齐） |
+| op_host | ✅ 已落地（`*_def.cpp` / `*_tiling.{h,cpp}` / `op_api/*`，含 aclnn 两段式） |
+| op_kernel | ✅ 已落地（Cube + Vector 双核流水；Stage/同步协议见 `op_kernel/*.cpp` 顶部与 `docs/design.md`） |
+| Python 接入 | ✅ ctypes（`_aclnn_ctypes.py`）+ stable ABI（`torch_custom/fla_npu/csrc/src/stable_pre_process_fwd_kernel_merged.cpp`）；`_stable.py` / `__init__.py` 已注册，11 条离线单测通过 |
+| 单算子验证（A5 / A2-A3） | ✅ A5：L0 静态门禁、L1 位级 `BIT_IDENTICAL`、L2 smoke 10/10、L4 全量 41/41；A2/A3：单算子编译 + L0 + L2 10/10 + 位级复跑一致，性能无回退 |
+| ATK 交付件 | ✅ 已就绪（`tests/atk/pre_process_fwd_kernel_merged/`：111 条精度、4 条性能、5 条内存/确定性；支持 CPU 双标杆与 GPU 双标杆），待上机执行并回填 README 的验收表 |
 
-## 接线方法（kernel 写完后）
+**范围**：GDN（`g`）与 KDA（`gk`）两条路径。**DPLR（`gk` + `bg`）不支持**：`bg` / `v`
+必须传空，非空在 host tiling / aclnn / ctypes / stable 四个入口一致地被拒
+（`docs/api.md` §6，`docs/design.md` 开头的范围变更）。
 
-1. 加 `op_host/CMakeLists.txt`（内容照 `../recompute_w_u_fwd/op_host/CMakeLists.txt`：
-   `add_op_to_compiled_list()` + `target_sources(op_host_aclnnExc PRIVATE pre_process_fwd_kernel_merged_def.cpp)`
-   + `add_modules_sources(OPTYPE pre_process_fwd_kernel_merged ACLNNTYPE aclnn_exclude)`
-   + `add_ops_compile_options(OP_NAME PreProcessFwdKernelMerged ...)`）；
-2. 加 `op_kernel/pre_process_fwd_kernel_merged.cpp`（kernel 入口，`TILING_KEY_IS(1..3)` 分派 gate 模式）
-   与其实现头文件；
-3. `bash build.sh` 编译，按错误逐条清；
-4. 用 ATK 工程里的 CPU 标杆对拍精度（`tests/atk/pre_process_fwd_kernel_merged/`），再与 H20 基线比性能。
+## 构建与验证
+
+```bash
+bash build.sh --opkernel --soc=ascend910b --ops=pre_process_fwd_kernel_merged   # 只编 kernel
+bash build.sh --ophost   --ops=pre_process_fwd_kernel_merged                    # 只编 host 侧
+```
+
+精度与性能验收走 ATK 工程 `tests/atk/pre_process_fwd_kernel_merged/`（该目录 README 给出
+用例规模、TilingKey 覆盖表与执行命令）。单算子自测入口是
+`torch_custom/fla_npu/test/test_pre_process_fwd_kernel_merged.py`（离线，不需要 NPU）。
 
 **只编译本算子（快）**：`build.sh` 支持 `--ops=` 白名单，例如
 

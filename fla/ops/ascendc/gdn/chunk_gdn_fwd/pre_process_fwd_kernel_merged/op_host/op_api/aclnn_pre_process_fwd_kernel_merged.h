@@ -24,8 +24,9 @@ extern "C" {
  * u : required,  [1, HV, T, V] BF16
  * gOptional : optional, [1, HV, T] 标量 gate（FP32/BF16）；与 gk 二选一
  * gkOptional : optional, [1, HV, T, K] 逐 K gate（FP32/BF16）；与 g 二选一
- * bgOptional : optional, [1, HK, T, K] BF16（DPLR 预留，必须与 gk 配套）
- * vOptional : optional, [1, HV, T, V] BF16（DPLR 独立于 u；GDN/KDA 传 nullptr 表示复用 u）
+ * bgOptional : **必须传 nullptr**。它是 DPLR 的专用输入，本版本不支持 DPLR，
+ *              传非空会被 host 直接拒绝（这一位仅为保持 ABI 参数顺序而保留）
+ * vOptional : **必须传 nullptr**。同上：DPLR 专用；GDN/KDA 的取值来自 u
  * cuSeqlensOptional : required, host int 数组（严格递增，0 <= cu[0] < cu[-1] <= T）
  * chunkSize : required（固定 64）
  * hmOut : required, [Nseq, HV, K, V+K] FP32（Nseq = len(cuSeqlens)-1）

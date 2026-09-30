@@ -150,16 +150,6 @@ inputs:
         values: [fp32, bf16]
       invalid:
         values: [fp16]
-  - name: use_bg
-    type: attr
-    required: true
-    dtypes:
-      values: [bool]
-    ranges:
-      valid:
-        values: [false]
-      invalid:
-        values: []
   - name: soc
     type: attr
     required: true

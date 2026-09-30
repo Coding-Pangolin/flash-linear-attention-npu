@@ -61,7 +61,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-38_perf_kda_model\",\"group\":\"精度\",\"note\":\"对齐 H20 model-gk\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":11264,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,11264],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":0,\"seed\":20260818,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-38_perf_kda_model\",\"group\":\"精度\",\"note\":\"对齐 H20 model-gk\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":11264,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"gk\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,11264],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":0,\"seed\":20260818,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -177,17 +177,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -284,7 +273,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-39_perf_gdn_model\",\"group\":\"精度\",\"note\":\"对齐 H20 model-g\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":11264,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,11264],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":1,\"seed\":20260819,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-39_perf_gdn_model\",\"group\":\"精度\",\"note\":\"对齐 H20 model-g\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":11264,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,11264],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":1,\"seed\":20260819,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -400,17 +389,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -507,7 +485,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-40_perf_cp2_gva\",\"group\":\"精度\",\"note\":\"CP=2 窗口 + GVA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":5632,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,5632],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":2,\"seed\":20260820,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-40_perf_cp2_gva\",\"group\":\"精度\",\"note\":\"CP=2 窗口 + GVA\",\"dtype\":\"bf16\",\"B\":1,\"HK\":16,\"HV\":32,\"T\":5632,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,5632],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":2,\"seed\":20260820,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -623,17 +601,6 @@
         "outlier_values": null
       },
       {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
         "name": "soc",
         "type": "attr",
         "required": true,
@@ -730,7 +697,7 @@
         "required": true,
         "dtype": "non_param",
         "shape": null,
-        "range_values": "{\"name\":\"PPFM-41_perf_long\",\"group\":\"精度\",\"note\":\"长窗口\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":16384,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"use_bg\":false,\"cu_seqlens\":[0,16384],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":3,\"seed\":20260821,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "range_values": "{\"name\":\"PPFM-41_perf_long\",\"group\":\"精度\",\"note\":\"长窗口\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":16384,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,16384],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":3,\"seed\":20260821,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -841,17 +808,6 @@
         "dtype": "string",
         "shape": null,
         "range_values": "fp32",
-        "backward": false,
-        "align_32B": null,
-        "outlier_values": null
-      },
-      {
-        "name": "use_bg",
-        "type": "attr",
-        "required": true,
-        "dtype": "bool",
-        "shape": null,
-        "range_values": false,
         "backward": false,
         "align_32B": null,
         "outlier_values": null

@@ -27,7 +27,8 @@ CP（context parallel）场景下 GDN / KDA（/ DPLR）前向的 **pre-process �
 - `g` / `gk` **二选一**（互斥）；`g` 是 `[1, HV, T]`、`gk` 是 `[1, HV, T, K]`，
   两者都是 **base-2 的 chunk 内累积对数衰减**，dtype 支持 FP32 / BF16。
 - `K = V = 128`、`chunk_size = 64` 为固定规格（host 拦截其它值）；`k/w/u/v` 支持 BF16 / FP16。
-- `bg`（DPLR）与 `v != u` 的路径**本轮不验收**（见下方 TilingKey 表）。
+- **DPLR（`bg` / `v`）不支持**：两个入参在算子上必须传空，非空会在 host / aclnn / ctypes /
+  stable 四个入口一致地被拒（见下方 TilingKey 表与算子 `docs/api.md` §6）。
 - 输出 `hm[Nseq, HV, K, V+K]` **FP32**；`hm[i,hv][:, 0:V]` 是 `h`、`[:, V:V+K]` 是 `m`。
 
 ### ⚠ 用例数据的形态要求（不是可选项）
@@ -41,29 +42,104 @@ CP（context parallel）场景下 GDN / KDA（/ DPLR）前向的 **pre-process �
 
 | 项 | 内容 |
 | --- | --- |
-| CPU 标杆 | 本工程 `scripts/pre_process_fwd_kernel_merged_cpu.py`（纯 PyTorch，token-major） |
+| CPU / GPU 标杆 | 本工程 `scripts/pre_process_fwd_kernel_merged_cpu.py`（纯 PyTorch，token-major，设备无关） |
+| GPU 同精度标杆（可选） | 上游 Triton kernel `fla/ops/cp/chunk_delta_h.py::pre_process_fwd_kernel_merged`（按窗口直接启动） |
+| GPU 高精度真值（可选） | 同一份 `scripts/` 标杆的 FP64 路径（`accum_dtype=fp64`、三个舍入开关关闭） |
 | 上游语义来源 | `fla-org/flash-linear-attention@e52dbc0e` → `fla/ops/cp/chunk_delta_h.py::pre_process_fwd_kernel_merged` |
 | 用例表 | 本工程 `gen_pre_process_fwd_kernel_merged.py` 内置的冻结用例（37 条逻辑精度 + 4 条性能） |
 | 接口与约束 | `fla/ops/.../pre_process_fwd_kernel_merged/docs/api.md` §3 |
 
 `executor_*.py` 按相对路径**加载**上面那份参考实现（`importlib`），不复制副本，
-避免出现两份会分叉的标杆；输入构造 / `run_cpu` / `run_npu` / `FunctionApi` 都在本目录。
+避免出现两份会分叉的标杆；输入构造 / `run_cpu` / `run_npu` / `run_gpu_truth` /
+`run_gpu_control` / `FunctionApi` 都在本目录。
 
-**没有 GPU 标杆，也不打算加。** 本工程只支持两个角色：**NPU DUT** 与 **CPU golden**
-（`FunctionApi` 对其它 device 直接报错）—— 这与仓内 `tests/atk/README.md` 的精度路线一致
-（该文档通篇不提 GPU）。上游虽然有一份 Triton 参考实现
-（`fla/ops/cp/chunk_delta_h.py`），但它需要额外的 GPU server，而本算子的 CPU 标杆
-已经与 H20 `ieee` 逐项对齐（见上表"上游语义来源"与下面"精度口径"），
-精度验收不需要 GPU 节点；若将来只是想要更快的参考节点，可再按需扩展 executor。
+`executor_*.py` 支持**三种 ATK 节点角色**（由 `device` + `is_benchmark_task` 区分，
+不按算子名分支）：
+
+| 角色 | 触发条件 | 执行内容 |
+| --- | --- | --- |
+| DUT | `device ∈ {npu, pyaclnn}` | 仓内 `fla_npu.ops.ascendc.pre_process_fwd_kernel_merged` |
+| 高精度 golden | `device ∈ {cpu, gpu}` 且 `is_benchmark_task=True` | FP64 小算子拼接（`run_gpu_truth` / `run_cpu(high_precision=True)`） |
+| 同精度 benchmark | `device ∈ {cpu, gpu}` 且 `is_benchmark_task=False` | 契约版 FP32 标杆；GPU 上优先 Triton，回落 torch（`run_gpu_control`） |
+
+其中 GPU 同精度标杆用上游 Triton kernel，**按窗口逐段直接启动**（`BLOCK_SIZE` =
+`32 if K<=64 else 64`，`MULTI_SEQS=False`，`AFFINE_CHAIN_PRECISION="ieee"`）；
+上游那层需要 `FLACPContext` / 进程组的编排函数
+`chunk_gated_delta_rule_fwd_h_pre_process` 不参与比较（它只是启动器 + all-gather）。
+
+### GPU 双标杆（推荐）
+
+把参考节点放到 GPU：比 CPU 双标杆快，且更贴合真实小算子拼接语义。
+
+```text
+NPU DUT:      benchmark=False  high_precision=False   # 跑 ascendc 单算子
+GPU 真值:      benchmark=True   high_precision=True    # FP64 小算子拼接（ATK golden 节点）
+GPU 同精度标杆:  benchmark=False  high_precision=False   # Triton / torch 契约版（ATK benchmark 节点）
+```
+
+运行（在 A5/A910 侧发起，远端 GPU server 承载 `gpu_reference` 节点，`--bm_device gpu`）：
+
+```bash
+export GPU_HOST=<gpu-server-ip>  GPU_HOST_PORT=9090
+cd tests/atk/pre_process_fwd_kernel_merged
+atk node --name npu_dut --backend npu --devices 0 --output_path ./atk_output/gpu_dual \
+  node --name gpu_reference --backend gpu --host "$GPU_HOST" --port "$GPU_HOST_PORT" \
+       --devices 0 --is_compare true --output_path ./atk_output/gpu_dual \
+  task -c ./atk_pre_process_fwd_kernel_merged.json --task accuracy --bm_device gpu \
+       -p ./executor_pre_process_fwd_kernel_merged.py --syc_dataset -mt 1 -to 14400
+```
+
+GPU 服务器端的容器 / ATK server 启动方式与本仓交付件里的其它算子一致
+（交付仓 `FLA_ATK/common/gpu_server.sh`，或按
+`chunk_gated_delta_rule_fwd_h/README.md`「执行机制与网络配置」的手工步骤），
+服务器内只需 CUDA Torch + Triton + 本目录测试资产，不需要 CANN / NPU wheel。
+
+#### 三路精度标准与切换
+
+GPU 双标杆的比较是 `cv_fused_double_benchmark`（DUT vs 真值、同精度标杆 vs 真值两路），
+阈值与交付仓 `FLA_ATK` 的 `chunk_gated_delta_rule_fwd_h` / `chunk_kda_fwd` 一致：
+`max_re_ratio = 5`、`avg_re_ratio = 1.5`、`root_mean_squared_ratio = 1.5`。
+
+三份 JSON 默认写的是仓内统一标准 `mixed_tolerance_bm`（`tests/atk/README.md` 的
+「精度与 NaN 检测」约定：NPU DUT + CPU 高精度 golden）。做 GPU 双标杆验收时切到
+三路标准（**只改标准，不动用例与标杆**）：
+
+```bash
+# 1) 重写三份 JSON 的 standard.acc
+python gen_pre_process_fwd_kernel_merged.py --standard cv_fused_double_benchmark --summary
+# 2) 同步本目录 <op>.yaml 的 standard.acc（供 atk case 重新生成时使用）
+#    standard:
+#      acc:
+#        cv_fused_double_benchmark:
+#          max_re_ratio: 5
+#          avg_re_ratio: 1.5
+#          root_mean_squared_ratio: 1.5
+#      perf: not_key
+```
+
+只跑 CPU 单标杆流程时不要执行上面两步，保持仓库默认即可。
+本算子的 executor 对两种标准都成立：两种标准下都不会出现"参考节点没实现对应角色"的情况。
+
+executor 支持的环境变量：
+
+| 变量 | 说明 |
+| --- | --- |
+| `PPFM_ATK_TRITON=0` | 强制走 GPU torch 契约精度标杆，不加载 Triton（失败时也会自动回落并告警） |
+| `PPFM_ATK_TRITON_CALLABLE=...` | 覆盖 Triton 目标，默认 `fla.ops.cp.chunk_delta_h:pre_process_fwd_kernel_merged` |
 
 ### 精度口径（重要）
 
-- **验收基线 = 契约版标杆**：`accum_dtype=fp32` + 三个舍入点开关全开
+- **同精度对标 = 契约版标杆**：`accum_dtype=fp32` + 三个舍入点开关全开
   （`h`/`v_new` 进 MMAD 前降到输入 dtype、`M_c@m` 每 chunk 回落 fp32）。
-- `scripts/pre_process_fwd_kernel_merged_cpu.py` 的模块文档写明：kernel 的 h/m 累加器是 **FP32**，用 FP64 基准会让任何
-  忠实实现平白多出 **~9.4e-3** 的绝对偏差（与 H20 `ieee` 对齐时实测）。
-  ⇒ 本工程的 **`high_precision=True`（ATK benchmark 节点）只作参考侧灵敏度对照**，
-  不作为验收真值；验收真值走 `high_precision=False`。
+  它与 DUT 属于同一精度类，两者之差才用来判"实现是否忠实"。
+- **`scripts/pre_process_fwd_kernel_merged_cpu.py` 的模块文档写明**：kernel 的 h/m 累加器是
+  **FP32**，用 FP64 基准会让任何忠实实现平白多出 **~9.4e-3** 的绝对偏差（与 H20 `ieee`
+  对齐时实测）。
+  ⇒ **FP64 结果只作高精度 golden**，与 DUT 的比较必须走**混合容差**
+  （`mixed_tolerance_bm` 或 `cv_fused_double_benchmark` 的 5 / 1.5 / 1.5 比例），
+  不能当成"逐元素相等"的判据；也不能反过来用 FP64 golden 的偏差去放宽同精度对标。
+- 两边都不允许的用法：拿 FP64 基准 + 收紧容差去"证伪"忠实实现，或拿同精度标杆的自比
+  当成精度验收（它只能证明搬运/调度没改数值）。
 
 ## SOC 支持
 
@@ -95,8 +171,9 @@ python gen_pre_process_fwd_kernel_merged.py --summary
 
 ## TilingKey 覆盖表
 
-来源：算子 `docs/design.md` §3.2.1「`gate ∈ {USE_G, USE_GK, USE_BG}` × `gate dtype ∈ {BF16, FP32}`
-= 6 个 TilingKey」，本轮**验收 4 个**（DPLR 的 2 个已注册、不验收）。
+来源：算子 `docs/design.md` §3.2.1「`gate ∈ {USE_G, USE_GK}` × `gate dtype ∈ {BF16, FP32}`
+= **4 个可达 TilingKey**」（2026-09-30 起 DPLR 不支持，`USE_BG` 只保留模板槽位、host 永不
+产生，因此没有对应的用例）。
 
 | TilingKey | 选择条件 | 精度普通用例 | 精度边界用例 | `_mss.json` 用例 | 适用 SoC | 实际选择证据 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -104,8 +181,7 @@ python gen_pre_process_fwd_kernel_merged.py --summary
 | `USE_G` + gate **BF16** | 给 `g`（BF16）、`bg` 缺省 | `PPFM-27` | `PPFM-27` | `MSS-gate-g-bf16` | A2/A3/A5 | **待补** |
 | `USE_GK` + gate **FP32** | 给 `gk`（FP32）、`bg` 缺省 | `PPFM-06..10`、`PPFM-15..18`、`PPFM-28`、`PPFM-31`、`PPFM-33`、`PPFM-35`、`PPFM-37` | `PPFM-06`（T=1）等 | `MSS-gate-gk-fp32`、`MSS-varlen-3seg` | A2/A3/A5 | **待补** |
 | `USE_GK` + gate **BF16** | 给 `gk`（BF16）、`bg` 缺省 | `PPFM-29` | `PPFM-29` | `MSS-gate-gk-bf16` | A2/A3/A5 | **待补** |
-| `USE_BG`（DPLR）+ FP32 | 给 `bg` + `gk`，`v != u` | — | — | — | — | **本轮不验收**：算子 host 侧尚未开放该路径（`use_bg` 在用例空间里为 `false`） |
-| `USE_BG`（DPLR）+ BF16 | 同上 | — | — | — | — | **本轮不验收**，同上 |
+| ~~`USE_BG`（DPLR）~~ | 已删除 | — | — | — | — | **不支持**：算子接口拒绝非空 `bg` / `v`，该 TilingKey 不可达（`docs/api.md` §0/§6） |
 
 > 「实际选择证据」按 `tests/atk/README.md` 的硬要求：**必须补 host tiling UT 或运行时记录**，
 > 没有实际选中证据时不得标记为已覆盖。上电后第一步就补这一列。
@@ -138,6 +214,8 @@ python gen_pre_process_fwd_kernel_merged.py --summary
 
 ## 执行方式
 
+仓内统一入口（NPU DUT + CPU 高精度 golden，`mixed_tolerance_bm`）：
+
 ```bash
 bash tests/atk/run_test_cpu.sh -op=pre_process_fwd_kernel_merged -npu_device_id=0
 bash tests/atk/run_test_cpu.sh -op=pre_process_fwd_kernel_merged -npu_device_id=0 -scope=accuracy
@@ -146,6 +224,10 @@ bash tests/atk/run_test_cpu.sh -op=pre_process_fwd_kernel_merged -npu_device_id=
 bash tests/atk/run_test_cpu.sh -op=pre_process_fwd_kernel_merged -npu_device_id=0 -scope=mssanitizer
 bash tests/atk/run_test_cpu.sh -op=pre_process_fwd_kernel_merged -scope=gen_cases
 ```
+
+GPU 双标杆**不走** `run_test_cpu.sh`：仓内统一脚本只启动本机 NPU/CPU 两个 node，
+远端 GPU node 无法由它表达。GPU 双标杆按上一节「GPU 双标杆（推荐）」给出的
+`atk node … node … task …` 命令直接发起（先把三份 JSON 切成 `cv_fused_double_benchmark`）。
 
 运行前按 `tests/atk/README.md`「运行前准备」准备 `ATK_ENV / CANN_ENV / FLA_NPU_ENV`，
 并确认 `atk --version` ≥ `26.8.8`。

@@ -770,6 +770,17 @@ private:
             AIV_WAIT_MTE2_V();
             // left：USE_G 为 bf16(k·dg)，USE_GK 为 k 本身
             if (useG) {
+#if PPFM_LEFT_FUSE && PPFM_ARCH_IS_950
+                // P1-1：Cast(bf16->fp32) + 逐行 Muls + Cast(fp32->bf16) 合成一趟 RegBase
+                //（省 2 趟 UB 遍历、2 次 PIPE_V 栅栏、以及 32 次标量 GetValue）
+                MulRowScaleBf16ToBf16Regbase(
+                    RowPtrBf16(scrBf_, lo * CV_K), RowPtrBf16(kBlkBf_, lo * CV_K),
+                    RowScalePtr(dgF_, off),
+                    static_cast<uint16_t>(SEG), static_cast<uint16_t>(CV_K));
+                AIV_SET_V_MTE3();
+                AIV_WAIT_V_MTE3();   // V -> MTE3
+                DataCopy(lOut[off * CV_K], scrBf_[lo * CV_K], SEG * CV_K);
+#else
                 Cast(scrF_[lo * CV_K], kBlkBf_[lo * CV_K], RoundMode::CAST_NONE, SEG * CV_K);
                 PipeBarrier<PIPE_V>();
 #if PPFM_ROW_PREFETCH
@@ -791,6 +802,7 @@ private:
                 AIV_SET_V_MTE3();
                 AIV_WAIT_V_MTE3();   // V -> MTE3
                 DataCopy(lOut[off * CV_K], scrBf_[lo * CV_K], SEG * CV_K);
+#endif  // PPFM_LEFT_FUSE
             } else {
                 DataCopy(lOut[off * CV_K], kBlkBf_[lo * CV_K], SEG * CV_K);
             }

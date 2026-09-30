@@ -87,6 +87,11 @@ using namespace AscendC;
 #define PPFM_STATE_FUSE 1
 #endif
 
+// P1-1: left = cast_bf16(cast_fp32(k) · dg[row]) 合成一趟 RegBase（位级不变；仅 950）
+#ifndef PPFM_LEFT_FUSE
+#define PPFM_LEFT_FUSE 1
+#endif
+
 // epilogue 逐行 hm 写合并成一次跨步 DataCopy
 #ifndef PPFM_EP_MERGE
 #define PPFM_EP_MERGE 1
@@ -233,6 +238,75 @@ __simd_vf__ static inline void ApplyRowScaleAddInplaceRegbase(
             StoreAlign(matrix + offset, matrixReg0, mask);
         }
     }
+}
+
+// P1-1：行缩放 + bf16 往返，合成一趟 RegBase。
+//   dst_bf16[row, :] = cast_bf16_rint( cast_fp32(src_bf16[row, :]) · rowScale[row] )
+//   形态照同仓 chunk_fwd_h 的 FwdHLoadAsFloat / FwdHStoreBf16（1 个 bf16 寄存器 <-> 2 个
+//   fp32 寄存器，用 RegLayout::ZERO/ONE 分半）。
+//   **舍入点**：fp32->bf16 必须用 CAST_RINT（与现有 Cast(..., RoundMode::CAST_RINT) 一致），
+//   不能用 regbase.hpp 里 CastFloat2Half 的 CAST_ROUND（那是四舍五入远离零，在"恰好一半"
+//   的点上结果不同）。bf16->fp32 是加宽转换，恒精确。
+constexpr AscendC::Reg::CastTrait PPFM_B16_TO_F32_ZERO = {
+    AscendC::Reg::RegLayout::ZERO,
+    AscendC::Reg::SatMode::SAT,
+    AscendC::Reg::MaskMergeMode::ZEROING,
+    AscendC::RoundMode::CAST_NONE,
+};
+constexpr AscendC::Reg::CastTrait PPFM_B16_TO_F32_ONE = {
+    AscendC::Reg::RegLayout::ONE,
+    AscendC::Reg::SatMode::SAT,
+    AscendC::Reg::MaskMergeMode::ZEROING,
+    AscendC::RoundMode::CAST_NONE,
+};
+constexpr AscendC::Reg::CastTrait PPFM_F32_TO_B16_RINT_ZERO = {
+    AscendC::Reg::RegLayout::ZERO,
+    AscendC::Reg::SatMode::NO_SAT,
+    AscendC::Reg::MaskMergeMode::MERGING,
+    AscendC::RoundMode::CAST_RINT,
+};
+constexpr AscendC::Reg::CastTrait PPFM_F32_TO_B16_RINT_ONE = {
+    AscendC::Reg::RegLayout::ONE,
+    AscendC::Reg::SatMode::NO_SAT,
+    AscendC::Reg::MaskMergeMode::ZEROING,
+    AscendC::RoundMode::CAST_RINT,
+};
+
+__simd_vf__ static inline void MulRowScaleBf16ToBf16Regbase(
+    __ubuf__ bfloat16_t *dst, __ubuf__ bfloat16_t *src, __ubuf__ float *rowScale,
+    uint16_t rows, uint16_t cols)
+{
+    using namespace AscendC::MicroAPI;
+    constexpr uint16_t BF16_PER_REG = AscendC::VECTOR_REG_WIDTH / sizeof(bfloat16_t);
+    MaskReg mask16 = CreateMask<bfloat16_t, MaskPattern::ALL>();
+    MaskReg mask32 = CreateMask<float, MaskPattern::ALL>();
+    RegTensor<bfloat16_t> raw;
+    RegTensor<bfloat16_t> out;
+    RegTensor<float> f0;
+    RegTensor<float> f1;
+    RegTensor<float> sc;
+
+    for (uint16_t row = 0; row < rows; ++row) {
+        // 逐行标量 -> 向量 BRC 读（不再走 SCALARLDST 口）
+        LoadAlign<float, LoadDist::DIST_BRC_B32>(sc, rowScale + row);
+        for (uint16_t col = 0; col < cols; col += BF16_PER_REG) {
+            const uint32_t o = static_cast<uint32_t>(row) * cols + col;
+            LoadAlign<bfloat16_t, LoadDist::DIST_NORM>(raw, src + o);
+            Cast<float, bfloat16_t, PPFM_B16_TO_F32_ZERO>(f0, raw, mask16);
+            Cast<float, bfloat16_t, PPFM_B16_TO_F32_ONE>(f1, raw, mask16);
+            Mul(f0, f0, sc, mask32);
+            Mul(f1, f1, sc, mask32);
+            Cast<bfloat16_t, float, PPFM_F32_TO_B16_RINT_ONE>(out, f1, mask32);
+            Cast<bfloat16_t, float, PPFM_F32_TO_B16_RINT_ZERO>(out, f0, mask32);
+            StoreAlign(dst + o, out, mask16);
+        }
+    }
+}
+
+// bf16 LocalTensor 的行/段指针
+__aicore__ inline __ubuf__ bfloat16_t *RowPtrBf16(LocalTensor<bfloat16_t> &t, int32_t off)
+{
+    return (__ubuf__ bfloat16_t *)reinterpret_cast<uint64_t>(t.GetPhyAddr()) + off;
 }
 
 // LocalTensor 的行指针（PhyAddr 是字节地址，转 float* 后按元素步进）

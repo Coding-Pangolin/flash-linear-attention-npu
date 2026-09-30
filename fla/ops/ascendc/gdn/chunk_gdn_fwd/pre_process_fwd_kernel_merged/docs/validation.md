@@ -3111,3 +3111,65 @@ GDN 三形状也测到 −2.2~−2.7%，但 GDN 此时**执行的指令序列与
 > `#if PPFM_H_UB / #else / #endif` 的 `#else` 内部 —— 950（`PPFM_H_UB=1`）被整体跳过，
 > 而 A2/A3 反而编译到引用未定义 `UB_M_UB` 的块，导致 910B / 910_93 直接编译失败。
 > 并入后 950 kernel `.o` 与并入前逐字节相同（L-A），故本节 950 结论不受其影响。
+
+---
+
+## 49. P1-1(left)：`left = cast_bf16(cast_fp32(k)·dg)` 合成一趟 RegBase（位级不变）
+
+### 49.1 动机与改法
+
+现状（AIV staging 内、`USE_G` 分支，每段 32 行 × 128 列）：
+
+    Cast(bf16→fp32) → PipeBarrier<PIPE_V> → 32 次逐行 Muls(·dg[row]) → PipeBarrier<PIPE_V> → Cast(fp32→bf16)
+
+即 **3 趟 UB 遍历 + 2 次 PIPE_V 栅栏 + 32 次标量 `GetValue`**（后者是 R22b 的预取）。
+
+改成**一趟 `__simd_vf__`**（形态照同仓 `chunk_fwd_h` 的 `FwdHLoadAsFloat` / `FwdHStoreBf16`）：
+
+    读 bf16 行 → Cast fp32（RegLayout ZERO/ONE 分两半）→ 乘 dg[row]
+    → Cast 回 bf16 → 写
+
+其中 dg[row] 由 **向量 BRC 读**（`LoadDist::DIST_BRC_B32`）拿到，不再走 SCALARLDST 口。
+开关 `PPFM_LEFT_FUSE`（默认 1，仅 950；A2/A3 走原路径）。
+
+### 49.2 舍入点（关键，§39 的教训）
+
+仓内 `kernel_utils/vector/regbase.hpp` 的 `CastFloat2Half` 用的是
+`RoundMode::CAST_ROUND`（四舍五入**远离零**），而本算子现有代码用的是
+`Cast(..., RoundMode::CAST_RINT)`（四舍五入**取偶**）。
+
+两者在"恰好一半"的点上结果不同 ⇒ **不能直接复用现成 helper**，必须自定义
+`CAST_RINT` 的 `CastTrait`（`PPFM_F32_TO_B16_RINT_ZERO/ONE`）。
+`bf16→fp32` 是加宽转换，恒精确，两种 trait 等价。
+
+> trait 必须写全限定名 `AscendC::Reg::CastTrait` / `AscendC::Reg::RegLayout` /
+> `AscendC::Reg::SatMode` / `AscendC::Reg::MaskMergeMode` —— 在 `_common.h` 里没有
+> `using namespace AscendC::MicroAPI;`（那个 using 会漏进 `_vec.h`，与高层
+> `Add/Sub/Mul/Cast` 撞名）。第一次编译就是死在这里。
+
+### 49.3 结果（950/247 卡 0；同卡双向 A/B，每点 3 次取中位，tol=2%）
+
+| 用例 | A→B | B→A（反向） | 判定 |
+| --- | --- | --- | --- |
+| gdn T=1024/HV=8 | **−2.40%** | +1.87% | `faster` |
+| gdn T=4096/HV=8 | −0.03% | +0.32% | 中性 |
+| gdn 模型 case T=11264/HV=32 | **−0.94%** | +0.79% | `faster` |
+| kda T=2048/HK=HV=64（对照） | −0.04% | — | 不受影响 |
+| kda T=16384/HK=HV=64（对照） | +0.20% | — | 不受影响 |
+
+双向自洽：`p01k3` 两次测得 87.71 / 87.41 µs，`p11left` 两次 85.60 / 85.80 µs（Δ < 0.35%）
+⇒ 机器未漂移，差值可复现。
+
+> `left` 的逐行缩放**只存在于 `USE_G`（GDN）路径**（KDA 直接 `DataCopy(lOut, kBlkBf_)`）
+> ⇒ KDA 两档天然是本次改动的**对照组**，实测 ±0.2% 内，进一步说明测量干净。
+
+### 49.4 验证
+
+L0 静态 PASS、L1 位级 vs `r40a1` **`BIT_IDENTICAL`**（含 `kda-t256`）、L2 smoke 10/10。
+
+### 49.5 后续（同族）
+
+同族的 **`v_new`** 还没做：它的列宽是 `cb_`（colSplit 下 = 64），而 bf16 寄存器一次装
+128 个元素 ⇒ 直接用同样的 helper 会**越界读到下一行**。正确做法是
+（a）先只在 `cb_ == CV_V`（整宽任务）上启用、其余回退原路径，或
+（b）按 64 列分组 + 掩码处理尾块。留给下一轮。

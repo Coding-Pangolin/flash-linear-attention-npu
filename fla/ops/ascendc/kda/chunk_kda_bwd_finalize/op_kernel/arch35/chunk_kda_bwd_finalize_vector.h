@@ -1236,10 +1236,11 @@ private:
         auto lowNd = UbBytes(224 * 1024).ReinterpretCast<bfloat16_t>();
 
         const int64_t token = FinalizeTokenOffset(*tiling_, chunk, head, KDA_FINALIZE_DIM);
-        const int64_t state = FinalizeStateOffset(*tiling_, chunk, head);
+        const int64_t hState = FinalizeHOffset(*tiling_, chunk, head);
+        const int64_t state = FinalizeDhOffset(*tiling_, chunk, head);
         AscendC::DataCopy(kUb, k_[token], chunk.validRows * KDA_FINALIZE_DIM);
         AscendC::DataCopy(gkUb, gk_[token], chunk.validRows * KDA_FINALIZE_DIM);
-        AscendC::DataCopy(hUb, h_[state], KDA_FINALIZE_STATE_ELEMS);
+        AscendC::DataCopy(hUb, h_[hState], KDA_FINALIZE_STATE_ELEMS);
         AscendC::DataCopy(dhUb, dh_[state], KDA_FINALIZE_STATE_ELEMS);
         AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(mte2ToV_[slot]);
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(mte2ToV_[slot]);

@@ -11,6 +11,8 @@
 #include "aclnn_kernels/common/op_error_check.h"
 #include "aclnn_kernels/cast.h"
 #include "aclnn_kernels/reshape.h"
+#include "aclnn_kernels/transpose.h"
+#include "aclnn_kernels/contiguous.h"
 #include "opdev/make_op_executor.h"
 #include "opdev/op_dfx.h"
 #include "opdev/tensor_view_utils.h"
@@ -102,8 +104,6 @@ extern "C" aclnnStatus aclnnChunkKdaBwdV2GetWorkspaceSize(
     // Recompute copies A_log in groups of eight into a 256-float buffer.
     CHECK_COND(disableRecompute || (H <= 256 && H % 8 == 0), ACLNN_ERR_PARAM_INVALID,
         "Recompute currently requires H<=256 and H divisible by 8.");
-    CHECK_COND(disableRecompute || packed || T % 64 == 0, ACLNN_ERR_PARAM_INVALID,
-        "Recompute tails are disabled pending upstream repeatability repair; use saved caches.");
     const auto token = packed ? MakeShape({H,T,128}) : MakeShape({B,H,T,128});
     const auto scalar = packed ? MakeShape({H,T}) : MakeShape({B,H,T});
     const auto matrix = packed ? MakeShape({H,T,64}) : MakeShape({B,H,T,64});
@@ -134,8 +134,6 @@ extern "C" aclnnStatus aclnnChunkKdaBwdV2GetWorkspaceSize(
             CHECK_COND((*cu)[s] >= 0 && (*cu)[s] < (*cu)[s+1] && (*cu)[s+1] <= T,
                 ACLNN_ERR_PARAM_INVALID, "V2 expects nonempty sequences; wrapper compacts empty entries.");
             const int64_t count = ((*cu)[s+1]-(*cu)[s]+63)/64;
-            CHECK_COND(disableRecompute || ((*cu)[s+1]-(*cu)[s]) % 64 == 0,
-                ACLNN_ERR_PARAM_INVALID, "Recompute requires each sequence length divisible by 64.");
             for (int64_t c = 0; c < count; ++c, ++nc) {
                 CHECK_COND(static_cast<size_t>(2*nc+1) < indices->Size() &&
                     (*indices)[2*nc] == static_cast<int64_t>(s) && (*indices)[2*nc+1] == c,
@@ -144,13 +142,13 @@ extern "C" aclnnStatus aclnnChunkKdaBwdV2GetWorkspaceSize(
         }
         CHECK_COND(indices->Size() == static_cast<size_t>(2*nc), ACLNN_ERR_PARAM_INVALID, "Extra chunk indices.");
     }
-    const auto state = packed ? MakeShape({H,nc,128,128}) : MakeShape({B,H,nc,128,128});
+    const auto stateShape = packed ? MakeShape({nc,H,128,128}) : MakeShape({B,nc,H,128,128});
     if (disableRecompute) {
         for (const auto *x : {w,qg,kg,vNew}) {
             CHECK_COND(MatchesTensor(x,token,DataType::DT_BF16), ACLNN_ERR_PARAM_INVALID, "Saved token cache is invalid.");
         }
-        CHECK_COND(MatchesTensor(h,state,DataType::DT_BF16) && MatchesTensor(gk,token,DataType::DT_FLOAT),
-            ACLNN_ERR_PARAM_INVALID, "Expected head-major h and FP32 gk caches.");
+        CHECK_COND(MatchesTensor(h,stateShape,DataType::DT_BF16) && MatchesTensor(gk,token,DataType::DT_FLOAT),
+            ACLNN_ERR_PARAM_INVALID, "Expected forward chunk-major h and FP32 gk caches.");
     } else {
         CHECK_COND(!w && !qg && !kg && !vNew && !h && !gk, ACLNN_ERR_PARAM_INVALID,
             "Recompute mode requires saved caches to be absent.");
@@ -180,7 +178,7 @@ extern "C" aclnnStatus aclnnChunkKdaBwdV2GetWorkspaceSize(
         qg = AllocTensor(ex, token, DataType::DT_BF16);
         kg = AllocTensor(ex, token, DataType::DT_BF16);
         vNew = AllocTensor(ex, token, DataType::DT_BF16);
-        h = AllocTensor(ex, state, DataType::DT_BF16);
+        h = AllocTensor(ex, stateShape, DataType::DT_BF16);
         gk = AllocTensor(ex, token, DataType::DT_FLOAT);
         const auto *u = AllocTensor(ex, token, DataType::DT_BF16);
         CHECK_RET(w && qg && kg && vNew && h && gk && u, ACLNN_ERR_INNER_NULLPTR);
@@ -214,7 +212,7 @@ extern "C" aclnnStatus aclnnChunkKdaBwdV2GetWorkspaceSize(
     const auto *dAqk=AllocTensor(ex,matrix,DataType::DT_FLOAT);
     const auto *dv0=AllocTensor(ex,token,DataType::DT_BF16);
     const auto *dqRaw=AllocTensor(ex,token,DataType::DT_FLOAT);
-    const auto *dh=AllocTensor(ex,state,DataType::DT_BF16);
+    const auto *dh=AllocTensor(ex,stateShape,DataType::DT_BF16);
     const auto *dvScan=AllocTensor(ex,token,DataType::DT_BF16);
     CHECK_RET(dAqk && dv0 && dqRaw && dh && dvScan,ACLNN_ERR_INNER_NULLPTR);
     const auto prepareResult = l0op::ChunkKdaBwdPrepare(

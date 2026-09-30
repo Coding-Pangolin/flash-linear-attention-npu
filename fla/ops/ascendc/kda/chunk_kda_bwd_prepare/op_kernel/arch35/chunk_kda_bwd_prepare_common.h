@@ -117,9 +117,9 @@ __aicore__ inline int64_t StateOffset(
     const ChunkKdaBwdPrepareTilingData &tiling, const ChunkInfo &chunk, int64_t head)
 {
     if (tiling.isVariable != 0) {
-        return (head * tiling.totalChunkNum + chunk.stateIndex) * tiling.K * tiling.V;
+        return (chunk.stateIndex * tiling.NV + head) * tiling.K * tiling.V;
     }
-    return ((chunk.batchIndex * tiling.NV + head) * tiling.denseChunkNum + chunk.stateIndex) *
+    return ((chunk.batchIndex * tiling.denseChunkNum + chunk.stateIndex) * tiling.NV + head) *
            tiling.K * tiling.V;
 }
 

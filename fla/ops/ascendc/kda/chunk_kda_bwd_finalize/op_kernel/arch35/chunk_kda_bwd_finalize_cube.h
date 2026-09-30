@@ -454,7 +454,8 @@ private:
 
         const int64_t token = FinalizeTokenOffset(*tiling_, chunk, head, KDA_FINALIZE_DIM);
         const int64_t akkToken = FinalizeTokenOffset(*tiling_, chunk, head, KDA_FINALIZE_CHUNK);
-        const int64_t state = FinalizeStateOffset(*tiling_, chunk, head);
+        const int64_t hState = FinalizeHOffset(*tiling_, chunk, head);
+        const int64_t state = FinalizeDhOffset(*tiling_, chunk, head);
         LoadGmToL1A<CopyTransB, LayoutRM>(
             vNewL1, vNew_ + token * sizeof(DT), rows, KDA_FINALIZE_DIM, chunk.validRows);
         LoadGmToL1B<CopyTransB, LayoutCM>(
@@ -468,7 +469,7 @@ private:
         AscendC::SetFlag<AscendC::HardEvent::MTE2_MTE1>(Stage0Ready(stream, 1));
 
         LoadGmToL1B<CopyTransB, LayoutCM>(
-            hL1, h_ + state * sizeof(DT), KDA_FINALIZE_DIM, KDA_FINALIZE_DIM);
+            hL1, h_ + hState * sizeof(DT), KDA_FINALIZE_DIM, KDA_FINALIZE_DIM);
         AscendC::SetFlag<AscendC::HardEvent::MTE2_MTE1>(Stage0Ready(stream, 2));
         LoadGmToL1B<CopyTransB, LayoutCM>(
             vL1, v_ + token * sizeof(DT), KDA_FINALIZE_DIM, rows, KDA_FINALIZE_DIM, chunk.validRows);
@@ -488,7 +489,8 @@ private:
         auto hL1 = resource.l1Buf.template GetBufferByByte<DT>(streamBase + STREAM_H);
         auto vL1 = resource.l1Buf.template GetBufferByByte<DT>(streamBase + STREAM_V);
         const int64_t token = FinalizeTokenOffset(*tiling_, chunk, head, KDA_FINALIZE_DIM);
-        const int64_t state = FinalizeStateOffset(*tiling_, chunk, head);
+        const int64_t hState = FinalizeHOffset(*tiling_, chunk, head);
+        const int64_t state = FinalizeDhOffset(*tiling_, chunk, head);
 
         LoadGmToL1A<CopyTransB, LayoutRM>(
             vNewL1, vNew_ + token * sizeof(DT), rows, KDA_FINALIZE_DIM, chunk.validRows);
@@ -498,7 +500,7 @@ private:
         LoadGmToL1A<CopyRegular, LayoutRM>(
             dvScanL1, dvScan_ + token * sizeof(DT), rows, KDA_FINALIZE_DIM, chunk.validRows);
         LoadGmToL1B<CopyTransB, LayoutCM>(
-            hL1, h_ + state * sizeof(DT), KDA_FINALIZE_DIM, KDA_FINALIZE_DIM);
+            hL1, h_ + hState * sizeof(DT), KDA_FINALIZE_DIM, KDA_FINALIZE_DIM);
         AscendC::SetFlag<AscendC::HardEvent::MTE2_MTE1>(Stage0Ready(stream, 2));
         LoadGmToL1B<CopyTransB, LayoutCM>(
             vL1, v_ + token * sizeof(DT), KDA_FINALIZE_DIM, rows, KDA_FINALIZE_DIM, chunk.validRows);

@@ -195,14 +195,26 @@ __aicore__ inline int64_t FinalizeTokenOffset(
     return ((chunk.b * tiling.NV + head) * tiling.T + chunk.tokenStart) * width;
 }
 
-__aicore__ inline int64_t FinalizeStateOffset(
+// Saved h is chunk-major; dhu's internal dh remains head-major.
+__aicore__ inline int64_t FinalizeHOffset(
     const ChunkKdaBwdFinalizeTilingData &tiling, const FinalizeChunkInfo &chunk,
     int64_t head)
 {
     if (tiling.isVariable != 0) {
-        return (head * tiling.totalChunkNum + chunk.stateIndex) * tiling.K * tiling.V;
+        return (chunk.stateIndex * tiling.NV + head) * tiling.K * tiling.V;
     }
-    return ((chunk.b * tiling.NV + head) * tiling.denseChunkNum + chunk.stateIndex) *
+    return ((chunk.b * tiling.denseChunkNum + chunk.stateIndex) * tiling.NV + head) *
+        tiling.K * tiling.V;
+}
+
+__aicore__ inline int64_t FinalizeDhOffset(
+    const ChunkKdaBwdFinalizeTilingData &tiling, const FinalizeChunkInfo &chunk,
+    int64_t head)
+{
+    if (tiling.isVariable != 0) {
+        return (chunk.stateIndex * tiling.NV + head) * tiling.K * tiling.V;
+    }
+    return ((chunk.b * tiling.denseChunkNum + chunk.stateIndex) * tiling.NV + head) *
         tiling.K * tiling.V;
 }
 

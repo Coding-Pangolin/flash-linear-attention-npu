@@ -88,7 +88,7 @@ public:
             tiling_.K = dO.GetDim(2);
             tiling_.V = vNew.GetDim(2);
             tiling_.denseChunkNum = 0;
-            tiling_.totalChunkNum = h.GetDim(1);
+            tiling_.totalChunkNum = h.GetDim(0);
             const gert::Shape cu = ctx_.cuSeqlensShape->GetStorageShape();
             const gert::Shape indices = ctx_.chunkIndicesShape->GetStorageShape();
             if (cu.GetDimNum() != 1 || indices.GetDimNum() != 1 ||
@@ -103,9 +103,18 @@ public:
             tiling_.T = aqk.GetDim(2);
             tiling_.K = dO.GetDim(3);
             tiling_.V = vNew.GetDim(3);
-            tiling_.denseChunkNum = h.GetDim(2);
+            tiling_.denseChunkNum = h.GetDim(1);
             tiling_.totalChunkNum = tiling_.B * tiling_.denseChunkNum;
             tiling_.seqNum = tiling_.B;
+        }
+        const bool validH = isVariable
+            ? h.GetDim(1) == tiling_.NV && h.GetDim(2) == tiling_.K && h.GetDim(3) == tiling_.V
+            : h.GetDim(0) == tiling_.B && h.GetDim(2) == tiling_.NV &&
+              h.GetDim(3) == tiling_.K && h.GetDim(4) == tiling_.V &&
+              tiling_.denseChunkNum == (tiling_.T + ctx_.chunkSize - 1) / ctx_.chunkSize;
+        if (!validH) {
+            OP_LOGE(ctx_.nodeName, "h must use forward chunk-major layout");
+            return ge::GRAPH_FAILED;
         }
         tiling_.chunkTaskNum = tiling_.totalChunkNum;
         constexpr int64_t HEADS_PER_WORK_TASK = 4;

@@ -35,7 +35,7 @@ BF16 张量；Finalize 已融合归一化反向，调用方不应重复计算。
 |---|---|
 | 平台与维度 | Ascend950；Hq=Hv，K=V=128，chunk_size=64，B/H/T 为正 |
 | Token 布局 | 连续 dense [B,H,T,D] 或 packed [H,T,D] |
-| h 布局 | head-major：[B,H,Nc,K,V] 或 [H,Nc,K,V] |
+| h 布局 | 与前向一致：[B,Nc,H,K,V] 或 [Nc,H,K,V]，连续存储 |
 | q/k/v/dO、Aqk/Akk、Token/状态缓存 | BF16；gk 为 FP32 |
 | beta / db | BF16 或 FP32，输入输出类型一致 |
 | raw_g / A_log | BF16 或 FP32，执行器按需转为 FP32 |
@@ -46,12 +46,14 @@ BF16 张量；Finalize 已融合归一化反向，调用方不应重复计算。
 | 状态 | 不支持 initial_state/dht；dh0 为 None，state_v_first=False |
 | Gate | safe_gate、use_gate_in_kernel、use_exp2 均为 True；-5≤lower_bound<0 |
 
-前向公开接口的 h 为 sequence-major，传入此接口前需转成上述 head-major 布局。
+前向公开接口的 h 可直接传入，无需转置。旧调用方需删除 h 的 head-major 转换；
+H=Nc 时仅检查 shape 无法发现旧布局，调用方仍须同步更新。内部 dh 同样为 NT-first。
 元数据使用 Host INT64、按序列排列的规范 chunk 顺序；Python 层压缩空序列并
 重排序列编号，直接调用 V2 时须自行提供该形式，不接受设备端元数据或 T=0。
 
 重计算时设置 `disable_recompute=False`，将 gk/w/qg/kg/v_new/h 设为 None，
-仍须提供 Aqk/Akk。当前要求 H≤256 且为 8 的倍数，每条序列长度为 64 的倍数。
+仍须提供 Aqk/Akk。当前要求 H≤256 且为 8 的倍数。
+内部 FwdH 直接产生 NT-first 的 h，无需转置。
 
 ## 实现位置
 

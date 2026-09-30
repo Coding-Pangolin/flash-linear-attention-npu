@@ -78,13 +78,14 @@ public:
         const gert::Shape beta = ctx_.beta->GetStorageShape();
         const gert::Shape akk = ctx_.akk->GetStorageShape();
         const gert::Shape h = ctx_.h->GetStorageShape();
+        const gert::Shape dh = ctx_.dh->GetStorageShape();
         const size_t tokenRank = variable ? 3 : 4;
         const size_t scalarRank = variable ? 2 : 3;
         const size_t stateRank = variable ? 4 : 5;
         if (q.GetDimNum() != tokenRank || k.GetDimNum() != tokenRank ||
             v.GetDimNum() != tokenRank || gk.GetDimNum() != tokenRank ||
             akk.GetDimNum() != tokenRank || beta.GetDimNum() != scalarRank ||
-            h.GetDimNum() != stateRank) {
+            h.GetDimNum() != stateRank || dh.GetDimNum() != stateRank) {
             OP_LOGE(ctx_.nodeName, "dense/varlen rank does not match KernelC contract");
             return ge::GRAPH_FAILED;
         }
@@ -97,7 +98,7 @@ public:
             tiling_.K = k.GetDim(2);
             tiling_.V = v.GetDim(2);
             tiling_.denseChunkNum = 0;
-            tiling_.totalChunkNum = h.GetDim(1);
+            tiling_.totalChunkNum = h.GetDim(0);
             const gert::Shape cu = ctx_.cuSeqlens->GetStorageShape();
             const gert::Shape indices = ctx_.chunkIndices->GetStorageShape();
             if (cu.GetDimNum() != 1 || indices.GetDimNum() != 1 || cu.GetDim(0) < 2 ||
@@ -113,7 +114,7 @@ public:
             tiling_.T = k.GetDim(2);
             tiling_.K = k.GetDim(3);
             tiling_.V = v.GetDim(3);
-            tiling_.denseChunkNum = h.GetDim(2);
+            tiling_.denseChunkNum = h.GetDim(1);
             tiling_.totalChunkNum = tiling_.B * tiling_.denseChunkNum;
             tiling_.seqNum = tiling_.B;
         }
@@ -121,6 +122,19 @@ public:
             tiling_.T <= 0 || tiling_.K != 128 || tiling_.V != 128 ||
             tiling_.totalChunkNum <= 0) {
             OP_LOGE(ctx_.nodeName, "A5 v1 requires NQ=NV, K=V=128 and nonempty tensors");
+            return ge::GRAPH_FAILED;
+        }
+        const bool validStates = variable
+            ? h.GetDim(1) == tiling_.NV && h.GetDim(2) == tiling_.K && h.GetDim(3) == tiling_.V &&
+              dh.GetDim(0) == tiling_.totalChunkNum && dh.GetDim(1) == tiling_.NV &&
+              dh.GetDim(2) == tiling_.K && dh.GetDim(3) == tiling_.V
+            : h.GetDim(0) == tiling_.B && h.GetDim(2) == tiling_.NV &&
+              h.GetDim(3) == tiling_.K && h.GetDim(4) == tiling_.V &&
+              tiling_.denseChunkNum == (tiling_.T + ctx_.chunkSize - 1) / ctx_.chunkSize &&
+              dh.GetDim(0) == tiling_.B && dh.GetDim(1) == tiling_.denseChunkNum &&
+              dh.GetDim(2) == tiling_.NV && dh.GetDim(3) == tiling_.K && dh.GetDim(4) == tiling_.V;
+        if (!validStates) {
+            OP_LOGE(ctx_.nodeName, "expected NT-first h and dh");
             return ge::GRAPH_FAILED;
         }
         tiling_.chunkTaskNum = tiling_.totalChunkNum;

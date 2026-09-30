@@ -115,10 +115,10 @@ aclnnStatus Check(
     CHECK_COND(vHead == NV && oHead == NV && vT == T && oT == T,
                ACLNN_ERR_PARAM_INVALID, "aqk/v_new/d_o head or token dimensions mismatch");
 
-    const int64_t chunkCount = variable ? state.GetDim(1) : state.GetDim(2);
+    const int64_t chunkCount = variable ? state.GetDim(0) : state.GetDim(1);
     const bool stateShapeValid = variable
-        ? state.GetDim(0) == NV && state.GetDim(2) == 128 && state.GetDim(3) == 128
-        : state.GetDim(0) == B && state.GetDim(1) == NV &&
+        ? state.GetDim(1) == NV && state.GetDim(2) == 128 && state.GetDim(3) == 128
+        : state.GetDim(0) == B && state.GetDim(2) == NV &&
               state.GetDim(3) == 128 && state.GetDim(4) == 128;
     CHECK_COND(stateShapeValid, ACLNN_ERR_PARAM_INVALID, "h shape is invalid");
     if (variable) {

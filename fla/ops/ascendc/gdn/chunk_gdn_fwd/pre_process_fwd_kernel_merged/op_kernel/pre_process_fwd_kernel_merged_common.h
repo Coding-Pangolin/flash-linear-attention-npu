@@ -82,6 +82,11 @@ using namespace AscendC;
 #define PPFM_KDA_VF_ROWS 1
 #endif
 
+// P0-1k: KDA 的状态更新三合一（逐行 decay 缩放 + 加/减 dH 合成一趟 RegBase；位级不变）
+#ifndef PPFM_STATE_FUSE
+#define PPFM_STATE_FUSE 1
+#endif
+
 // epilogue 逐行 hm 写合并成一次跨步 DataCopy
 #ifndef PPFM_EP_MERGE
 #define PPFM_EP_MERGE 1
@@ -158,6 +163,73 @@ __simd_vf__ static inline void ApplyRowScaleInplaceRegbase(
             uint32_t offset = static_cast<uint32_t>(row) * cols + col;
             LoadAlign(matrixReg0, matrix + offset);
             Mul(matrixReg0, matrixReg0, scaleReg0, mask);
+            StoreAlign(matrix + offset, matrixReg0, mask);
+        }
+    }
+}
+
+// P0-1k：matrix = matrix 逐元素乘 rowScale[row]，再逐元素加/减 addend —— 一趟 RegBase 遍历。
+//   形态抄自同仓 chunk_fwd_h 的 FwdHStage3Arch35Vf（Mul 后接 Add）。
+//   逐元素先 Mul 再 Add/Sub（两次独立运算，**禁 FMA**）⇒ 与"先整块缩放、
+//   再整块加减"位级一致；省掉一整趟遍历与一次 PipeBarrier<PIPE_V>。
+//   仅用于逐行 decay（KDA）；GDN 的单标量 decay 仍走整块 Muls+Add。
+template <bool IS_SUB>
+__simd_vf__ static inline void ApplyRowScaleAddInplaceRegbase(
+    __ubuf__ float *matrix, __ubuf__ float *rowScale,
+    __ubuf__ float *addend, uint16_t rows, uint16_t cols)
+{
+    using namespace AscendC::MicroAPI;
+    constexpr uint16_t FP32_PER_REG = AscendC::VECTOR_REG_WIDTH / sizeof(float);
+    RegTensor<float> matrixReg0;
+    RegTensor<float> matrixReg1;
+    RegTensor<float> scaleReg0;
+    RegTensor<float> scaleReg1;
+    RegTensor<float> addReg0;
+    RegTensor<float> addReg1;
+
+    uint16_t row = 0;
+    for (; row + 1 < rows; row += 2) {
+        LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg0, rowScale + row);
+        LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg1, rowScale + row + 1);
+        for (uint16_t col = 0; col < cols; col += FP32_PER_REG) {
+            // 注意： UpdateMask 会消耗 count 计数器 ⇒ 两行各用一个独立变量
+            uint32_t activeCount0 = static_cast<uint32_t>(cols - col);
+            uint32_t activeCount1 = activeCount0;
+            MaskReg mask0 = UpdateMask<float>(activeCount0);
+            MaskReg mask1 = UpdateMask<float>(activeCount1);
+            uint32_t offset0 = static_cast<uint32_t>(row) * cols + col;
+            uint32_t offset1 = static_cast<uint32_t>(row + 1) * cols + col;
+            LoadAlign(matrixReg0, matrix + offset0);
+            LoadAlign(matrixReg1, matrix + offset1);
+            LoadAlign(addReg0, addend + offset0);
+            LoadAlign(addReg1, addend + offset1);
+            Mul(matrixReg0, matrixReg0, scaleReg0, mask0);
+            Mul(matrixReg1, matrixReg1, scaleReg1, mask1);
+            if constexpr (IS_SUB) {
+                Sub(matrixReg0, matrixReg0, addReg0, mask0);
+                Sub(matrixReg1, matrixReg1, addReg1, mask1);
+            } else {
+                Add(matrixReg0, matrixReg0, addReg0, mask0);
+                Add(matrixReg1, matrixReg1, addReg1, mask1);
+            }
+            StoreAlign(matrix + offset0, matrixReg0, mask0);
+            StoreAlign(matrix + offset1, matrixReg1, mask1);
+        }
+    }
+    if (row < rows) {
+        LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg0, rowScale + row);
+        for (uint16_t col = 0; col < cols; col += FP32_PER_REG) {
+            uint32_t activeCount = static_cast<uint32_t>(cols - col);
+            MaskReg mask = UpdateMask<float>(activeCount);
+            uint32_t offset = static_cast<uint32_t>(row) * cols + col;
+            LoadAlign(matrixReg0, matrix + offset);
+            LoadAlign(addReg0, addend + offset);
+            Mul(matrixReg0, matrixReg0, scaleReg0, mask);
+            if constexpr (IS_SUB) {
+                Sub(matrixReg0, matrixReg0, addReg0, mask);
+            } else {
+                Add(matrixReg0, matrixReg0, addReg0, mask);
+            }
             StoreAlign(matrix + offset, matrixReg0, mask);
         }
     }

@@ -1011,6 +1011,22 @@ private:
             DataCopy(extBlkF_, dhBuf[rb * cb_], RB * cb_);
             AIV_SET_MTE2_V();
 #endif
+#if PPFM_STATE_FUSE && PPFM_H_UB && PPFM_DH_CV && PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
+            if (useG) {
+                // GDN：单标量 decay ⇒ 整块 Muls+Add 已是指令数最省（~128+128），不动
+                const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
+                Muls(hUb_[lo * cb_], hUb_[lo * cb_], dc, RB * cb_);
+                PipeBarrier<PIPE_V>();
+                Add(hUb_[lo * cb_], hUb_[lo * cb_], dHUb[lo * cb_], RB * cb_);
+            } else {
+                // KDA：逐行 decay 与 +dH 合成一趟 RegBase（省一整趟遍历 + 一次 V 栅栏）
+                ApplyRowScaleAddInplaceRegbase<false>(
+                    RowScalePtr(hUb_, lo),
+                    usePrevDecay ? RowScalePtr(decayPrevF_, rb) : RowScalePtr(decayF_, rb),
+                    RowScalePtr(dHUb, lo),
+                    static_cast<uint16_t>(RB), static_cast<uint16_t>(cb_));
+            }
+#else
             if (useG) {
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(hUb_[lo * cb_], hUb_[lo * cb_], dc, RB * cb_);
@@ -1040,6 +1056,7 @@ private:
             AIV_WAIT_MTE2_V();
             Add(hUb_[lo * cb_], hUb_[lo * cb_], extBlkF_, RB * cb_);
 #endif
+#endif  // PPFM_STATE_FUSE
             AIV_SET_MTE3_V();
             AIV_WAIT_MTE3_V();   // 上一次 MTE3 读完 stateBlkBf_ 才能覆盖
             Cast(stateBlkBf_, hUb_[lo * cb_], RoundMode::CAST_RINT, RB * cb_);
@@ -1122,6 +1139,21 @@ private:
             const int32_t lo = rb - mbBeg;
 #if PPFM_M_UB
             // m 常驻 UB ⇒ 就地更新（无 MTE2 载入、无 fp32 落盘），只留 bf16(m) 给 AIC 的 mm3
+#if PPFM_STATE_FUSE && PPFM_M_UB && PPFM_T2_CV && PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
+            if (useG) {
+                const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
+                Muls(mUb_[lo * cb_], mUb_[lo * cb_], dc, RB * cb_);
+                PipeBarrier<PIPE_V>();
+                Sub(mUb_[lo * cb_], mUb_[lo * cb_], t2Ub[lo * cb_], RB * cb_);
+            } else {
+                // KDA：逐行 decay 与 -T2 合成一趟 RegBase（省一整趟遍历 + 一次 V 栅栏）
+                ApplyRowScaleAddInplaceRegbase<true>(
+                    RowScalePtr(mUb_, lo),
+                    usePrevDecay ? RowScalePtr(decayPrevF_, rb) : RowScalePtr(decayF_, rb),
+                    RowScalePtr(t2Ub, lo),
+                    static_cast<uint16_t>(RB), static_cast<uint16_t>(cb_));
+            }
+#else
             if (useG) {
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(mUb_[lo * cb_], mUb_[lo * cb_], dc, RB * cb_);
@@ -1146,6 +1178,7 @@ private:
             }
             PipeBarrier<PIPE_V>();
             Sub(mUb_[lo * cb_], mUb_[lo * cb_], t2Ub[lo * cb_], RB * cb_);
+#endif  // PPFM_STATE_FUSE
             AIV_SET_MTE3_V();
             AIV_WAIT_MTE3_V();
             Cast(stateBlkBf_, mUb_[lo * cb_], RoundMode::CAST_RINT, RB * cb_);

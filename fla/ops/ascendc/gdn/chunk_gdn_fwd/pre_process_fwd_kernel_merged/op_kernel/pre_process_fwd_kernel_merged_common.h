@@ -82,6 +82,21 @@ using namespace AscendC;
 #define PPFM_KDA_VF_ROWS 1
 #endif
 
+// K1-a: KDA 逐行 decay 的标量预取（先把一批 factor 读进寄存器数组，再整批 Muls）。
+// 算术与舍入顺序完全不变 ⇒ 位级不变。
+// 0=关（回退逐行 GetValue+Muls），其它=每批预取行数。
+// 只作用于 KDA 的逐行 decay 分支（A2/A3 唯一可用的等价改造；950 走 RegBase VF 路径，
+// 该分支在 950 上被预处理器整段丢弃 ⇒ 本宏不影响 950 的机器码）。
+#ifndef PPFM_KDA_ROW_BATCH
+#define PPFM_KDA_ROW_BATCH 16
+#endif
+
+#if PPFM_KDA_ROW_BATCH > 0
+#define PPFM_KDA_ROW_PREFETCH 1
+#else
+#define PPFM_KDA_ROW_PREFETCH 0
+#endif
+
 // P0-1k: KDA 的状态更新三合一（逐行 decay 缩放 + 加/减 dH 合成一趟 RegBase；位级不变）
 #ifndef PPFM_STATE_FUSE
 #define PPFM_STATE_FUSE 1

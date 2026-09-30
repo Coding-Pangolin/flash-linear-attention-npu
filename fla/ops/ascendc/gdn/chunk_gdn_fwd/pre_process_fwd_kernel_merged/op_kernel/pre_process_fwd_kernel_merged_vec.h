@@ -259,20 +259,29 @@ private:
 #if PPFM_A2_BLOCKWISE
         {
             const int32_t rowsPerSub_ = CV_K / PPFM_SUB;
-            Duplicate(extBlkF_, 0.0f, rowsPerSub_ * cb_);
-            PipeBarrier<PIPE_ALL>();
-            Cast(stateBlkBf_, extBlkF_, RoundMode::CAST_RINT, rowsPerSub_ * cb_);
-            AIV_SET_V_MTE3();
-            AIV_WAIT_V_MTE3();
-            DataCopyParams hpF_{static_cast<uint16_t>(rowsPerSub_),
-                               static_cast<uint16_t>((cb_ * 4) / 32), 0,
-                               static_cast<uint16_t>((cb_ * 4) / 32)};
-            DataCopyParams hpB_{static_cast<uint16_t>(rowsPerSub_),
-                               static_cast<uint16_t>((cb_ * 2) / 32), 0,
-                               static_cast<uint16_t>((cb_ * 2) / 32)};
-            DataCopy(hF32_[subIdx_ * cb_], extBlkF_, hpF_);
-            DataCopy(hBf_[subIdx_ * cb_], stateBlkBf_, hpB_);
-            PipeBarrier<PIPE_ALL>();
+            // extBlkF_ 只有 2*PPFM_SEG*CV_V 个 fp32 ⇒ 单次最多放 rowsPerCopy_ 行
+            // （cb_=128 时 32 行、cb_=64 时 64 行）。首版按 64 行整块使用，cb_=128 时
+            // 越界踩到相邻 UB（hy30/hy40 实测 m 半边出错），这里按行分块。
+            const int32_t rowsPerCopy_ = (2 * PPFM_SEG * CV_V) / cb_;
+            for (int32_t i0 = 0; i0 < rowsPerSub_; i0 += rowsPerCopy_) {
+                const int32_t nr_ = (rowsPerSub_ - i0 < rowsPerCopy_)
+                                        ? (rowsPerSub_ - i0) : rowsPerCopy_;
+                Duplicate(extBlkF_, 0.0f, nr_ * cb_);
+                PipeBarrier<PIPE_ALL>();
+                Cast(stateBlkBf_, extBlkF_, RoundMode::CAST_RINT, nr_ * cb_);
+                AIV_SET_V_MTE3();
+                AIV_WAIT_V_MTE3();
+                DataCopyParams hpF_{static_cast<uint16_t>(nr_),
+                                   static_cast<uint16_t>((cb_ * 4) / 32), 0,
+                                   static_cast<uint16_t>((cb_ * 4) / 32)};
+                DataCopyParams hpB_{static_cast<uint16_t>(nr_),
+                                   static_cast<uint16_t>((cb_ * 2) / 32), 0,
+                                   static_cast<uint16_t>((cb_ * 2) / 32)};
+                const int32_t r0_ = subIdx_ + i0 * subNum_;
+                DataCopy(hF32_[r0_ * cb_], extBlkF_, hpF_);
+                DataCopy(hBf_[r0_ * cb_], stateBlkBf_, hpB_);
+                PipeBarrier<PIPE_ALL>();
+            }
         }
 #else
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
@@ -368,28 +377,35 @@ private:
 #if PPFM_A2_BLOCKWISE
         {
             const int32_t rowsPerSub_ = CV_K / PPFM_SUB;
-            Duplicate(extBlkF_, 0.0f, rowsPerSub_ * cb_);
-            PipeBarrier<PIPE_ALL>();
-            for (int32_t i = 0; i < rowsPerSub_; ++i) {
-                const int32_t r = subIdx_ + i * subNum_;
-                const int32_t c = r - colBase_;
-                if (c >= 0 && c < cb_) {
-                    extBlkF_.SetValue(i * cb_ + c, 1.0f);
+            // 同 h 初值：按 extBlkF_ 的容量分块（cb_=128 ⇒ 32 行/块）
+            const int32_t rowsPerCopy_ = (2 * PPFM_SEG * CV_V) / cb_;
+            for (int32_t i0 = 0; i0 < rowsPerSub_; i0 += rowsPerCopy_) {
+                const int32_t nr_ = (rowsPerSub_ - i0 < rowsPerCopy_)
+                                        ? (rowsPerSub_ - i0) : rowsPerCopy_;
+                Duplicate(extBlkF_, 0.0f, nr_ * cb_);
+                PipeBarrier<PIPE_ALL>();
+                for (int32_t n = 0; n < nr_; ++n) {
+                    const int32_t r = subIdx_ + (i0 + n) * subNum_;
+                    const int32_t c = r - colBase_;
+                    if (c >= 0 && c < cb_) {
+                        extBlkF_.SetValue(n * cb_ + c, 1.0f);
+                    }
                 }
+                PipeBarrier<PIPE_ALL>();
+                Cast(stateBlkBf_, extBlkF_, RoundMode::CAST_RINT, nr_ * cb_);
+                AIV_SET_V_MTE3();
+                AIV_WAIT_V_MTE3();
+                DataCopyParams mpF_{static_cast<uint16_t>(nr_),
+                                   static_cast<uint16_t>((cb_ * 4) / 32), 0,
+                                   static_cast<uint16_t>((cb_ * 4) / 32)};
+                DataCopyParams mpB_{static_cast<uint16_t>(nr_),
+                                   static_cast<uint16_t>((cb_ * 2) / 32), 0,
+                                   static_cast<uint16_t>((cb_ * 2) / 32)};
+                const int32_t r0_ = subIdx_ + i0 * subNum_;
+                DataCopy(mF32_[r0_ * cb_], extBlkF_, mpF_);
+                DataCopy(mBf_[r0_ * cb_], stateBlkBf_, mpB_);
+                PipeBarrier<PIPE_ALL>();
             }
-            PipeBarrier<PIPE_ALL>();
-            Cast(stateBlkBf_, extBlkF_, RoundMode::CAST_RINT, rowsPerSub_ * cb_);
-            AIV_SET_V_MTE3();
-            AIV_WAIT_V_MTE3();
-            DataCopyParams mpF_{static_cast<uint16_t>(rowsPerSub_),
-                               static_cast<uint16_t>((cb_ * 4) / 32), 0,
-                               static_cast<uint16_t>((cb_ * 4) / 32)};
-            DataCopyParams mpB_{static_cast<uint16_t>(rowsPerSub_),
-                               static_cast<uint16_t>((cb_ * 2) / 32), 0,
-                               static_cast<uint16_t>((cb_ * 2) / 32)};
-            DataCopy(mF32_[subIdx_ * cb_], extBlkF_, mpF_);
-            DataCopy(mBf_[subIdx_ * cb_], stateBlkBf_, mpB_);
-            PipeBarrier<PIPE_ALL>();
         }
 #else
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
@@ -541,21 +557,28 @@ private:
 #if PPFM_A2_BLOCKWISE
         {
             const int32_t rowsPerSub_ = CV_K / PPFM_SUB;
-            DataCopyParams rd_{static_cast<uint16_t>(rowsPerSub_),
-                              static_cast<uint16_t>((cb_ * 4) / 32),
-                              static_cast<uint16_t>((cb_ * 4) / 32), 0};
-            DataCopyParams wr_{static_cast<uint16_t>(rowsPerSub_),
-                              static_cast<uint16_t>((cb_ * 4) / 32), 0,
-                              static_cast<uint16_t>(((2 * (CV_V + CV_K) - cb_) * 4) / 32)};
-            const int64_t epRow0_ = hmBase + static_cast<int64_t>(subIdx_) * (CV_V + CV_K);
-            DataCopy(extBlkF_, hF32_[subIdx_ * cb_], rd_);
-            PipeBarrier<PIPE_ALL>();
-            DataCopy(hmGm_[epRow0_ + colBase_], extBlkF_, wr_);
-            PipeBarrier<PIPE_ALL>();
-            DataCopy(extBlkF_, mF32_[subIdx_ * cb_], rd_);
-            PipeBarrier<PIPE_ALL>();
-            DataCopy(hmGm_[epRow0_ + CV_V + colBase_], extBlkF_, wr_);
-            PipeBarrier<PIPE_ALL>();
+            // 同 prologue：按 extBlkF_ 容量分块搬运，避免踩相邻 UB
+            const int32_t rowsPerCopy_ = (2 * PPFM_SEG * CV_V) / cb_;
+            for (int32_t i0 = 0; i0 < rowsPerSub_; i0 += rowsPerCopy_) {
+                const int32_t nr_ = (rowsPerSub_ - i0 < rowsPerCopy_)
+                                        ? (rowsPerSub_ - i0) : rowsPerCopy_;
+                DataCopyParams rd_{static_cast<uint16_t>(nr_),
+                                   static_cast<uint16_t>((cb_ * 4) / 32),
+                                   static_cast<uint16_t>((cb_ * 4) / 32), 0};
+                DataCopyParams wr_{static_cast<uint16_t>(nr_),
+                                   static_cast<uint16_t>((cb_ * 4) / 32), 0,
+                                   static_cast<uint16_t>(((2 * (CV_V + CV_K) - cb_) * 4) / 32)};
+                const int32_t r0_ = subIdx_ + i0 * subNum_;
+                const int64_t epRow0_ = hmBase + static_cast<int64_t>(r0_) * (CV_V + CV_K);
+                DataCopy(extBlkF_, hF32_[r0_ * cb_], rd_);
+                PipeBarrier<PIPE_ALL>();
+                DataCopy(hmGm_[epRow0_ + colBase_], extBlkF_, wr_);
+                PipeBarrier<PIPE_ALL>();
+                DataCopy(extBlkF_, mF32_[r0_ * cb_], rd_);
+                PipeBarrier<PIPE_ALL>();
+                DataCopy(hmGm_[epRow0_ + CV_V + colBase_], extBlkF_, wr_);
+                PipeBarrier<PIPE_ALL>();
+            }
         }
 #else
         for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
@@ -1064,10 +1087,26 @@ private:
                     }
                 }
 #else
+#if PPFM_KDA_ROW_PREFETCH
+                // K1-a：先批量标量预取 factor，再整批 Muls（纯发射顺序，位级不变）
+                for (int32_t kb = 0; kb < RB; kb += PPFM_KDA_ROW_BATCH) {
+                    float decBuf_[PPFM_KDA_ROW_BATCH];
+                    for (int32_t kj = 0; kj < PPFM_KDA_ROW_BATCH; ++kj) {
+                        decBuf_[kj] = usePrevDecay ? decayPrevF_.GetValue(rb + kb + kj)
+                                                   : decayF_.GetValue(rb + kb + kj);
+                    }
+#pragma unroll
+                    for (int32_t kj = 0; kj < PPFM_KDA_ROW_BATCH; ++kj) {
+                        Muls(hUb_[(lo + (kb + kj)) * cb_], hUb_[(lo + (kb + kj)) * cb_],
+                             decBuf_[kj], cb_);
+                    }
+                }
+#else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(hUb_[(lo + (r - rb)) * cb_], hUb_[(lo + (r - rb)) * cb_], dc, cb_);
                 }
+#endif
 #endif
             }
             PipeBarrier<PIPE_V>();
@@ -1122,10 +1161,26 @@ private:
                     }
                 }
 #else
+#if PPFM_KDA_ROW_PREFETCH
+                // K1-a：先批量标量预取 factor，再整批 Muls（纯发射顺序，位级不变）
+                for (int32_t kb = 0; kb < RB; kb += PPFM_KDA_ROW_BATCH) {
+                    float decBuf_[PPFM_KDA_ROW_BATCH];
+                    for (int32_t kj = 0; kj < PPFM_KDA_ROW_BATCH; ++kj) {
+                        decBuf_[kj] = usePrevDecay ? decayPrevF_.GetValue(rb + kb + kj)
+                                                   : decayF_.GetValue(rb + kb + kj);
+                    }
+#pragma unroll
+                    for (int32_t kj = 0; kj < PPFM_KDA_ROW_BATCH; ++kj) {
+                        Muls(stateBlkF_[(kb + kj) * cb_], stateBlkF_[(kb + kj) * cb_],
+                             decBuf_[kj], cb_);
+                    }
+                }
+#else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
+#endif
 #endif
             }
             PipeBarrier<PIPE_V>();
@@ -1191,10 +1246,26 @@ private:
                     }
                 }
 #else
+#if PPFM_KDA_ROW_PREFETCH
+                // K1-a：先批量标量预取 factor，再整批 Muls（纯发射顺序，位级不变）
+                for (int32_t kb = 0; kb < RB; kb += PPFM_KDA_ROW_BATCH) {
+                    float decBuf_[PPFM_KDA_ROW_BATCH];
+                    for (int32_t kj = 0; kj < PPFM_KDA_ROW_BATCH; ++kj) {
+                        decBuf_[kj] = usePrevDecay ? decayPrevF_.GetValue(rb + kb + kj)
+                                                   : decayF_.GetValue(rb + kb + kj);
+                    }
+#pragma unroll
+                    for (int32_t kj = 0; kj < PPFM_KDA_ROW_BATCH; ++kj) {
+                        Muls(mUb_[(lo + (kb + kj)) * cb_], mUb_[(lo + (kb + kj)) * cb_],
+                             decBuf_[kj], cb_);
+                    }
+                }
+#else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(mUb_[(lo + (r - rb)) * cb_], mUb_[(lo + (r - rb)) * cb_], dc, cb_);
                 }
+#endif
 #endif
             }
             PipeBarrier<PIPE_V>();
@@ -1228,10 +1299,26 @@ private:
                     }
                 }
 #else
+#if PPFM_KDA_ROW_PREFETCH
+                // K1-a：先批量标量预取 factor，再整批 Muls（纯发射顺序，位级不变）
+                for (int32_t kb = 0; kb < RB; kb += PPFM_KDA_ROW_BATCH) {
+                    float decBuf_[PPFM_KDA_ROW_BATCH];
+                    for (int32_t kj = 0; kj < PPFM_KDA_ROW_BATCH; ++kj) {
+                        decBuf_[kj] = usePrevDecay ? decayPrevF_.GetValue(rb + kb + kj)
+                                                   : decayF_.GetValue(rb + kb + kj);
+                    }
+#pragma unroll
+                    for (int32_t kj = 0; kj < PPFM_KDA_ROW_BATCH; ++kj) {
+                        Muls(stateBlkF_[(kb + kj) * cb_], stateBlkF_[(kb + kj) * cb_],
+                             decBuf_[kj], cb_);
+                    }
+                }
+#else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
+#endif
 #endif
             }
             PipeBarrier<PIPE_V>();
@@ -1272,10 +1359,26 @@ private:
                     }
                 }
 #else
+#if PPFM_KDA_ROW_PREFETCH
+                // K1-a：先批量标量预取 factor，再整批 Muls（纯发射顺序，位级不变）
+                for (int32_t kb = 0; kb < RB; kb += PPFM_KDA_ROW_BATCH) {
+                    float decBuf_[PPFM_KDA_ROW_BATCH];
+                    for (int32_t kj = 0; kj < PPFM_KDA_ROW_BATCH; ++kj) {
+                        decBuf_[kj] = usePrevDecay ? decayPrevF_.GetValue(rb + kb + kj)
+                                                   : decayF_.GetValue(rb + kb + kj);
+                    }
+#pragma unroll
+                    for (int32_t kj = 0; kj < PPFM_KDA_ROW_BATCH; ++kj) {
+                        Muls(stateBlkF_[(kb + kj) * cb_], stateBlkF_[(kb + kj) * cb_],
+                             decBuf_[kj], cb_);
+                    }
+                }
+#else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
+#endif
 #endif
             }
             PipeBarrier<PIPE_V>();

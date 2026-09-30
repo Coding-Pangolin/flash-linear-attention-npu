@@ -722,6 +722,7 @@ constexpr int32_t PPFM_VEC_UB_BYTES = UB_H_UB + H_UB_ROWS * CV_V * 4;  // 只有
 #else
 constexpr int32_t UB_M_UB_ELEM = 0;
 constexpr int32_t PPFM_VEC_UB_BYTES = UB_CV_END;
+#endif
 
 // ---- 编译期自检（§7.7：常量集中 + 空间上限配 static_assert）----
 // 950 的 AIV UB 上限 256 KiB；A2/910B 为 192 KiB（见 docs/port_910b.md 的 UB 预算表）。
@@ -731,12 +732,17 @@ static_assert(PPFM_VEC_UB_BYTES <= (PPFM_ARCH_IS_950 ? 256 * 1024 : 192 * 1024),
 static_assert(H_UB_ROWS * CV_V * 4 * 2 <= 96 * 1024,
               "h/m 常驻 UB 超过预留的 96 KiB");
 // 段缓冲与行缓冲的 32B 对齐前提（V 运算对 UB 偏移要求 32B 对齐）
-static_assert((UB_H_UB % 32) == 0 && (UB_M_UB % 32) == 0 && (UB_DH_CV % 32) == 0,
-              "关键 UB 槽偏移必须 32B 对齐");
+// NOTE: UB_M_UB is only defined when BOTH h and m are UB-resident
+// (A2/A3 take the PPFM_H_UB==0 branch, where UB_M_UB does not exist).
+static_assert((UB_H_UB % 32) == 0 && (UB_DH_CV % 32) == 0,
+              "critical UB slot offsets must be 32B aligned");
+#if PPFM_H_UB && PPFM_M_UB
+static_assert((UB_M_UB % 32) == 0,
+              "m-resident UB slot offset must be 32B aligned");
+#endif
 static_assert(PPFM_SUB == 1 || PPFM_SUB == 2, "AIV 子核数只支持 1 或 2");
 static_assert(CV_BT % PPFM_SEGROWS == 0 && (CV_BT / PPFM_SEGROWS) % PPFM_SUB == 0,
               "staging 段划分必须整除：CV_BT 能被 SEGROWS*PPFM_SUB 整除");
-#endif
 
 // 上面都是**字节**偏移，取 Tensor 时要按元素大小换算（bf16 → /2，fp32 → /4）
 constexpr int32_t UB_ROW0_BF_ELEM = UB_ROW0_BF / 2;

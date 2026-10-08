@@ -554,11 +554,13 @@ private:
 #endif
 #if PPFM_DIAG
         // 诊断收尾（只由子核 0 写）：lane 0..3 = AIV 读到的 vTmpF_[0]（第 c 个 chunk），
-        // lane 8..11 = AIC 写出的 vTmpF_[0]。落在 hm 的 m 半边第 0 行（验收时排除该行）。
+        // lane 4 = AIV 读到的 T2 首元素；lane 8..11 = AIC 写出的 vTmpF_[0]，
+        // lane 12 = AIC 写进 t2Buf 的首元素，lane 13 = AIC 读到的 bf16(m)[0]（chunk0 应为 1.0）。
+        // 落在 hm 的 m 半边第 0 行（验收时排除该行）。
         if (subIdx_ == 0) {
             Duplicate(row0F_, 0.0f, CV_K);
             PipeBarrier<PIPE_V>();
-            for (int32_t i = 0; i < PPFM_DIAG_CHUNKS; ++i) {
+            for (int32_t i = 0; i < 8; ++i) {
                 row0F_.SetValue(i, dbgF_.GetValue(i));
             }
             PipeBarrier<PIPE_ALL>();
@@ -568,7 +570,7 @@ private:
 #endif
             DataCopy(row1F_, diagG_, 8);          // 8 个 fp32 = 32B，满足对齐要求
             PipeBarrier<PIPE_ALL>();
-            for (int32_t i = 0; i < PPFM_DIAG_CHUNKS; ++i) {
+            for (int32_t i = 0; i < 8; ++i) {
                 row0F_.SetValue(8 + i, row1F_.GetValue(i));
             }
             PipeBarrier<PIPE_ALL>();
@@ -1242,6 +1244,15 @@ private:
             DataCopy(extBlkF_, t2Buf[rb * cb_], RB * cb_);
             AIV_SET_MTE2_V();
             AIV_WAIT_MTE2_V();
+#if PPFM_DIAG
+            // MDIAG：记录 AIV **实际读到的** T2 行首元素（行 rb 与 rb+32），
+            // 与 AIC 写进 t2Buf 的那一份对比（槽位 4+2*subIdx_ / 5+2*subIdx_）。
+            if (dataChunk == 0) {
+                dbgF_.SetValue(4 + 2 * subIdx_, extBlkF_.GetValue(0));
+                dbgF_.SetValue(5 + 2 * subIdx_, extBlkF_.GetValue(32 * cb_));
+                PipeBarrier<PIPE_ALL>();
+            }
+#endif
             if (useG) {
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(stateBlkF_, stateBlkF_, dc, RB * cb_);

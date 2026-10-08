@@ -349,6 +349,17 @@ private:
 #endif
             PipeBarrier<PIPE_ALL>();
             diagG_.SetValue(static_cast<int32_t>(c), vTmpF_.GetValue(0));
+            if (c == 0) {
+                // MDIAG：记录 AIC 写进 t2Buf 的 4 个行首元素（mm4 的 C，行距 32）。
+                // 读之前先 clean+invalidate，否则探针本身可能读到自己的旧缓存行。
+                DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                         DcciDst::CACHELINE_OUT>(t2Buf);
+                PipeBarrier<PIPE_ALL>();
+                diagG_.SetValue(4, t2Buf.GetValue(0));
+                diagG_.SetValue(5, t2Buf.GetValue(32 * cb_));
+                diagG_.SetValue(6, t2Buf.GetValue(64 * cb_));
+                diagG_.SetValue(7, t2Buf.GetValue(96 * cb_));
+            }
             PipeBarrier<PIPE_ALL>();
         }
 #endif

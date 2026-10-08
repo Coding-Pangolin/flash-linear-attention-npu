@@ -285,7 +285,10 @@ private:
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(lIn);
 #endif
-#if PPFM_KEEP_CACHEOPS_W
+#if PPFM_LEGACY_CACHEOPS
+// t1Bf_ 由 AIC 自己写（fixpipe mm2 的 C）、又由 AIC 的 mm4 读 —— 同一核 GM 往返，
+// 必须 clean+invalidate 才能读到自己刚写回的 bf16(T1)。上游 arch 拆分时把这行误改成
+// KEEP_CACHEOPS_W（宏未定义 ⇒ 关），此处恢复成与邻居一致的 LEGACY 守卫。
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1Bf_);
 #endif

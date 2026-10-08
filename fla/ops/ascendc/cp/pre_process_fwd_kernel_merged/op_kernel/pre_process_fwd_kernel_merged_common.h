@@ -345,6 +345,22 @@ constexpr int32_t TILED_L1_B_F32_OFF = 192 * 1024;
 #ifndef PPFM_M_CHAIN_FP32
 #define PPFM_M_CHAIN_FP32 PPFM_ARCH_IS_950
 #endif
+// —— A2（arch22 / 910B·910_93）侧现状：**仍是旧的 bf16 双量化链**，属已知偏差。
+//    A2 的 cube 没有 fp32 MMA，抄不了 950 的 ④。2026-10-08 在 234 上量化过：
+//      * kernel vs 契约（= 仓内 reference）：m 半边 absmax 3.0e-05、absmean 2.0e-06、
+//        近零元素**相对误差 max 1.06e3**（h 半边只有 9.5e-07）⇒ ATK 阈值 2.0 过不了；
+//      * torch 选型（把候选公式都模拟一遍）：只换 `Kw` 形式（C_kw）或只拆 `m`（C_kwM）
+//        **完全没有改善**（1e3 量级不变，误差由另一种量化主导）；
+//        **只有 `Kw` 与 `m` 同时拆 hi/lo（3 次 MMAD）才回到契约**（相对误差 1.13）。
+//    A2 上可行且**不新增跨核握手**的写法：
+//      ① 关掉 `PPFM_T1_FIXPIPE_BF16`，AIC 把 `T1 = W@m` 以 **fp32** 落 GM；
+//      ② AIV 读 `t1F_`（32 KiB）拆成 `t1_hi/t1_lo` 两个 bf16（各 16 KiB）——
+//         复用**已有的** `kFlagVNew` 握手，不新增 flag；
+//      ③ AIC 用 4 次 MMAD 完成：`T1 = W@m_hi + W@m_lo`、`T2 = left^T@t1_hi + left^T@t1_lo`；
+//      ④ `m = decay⊙m - T2` 仍走 AIV 的 fp32 路径。
+//    代价：cube 每 chunk 2→4 次 MMAD（A2 是 AIV-bound，可能大部分被隐藏）+
+//          AIV 每 chunk 多搬 64 KiB（读 t1F_ 32 KiB + 写 2×16 KiB）≈ 个位数~十几个百分点。
+//    ⇒ **待决策**：这一项是"用 A2 的一部分性能增益换契约精度"，需要产品/评审拍板后再做。
 // 注意：**不动 `PPFM_T2_CV` / `PPFM_M_UB`**。T2 仍然落 UB 单槽（只是改由 fp32 的
 // `RunMmadNTF32Ub` 写），m 仍然常驻 UB；`PPFM_M_UB` 分支额外把 fp32 的 m 行块落
 // `mF32_`，供 cube 的 ④' 直接读（见 arch35 的 vector/cube）。

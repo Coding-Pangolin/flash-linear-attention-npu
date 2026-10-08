@@ -1,37 +1,12 @@
-# pre_process_fwd_kernel_merged 设计
+# PreProcessFwdKernelMerged 设计
 
-`workflow_id`: `catlass-linear-attention-v1`
-`design_rule_version`: `V1`
-`sync_pattern`: `SYNC_L1_HANDOFF`
-`pipeline_pattern`: `PIPE_SERIAL`
-`status`: `design_ready_for_review`
+> 本算子只实现 **GDN（`g`）与 KDA（`gk`）** 两条路径；**DPLR 不支持**：`bg` / `v` 在接口上必须为空、
+> 非空直接拒绝（见 [`api.md`](api.md) §5）。本文档里出现的 `USE_BG` / `bg` / `v` 相关条目
+> （分核表、L1/L0 预算表、Stage 详设中的 DPLR 例外等）均属**历史设计记录**，不构成本版本的接口承诺。
 
-> **范围变更（2026-09-30）：DPLR 不支持。** 本文档第 1、3、4 章里所有 DPLR 条目
-> （`USE_BG`、`bg`、`v` 与 `u` 分离、`M_c` 取 `+`）都是**该分支的历史设计记录**，不构成本
-> 版本的接口承诺：接口已把 `bg` / `v` 收敛成"必须为空、非空直接拒绝"（`docs/api.md`
-> §0 / §2 / §6），TilingKey 可达 **4 个**，`USE_BG` 只保留槽位、host 永不产生。
-> 实现与验收范围只有 **GDN（`g`）与 KDA（`gk`）**。
+## 1. 定位
 
-> 03 方案设计分两步完成。**第一步（Stage 划分）与第二步（具体详设）均已完成**：
-> 第 1、2、3、6 章已填实，包含完整依赖图与 Stage 表、逐 Stage 的公式/地址/生命周期/同步、
-> L1/UB/L0 容量、`TilingKey` 与 workspace、以及 R01–R21 逐条结论。
-> 第 4 章的性能目标与第 5 章的未决问题里仍有需要用户输入或 04 实测的项，逐条列在第 5 章。
-
-> **修订记录**
->
-> | 日期 | 修订 | 影响位置 |
-> | --- | --- | --- |
-> | 2026-09-21 | `K` 收敛为 `<=128`、`V` 收敛为 `<=128`、`chunk_size` 固定 64（`K=256`/`V=256`/`128` 移出本轮）；GVA 保留，`HK` 与 `HV` 成倍数 | 1.1、1.2、1.3、2.1.4、3.1、3.3、3.4、4.3、5.2 |
-> | 2026-09-21 | 分档由容量模型算出；收敛范围后全档位只落在一组配置 | 3.1、3.4、4.3 |
-> | 2026-09-21 | 输入输出布局定为 BNSD，与仓内其他 AscendC 算子一致 | 1.4、4.3、5.2 |
-> | 2026-09-21 | 第二步详设完成：2.7 同步（CrossCore/HardEvent 分配 + 完整伪代码）、2.8 组件与 TileShape、3.1 L0 占用、3.2 TilingKey 与 workspace、3.3 模板字段划分 | 2.7、2.8、3.1、3.2、3.3 |
-> | 2026-09-21 | `K`/`V` 由"`<=128` 的档位"改为**写死 128**；`TilingKey` 收敛到 6 个；3.4 改写为写死依据 | 1.1、1.2、2.1.4、2.2、2.4、2.6、2.7、2.8、3.1、3.2、3.3、3.4、4.3、5 |
-
----
-
-## 1. 目标与数学语义
-
-### 1.1 目标与范围
+### 1.1 定位与范围
 
 - **目标 SoC**：`Ascend950PR_9579`，`NpuArch=3510`（`CATLASS_ARCH=3510`），`AIC_version=AIC-C-310`。
   平台参数取自 `${ASCEND_HOME_PATH}/../latest/acllib/data/platform_config/Ascend950PR_9579.ini`：
@@ -77,15 +52,15 @@
 | `g` | 二选一 | `[1,HV,T]` | FP32/BF16 | 标量 gate，base-2 chunk 内累积对数衰减 |
 | `gk` | 二选一 | `[1,HV,T,K]` | FP32/BF16 | 逐 K gate，同为 base-2 chunk 内累积量 |
 | `bg` | 仅 DPLR | `[1,HK,T,K]` | BF16 | DPLR 的 K 侧项 |
-| `cu_seqlens` | **是** | `[N+1]` | **host `list[int]`**（非张量） | 本窗口内的段边界（T 轴打包多段），`N = Nseq >= 1`；首元素 0、严格递增、末元素 = `T_win`（唯一形态，与 `api.md` 3.2 一致） |
+| `cu_seqlens` | **是** | `[N+1]` | **host `list[int]`**（非张量） | 本窗口内的段边界（T 轴打包多段），`N = Nseq >= 1`；首元素 0、严格递增、末元素 = `T_win`（唯一形态，与 `api.md` §2.1 一致） |
 | `hm` | 输出 | `[Nseq,HV,K,V+K]` | FP32 | 左 `[0,V)` 为 `h`，右 `[V,V+K)` 为 `m`；`Nseq = len(cu_seqlens)-1` |
 
-属性、边界与异常行为以 `docs/api.md` 第 3、6 节为准；host 负责全部 shape/dtype/属性校验并拦截
+属性、边界与异常行为以 `docs/api.md` §2、§5 为准；host 负责全部 shape/dtype/属性校验并拦截
 非法组合（`K!=128`、`V!=128`、`HK>HV` 或 `HV%HK!=0`、`g`/`gk` 同缺或同给、
 `bg`/`v` 非空（DPLR 不支持）、空窗口、`chunk_size!=64`）。标杆与算子接口的差异（NPU 固定
-`ieee` 口径、`hm` 单 part 布局）已在 `docs/api.md` 第 2、4 节记录。
+`ieee` 口径、`hm` 前导维布局）已在 `docs/api.md` §2.2、§2.3 记录。
 
-### 1.3 完整数学语义
+### 1.3 数学目标（完整语义）
 
 符号：
 
@@ -136,7 +111,7 @@ hm[i_h, 0:K, V:V+K] = FP32(m_{NT})
 ```
 
 与 CPU 标杆（`tests/atk/pre_process_fwd_kernel_merged/scripts/pre_process_fwd_kernel_merged_cpu.py`）
-的对应关系与**必须保持的舍入点**（见 `docs/api.md` 第 4 节）：
+的对应关系与**必须保持的舍入点**（见 1.3）：
 
 1. S0 的右操作数 `h` 先降 BF16 再入 Cube；S1 产出的 `v_new` 在进入 S2 前量化 BF16；
 2. `h` 的累加 `decay*h + dH` 在 FP32 上完成，chunk 之间不降精度；
@@ -146,7 +121,7 @@ hm[i_h, 0:K, V:V+K] = FP32(m_{NT})
 `USE_G` 下 `Kw = (E(dg)*K_c)^T @ W_c` 与代数等价的 `K_c^T @ (E(dg)*W_c)` 在 BF16 舍入上
 不等价。本设计**采用上游写法：缩放 `K_c` 后再量化**，以保持与标杆相同的舍入位置。
 
-### 1.4 Python 入口与对标接口的差异
+### 1.4 与 Triton 参考实现的差异（Python 入口对标）
 
 **本算子当前只有一个窗口一个 part 的粒度**，因此公开入口是"直接产出 `hm`"的函数，
 而不是竞品的 CP 编排函数。对标关系如下（详见 `docs/api.md` 第 3 节）：
@@ -157,25 +132,25 @@ hm[i_h, 0:K, V:V+K] = FP32(m_{NT})
 | Python 包装 | `chunk_gated_delta_rule_fwd_h_pre_process(k, w, u, g=None, gk=None, bg=None, v=None, chunk_size=64, state_v_first=False, cu_seqlens=None, initial_state=None, context=None, use_graph=False) -> initial_state`，内部做 zigzag part 循环 + `all_gather` + `merge_fwd_bwd_kernel` | 不做 CP 编排；只承担其中对 `pre_process_fwd_kernel_merged` 的单次调用 |
 | 调用入口 | 无独立算子名 | `from fla_npu.ops.ascendc import pre_process_fwd_kernel_merged`（同时导出 `npu_pre_process_fwd_kernel_merged`） |
 | 输入布局 | token-major `[B, T, H, D]` | **BNSD `[B, H, T, D]`**，与仓内其他 AscendC 算子一致（见 5.2） |
-| `u` / `v` | 位置参数 `u`，关键字 `v`；GDN/KDA 下 `v=u if v is None else v` | 同左（保持别名语义与 host 校验） |
+| `u` / `v` | 关键字参数 `u`，另有 `v`（GDN/KDA 下 `v=u if v is None else v`） | 只收 `u`；`v` 是 DPLR 专用位，本版必须为空（传非空直接拒绝） |
 | `state_v_first` | 有，但只影响包装内部 `initial_state` 的布局 | 不适用（本算子不接触 `initial_state`） |
 | `AFFINE_CHAIN_PRECISION` | 编译期常量，NVIDIA 上可为 `tf32x3` | 固定 `ieee`（NPU），不作为参数暴露 |
 | `MULTI_SEQS` | 编译期常量，上游包装恒传 `False` | 不适用 |
-| `hm` | 包装内部 buffer，不返回 | 作为函数返回值，`[B, HV, K, V+K]` FP32 |
+| `hm` | 包装内部 buffer，不返回 | 作为函数返回值，`[Nseq, HV, K, V+K]` FP32 |
 
 > 布局差异已按用户要求定稿为 BNSD（理由见 5.2），竞品的 token-major 由调用方吸收。
-> 仍需确认的一处是 `hm` 的返回方式；它属于 `operator_contract` 的范围，若在 04 之前定稿只需
-> 同步更新 `docs/api.md`；一旦进入 04 再改动，按主 Skill 的恢复矩阵回到 01。
+> `hm` 以函数返回值形式给出（`[Nseq, HV, K, V+K]` FP32）；与竞品"包装内部 buffer、不返回"的
+> 差异与理由见 `api.md` §2.3。
 
-**`hm` 的 `B` 维与上游的"part 维"是同一个东西**：
+**`hm` 的前导维 `Nseq` 与上游的"part 维"是同一个东西**：
 
 | 场景 | 上游 `hm` | 本算子 `hm` |
 | --- | --- | --- |
-| 单 part（contiguous CP 或非 CP） | `[HV, K, V+K]` | `B = 1` → `[1, HV, K, V+K]` |
-| zigzag CP（每 rank 两个 part：front/back） | `[2, HV, K, V+K]` | `B = 2` → `[2, HV, K, V+K]` |
+| 单 part（contiguous CP 或非 CP） | `[HV, K, V+K]` | `Nseq = 1` → `[1, HV, K, V+K]` |
+| zigzag CP（每 rank 两个 part：front/back） | `[2, HV, K, V+K]`（part 维） | 两次调用各 `Nseq = 1`；调用方愿意时也可一次吃两段 `Nseq = 2` |
 
-所以本设计**不是偏离上游**：`B = 1` 时去掉 size-1 维后内存布局逐字节相同，zigzag 下形状完全一致。
-带上 `B` 维的三条理由（`api.md` 第 3.4 节有完整表述）：输入输出对称；与仓内
+所以本设计**不是偏离上游**：`Nseq = 1` 时去掉 size-1 维后内存布局逐字节相同，zigzag 下形状完全一致。
+带 `Nseq` 前导维的三条理由（`api.md` 2.3 节有完整表述）：输入输出对称；与仓内
 `npu_chunk_fwd_h`（输出 `h` 是 `[B,HV,NT,K,V]`）的约定一致；`Nseq > 1` 正是并行度
 `Nseq × HV` 的来源（2.1.4）。上游"没有 `B` 维"是它一次只算一段窗口的调用粒度造成的，
 它一用 zigzag 就不得不加一个 `2` 维。
@@ -275,7 +250,7 @@ kernel 侧唯一的消费者是 `chunk_delta_h.py` 的 `if context.layout == 'zi
 都合法。这样**调用形态与竞品 1:1 一致**（竞品每次就是"整根张量 + `cu_seqlens[-2:]` /
 `cu_seqlens[fns-1:fns+1]`"）。内核尚未实现，此时纳入成本最低。
 
-**契约影响**：`api.md` 3.2 / 6 已同步——校验从"`cu[0]=0` 且 `cu[-1]=T`"放宽为
+**契约影响**：`api.md` §2.1 / §5 已同步——校验从"`cu[0]=0` 且 `cu[-1]=T`"放宽为
 `0 ≤ cu[0] < cu[-1] ≤ T`；`B ≡ 1`、零长段、非递增、越界仍拒绝。
 
 **实现影响**（集中在 host + 一个 tiling 字段；内核地址表达式不变形）：
@@ -311,7 +286,7 @@ B / D 不再需要；§5.2 第 12 项关闭；第 9 项（zigzag 一次吃两个
 
 ---
 
-## 2. Stage 总览与完整详设
+## 2. Stage 划分与同步合同
 
 ### 2.1 依赖图与 Stage 总览
 
@@ -373,7 +348,7 @@ GM k/w/v/u/bg/g/gk/cu_seqlens
 | `hm` | `[K,V+K]` | FP32 | S3（`h`）、S4（`m`） | 调用方 | 调用方 | GM | 最终输出 |
 | `decay` | 标量 / `[K]` | FP32 | S3 | S3 | S3 的 VF | UB | 由 `g`/`gk` 现算，两个分片各算自身 K 行范围 |
 
-#### 2.1.4 调度一致性、AIC/AIV 映射与 Stage 数量依据
+#### 2.1.4 分核规则：调度一致性、AIC/AIV 映射与 Stage 数量依据
 
 **分核与任务映射（R20）**：
 
@@ -687,7 +662,7 @@ Stage4AIC(item, c):
   else:         Fixpipe(L0C -> L1 m, NZ2NZ)
 ```
 
-### 2.7 Stage 间同步方案
+### 2.7 同步合同：Stage 间同步方案
 
 本设计选用 `SYNC_L1_HANDOFF`：AIV 直接写 L1，AIC 用跨核 flag 等待，**不使用 GM 中转**
 （与仓内先例 `chunk_gdn_fwd_prepare` 的 AIV -> L1 写法一致）。GM 中转按 R14 保留为容量或
@@ -906,7 +881,7 @@ Stage3AIV(hv, c, part):
 
 ---
 
-## 3. 全局资源、Tiling 和 Workspace
+## 3. 全局资源与 workspace 布局
 
 ### 3.1 L1 / UB / L0 地址与容量
 
@@ -1033,20 +1008,21 @@ L0 的布局取决于阶段而非固定 offset：**S4 的两份 FP32 操作数�
 
 #### 3.2.1 `TilingKey` 枚举
 
-`TilingKey` 只由编译期维度组成，规模有界：
+`TilingKey` 只由编译期维度组成，规模有界：唯一位是 `GATE_MODE`。
 
 ```text
-TilingKey = (GATE_MODE, GATE_T)
+TilingKey = GATE_MODE
 
 GATE_MODE ∈ {USE_G, USE_GK}           # 核心路径：是否需要 L_c（USE_BG 槽位保留但不产生）
-GATE_T    ∈ {BF16, FP32}              # g/gk 的存储 dtype
 ```
 
-`K`/`V`/`BT` 是固定规格（128 / 128 / 64），不进 `TilingKey`。可达组合
-**2 × 2 = 4 个 `TilingKey`**（`USE_G` / `USE_GK` × `GATE_T ∈ {BF16, FP32}`）。
-`USE_BG`（DPLR）**不产生**：`bg` 非空被 host 直接拒绝（`docs/api.md` §6），
-模板槽位与相关布局条目只作历史记录，不进精度/性能用例。选择条件全部来自 host 校验后的属性，kernel 内只有一个
-`switch(TilingKey)` 的模板分派，没有运行时分支。不满足固定规格的输入在 host 侧被拒绝
+`K`/`V`/`BT` 是固定规格（128 / 128 / 64），不进 `TilingKey`；gate 的存储 dtype 也不进 ——
+aclnn 层把 BF16 gate 统一 Cast 成 FP32 后下发，kernel 用运行期 `tiling->gateDtype` 选择标量 /
+向量路径。**可达 2 个 `TilingKey`**（`1 = USE_G` / `2 = USE_GK`）。
+`USE_BG`（DPLR）**不产生**：`bg` 非空被 host 直接拒绝（`api.md` §5），
+模板槽位与相关布局条目只作历史记录，不进精度/性能用例。选择条件是 host 校验后的 `gateMode`，
+kernel 侧由 `ASCENDC_TPL_SEL` 选模板实例（运行时不作 `TILING_KEY_IS` 分支）。
+不满足固定规格的输入在 host 侧被拒绝
 （`K!=128`、`V!=128`、`chunk_size!=64`、`HK>HV`、`HV%HK!=0`）。
 
 #### 3.2.2 Workspace
@@ -1114,7 +1090,7 @@ kernel 入参：Nwork=HV, blockDim, NT, M(c), 各张量 stride
 > `K=256` 的 `SPLIT=2` 拆分），那些档位来自上游 Triton 的 `assert K <= 256` 与
 > `BLOCK_SIZE = 32 if K <= 64 else 64`，**不是这个仓库的做法**，现已全部删除。
 
-### 3.5 平台常量与可移植性
+### 3.5 平台与限制（平台常量与可移植性）
 
 本文的容量、地址图与分核规则都建立在一组**平台常量**上。把它们和"换硬件时怎么处理"一次列清，
 避免把某一档位的数字当成通用结论：
@@ -1143,7 +1119,7 @@ kernel 入参：Nwork=HV, blockDim, NT, M(c), 各张量 stride
 
 ---
 
-## 4. 精度、性能和测试计划
+## 4. 验证方案：精度、性能与测试计划
 
 ### 4.1 精度观察点与策略
 
@@ -1252,7 +1228,7 @@ GVA 只出现在 g-only 路径，DPLR 不支持、不进用例）。
 
 ---
 
-## 5. 风险、兼容和回退方案
+## 5. 平台与限制、风险与回退
 
 ### 5.1 风险
 
@@ -1282,7 +1258,7 @@ GVA 只出现在 g-only 路径，DPLR 不支持、不进用例）。
 
 | # | 问题 | 阻塞对象 |
 | --- | --- | --- |
-| 0 | **是否吃满多序列**（一个打包窗口里的多段 `cu_seqlens`，`Nwork = Nseq × HV`）：并行度只有 `Nseq × HV`，`Nseq=1, HV=8` 时 28 个 AIC 只用 8 个。接口本来就允许多段（`api.md` 第 3 节），要定的是**验收范围**（多段是否进本轮）与 kernel 侧"段号进 grid 第三维"的实现。竞品的跨卡 `pre_process` 这一层是二维 grid（一次只一段），但它的**卡内**路径（`intracard_pre_scan`）就是把段号放进 grid 第三维的，所以这不是超出对标的扩展，而是对标竞品的另一条既有形态 | **04 之前**（2.1.4、5.1 第 8 条）；与第 3 项的口径联动 |
+| 0 | **是否吃满多序列**（一个打包窗口里的多段 `cu_seqlens`，`Nwork = Nseq × HV`）：并行度只有 `Nseq × HV`，`Nseq=1, HV=8` 时 28 个 AIC 只用 8 个。接口本来就允许多段（`api.md` §2.1），要定的是**验收范围**（多段是否进本轮）与 kernel 侧"段号进 grid 第三维"的实现。竞品的跨卡 `pre_process` 这一层是二维 grid（一次只一段），但它的**卡内**路径（`intracard_pre_scan`）就是把段号放进 grid 第三维的，所以这不是超出对标的扩展，而是对标竞品的另一条既有形态 | **04 之前**（2.1.4、5.1 第 8 条）；与第 3 项的口径联动 |
 | 1 | 模型 case 的完整 shape/dtype 与 CP `world_size -> T_win`，以及每个模型的 `B` 与 `HV` | 第 4 章性能目标 |
 | 2 | 模型实际 `precision` 档位（default 还是 tf32x3，差 2.1x） | 第 4 章目标值 |
 | 3 | 1.0x 口径：单次 kernel 调用 vs 一个 rank 的整个 pre_process。**若采纳第 0 项吃多段**，这条从"可选"变成"必答"：竞品要按段多次调用、我们 1 次，只有按"一个 rank 的整个 pre_process 总时长"比才公平 | 第 4 章目标值；与第 0 项联动 |
@@ -1306,11 +1282,11 @@ GVA 只出现在 g-only 路径，DPLR 不支持、不进用例）。
 | 项 | 结论 | 依据/影响 |
 | --- | --- | --- |
 | `M_c @ m` 精度路径（原第 8 项） | **FP32 原生**（两侧 FP32、累加 FP32），不做 BF16 三分拆；回退候选顺序 单遍 HF32 → BF16 三分拆 | 精度按 CPU 契约标杆验收（FP32 原生比 H20 `default` 更接近真值）；H20 `default` 仅作性能对标口径（差 11×）。见 2.8、4.2.3 |
-| DPLR 范围（原 A4，**2026-09-30 修订**） | **不支持**：`bg` / `v` 必须为空，非空在四个入口被拒；TilingKey 可达 4 个 | 见本文开头的范围变更、`api.md` §0/§2/§6；`USE_BG` 槽位与历史设计记录保留但 host 永不产生（1.1、3.2.1、4.3） |
-| `hm` 前导维（原第 10 项） | **链条数 `Nseq = len(cu_seqlens)-1`**；等价说法"我们第 i 份 == 竞品对第 i 段单独调用" | 竞品"跨卡每一次调用"是 `[HV,K,V+K]`（无前导维，`MULTI_SEQS=False`）、"卡内切段"是 `[S_split,HV,K,V+K]`（`MULTI_SEQS=True`）；我们保留前导维 = 两者并集，`Nseq=1` 时与竞品跨卡形态逐字节相同。见 1.1、1.4、api.md 3.4 |
-| 序列表达（2026-09-22 新增） | **只保留 varlen 打包窗口**：`B ≡ 1`、`cu_seqlens` 必给、`Nseq = len(cu_seqlens)-1`；等长 batch 由调用方打包成等长多段 | 与竞品 CP 契约一致（"CP expects `B == 1` for varlen"）；`B>1` 在 CP 下不可达（非 CP 下竞品 wrapper 直接 return）。见 `api.md` 3.2/6、`design.md` 1.1/1.2 |
+| DPLR 范围（原 A4，**2026-09-30 修订**） | **不支持**：`bg` / `v` 必须为空，非空在四个入口被拒；TilingKey 可达 2 个 | 见本文 1.1 与 `api.md` §1/§5；`USE_BG` 槽位与历史设计记录保留但 host 永不产生（1.1、3.2.1、4.3） |
+| `hm` 前导维（原第 10 项） | **链条数 `Nseq = len(cu_seqlens)-1`**；等价说法"我们第 i 份 == 竞品对第 i 段单独调用" | 竞品"跨卡每一次调用"是 `[HV,K,V+K]`（无前导维，`MULTI_SEQS=False`）、"卡内切段"是 `[S_split,HV,K,V+K]`（`MULTI_SEQS=True`）；我们保留前导维 = 两者并集，`Nseq=1` 时与竞品跨卡形态逐字节相同。见 1.1、1.4、`api.md` §2.3 |
+| 序列表达（2026-09-22 新增） | **只保留 varlen 打包窗口**：`B ≡ 1`、`cu_seqlens` 必给、`Nseq = len(cu_seqlens)-1`；等长 batch 由调用方打包成等长多段 | 与竞品 CP 契约一致（"CP expects `B == 1` for varlen"）；`B>1` 在 CP 下不可达（非 CP 下竞品 wrapper 直接 return）。见 `api.md` §2.1/§5、本文 1.1/1.2 |
 | UB/L1 口径 | **硬上限**取平台实测值（L1 512 / UB 248 KiB）；**设计预算**（448 / 224）只是本设计预留，实际占用按**目标芯片 + 目标 CANN 版本**的组件实测重算 | 见 3.1、3.5；换芯片必须重算地址图 |
-| Python 落地形态 | `from fla_npu.ops.ascendc import pre_process_fwd_kernel_merged`（同时导出 `npu_` 前缀），实测调用示例见 `api.md` 3.5 | 与仓内 `_aclnn_ctypes.py` 的注册/调用约定一致 |
+| Python 落地形态 | `from fla_npu.ops.ascendc import pre_process_fwd_kernel_merged`（同时导出 `npu_` 前缀），调用示例与接入落点见 `api.md` §3 | 与仓内 `_aclnn_ctypes.py` 的注册/调用约定一致 |
 
 **已定稿（用户确认，2026-09-21）**：`K`、`V`、`chunk_size` 均写死为固定规格
 （128 / 128 / 64），host 拦截其它值，依据见 3.4。**GVA 保留**，因此 `HK` 与 `HV`
@@ -1329,7 +1305,7 @@ GVA 只出现在 g-only 路径，DPLR 不支持、不进用例）。
    `npu_chunk_fwd_h` 还显式覆盖 descriptor 为 `ACL_FORMAT_ND`；本算子接在 `chunk_fwd_h`
    之前、共用同一批输入张量，保持 BNSD 是**零转置**选择。
 2. 上游竞品（以及 CPU 标杆）是 token-major `[B, T, H, D]`。这一层差异由
-   调用方吸收，不进本算子契约；`docs/api.md` 第 3 节的 BNSD 约定同时是 01 阶段的已冻结接口。
+调用方吸收，不进本算子契约；`docs/api.md` §2.1 的 BNSD 约定同时是 01 阶段的已冻结接口。
 3. 仓内 `npu_chunk_gated_delta_rule_bwd`、`npu_chunk_fwd_o`、`npu_chunk_kda_fwd_finalize`
    提供 `layout` / `output_layout` 参数接受 BSND，做法是**在 host 侧显式转置**，KDA bwd 还用
    `_KDA_BSND_TRANSPOSE_WORKSPACE_BUDGET_BYTES` 按 token 分段来约束转置 workspace。
@@ -1342,7 +1318,7 @@ GVA 只出现在 g-only 路径，DPLR 不支持、不进用例）。
 ### 5.3 兼容与回退
 
 - 公开接口、属性默认值、输出布局与 `docs/api.md` 一致；命名偏离（算子名不含 `catlass`）
-  已按用户明确要求在 `docs/api.md` 第 8 节记录。
+  已按用户明确要求在交付说明（PR 描述）中记录。
 - 回退顺序：`SYNC_L1_HANDOFF -> SYNC_GM_QUEUE`（R14 兜底）；
   `PIPE_SERIAL -> PIPE_PACK_OVERLAP` 为正向候选，失败即恢复已验证的 `PIPE_SERIAL` 基线。
 - 设计调整统一回写本文第 1/2/3/6 章再改代码。
@@ -1351,29 +1327,3 @@ GVA 只出现在 g-only 路径，DPLR 不支持、不进用例）。
   （ATK 单算子验收工程，含 CPU 标杆 `scripts/pre_process_fwd_kernel_merged_cpu.py`）。
 
 ---
-
-## 6. R01-R21 规则检查表
-
-| 规则 | 结论 | 证据位置 |
-| --- | --- | --- |
-| R01 | 满足 | 2.1.2、2.1.4：先按数据依赖/计算类型/生命周期/精度观察点划 5 个 Stage，再映射 AIC（S0/S2/S4）与 AIV（S1/S3）；AIV 分工为同 head 分片并给出列段与 K 行范围 |
-| R02 | 满足 | 2.1.2 前驱列、2.1.3：每条边的消费者都等待生产者；S2 与 S4 同为 Cube，但因 S4 读 S2 的 Cube 输出而保持两个 Stage |
-| R03 | 满足 | 3.1、3.5：按 §1.1 平台参数的 L1 512 KiB / UB 248 KiB / L0A-B 64 KiB / L0C 256 KiB 核算，L1 与 UB 分别计预算；容量与预留的平台来源见 3.5 |
-| R04 | 满足 | 2.2、3.1：`P` 由 Fixpipe 按列段写两个 AIV 的 UB，`P_ready` 在 Fixpipe 之后发布 |
-| R05 | 满足 | 2.5、3.1：`h` 分片与 `dH`/`Kw` 行块驻 UB；`decay`、mask 计入 UB 峰值 |
-| R06 | 不适用 | 采用 `SYNC_L1_HANDOFF`，Vector -> Cube 走 L1 直写，不经过 GM；R14 兜底路径见 5.1、5.3 |
-| R07 | 满足 | 2.1.3、2.6：本设计唯一的 Cube -> Cube 跨 Stage 驻留是 `m`（S4 产出、下一 chunk 的 S4 消费，1 份放 L1）；`H_c`、`M_c` 是 Vector -> Cube 的 L1 交接，按 R06 的等价形式处理。各区的生产、消费与释放顺序见 2.1.3 |
-| R08 | 满足 | 3.1.2、3.1.4：每 AIV 132 KiB，含跨 chunk 常驻的 `h`、`dH`/`Kw` 的 staging、`P` 与计算缓冲；对照设计预算 224 KiB（硬上限 248 KiB） |
-| R09 | 满足 | 3.1：各 L1 区独立列出首次写入与最后消费；`m`、`H_c` 常驻，其余按 chunk 复用 |
-| R10 | 满足（缓存策略待实测） | 3.2：`k`、`w` 每 chunk 只从 GM 搬一次（上游逐列块重复读，固定规格下是 4 次）；GM 流量逐项列出；L2 缓存参与方式在 04 按 API 支持与同条件性能确认 |
-| R11 | 满足 | 3.1、2.7：各 UB 区标注生产、最后消费与复用事件（`MTE3_MTE2`、`MTE3_V`、`V_MTE2`），kernel 尾部排空 |
-| R12 | 满足 | 2.3、2.5：每个 AIV 一次装入本分片全部数据，并用一次 VF 完成该 Stage |
-| R13 | 满足 | 2.1.4、3.1：不同工作项（不同 head / 不同列段）无依赖，按可并行建模并使用互不重叠的地址 |
-| R14 | 不适用（已保留兜底） | 3.2：本设计不需要 workspace；R14 作为 AIV -> L1 受限时的兜底保留，触发条件与代价见 5.1 第 2 条 |
-| R15 | 满足 | 2.1.4 第 5 条：S1、S3 已分别是合并后的唯一 Vector Stage；S3 把 `h` 更新与 `M_c` 构造合并，拆开反而抬高 UB 峰值 |
-| R16 | 满足 | 2.1.3：`h`、`m` 作为跨 chunk 复用结果在 UB/L1 驻留，并记录生产、消费与释放 |
-| R17 | 满足（容量条件见证据） | 3.1：各区按 512 B 对齐连续排列，峰值与最大连续空闲区可计算 |
-| R18 | 满足 | 2.1.4：所有 head 使用相同的列分片规则与算法路径，差异仅来自有效宽度与 tail |
-| R19 | 满足 | 2.1.4、3.1.1~3.1.4：先算合并方案的同时存活量（L1 256 / UB 132 / L0C 128 KiB），容量足够后取依赖要求的最少 Stage；本设计未触发列段拆分，R14 兜底保留 |
-| R20 | 满足（候选待实测比较） | 2.1.4、3.1、3.5：`Nwork = Nseq × HV`（`Nseq = len(cu_seqlens)-1`）、`blockDim=min(AIC_NUM,Nwork)`（`AIC_NUM` 由 host 读，不写死）、grid-stride；不拆列段（容量有 192 KiB 余量），`CG=1/2/4` 作为候选在 04 阶段比较波次、尾部负载与搬运 |
-| R21 | 满足（待值域补充） | 1.3、4.1：`E(dg)` 处先判 mask 再求 `exp2`；`h`、`m` 全程 FP32 无跨 chunk 降精度；BF16 量化点固定在 S0 右操作数与 S1 输出；`decay` 对无效行取 1。输入值域与溢出界在 04 阶段按模型实测范围补写 |

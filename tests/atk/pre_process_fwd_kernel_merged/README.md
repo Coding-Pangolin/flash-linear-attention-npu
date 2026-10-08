@@ -28,7 +28,7 @@ CP（context parallel）场景下 GDN / KDA（/ DPLR）前向的 **pre-process �
   两者都是 **base-2 的 chunk 内累积对数衰减**，dtype 支持 FP32 / BF16。
 - `K = V = 128`、`chunk_size = 64` 为固定规格（host 拦截其它值）；`k/w/u/v` 支持 BF16 / FP16。
 - **DPLR（`bg` / `v`）不支持**：两个入参在算子上必须传空，非空会在 host / aclnn / ctypes /
-  stable 四个入口一致地被拒（见下方 TilingKey 表与算子 `docs/api.md` §6）。
+  stable 四个入口一致地被拒（见下方 TilingKey 表与算子 `docs/api.md` §5）。
 - 输出 `hm[Nseq, HV, K, V+K]` **FP32**；`hm[i,hv][:, 0:V]` 是 `h`、`[:, V:V+K]` 是 `m`。
 
 ### ⚠ 用例数据的形态要求（不是可选项）
@@ -47,7 +47,7 @@ CP（context parallel）场景下 GDN / KDA（/ DPLR）前向的 **pre-process �
 | GPU 高精度真值（可选） | 同一份 `scripts/` 标杆的 FP64 路径（`accum_dtype=fp64`、三个舍入开关关闭） |
 | 上游语义来源 | `fla-org/flash-linear-attention@e52dbc0e` → `fla/ops/cp/chunk_delta_h.py::pre_process_fwd_kernel_merged` |
 | 用例表 | 本工程 `gen_pre_process_fwd_kernel_merged.py` 内置的冻结用例（37 条逻辑精度 + 4 条性能） |
-| 接口与约束 | `fla/ops/.../pre_process_fwd_kernel_merged/docs/api.md` §3 |
+| 接口与约束 | `fla/ops/.../pre_process_fwd_kernel_merged/docs/api.md` §1、§2 |
 
 `executor_*.py` 按相对路径**加载**上面那份参考实现（`importlib`），不复制副本，
 避免出现两份会分叉的标杆；输入构造 / `run_cpu` / `run_npu` / `run_gpu_truth` /
@@ -157,13 +157,15 @@ YAML 元信息覆盖 `ascend910b`、`ascend910_93`、`ascend950`，可配合统�
 | --- | ---: | --- |
 | `atk_pre_process_fwd_kernel_merged.json` | **111** | PPFM-01..37 每条 **3 个固定种子**（逻辑分支/边界/变长/GVA/gate dtype/并行度/子区间） |
 | `atk_pre_process_fwd_kernel_merged_perf.json` | **4** | 用户模型 case（PPFM-38..41：model-g / model-gk / CP=2+GVA / 长窗口） |
-| `atk_pre_process_fwd_kernel_merged_mss.json` | **5** | 按**可达 TilingKey** 人工构造（4 个 key + 1 条变长段枚举） |
+| `atk_pre_process_fwd_kernel_merged_mss.json` | **5** | 按**可达 gate 路径**人工构造（2 个可达 TilingKey（`USE_G` / `USE_GK`）× gate 两条 dtype 路径 = 4 条 + 1 条变长段枚举） |
 
 三条来源不同、不能互相替代。生成（不需要 ATK 环境即可落地 JSON）：
 
 ```bash
 python gen_pre_process_fwd_kernel_merged.py --summary
 # logical=37 accuracy=111 perf=4 mss=5 tiling_keys=4 -> [('g','bf16'), ('g','fp32'), ('gk','bf16'), ('gk','fp32')]
+# 注：这里的 tiling_keys=4 是生成器统计的「gate 模式 × gate dtype」组合数，不等于 TilingKey 个数；
+#     本算子 TilingKey 只有 GATE_MODE 一位，可达 2 个（1=USE_G / 2=USE_GK）。
 ```
 
 `atk case -f pre_process_fwd_kernel_merged.yaml -p gen_pre_process_fwd_kernel_merged.py -dt 100 -en 0`
@@ -171,17 +173,18 @@ python gen_pre_process_fwd_kernel_merged.py --summary
 
 ## TilingKey 覆盖表
 
-来源：算子 `docs/design.md` §3.2.1「`gate ∈ {USE_G, USE_GK}` × `gate dtype ∈ {BF16, FP32}`
-= **4 个可达 TilingKey**」（2026-09-30 起 DPLR 不支持，`USE_BG` 只保留模板槽位、host 永不
-产生，因此没有对应的用例）。
+来源：算子 `docs/design.md` §3.2.1 —— **TilingKey 只有 `GATE_MODE` 一位，可达 2 个**
+（`1 = USE_G` / `2 = USE_GK`）。gate 的存储 dtype 不进 TilingKey（aclnn 层把 BF16 gate 统一
+Cast 成 FP32 后下发），下表按「gate 模式 × gate dtype」给用例覆盖。2026-09-30 起 DPLR 不支持，
+`USE_BG` 只保留模板槽位、host 永不产生，因此没有对应的用例。
 
-| TilingKey | 选择条件 | 精度普通用例 | 精度边界用例 | `_mss.json` 用例 | 适用 SoC | 实际选择证据 |
+| gate 模式（TilingKey）× gate dtype | 选择条件 | 精度普通用例 | 精度边界用例 | `_mss.json` 用例 | 适用 SoC | 实际选择证据 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `USE_G` + gate **FP32** | 给 `g`（FP32）、`bg` 缺省 | `PPFM-01..05`、`PPFM-11..14`、`PPFM-19..26`、`PPFM-30`、`PPFM-32`、`PPFM-34`、`PPFM-36` | `PPFM-11`（T=1）等 | `MSS-gate-g-fp32` | A2/A3/A5 | **待补**：host tiling UT 或运行时 tilingKey 记录（上电后执行，见 §验收） |
 | `USE_G` + gate **BF16** | 给 `g`（BF16）、`bg` 缺省 | `PPFM-27` | `PPFM-27` | `MSS-gate-g-bf16` | A2/A3/A5 | **待补** |
 | `USE_GK` + gate **FP32** | 给 `gk`（FP32）、`bg` 缺省 | `PPFM-06..10`、`PPFM-15..18`、`PPFM-28`、`PPFM-31`、`PPFM-33`、`PPFM-35`、`PPFM-37` | `PPFM-06`（T=1）等 | `MSS-gate-gk-fp32`、`MSS-varlen-3seg` | A2/A3/A5 | **待补** |
 | `USE_GK` + gate **BF16** | 给 `gk`（BF16）、`bg` 缺省 | `PPFM-29` | `PPFM-29` | `MSS-gate-gk-bf16` | A2/A3/A5 | **待补** |
-| ~~`USE_BG`（DPLR）~~ | 已删除 | — | — | — | — | **不支持**：算子接口拒绝非空 `bg` / `v`，该 TilingKey 不可达（`docs/api.md` §0/§6） |
+| ~~`USE_BG`（DPLR）~~ | 已删除 | — | — | — | — | **不支持**：算子接口拒绝非空 `bg` / `v`，该 TilingKey 不可达（`docs/api.md` §1/§5） |
 
 > 「实际选择证据」按 `tests/atk/README.md` 的硬要求：**必须补 host tiling UT 或运行时记录**，
 > 没有实际选中证据时不得标记为已覆盖。上电后第一步就补这一列。

@@ -52,6 +52,18 @@ using MmTileCopyTA = Catlass::Gemm::Tile::PackedTileCopyTla<
     Catlass::layout::RowMajor>;
 using MmBlockTA = Catlass::Gemm::Block::BlockMmadTla<MmDispatchPolicy, MmL1Shape, MmL0Shape, bfloat16_t,
                                                      bfloat16_t, float, void, MmTileCopyTA>;
+// fp32×fp32 → fp32（PPFM_M_CHAIN_FP32 的 ④：T2 = Kw @ m）。
+// 950 的 cube 原生支持 fp32 A/B（catlass examples/43_ascend950_basic_matmul 用
+// ElementA/B/C = float + Arch::Ascend950）。
+using MmTileCopyFF = Catlass::Gemm::Tile::PackedTileCopyTla<
+    MmArchTag, float, Catlass::layout::RowMajor, float, Catlass::layout::RowMajor, float,
+    Catlass::layout::RowMajor>;
+// fp32 的 L0 tile 必须比 bf16 小：L0A = M×K×4B × 2 stages 要在 64 KiB 以内
+// （bf16 用 128×128×2=32KiB×2=64KiB 刚好贴上限；fp32 同 shape 会翻倍到 128KiB）。
+// 取 K 方向 32 的 L0 分块：L0A = 128×32×4=16KiB×2，L0B = 32×128×4=16KiB×2，均满足。
+using MmL0ShapeF32 = tla::Shape<tla::Int<128>, tla::Int<128>, tla::Int<32>>;
+using MmBlockFF = Catlass::Gemm::Block::BlockMmadTla<MmDispatchPolicy, MmL1Shape, MmL0ShapeF32, float,
+                                                     float, float, void, MmTileCopyFF>;
 
 // ---------------- A5 手写 tile 级（L0C→UB）类型 ----------------
 // 与仓内 chunk_fwd_h_cube.h / chunk_kda_fwd_fwd_h.h 同一套 API：
@@ -77,6 +89,13 @@ using TiledMmadNT = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
                                                      typename TiledCopyNT::LayoutTagL1A>;
 using TiledMmadTA = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
                                                      typename TiledCopyTA::LayoutTagL1A>;
+// C 落 UB（SPLIT_M）的 fp32 NT 版本（PPFM_M_CHAIN_FP32 的 ④'）：T2 仍写回原来的 UB 单槽，
+// UB 布局与 flag 协议完全不变，只有 A/B 元素类型换成 fp32。
+using TiledCopyNTF32SplitUb = Common::Tile::PackedTileCopyTlaToUB<
+    TiledArchTag, float, Catlass::layout::RowMajor, float, Catlass::layout::RowMajor,
+    float, Catlass::layout::RowMajor, void, Catlass::Gemm::Tile::CopyL0CToUBMode::SPLIT_M>;
+using TiledMmadNTF32 = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, float,
+                                                        typename TiledCopyNTF32SplitUb::LayoutTagL1A>;
 // GM 落点的 tile+C 回写类型（A2/A3 与 A5 的 A1 增量都用它）
 // C 落 GM 的 tile-copy 别名（两代 API 名字不同）
 template <class TensorC>
@@ -120,6 +139,11 @@ public:
         t1F_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T1_F32), CV_BT * CV_K);
         t2F_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T2_F32), CV_K * CV_K);
         t2F1_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T2_F32_1), CV_K * CV_K);
+#if PPFM_M_CHAIN_FP32
+        // m 链 fp32 化：m 的 fp32 窗口（[K, cb_] row-major，AIV 每 chunk 落盘）+ Kw [K,K] fp32
+        mF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_M_F32), CV_K * CV_K);
+        kwF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_KW_F32), CV_K * CV_K);
+#endif
 
         cuGm_.SetGlobalBuffer(reinterpret_cast<__gm__ int64_t *>(ctx_.cu));
         // PPFM_AIC_DIRECT_INPUTS：满 chunk 时直接读输入张量里的 w/k（省掉 AIV 的 staging）
@@ -194,6 +218,11 @@ private:
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(mBf_);
 #endif
+#if PPFM_LEGACY_CACHEOPS && PPFM_M_CHAIN_FP32
+        // m 链 fp32 化后 cube 直接读 fp32 的 m（不再是 mBf_）
+        DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(mF_);
+#endif
 #if PPFM_TILE_MMAD
         RunTiledNT(wTile, hBf_, vTmpF_, CV_BT, static_cast<uint32_t>(cb_), CV_K,
                     /*toUb=*/(PPFM_VTMP_UB != 0));   // 按宏选择 A2 UB 落点
@@ -201,7 +230,7 @@ private:
         RunMmadNT(wTile, hBf_, vTmpF_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #endif
 
-#if PPFM_T1_FIXPIPE_BF16
+#if PPFM_T1_FIXPIPE_BF16 || PPFM_M_CHAIN_FP32
         // ---- ：**mm1 一做完就通知 AIV** ----
         // 原实现是"mm1 + mm3 都做完才 set kFlagHalf1"。但 AIV 的 `v_new` 只需要 mm1 的 C（vTmp）；
         // T1（mm3 的 C）只有 AIC 自己用（mm4 的 B）⇒ 通知提前到 mm1 之后，
@@ -220,6 +249,10 @@ private:
         AicSetToAiv(kFlagHalf1);
 #endif
 
+#if PPFM_M_CHAIN_FP32
+        // ③/④ 合并到下面 `lIn` 声明之后（那里才有 left 的槽选择）：先算 Kw，再算 T2。
+        // 本分支不再计算 t1 = W_c @ bf16(m)，`m` 状态也不再被量化成 bf16。
+#else
         // ③ T1[BT,K] = W_c[BT,K] @ bf16(m)[K,K]
 #if PPFM_TILE_MMAD
 #if PPFM_T1_FIXPIPE_BF16
@@ -234,6 +267,7 @@ private:
 #else
         RunMmadNT(wTile, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #endif
+#endif  // PPFM_M_CHAIN_FP32
 
         // 注意： 写侧也要 clean（写回），只靠读者 DCCI 不够：FIX
         // 写回可能还停在写缓冲里，
@@ -252,7 +286,7 @@ private:
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1F_);
 #endif
-#if !PPFM_T1_FIXPIPE_BF16
+#if !PPFM_T1_FIXPIPE_BF16 && !PPFM_M_CHAIN_FP32
         // 注意： 正式原语：DDR 数据同步屏障——保证 C 的写回对其他核可见后再抬 flag。
         //   诊断版实验表明竞态是"flag 已到、写回仍在途"的时序窗口（加探针即掩盖）。
 #if PPFM_LEGACY_CACHEOPS
@@ -297,7 +331,23 @@ private:
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1Bf_);
 #endif
+#if PPFM_M_CHAIN_FP32
+        // ③' Kw[K,K] = FP32(left^T[K,BT] @ W_c[BT,K]) —— bf16×bf16、FP32 累加（契约 S2）。
+        RunMmadTA(lIn, wTile, kwF_, CV_K, CV_K, CV_BT);
+        // T2 槽的归还信用必须**在写 T2 之前**消费（与旧 RunTiledTAUb 的次序一致）：
+        // 否则 AIC 会把 T2 写进 AIV 仍在回读的那份 GM 缓冲 ⇒ 偶发非确定
+        // （实测 determinism `MSS-gate-gk-fp32` 4/5）。
 #if PPFM_T2_CV
+        CrossCoreWaitFlag<0x4, PIPE_FIX>(static_cast<uint16_t>(kFlagT2Free));
+        CrossCoreWaitFlag<0x4, PIPE_FIX>(
+            static_cast<uint16_t>(kFlagT2Free + PPFM_SUBFLAG_STRIDE));
+#endif
+        // ④' T2[K,cb] = FP32(Kw[K,K] @ m[K,cb]) —— **fp32×fp32**（契约 S4）。
+        //     m 取 AIV 每 chunk 落盘的 fp32 窗口（`WS_M_F32`，布局 [K, cb_] row-major）。
+        //     走 BlockMmad 的 fp32 路线（950 官方支持：ElementA/B/C = float），C 落 GM `t2Buf`；
+        //     AIV 侧把它按行块搬进 UB 再消费（见 arch35 vector 的 m 相位）。
+        RunMmadNTF32(kwF_, mF_, t2Buf, CV_K, static_cast<uint32_t>(cb_), CV_K);
+#elif PPFM_T2_CV
         // T2 直落 UB 槽（单槽）
         RunTiledTAUb(lIn, t1Bf_, CV_K, static_cast<uint32_t>(cb_), CV_BT,
                      UB_T2_CV, static_cast<uint16_t>(kFlagT2Free));
@@ -594,6 +644,82 @@ private:
         WaitFlag<HardEvent::FIX_M>(EVENT_ID3);
         PipeBarrier<PIPE_ALL>();
     }
+
+#if PPFM_M_CHAIN_FP32
+    // m 链 fp32 化（PPFM_M_CHAIN_FP32）的 ④'：T2[K,n] = FP32(Kw[K,K] @ m[K,n])。
+    // 与 RunTiledTAUb 同构（同样写回 **UB 单槽**，SPLIT_M + `freeFlag` 归还信用），
+    // 只有两点不同：A/B 都是 **fp32**，且 A 是行主（NT 形态，Kw 本身就是 [K,K] 行主）。
+    // L1 用 fp32 专用偏移（TILED_L1_A_F32_OFF/B_F32_OFF），避免与 bf16 的 0/32KiB 重叠。
+    __aicore__ inline void RunMmadNTF32Ub(GlobalTensor<float> &gmA, GlobalTensor<float> &gmB,
+                                          uint32_t m, uint32_t n, uint32_t k, int32_t ubOff,
+                                          uint16_t freeFlag)
+    {
+        Catlass::Arch::Resource<MmArchTag> res;
+        auto l1A = res.l1Buf.template GetBufferByByte<float>(TILED_L1_A_F32_OFF);
+        auto l1B = res.l1Buf.template GetBufferByByte<float>(TILED_L1_B_F32_OFF);
+        auto l0A = res.l0ABuf.template GetBufferByByte<float>(0);
+        auto l0B = res.l0BBuf.template GetBufferByByte<float>(0);
+        auto l0C = res.l0CBuf.template GetBufferByByte<float>(0);
+
+        auto tA = tla::MakeTensor(gmA[0], tla::MakeLayout<float, Catlass::layout::RowMajor>(m, k),
+                                  Catlass::Arch::PositionGM{});
+        auto tB = tla::MakeTensor(gmB[0], tla::MakeLayout<float, Catlass::layout::RowMajor>(k, n),
+                                  Catlass::Arch::PositionGM{});
+        auto bA = GetTile(tA, tla::MakeCoord(0, 0), tla::MakeShape(m, k));
+        auto bB = GetTile(tB, tla::MakeCoord(0, 0), tla::MakeShape(k, n));
+
+        auto tL1A = tla::MakeTensor(
+            l1A,
+            tla::MakeLayout<float, typename TiledCopyNTF32SplitUb::LayoutTagL1A>(TILED_L1_CAP_M,
+                                                                               TILED_L1_CAP_K),
+            Catlass::Arch::PositionL1{});
+        auto tL1B = tla::MakeTensor(
+            l1B,
+            tla::MakeLayout<float, typename TiledCopyNTF32SplitUb::LayoutTagL1B>(TILED_L1_CAP_K,
+                                                                               TILED_L1_CAP_N),
+            Catlass::Arch::PositionL1{});
+        typename TiledCopyNTF32SplitUb::template CopyGmToL1A<decltype(bA)> copyG2LA;
+        typename TiledCopyNTF32SplitUb::template CopyGmToL1B<decltype(bB)> copyG2LB;
+        copyG2LA(tL1A, bA);
+        copyG2LB(tL1B, bB);
+        SetFlag<HardEvent::MTE2_MTE1>(EVENT_ID0);
+        WaitFlag<HardEvent::MTE2_MTE1>(EVENT_ID0);
+
+        auto tL0A = tla::MakeTensor(
+            l0A, tla::MakeLayout<float, typename TiledCopyNTF32SplitUb::LayoutTagL0A>(m, k),
+            Catlass::Arch::PositionL0A{});
+        auto tL0B = tla::MakeTensor(
+            l0B, tla::MakeLayout<float, typename TiledCopyNTF32SplitUb::LayoutTagL0B>(k, n),
+            Catlass::Arch::PositionL0B{});
+        typename TiledCopyNTF32SplitUb::CopyL1ToL0A copyL2L0A;
+        typename TiledCopyNTF32SplitUb::CopyL1ToL0B copyL2L0B;
+        copyL2L0A(tL0A, GetTile(tL1A, tla::MakeCoord(0, 0), tla::MakeShape(m, k)));
+        copyL2L0B(tL0B, GetTile(tL1B, tla::MakeCoord(0, 0), tla::MakeShape(k, n)));
+        SetFlag<HardEvent::MTE1_M>(EVENT_ID1);
+        WaitFlag<HardEvent::MTE1_M>(EVENT_ID1);
+
+        auto tL0C = tla::MakeTensor(l0C, tla::MakeLayoutL0C(m, n), Catlass::Arch::PositionL0C{});
+        TiledMmadNTF32 mmad;
+        mmad(tL0C, tL0A, tL0B, m, n, k);
+        SetFlag<HardEvent::M_FIX>(EVENT_ID2);
+        WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
+
+        // 槽归还信用：与旧 T2 路径完全一致（AIV 消费完上一代才置起）
+        CrossCoreWaitFlag<0x4, PIPE_FIX>(freeFlag);
+        CrossCoreWaitFlag<0x4, PIPE_FIX>(
+            static_cast<uint16_t>(freeFlag + PPFM_SUBFLAG_STRIDE));
+
+        AscendC::LocalTensor<float> t2Ub(AscendC::TPosition::VECCALC, ubOff, m * n);
+        auto layoutUb = tla::MakeLayout<float, Catlass::layout::RowMajor>(m, n);
+        auto tensorUb = tla::MakeTensor(t2Ub, layoutUb, Catlass::Arch::PositionUB{});
+        typename TiledCopyNTF32SplitUb::template CopyL0CToDst<decltype(tensorUb)> copyUb;
+        copyUb(tensorUb, tL0C);
+
+        SetFlag<HardEvent::FIX_M>(EVENT_ID3);
+        WaitFlag<HardEvent::FIX_M>(EVENT_ID3);
+        PipeBarrier<PIPE_ALL>();
+    }
+#endif  // PPFM_M_CHAIN_FP32
 #endif  // PPFM_DH_CV
 #endif  // PPFM_TILE_MMAD
 
@@ -617,6 +743,31 @@ private:
         mm.finalWaitFlags();
     }
 
+#if PPFM_M_CHAIN_FP32
+    // A 行主、**A/B 都是 fp32**：C[m,n] = A @ B（PPFM_M_CHAIN_FP32 的 ④'：T2 = Kw @ m）。
+    // 走 CATLASS 的 BlockMmad（与 examples/43_ascend950_basic_matmul 同一套 fp32 支持），
+    // C 落 GM `t2Buf`；`MmBlockFF` 用 K 方向 32 的 L0 分块以适配 L0A/L0B 的 64 KiB 上限。
+    __aicore__ inline void RunMmadNTF32(GlobalTensor<float> &gmA, GlobalTensor<float> &gmB,
+                                        GlobalTensor<float> &gmC, uint32_t m, uint32_t n, uint32_t k)
+    {
+        Catlass::Arch::Resource<MmArchTag> resource;
+        MmBlockFF mm(resource);
+        mm.preSetFlags();
+        auto layoutA = tla::MakeLayout<float, Catlass::layout::RowMajor>(m, k);
+        auto layoutB = tla::MakeLayout<float, Catlass::layout::RowMajor>(k, n);
+        auto layoutC = tla::MakeLayout<float, Catlass::layout::RowMajor>(m, n);
+        auto tA = tla::MakeTensor(gmA[0], layoutA, Catlass::Arch::PositionGM{});
+        auto tB = tla::MakeTensor(gmB[0], layoutB, Catlass::Arch::PositionGM{});
+        auto tC = tla::MakeTensor(gmC[0], layoutC, Catlass::Arch::PositionGM{});
+        Catlass::GemmCoord shape{m, n, k};
+        auto bA = GetTile(tA, tla::MakeCoord(0, 0), tla::MakeShape(shape.m(), shape.k()));
+        auto bB = GetTile(tB, tla::MakeCoord(0, 0), tla::MakeShape(shape.k(), shape.n()));
+        auto bC = GetTile(tC, tla::MakeCoord(0, 0), tla::MakeShape(shape.m(), shape.n()));
+        mm(bA, bB, bC, shape);
+        mm.finalWaitFlags();
+    }
+#endif  // PPFM_M_CHAIN_FP32
+
     // A 列主（= 逻辑 [m,k] 在内存里按 [k,m] 存，正好对应"转置 A"）：C[m,n] = A^T @ B
     __aicore__ inline void RunMmadTA(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
                                      GlobalTensor<float> &gmC, uint32_t m, uint32_t n, uint32_t k)
@@ -637,6 +788,7 @@ private:
         mm(bA, bB, bC, shape);
         mm.finalWaitFlags();
     }
+
 
     const PpFwdCtx &ctx_;
     GlobalTensor<bfloat16_t> wBf_;
@@ -659,6 +811,10 @@ private:
     GlobalTensor<float> t1F_;
     GlobalTensor<float> t2F_;
     GlobalTensor<float> t2F1_;
+#if PPFM_M_CHAIN_FP32
+    GlobalTensor<float> mF_;    // m 的 fp32 窗口 [K, cb_]（AIV 每 chunk 落盘）
+    GlobalTensor<float> kwF_;   // Kw = left^T @ W_c [K,K] fp32
+#endif
     GlobalTensor<int64_t> cuGm_;
 #if PPFM_DIAG
     GlobalTensor<float> diagG_;      // 每核 4 KiB 诊断区（AIV epilogue 会搬到 hm）

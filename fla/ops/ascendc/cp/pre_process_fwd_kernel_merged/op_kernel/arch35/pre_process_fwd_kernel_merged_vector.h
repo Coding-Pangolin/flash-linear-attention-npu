@@ -479,6 +479,11 @@ private:
         Cast(stateBlkBf_, mUb_, RoundMode::CAST_RINT, H_UB_ROWS * cb_);
         AIV_SET_V_MTE3();
         AIV_WAIT_V_MTE3();
+#if PPFM_M_CHAIN_FP32
+        // m 链 fp32 化：chunk 0 的 T2 = Kw @ m 需要 fp32 的 **单位阵** m ⇒ 初始化时也要落
+        // `mF32_`（否则 mF32_ 仍是 0，T2 恒为 0，m 变成纯 diag(decay)）。
+        DataCopy(mF32_[subIdx_ * H_UB_ROWS * cb_], mUb_, H_UB_ROWS * cb_);
+#endif
         DataCopy(mBf_[subIdx_ * H_UB_ROWS * cb_], stateBlkBf_, H_UB_ROWS * cb_);
         PipeBarrier<PIPE_ALL>();
 #else
@@ -490,6 +495,9 @@ private:
             Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
             PipeBarrier<PIPE_ALL>();
             Muls(mUb_[(r - subIdx_ * H_UB_ROWS) * cb_], row0F_, 1.0f, cb_);   // 精确搬移
+#if PPFM_M_CHAIN_FP32
+            DataCopy(mF32_[r * cb_], row0F_, cb_);   // 同上：fp32 的 m 也要初始化
+#endif
             DataCopy(mBf_[r * cb_], row0Bf_, cb_);
             PipeBarrier<PIPE_ALL>();
         }
@@ -1206,11 +1214,25 @@ private:
 #if PPFM_T2_CV
         // T2 也在本子核的 UB bank 里（单槽，同样 SPLIT_M 连续半区）⇒ 本相位必须
         // 用与 h 相位一致的**连续半区**行分配（逐行 elementwise，数值等价）。
+#if PPFM_M_CHAIN_FP32
+        // m 链 fp32 化：T2 由 cube 的 fp32 MMA 落 **GM**（`t2F_`/`t2F1_`），本相位按行块
+        // 搬进 `stateBlkF_` 再消费（M_UB 分支不碰 stateBlkF_，且 UpdateVNew 已带出口全栅栏）。
+        // 索引沿用原来的 `lo * cb_`（同一块内偏移），故下游消费代码无需改动。
+        LocalTensor<float> t2Ub = stateBlkF_;
+#else
         LocalTensor<float> t2Ub = ubBuf_.Get<float>()[UB_T2_CV_ELEM];
+#endif
         const int32_t mbBeg = subIdx_ * (CV_K / PPFM_SUB);
         const int32_t mbEnd = mbBeg + (CV_K / PPFM_SUB);
         for (int32_t rb = mbBeg; rb < mbEnd; rb += RB) {
             const int32_t lo = rb - mbBeg;
+#if PPFM_M_CHAIN_FP32
+            AIV_SET_MTE3_MTE2();   // 与 A2 的 dH 回读同款 WAR 序：上一相位对 stateBlkF_ 的 V 读先完成
+            AIV_WAIT_MTE3_MTE2();
+            DataCopy(t2Ub[lo * cb_], t2Buf[rb * cb_], RB * cb_);
+            AIV_SET_MTE2_V();
+            AIV_WAIT_MTE2_V();
+#endif
 #if PPFM_M_UB
             // m 常驻 UB ⇒ 就地更新（无 MTE2 载入、无 fp32 落盘），只留 bf16(m) 给 AIC 的 mm3
 #if PPFM_STATE_FUSE && PPFM_M_UB && PPFM_T2_CV && PPFM_KDA_VF_ROWS
@@ -1234,6 +1256,14 @@ private:
             Cast(stateBlkBf_, mUb_[lo * cb_], RoundMode::CAST_RINT, RB * cb_);
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();
+#if PPFM_M_CHAIN_FP32
+            // m 链 fp32 化：cube 的 ④' 直接读 fp32 的 m ⇒ 除 bf16 影子外，把本子核的
+            // fp32 行块也落 `mF32_`（与 [K, cb_] 行主窗口同布局）。
+            // 注意：必须放在 **V→MTE3 事件对之后** —— 它读的是 V 刚更新完的 `mUb_`，
+            // 与下面 `mBf_` 的搬运共用同一对可见性保证（放在 Cast 之前会读到未落地的 m，
+            // 表现为 NT≥3 后 m 逐 chunk 漂移）。
+            DataCopy(mF32_[rb * cb_], mUb_[lo * cb_], RB * cb_);
+#endif
             DataCopy(mBf_[rb * cb_], stateBlkBf_, RB * cb_);
 #else
             AIV_SET_MTE3_MTE2();

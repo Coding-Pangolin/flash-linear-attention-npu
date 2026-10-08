@@ -158,6 +158,8 @@ constexpr int64_t WS_H_F32 = WS_GATE + 4096;           // h  [K,V] fp32 65536（
 // kBf_/lBf_ 的第二槽（chunk 奇偶选槽）
 constexpr int64_t WS_K_BF_1 = WS_H_F32 + 65536;        // k_c 第二槽 16384
 constexpr int64_t WS_L_BF_1 = WS_K_BF_1 + 16384;       // left 第二槽 16384
+// m 链 fp32 化（PPFM_M_CHAIN_FP32）用的 Kw = left^T @ W_c（[K,K] fp32）
+constexpr int64_t WS_KW_F32 = WS_L_BF_1 + 16384;       // Kw [K,K] fp32 65536
 constexpr int64_t WS_GATE_DG = 0;
 constexpr int64_t WS_GATE_DECAY = CV_BT * 4;
 
@@ -250,6 +252,10 @@ constexpr int32_t TILED_L1_B_OFF = 32 * 1024;
 constexpr int32_t TILED_L1_CAP_M = 128;
 constexpr int32_t TILED_L1_CAP_K = 128;
 constexpr int32_t TILED_L1_CAP_N = 128;
+// fp32（PPFM_M_CHAIN_FP32）专用 L1 偏移：Ky 128x128 fp32 = 64 KiB、m 窗口 128x128 fp32 = 64 KiB，
+// 不能沿用 bf16 的 0 / 32 KiB（会互相覆盖）。
+constexpr int32_t TILED_L1_A_F32_OFF = 128 * 1024;
+constexpr int32_t TILED_L1_B_F32_OFF = 192 * 1024;
 // 手写 tile 级 mmad 开关：1=用 TileMmadTla 手拼，0=退回 BlockMmadTla
 // （已验证） A1 数值已对齐（2026-09-28，241 device6 实测）：
 //   - 只 tile mm1（SEL=1）时 m 半边与基线逐位一致，只 tile mm3（SEL=2）时 h 半边逐位一致
@@ -325,10 +331,23 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #undef PPFM_M_UB
 #define PPFM_M_UB 0
 #endif
-#if PPFM_T2_CV && !PPFM_DH_CV
-#undef PPFM_T2_CV
-#define PPFM_T2_CV 0
+// ---------------- m 链精度（PPFM_M_CHAIN_FP32，默认 950 打开）----------------
+// 契约（docs/design.md §1.3 第 3 条）与上游 H20（`AFFINE_CHAIN_PRECISION` 默认 `ieee`，
+// 快档 `tf32x3` 也是三次分裂乘）都要求 **m 链的乘积在 FP32 上完成**。旧实现在 cube 上用
+// 结合律 `T2 = left^T @ bf16(W_c @ bf16(m))`，把 fp32 的 `m` 状态与中间量 `t1` 各量化成
+// bf16（2^-9）——实测 m 半边有效精度比契约差约 1000×（case 81: 6.26e-05 vs 2.03e-06），
+// ATK `cv_fused_double_benchmark` 的 gk 档因此判为"小值域数错误差比例 3.63 > 2.0"。
+// 打开后（与契约 S2/S4 逐条对应）：
+//   ③ Kw[K,K] = FP32(left^T @ W_c)      —— bf16×bf16、FP32 累加（与契约一致）
+//   ④ T2[K,K] = FP32(Kw @ m)            —— **fp32×fp32**（950 的 cube 原生支持 fp32 MMA；
+//                                          见 third_party/catlass/examples/43_ascend950_basic_matmul）
+// AIV 侧算法不变：`m` 的 fp32 状态本来就每 chunk 落 `mF32_`（本开关下 M_UB 分支也要落）。
+#ifndef PPFM_M_CHAIN_FP32
+#define PPFM_M_CHAIN_FP32 PPFM_ARCH_IS_950
 #endif
+// 注意：**不动 `PPFM_T2_CV` / `PPFM_M_UB`**。T2 仍然落 UB 单槽（只是改由 fp32 的
+// `RunMmadNTF32Ub` 写），m 仍然常驻 UB；`PPFM_M_UB` 分支额外把 fp32 的 m 行块落
+// `mF32_`，供 cube 的 ④' 直接读（见 arch35 的 vector/cube）。
 // 临时诊断开关：1=在 prologue 给 AIC 要写的 C 缓冲预置哨兵（见 ProcessChain）
 #ifndef PPFM_SENTINEL_PROBE
 #define PPFM_SENTINEL_PROBE 0

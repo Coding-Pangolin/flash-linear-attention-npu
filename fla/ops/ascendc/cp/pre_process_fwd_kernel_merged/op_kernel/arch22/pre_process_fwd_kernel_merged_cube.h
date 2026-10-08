@@ -106,12 +106,6 @@ public:
         mBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_M_BF), CV_K * CV_K);
         vNewBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_VNEW_BF), CV_BT * CV_V);
         t1Bf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_T1_BF), CV_BT * CV_K);
-#if PPFM_A2_M_FP32
-        // m 链 fp32 等价实现（见 common.h 的说明）：m_lo / T1 的 hi、lo 三块 bf16
-        mBfLo_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_M_BF_LO), CV_K * CV_K);
-        t1BfHi_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_T1_BF_HI), CV_BT * CV_K);
-        t1BfLo_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_T1_BF_LO), CV_BT * CV_K);
-#endif
         vTmpF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_VTMP_F32), CV_BT * CV_V);
         dHF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_DH_F32), CV_K * CV_V);
         dHF1_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_DH_F32_1), CV_K * CV_V);
@@ -219,14 +213,6 @@ private:
 #endif
 
         // ③ T1[BT,K] = W_c[BT,K] @ bf16(m)[K,K]
-#if PPFM_A2_M_FP32
-        // m 链 fp32 等价：T1 = W@m_hi + W@m_lo（第二次 initC=false 累加进同一 L0C）。
-        // 入口/出口与原来一致 —— 仍以 pf32 落 t1F_，由 AIV 去拆 hi/lo。
-        RunTiledNT(wTile, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K,
-                   /*toUb=*/false, /*keepA=*/true, /*initC=*/true);
-        RunTiledNT(wTile, mBfLo_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K,
-                   /*toUb=*/false, /*keepA=*/true, /*initC=*/false);
-#else
 #if PPFM_TILE_MMAD
 #if PPFM_T1_FIXPIPE_BF16
         // fixpipe 直接把 T1 量化成 bf16 落 t1Bf_（mm4 的 B 操作数），AIV 侧不再往返
@@ -240,7 +226,6 @@ private:
 #else
         RunMmadNT(wTile, mBf_, t1F_, CV_BT, static_cast<uint32_t>(cb_), CV_K);
 #endif
-#endif  // PPFM_A2_M_FP32
 
         // 注意： 写侧也要 clean（写回），只靠读者 DCCI 不够：FIX
         // 写回可能还停在写缓冲里，
@@ -307,10 +292,7 @@ private:
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1Bf_);
 #endif
-#if PPFM_A2_M_FP32
-        // M_FP32：mm4 的操作数 t1_hi/t1_lo 由 **AIV** 写（不是原来的"AIC 自己 fixpipe 写"），
-        // 所以这里**不能提前算** —— 挪到 `AicWaitFromAiv(kFlagVNew)` 之后（见下面同宏的块）。
-#elif PPFM_T2_CV
+#if PPFM_T2_CV
         // T2 直落 UB 槽（单槽）
         RunTiledTAUb(lIn, t1Bf_, CV_K, static_cast<uint32_t>(cb_), CV_BT,
                      UB_T2_CV, static_cast<uint16_t>(kFlagT2Free));
@@ -320,18 +302,6 @@ private:
 
         // ② dH[K,V] = k_c^T @ bf16(v_new)[BT,V]
         AicWaitFromAiv(kFlagVNew);
-#if PPFM_A2_M_FP32
-        // M_FP32 的 mm4：T2 = left^T@t1_hi + left^T@t1_lo（累加进同一 L0C）。
-        // t1_hi/t1_lo 由 AIV 在 kFlagVNew 之前写好 ⇒ 读之前失效即可（与 t1Bf_ 同款）。
-#if PPFM_LEGACY_CACHEOPS
-        DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
-                                 DcciDst::CACHELINE_OUT>(t1BfHi_);
-        DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
-                                 DcciDst::CACHELINE_OUT>(t1BfLo_);
-#endif
-        RunTiledTA(lIn, t1BfHi_, t2Buf, CV_K, static_cast<uint32_t>(cb_), CV_BT, /*initC=*/true);
-        RunTiledTA(lIn, t1BfLo_, t2Buf, CV_K, static_cast<uint32_t>(cb_), CV_BT, /*initC=*/false);
-#endif
         // 按 chunk 奇偶取 k/left 槽（与 AIV staging 写入槽一致）
         GlobalTensor<bfloat16_t> &kIn = ((c & 1) != 0) ? kBf1_ : kBf_;
 
@@ -407,7 +377,7 @@ private:
     template <class CT>
     __aicore__ inline void RunTiledNT(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
                                       GlobalTensor<CT> &gmC, uint32_t m, uint32_t n, uint32_t k,
-                                      bool toUb = false, bool keepA = false, bool initC = true)
+                                      bool toUb = false, bool keepA = false)
     {
         Catlass::Arch::Resource<MmArchTag> res;
         auto l1A = res.l1Buf.template GetBufferByByte<bfloat16_t>(TILED_L1_A_OFF);
@@ -458,8 +428,7 @@ private:
 
         auto tL0C = tla::MakeTensor(l0C, tla::MakeLayoutL0C(m, n), Catlass::Arch::PositionL0C{});
         MmTileMmadNT mmad;
-        // initC=false：把本次乘积**累加**进 L0C（PPFM_A2_M_FP32 的 hi/lo 两次 MMAD 用）
-        mmad(tL0C, tL0A, tL0B, m, n, k, initC);
+        mmad(tL0C, tL0A, tL0B, m, n, k);
         SetFlag<HardEvent::M_FIX>(EVENT_ID2);
         WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 
@@ -485,8 +454,7 @@ private:
 
     // A 列主（A 在 GM 上是 [k,m] 列主，逻辑 [m,k]）
     __aicore__ inline void RunTiledTA(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
-                                      GlobalTensor<float> &gmC, uint32_t m, uint32_t n, uint32_t k,
-                                      bool initC = true)
+                                      GlobalTensor<float> &gmC, uint32_t m, uint32_t n, uint32_t k)
     {
         Catlass::Arch::Resource<MmArchTag> res;
         auto l1A = res.l1Buf.template GetBufferByByte<bfloat16_t>(TILED_L1_A_OFF);
@@ -533,7 +501,7 @@ private:
 
         auto tL0C = tla::MakeTensor(l0C, tla::MakeLayoutL0C(m, n), Catlass::Arch::PositionL0C{});
         MmTileMmadTA mmad;
-        mmad(tL0C, tL0A, tL0B, m, n, k, initC);
+        mmad(tL0C, tL0A, tL0B, m, n, k);
         SetFlag<HardEvent::M_FIX>(EVENT_ID2);
         WaitFlag<HardEvent::M_FIX>(EVENT_ID2);
 
@@ -674,11 +642,6 @@ private:
     GlobalTensor<bfloat16_t> mBf_;
     GlobalTensor<bfloat16_t> vNewBf_;
     GlobalTensor<bfloat16_t> t1Bf_;
-#if PPFM_A2_M_FP32
-    GlobalTensor<bfloat16_t> mBfLo_;    // m 的低位（AIV 写，AIC 的 mm3 用）
-    GlobalTensor<bfloat16_t> t1BfHi_;   // T1 的高位（AIV 写，AIC 的 mm4 用）
-    GlobalTensor<bfloat16_t> t1BfLo_;   // T1 的低位
-#endif
     GlobalTensor<float> vTmpF_;
     GlobalTensor<float> dHF_;
     GlobalTensor<float> dHF1_;

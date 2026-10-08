@@ -160,14 +160,6 @@ constexpr int64_t WS_K_BF_1 = WS_H_F32 + 65536;        // k_c 第二槽 16384
 constexpr int64_t WS_L_BF_1 = WS_K_BF_1 + 16384;       // left 第二槽 16384
 // m 链 fp32 化（PPFM_M_CHAIN_FP32）用的 Kw = left^T @ W_c（[K,K] fp32）
 constexpr int64_t WS_KW_F32 = WS_L_BF_1 + 16384;       // Kw [K,K] fp32 65536
-// A2（910B/910_93）的 m 链 fp32 **等价**实现（PPFM_A2_M_FP32）复用这块区域
-//   （950 的 Kw 区在 A2 上本来不用）：
-//     WS_M_BF_LO  [K,cb_] bf16 32 KiB —— m 的低位（m_lo = bf16(m - bf16(m))）
-//     WS_T1_BF_HI [BT,cb_] bf16 16 KiB —— T1 的高位
-//     WS_T1_BF_LO [BT,cb_] bf16 16 KiB —— T1 的低位
-constexpr int64_t WS_M_BF_LO = WS_KW_F32;              // 32 KiB
-constexpr int64_t WS_T1_BF_HI = WS_KW_F32 + 32768;     // 16 KiB
-constexpr int64_t WS_T1_BF_LO = WS_KW_F32 + 32768 + 16384;  // 16 KiB
 constexpr int64_t WS_GATE_DG = 0;
 constexpr int64_t WS_GATE_DECAY = CV_BT * 4;
 
@@ -359,37 +351,16 @@ constexpr int32_t TILED_L1_B_F32_OFF = 192 * 1024;
 #ifndef PPFM_M_CHAIN_FP32
 #define PPFM_M_CHAIN_FP32 0
 #endif
-// —— A2（arch22 / 910B·910_93）侧现状：**仍是旧的 bf16 双量化链**，属已知偏差。
-//    A2 的 cube 没有 fp32 MMA，抄不了 950 的 ④。2026-10-08 在 234 上量化过：
-//      * kernel vs 契约（= 仓内 reference）：m 半边 absmax 3.0e-05、absmean 2.0e-06、
-//        近零元素**相对误差 max 1.06e3**（h 半边只有 9.5e-07）⇒ ATK 阈值 2.0 过不了；
-//      * torch 选型（把候选公式都模拟一遍）：只换 `Kw` 形式（C_kw）或只拆 `m`（C_kwM）
-//        **完全没有改善**（1e3 量级不变，误差由另一种量化主导）；
-//        **只有 `Kw` 与 `m` 同时拆 hi/lo（3 次 MMAD）才回到契约**（相对误差 1.13）。
-//    A2 上可行且**不新增跨核握手**的写法：
-//      ① 关掉 `PPFM_T1_FIXPIPE_BF16`，AIC 把 `T1 = W@m` 以 **fp32** 落 GM；
-//      ② AIV 读 `t1F_`（32 KiB）拆成 `t1_hi/t1_lo` 两个 bf16（各 16 KiB）——
-//         复用**已有的** `kFlagVNew` 握手，不新增 flag；
-//      ③ AIC 用 4 次 MMAD 完成：`T1 = W@m_hi + W@m_lo`、`T2 = left^T@t1_hi + left^T@t1_lo`；
-//      ④ `m = decay⊙m - T2` 仍走 AIV 的 fp32 路径。
-//    代价：cube 每 chunk 2→4 次 MMAD（A2 是 AIV-bound，可能大部分被隐藏）+
-//          AIV 每 chunk 多搬 64 KiB（读 t1F_ 32 KiB + 写 2×16 KiB）≈ 个位数~十几个百分点。
-//    ⇒ **待决策**：这一项是"用 A2 的一部分性能增益换契约精度"，需要产品/评审拍板后再做。
-//
-// —— `PPFM_A2_M_FP32`（默认 0，实验开关）：A2 上把上面那套等价实现真正落地。
-//    前置验证（2026-10-08，234 的 torch 选型）：把候选公式都模拟一遍，
-//    只有"Kw/m 同时 hi/lo 拆分"或"T1 走 fp32 + AIV 拆 hi/lo"能回到契约
-//    （相对误差 1.13 / 0.0999，而现状是 1.06e3）；只做一半完全没有改善。
-//    累加能力已确认：Catlass `tile_mmad.hpp` 的 `initC` 参数支持"第二次 MMAD 累加进同一 L0C"。
-#ifndef PPFM_A2_M_FP32
-#define PPFM_A2_M_FP32 0
-#endif
-#if PPFM_A2_M_FP32 && !PPFM_ARCH_IS_950
-// 该实现要求 AIC 把 T1 以 **fp32** 落 GM（AIV 再去拆 hi/lo ⇒ 复用既有 kFlagVNew 握手），
-// 所以必须关掉 fixpipe 直接落 bf16 的那条捷径。
-#undef PPFM_T1_FIXPIPE_BF16
-#define PPFM_T1_FIXPIPE_BF16 0
-#endif
+// —— A2（arch22 / 910B·910_93）：m 链**保持 bf16**。这与 950 的默认一致，也正是本次的交付口径
+//    ——对齐 CP 组兄弟算子 `chunk_delta_h_bwd_preprocess`：链上中间量按模型 dtype 入 Cube，
+//    验收同样按模型 dtype 判（见 `tests/atk/pre_process_fwd_kernel_merged/README.md` 的「精度口径」）。
+//    2026-10-08 在 234 上量过 A2 的实际水平（T=256、HK=2、HV=8，对比仓内 reference 契约）：
+//      m 半边 absmax 3.4e-05 / absmean 1.9e-06（h 半边 9.5e-07）
+//    ⇒ 与 950 的 bf16 m 链同级，按 `mixed_tolerance_bm` + `output_dtype_overrides{bf16}` 判达标，
+//      因此 A2 不需要再做 m 链的 fp32/双量化等价实现。
+//    （历史记录：A2 的「IEEE FP32 等价」原型 =「AIC 落 fp32 T1 → AIV 拆 hi/lo → 4 次 MMAD」曾
+//      实现过一版，端到端实测不成立（m 半边 absmax 0.947，而 m 量级本身才 0.94），已按上述口径
+//      撤下；若将来 A2 也要过严格的 `cv_fused_double_benchmark`，原型留档在 commit `62ece9e6`。）
 // 注意：**不动 `PPFM_T2_CV` / `PPFM_M_UB`**。T2 仍然落 UB 单槽（只是改由 fp32 的
 // `RunMmadNTF32Ub` 写），m 仍然常驻 UB；`PPFM_M_UB` 分支额外把 fp32 的 m 行块落
 // `mF32_`，供 cube 的 ④' 直接读（见 arch35 的 vector/cube）。

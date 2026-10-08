@@ -73,6 +73,12 @@ public:
         dHF1_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_DH_F32_1), CV_K * CV_V);
         t1F_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T1_F32), CV_BT * CV_K);
         t1Bf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_T1_BF), CV_BT * CV_K);
+#if PPFM_A2_M_FP32
+        // m 链 fp32 等价：m 的低位 + T1 的 hi/lo（布局见 common.h）
+        mBfLo_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_M_BF_LO), CV_K * CV_K);
+        t1BfHi_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_T1_BF_HI), CV_BT * CV_K);
+        t1BfLo_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_T1_BF_LO), CV_BT * CV_K);
+#endif
         t2F_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T2_F32), CV_K * CV_K);
         t2F1_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T2_F32_1), CV_K * CV_K);
         gateF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_GATE), CV_BT + CV_K);
@@ -353,6 +359,16 @@ private:
                 const int32_t r0_ = subIdx_ + i0 * subNum_;
                 DataCopy(mF32_[r0_ * cb_], extBlkF_, mpF_);
                 DataCopy(mBf_[r0_ * cb_], stateBlkBf_, mpB_);
+#if PPFM_A2_M_FP32
+                // 初值 m ≡ I ⇒ m_lo ≡ 0。用与 mBf_ **同一套落点参数**（r0_/mpB_）落 0，
+                // 保证 hi/lo 布局一致；不写的话会读到上一个 work item 的残留。
+                Duplicate(extBlkF_, 0.0f, nr_ * cb_);
+                PipeBarrier<PIPE_ALL>();
+                Cast(scrBf_, extBlkF_, RoundMode::CAST_RINT, nr_ * cb_);
+                AIV_SET_V_MTE3();
+                AIV_WAIT_V_MTE3();
+                DataCopy(mBfLo_[r0_ * cb_], scrBf_, mpB_);
+#endif
                 PipeBarrier<PIPE_ALL>();
             }
         }
@@ -937,6 +953,28 @@ private:
         // 与 AIC fixpipe SPLIT_M 的落点（前一半行→低半区）对齐
         // SEG_PER_SUB 已在 v_new 循环前声明（同一函数内不能重复定义）
 #if !PPFM_T1_FIXPIPE_BF16
+#if PPFM_A2_M_FP32
+        // m 链 fp32 等价：把 AIC 落的 fp32 T1 拆成 hi/lo 两个 bf16（各段独立，段内用 scrF_/extBlkF_）
+        for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
+            const int32_t off = seg * SEG;
+            const int32_t lo = (seg - subIdx_ * SEG_PER_SUB) * SEG;
+            const int32_t cnt = SEG * cb_;
+            DataCopy(scrF_[lo * cb_], t1F_[off * cb_], cnt);
+            AIV_SET_MTE2_V();
+            AIV_WAIT_MTE2_V();
+            Cast(scrBf_[lo * cb_], scrF_[lo * cb_], RoundMode::CAST_RINT, cnt);
+            AIV_SET_V_MTE3();
+            AIV_WAIT_V_MTE3();   // V -> MTE3
+            DataCopy(t1BfHi_[off * cb_], scrBf_[lo * cb_], cnt);
+            // lo = bf16(T1 - fp32(hi))：extBlkF_ 只作临时（v_new 段已用完，不再被读）
+            Cast(extBlkF_, scrBf_[lo * cb_], RoundMode::CAST_NONE, cnt);
+            Sub(extBlkF_, scrF_[lo * cb_], extBlkF_, cnt);
+            Cast(scrBf_[lo * cb_], extBlkF_, RoundMode::CAST_RINT, cnt);
+            AIV_SET_V_MTE3();
+            AIV_WAIT_V_MTE3();
+            DataCopy(t1BfLo_[off * cb_], scrBf_[lo * cb_], cnt);
+        }
+#else
         for (int32_t seg = subIdx_ * SEG_PER_SUB; seg < (subIdx_ + 1) * SEG_PER_SUB; ++seg) {
             const int32_t off = seg * SEG;
             DataCopy(scrF_[lo * cb_], t1F_[off * cb_], SEG * cb_);
@@ -947,6 +985,7 @@ private:
             AIV_WAIT_V_MTE3();   // V -> MTE3
             DataCopy(t1Bf_[off * cb_], scrBf_[lo * cb_], SEG * cb_);
         }
+#endif  // PPFM_A2_M_FP32
         PipeBarrier<PIPE_ALL>();
 #endif
 #if PPFM_RD_PROBE
@@ -1306,6 +1345,20 @@ private:
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
             DataCopy(mBf_[rb * cb_], stateBlkBf_, RB * cb_);
+#if PPFM_A2_M_FP32
+            // m_lo = bf16(m - fp32(m_hi))，按 16 行子块算（scrBf_/extBlkF_ 容量够）并直接落 GM。
+            // 此时 extBlkF_ 里的 T2 已在上面 Sub 时消费完，可安全复用。
+            for (int32_t blk = 0; blk < RB; blk += 16) {
+                const int32_t cnt = 16 * cb_;
+                Cast(extBlkF_, stateBlkBf_[blk * cb_], RoundMode::CAST_NONE, cnt);
+                Sub(extBlkF_, stateBlkF_[blk * cb_], extBlkF_, cnt);
+                Cast(scrBf_, extBlkF_, RoundMode::CAST_RINT, cnt);
+                AIV_SET_V_MTE3();
+                AIV_WAIT_V_MTE3();
+                DataCopy(mBfLo_[(rb + blk) * cb_], scrBf_, cnt);
+            }
+            PipeBarrier<PIPE_ALL>();
+#endif
         }
 #endif  // PPFM_T2_CV
         PipeBarrier<PIPE_ALL>();
@@ -1372,6 +1425,11 @@ private:
     GlobalTensor<float> dHF1_;
     GlobalTensor<float> t1F_;
     GlobalTensor<bfloat16_t> t1Bf_;
+#if PPFM_A2_M_FP32
+    GlobalTensor<bfloat16_t> mBfLo_;    // bf16(m - bf16(m))，供 AIC 的 mm3 做第二次累加
+    GlobalTensor<bfloat16_t> t1BfHi_;   // bf16(T1)
+    GlobalTensor<bfloat16_t> t1BfLo_;   // bf16(T1 - bf16(T1))
+#endif
     GlobalTensor<float> t2F_;
     GlobalTensor<float> t2F1_;
     GlobalTensor<float> gateF_;

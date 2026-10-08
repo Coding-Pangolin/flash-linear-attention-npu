@@ -578,11 +578,12 @@ static_assert(!(PPFM_A2_RB64 && !PPFM_UB_SHARE),
 #define PPFM_DIAG 0
 #endif
 constexpr int32_t PPFM_DIAG_CHUNKS = 4;
-// 诊断区必须落在 workspace 的**空闲段**：原来写 626688，而该偏移正好等于 `WS_K_BF_1`
-//   （k_c 的第二槽）⇒ 一打开 PPFM_DIAG 就把 k 缓冲区写坏（现象是 h 半边直接变 1e37 量级，
-//   曾被误当成"算子精度缺陷"）。本核 workspace 共 768 KiB，`WS_L_BF_1` 结束于
-//   643072 + 16384 = 659456 ⇒ 659456..786432 是空闲段，诊断区放这里。
-constexpr int64_t WS_DIAG = 659456;               // 每核 4 KiB（AIC 写，AIV epilogue 搬到 hm）
+// 诊断区必须落在 workspace 的**空闲段**，且不能与任何活缓冲区重叠：
+//   * 原值 626688 == `WS_K_BF_1`（k_c 第二槽）⇒ 一开 PPFM_DIAG 就写坏 k，
+//     现象是 h 半边变成 1e37 量级（曾被误当成"算子精度缺陷"）；
+//   * 一度改到 659456，又被 m 链 fp32 化的 `WS_KW_F32`（659456..724992，64 KiB）占用。
+//   本核 workspace 共 768 KiB，`WS_KW_F32` 之后的空闲段是 724992..786432 ⇒ 诊断区放末尾。
+constexpr int64_t WS_DIAG = 778240;               // 每核 4 KiB（AIC 写，AIV epilogue 搬到 hm）
 
 // PPFM_NSLOT = 1（默认）时这些都是**单份**；= PPFM_SUB 时回退历史的两份布局。
 constexpr int32_t UB_ROW0_BF = 0;                                  // [K] bf16

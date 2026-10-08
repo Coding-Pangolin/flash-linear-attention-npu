@@ -50,6 +50,29 @@ inputs:
         values: ['{"profile":"frozen_by_gen"}']
       invalid:
         values: []
+  # ATK 的 BaseBackend.before_call 会丢弃 dtype=non_param 的输入（case_spec 就是 non_param），
+  # 因此 executor 运行时真正要用的标量必须**单独**声明为普通属性通道：
+  # 与 chunk_delta_h_bwd_preprocess 同一约定（cu_seqlens 是 list，用逗号分隔的 string 下发）。
+  - name: cu_seqlens
+    type: attr
+    required: true
+    dtypes:
+      values: [string]
+    ranges:
+      valid:
+        values: ['0,1024']
+      invalid:
+        values: []
+  - name: seed
+    type: attr
+    required: true
+    dtypes:
+      values: [int]
+    ranges:
+      valid:
+        values: [20260818]
+      invalid:
+        values: []
   - name: dtype
     type: attr
     required: true

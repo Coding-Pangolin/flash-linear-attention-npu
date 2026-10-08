@@ -216,6 +216,13 @@ def _case_payload(case_id: int, profile: dict, standard: dict, seed: int) -> dic
         _input("low_precision_marker", marker_dtype, [0, 0], input_type="tensor", shape=[1]),
         _input("fp32_marker", "fp32", [0, 0], input_type="tensor", shape=[1]),
         _input("case_spec", "non_param", json.dumps(spec, ensure_ascii=False, separators=(",", ":"))),
+        # ATK 的 BaseBackend.before_call 会丢弃 dtype=non_param 的输入（case_spec 正是 non_param），
+        # 所以 executor 运行时需要的标量必须**单独**走普通属性通道下发，否则会被静默忽略：
+        #   case_spec 里曾同时写着 seed 与 cu_seqlens，实际都收不到 —— seed 回落成默认值、
+        #   cu_seqlens 回落成 [0, T]，于是多段/子区间用例退化成单窗口，用例名与真实输入不符。
+        # cu_seqlens 是 list，按 chunk_delta_h_bwd_preprocess 的约定用逗号分隔的 string 下发。
+        _input("cu_seqlens", "string", ",".join(str(int(x)) for x in spec["cu_seqlens"])),
+        _input("seed", "int", spec["seed"]),
         _input("dtype", "string", spec["dtype"]),
         _input("B", "int", spec["B"]),
         _input("HK", "int", spec["HK"]),

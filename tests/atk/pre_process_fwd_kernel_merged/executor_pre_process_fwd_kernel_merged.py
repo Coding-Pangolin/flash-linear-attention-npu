@@ -140,8 +140,17 @@ def build_inputs(spec: dict[str, Any], device: torch.device, high_precision: boo
     gate_kind = str(spec.get("gate", "g")).lower()
     gate_dtype = str(spec.get("gate_dtype", "fp32")).lower()
 
+    # cu_seqlens 走字符串属性通道下发（ATK 会丢弃 non_param 的 case_spec，见 yaml 说明），
+    # 因此这里同时接受逗号分隔的 string、list/tuple 与 None（None ⇒ 单窗口 [0, T]）。
     cu_raw = spec.get("cu_seqlens")
-    cu = [int(x) for x in cu_raw] if cu_raw else [0, T]
+    if cu_raw is None:
+        cu = [0, T]
+    elif isinstance(cu_raw, str):
+        cu = [int(token) for token in cu_raw.replace(" ", "").split(",") if token]
+    else:
+        cu = [int(x) for x in cu_raw]
+    if not cu:
+        cu = [0, T]
 
     gen = torch.Generator(device="cpu")
     gen.manual_seed(seed)

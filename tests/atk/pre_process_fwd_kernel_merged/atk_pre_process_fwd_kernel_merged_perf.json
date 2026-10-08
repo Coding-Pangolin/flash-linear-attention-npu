@@ -67,6 +67,28 @@
         "outlier_values": null
       },
       {
+        "name": "cu_seqlens",
+        "type": "attr",
+        "required": true,
+        "dtype": "string",
+        "shape": null,
+        "range_values": "0,11264",
+        "backward": false,
+        "align_32B": null,
+        "outlier_values": null
+      },
+      {
+        "name": "seed",
+        "type": "attr",
+        "required": true,
+        "dtype": "int",
+        "shape": null,
+        "range_values": 20260818,
+        "backward": false,
+        "align_32B": null,
+        "outlier_values": null
+      },
+      {
         "name": "dtype",
         "type": "attr",
         "required": true,
@@ -274,6 +296,28 @@
         "dtype": "non_param",
         "shape": null,
         "range_values": "{\"name\":\"PPFM-39_perf_gdn_model\",\"group\":\"精度\",\"note\":\"对齐 H20 model-g\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":11264,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,11264],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":1,\"seed\":20260819,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "backward": false,
+        "align_32B": null,
+        "outlier_values": null
+      },
+      {
+        "name": "cu_seqlens",
+        "type": "attr",
+        "required": true,
+        "dtype": "string",
+        "shape": null,
+        "range_values": "0,11264",
+        "backward": false,
+        "align_32B": null,
+        "outlier_values": null
+      },
+      {
+        "name": "seed",
+        "type": "attr",
+        "required": true,
+        "dtype": "int",
+        "shape": null,
+        "range_values": 20260819,
         "backward": false,
         "align_32B": null,
         "outlier_values": null
@@ -491,6 +535,28 @@
         "outlier_values": null
       },
       {
+        "name": "cu_seqlens",
+        "type": "attr",
+        "required": true,
+        "dtype": "string",
+        "shape": null,
+        "range_values": "0,5632",
+        "backward": false,
+        "align_32B": null,
+        "outlier_values": null
+      },
+      {
+        "name": "seed",
+        "type": "attr",
+        "required": true,
+        "dtype": "int",
+        "shape": null,
+        "range_values": 20260820,
+        "backward": false,
+        "align_32B": null,
+        "outlier_values": null
+      },
+      {
         "name": "dtype",
         "type": "attr",
         "required": true,
@@ -698,6 +764,28 @@
         "dtype": "non_param",
         "shape": null,
         "range_values": "{\"name\":\"PPFM-41_perf_long\",\"group\":\"精度\",\"note\":\"长窗口\",\"dtype\":\"bf16\",\"B\":1,\"HK\":32,\"HV\":32,\"T\":16384,\"K\":128,\"V\":128,\"chunk_size\":64,\"gate\":\"g\",\"gate_dtype\":\"fp32\",\"cu_seqlens\":[0,16384],\"op\":\"pre_process_fwd_kernel_merged\",\"case_id\":3,\"seed\":20260821,\"route\":\"ascendc\",\"soc\":\"ascend950\"}",
+        "backward": false,
+        "align_32B": null,
+        "outlier_values": null
+      },
+      {
+        "name": "cu_seqlens",
+        "type": "attr",
+        "required": true,
+        "dtype": "string",
+        "shape": null,
+        "range_values": "0,16384",
+        "backward": false,
+        "align_32B": null,
+        "outlier_values": null
+      },
+      {
+        "name": "seed",
+        "type": "attr",
+        "required": true,
+        "dtype": "int",
+        "shape": null,
+        "range_values": 20260821,
         "backward": false,
         "align_32B": null,
         "outlier_values": null

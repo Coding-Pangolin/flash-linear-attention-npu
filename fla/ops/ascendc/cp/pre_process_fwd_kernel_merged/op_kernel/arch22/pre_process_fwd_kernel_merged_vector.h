@@ -351,6 +351,10 @@ private:
                 const int32_t r0_ = subIdx_ * rowsPerSub_ + i0;
                 DataCopy(mF32_[r0_ * cb_], extBlkF_, mpF_);
                 DataCopy(mBf_[r0_ * cb_], stateBlkBf_, mpB_);
+#if PPFM_M_UB
+                // m 常驻 UB：单位阵也要落到 mUb_（与 mpF_ 同套连续落点）
+                DataCopy(mUb_[i0 * cb_], extBlkF_, mpF_);
+#endif
                 PipeBarrier<PIPE_ALL>();
             }
         }
@@ -1240,10 +1244,20 @@ private:
             AIV_WAR_BEFORE_STATE_MTE2();   // C9：m 相位的同一窗口
             AIV_SET_MTE3_MTE2();
             AIV_WAIT_MTE3_MTE2();
-            DataCopy(stateBlkF_, mF32_[rb * cb_], RB * cb_);
+#if PPFM_M_UB
+            // m 常驻 UB：不载入 fp32 状态（省每 chunk 64 KiB 读）
+#else
+            DataCopy(mState, mF32_[rb * cb_], RB * cb_);
+#endif
             DataCopy(extBlkF_, t2Buf[rb * cb_], RB * cb_);
             AIV_SET_MTE2_V();
             AIV_WAIT_MTE2_V();
+#if PPFM_M_UB
+            // 本子核那一段（lo = rb - subIdx_*RB，与 epilogue 的连续半区一致）
+            LocalTensor<float> mState = mUb_[(rb - subIdx_ * RB) * cb_];
+#else
+            LocalTensor<float> mState = stateBlkF_;
+#endif
 #if PPFM_DIAG
             // MDIAG：记录 AIV **实际读到的** T2 行首元素（行 rb 与 rb+32），
             // 与 AIC 写进 t2Buf 的那一份对比（槽位 4+2*subIdx_ / 5+2*subIdx_）。
@@ -1255,7 +1269,7 @@ private:
 #endif
             if (useG) {
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
-                Muls(stateBlkF_, stateBlkF_, dc, RB * cb_);
+                Muls(mState, mState, dc, RB * cb_);
             } else {
 #if PPFM_KDA_ROW_PREFETCH
                 // K1-a：先批量标量预取 factor，再整批 Muls（纯发射顺序，位级不变）
@@ -1267,7 +1281,7 @@ private:
                     }
 #pragma unroll
                     for (int32_t kj = 0; kj < PPFM_KDA_ROW_BATCH; ++kj) {
-                        Muls(stateBlkF_[(kb + kj) * cb_], stateBlkF_[(kb + kj) * cb_],
+                        Muls(mState[(kb + kj) * cb_], mState[(kb + kj) * cb_],
                              decBuf_[kj], cb_);
                     }
                 }
@@ -1281,7 +1295,7 @@ private:
                     // 同 C10：按 ≤64 一段扫（cb_ 可为 32 ⇒ 不能假设 cb_/64 >= 1）
                     for (int32_t c0 = 0; c0 < cb_; c0 += 64) {
                         const int32_t n = (cb_ - c0 < 64) ? (cb_ - c0) : 64;
-                        Mul(stateBlkF_[c0], stateBlkF_[c0], fac8_,
+                        Mul(mState[c0], mState[c0], fac8_,
                             static_cast<uint16_t>(n), RB,
                             {1, 1, 0, static_cast<uint8_t>(cb_ / 8),
                              static_cast<uint8_t>(cb_ / 8), 1});
@@ -1290,19 +1304,21 @@ private:
 #else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
-                    Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
+                    Muls(mState[(r - rb) * cb_], mState[(r - rb) * cb_], dc, cb_);
                 }
 #endif
 #endif
             }
             PipeBarrier<PIPE_V>();
-            Sub(stateBlkF_, stateBlkF_, extBlkF_, RB * cb_);
+            Sub(mState, mState, extBlkF_, RB * cb_);
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
-            DataCopy(mF32_[rb * cb_], stateBlkF_, RB * cb_);
+#if !PPFM_M_UB
+            DataCopy(mF32_[rb * cb_], mState, RB * cb_);
+#endif
             AIV_SET_MTE3_V();
             AIV_WAIT_MTE3_V();
-            Cast(stateBlkBf_, stateBlkF_, RoundMode::CAST_RINT, RB * cb_);
+            Cast(stateBlkBf_, mState, RoundMode::CAST_RINT, RB * cb_);
             AIV_SET_V_MTE3();
             AIV_WAIT_V_MTE3();   // V -> MTE3
             DataCopy(mBf_[rb * cb_], stateBlkBf_, RB * cb_);

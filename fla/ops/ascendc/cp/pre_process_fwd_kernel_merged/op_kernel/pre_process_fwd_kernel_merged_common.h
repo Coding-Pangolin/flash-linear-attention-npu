@@ -334,10 +334,20 @@ constexpr int32_t TILED_L1_B_F32_OFF = 192 * 1024;
 #ifndef PPFM_M_UB
 #define PPFM_M_UB 1
 #endif
-// 注意： m 常驻只实现于 950 的 CV 路径（A2 的 m 相位仍写 mF32_）⇒ 必须同时要求 DH_CV，
-//   否则会出现"epilogue 按 M_UB 去读 mUb_、而 m
-// 相位根本没写它"的错配（首次测量就是这么错的）。
-#if PPFM_M_UB && !(PPFM_H_UB && PPFM_DH_CV)
+// 约束：
+//   ① 必须 H_UB —— epilogue 的 M_UB 读取分支挂在 H_UB(+EP_MERGE) 里；
+//   ② 状态更新的行块必须正好等于一个半区（PPFM_SBRB == CV_K/PPFM_SUB），
+//      否则 mUb_ 的本地偏移与 epilogue 的连续半区对不上（下面有 static_assert）。
+// （2026-10-09）：A2/A3 的非 CV 路径也实现了 m 常驻 UB（原来是 950 CV 专属），
+//   因此不再要求 DH_CV；A2 侧可用 PPFM_M_UB_A2=0 单独关掉做 A/B。
+#if PPFM_M_UB && !PPFM_H_UB
+#undef PPFM_M_UB
+#define PPFM_M_UB 0
+#endif
+#ifndef PPFM_M_UB_A2
+#define PPFM_M_UB_A2 1
+#endif
+#if PPFM_M_UB && !PPFM_ARCH_IS_950 && !PPFM_M_UB_A2
 #undef PPFM_M_UB
 #define PPFM_M_UB 0
 #endif
@@ -584,6 +594,10 @@ constexpr int32_t PPFM_SBRB = CV_K / PPFM_SUB;   // 64
 #else
 constexpr int32_t PPFM_SBRB = PPFM_RB;           // 32（A2 与回退路径）
 #endif
+// m 常驻 UB 时，mUb_ 的本地偏移（lo = rb - subIdx_*RB）必须与 epilogue 的
+// 连续半区一致 ⇒ 状态更新的行块必须正好是 CV_K/PPFM_SUB。
+static_assert(!PPFM_M_UB || PPFM_SBRB == CV_K / PPFM_SUB,
+              "PPFM_M_UB 要求 PPFM_SBRB == CV_K/PPFM_SUB（行块 = 一个半区）");
 // A2 的 PPFM_UB_SHARE=0 是历史两份布局：stateBlkF_ 的每子核偏移仍按 PPFM_RB 算，
 // 与 RB=64 的容量不一致 ⇒ 直接禁止这个组合（默认 UB_SHARE=1，不受影响）。
 static_assert(!(PPFM_A2_RB64 && !PPFM_UB_SHARE),

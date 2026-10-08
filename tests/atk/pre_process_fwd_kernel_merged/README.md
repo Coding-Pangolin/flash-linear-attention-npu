@@ -94,30 +94,27 @@ GPU 服务器端的容器 / ATK server 启动方式与本仓交付件里的其�
 `chunk_gated_delta_rule_fwd_h/README.md`「执行机制与网络配置」的手工步骤），
 服务器内只需 CUDA Torch + Triton + 本目录测试资产，不需要 CANN / NPU wheel。
 
-#### 三路精度标准与切换
+#### 精度标准与切换
 
-GPU 双标杆的比较是 `cv_fused_double_benchmark`（DUT vs 真值、同精度标杆 vs 真值两路），
+**默认 = CP 组同口径**：ATK 原生 `mixed_tolerance_bm` + `output_dtype_overrides {"0": "bf16"}` ——
+"`hm` 虽是 FP32 输出，但链上中间量按设计用模型 dtype 传递 ⇒ **按模型 dtype 判精度**"，
+与兄弟算子 `chunk_delta_h_bwd_preprocess` 完全一致；**不在 executor 里自定义任何指标**。
+该标准名需要 **ATK ≥ 26.8.8** 才注册（26.7.8.dev / 26.9.24 会 `KeyError: mixed_tolerance_bm`）。
+
+**备选（非默认）**：`cv_fused_double_benchmark`（DUT + 同精度标杆 vs FP64 真值两路），
 阈值与交付仓 `FLA_ATK` 的 `chunk_gated_delta_rule_fwd_h` / `chunk_kda_fwd` 一致：
 `max_re_ratio = 5`、`avg_re_ratio = 1.5`、`root_mean_squared_ratio = 1.5`。
-
-三份 JSON 默认写的是仓内统一标准 `mixed_tolerance_bm`（`tests/atk/README.md` 的
-「精度与 NaN 检测」约定：NPU DUT + CPU 高精度 golden）。做 GPU 双标杆验收时切到
-三路标准（**只改标准，不动用例与标杆**）：
+它严得多（要求 DUT vs FP64 的"小值域"误差 ≤ 2× 同精度标杆），**只有把 m 链做成 IEEE FP32
+（内核 `-DPPFM_M_CHAIN_FP32=1`，板端 `msprof` 实测 +65~80%）才能 111/111 全过**。
+切换方式（只改标准，不动用例与标杆）：
 
 ```bash
 # 1) 重写三份 JSON 的 standard.acc
 python gen_pre_process_fwd_kernel_merged.py --standard cv_fused_double_benchmark --summary
 # 2) 同步本目录 <op>.yaml 的 standard.acc（供 atk case 重新生成时使用）
-#    standard:
-#      acc:
-#        cv_fused_double_benchmark:
-#          max_re_ratio: 5
-#          avg_re_ratio: 1.5
-#          root_mean_squared_ratio: 1.5
-#      perf: not_key
 ```
 
-只跑 CPU 单标杆流程时不要执行上面两步，保持仓库默认即可。
+只跑默认（CP 组同口径）流程时不要执行上面两步。
 本算子的 executor 对两种标准都成立：两种标准下都不会出现"参考节点没实现对应角色"的情况。
 
 executor 支持的环境变量：
@@ -129,17 +126,18 @@ executor 支持的环境变量：
 
 ### 精度口径（重要）
 
-- **同精度对标 = 契约版标杆**：`accum_dtype=fp32` + 三个舍入点开关全开
-  （`h`/`v_new` 进 MMAD 前降到输入 dtype、`M_c@m` 每 chunk 回落 fp32）。
-  它与 DUT 属于同一精度类，两者之差才用来判"实现是否忠实"。
-- **`scripts/pre_process_fwd_kernel_merged_cpu.py` 的模块文档写明**：kernel 的 h/m 累加器是
-  **FP32**，用 FP64 基准会让任何忠实实现平白多出 **~9.4e-3** 的绝对偏差（与 H20 `ieee`
-  对齐时实测）。
-  ⇒ **FP64 结果只作高精度 golden**，与 DUT 的比较必须走**混合容差**
-  （`mixed_tolerance_bm` 或 `cv_fused_double_benchmark` 的 5 / 1.5 / 1.5 比例），
-  不能当成"逐元素相等"的判据；也不能反过来用 FP64 golden 的偏差去放宽同精度对标。
-- 两边都不允许的用法：拿 FP64 基准 + 收紧容差去"证伪"忠实实现，或拿同精度标杆的自比
-  当成精度验收（它只能证明搬运/调度没改数值）。
+- **实现侧（精度等级）**：h 链的 `W@h`、`Kᵀ@v_new` 与 m 链的 `Kw = LᵀW`、`Kw @ m`，
+  都是 **bf16 操作数 + FP32 累加** —— 与 CP 组兄弟算子 `chunk_delta_h_bwd_preprocess` 的
+  链式量同级；`hm` 以 FP32 输出、不做额外舍入（与 `docs/design.md` §1.3 的舍入点清单一致）。
+- **判据侧**：链式量的绝对误差随链长（chunk 数）放大、逐元素相对误差又会被参考里的极小值污染，
+  因此**不在 executor 里自造指标**，直接用 ATK 原生的 `mixed_tolerance_bm` +
+  `output_dtype_overrides {"0": "bf16"}` 声明"按模型 dtype 判" —— 与兄弟算子同一份写法
+  （`standard.acc` 用 dict 形式，理由见本目录 `<op>.yaml` 的注释）。
+- **同精度对标的角色**：`accum_dtype=fp32` + 三个舍入点开关全开的"契约版"标杆只用来回答
+  "实现是否忠实"；FP64 结果只作高精度 golden / 灵敏度对照（用 FP64 直接当逐元素判据，
+  会让任何忠实实现平白多出 ~9.4e-3 的绝对偏差，与 H20 `ieee` 对齐时实测）。
+- **不允许**：通过收窄输入 range、跳过失败用例或放宽阈值制造通过结论；也不允许拿 FP64 基准
+  + 收紧容差去"证伪"忠实实现。
 
 ## SOC 支持
 

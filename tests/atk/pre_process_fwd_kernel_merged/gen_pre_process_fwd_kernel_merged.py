@@ -44,17 +44,23 @@ BT = 64
 SEED0 = 20260818
 
 STANDARD = {
-    "acc": "mixed_tolerance_bm",
+    # 与 CP 组兄弟算子 `chunk_delta_h_bwd_preprocess` 同口径：`hm` 是 FP32 输出，但
+    # `m` 链的 `Kw@m` / h 链的 `W@h`、`Kᵀ@v_new` 的中间量按设计用**模型 dtype** 入 Cube
+    # （bf16 操作数 + FP32 累加）⇒ 按模型 dtype 判精度（ATK 原生 `output_dtype_overrides`），
+    # 不在 executor 里自定义指标。需要 ATK >= 26.8.8。
+    "acc": {"mixed_tolerance_bm": {"output_dtype_overrides": {"0": "bf16"}}},
     "perf": "not_key",
 }
 MSS_STANDARD = {
-    "acc": "mixed_tolerance_bm",
+    "acc": {"mixed_tolerance_bm": {"output_dtype_overrides": {"0": "bf16"}}},
     "perf": "not_key",
     "mem": 1.1,
 }
 
-# GPU 双标杆（DUT + 同精度标杆 vs FP64 真值）用 ATK 的 `cv_fused_double_benchmark`，
-# 阈值与交付仓 `FLA_ATK` 里 `chunk_gated_delta_rule_fwd_h` / `chunk_kda_fwd` 一致。
+# 备选（非默认）：GPU/CPU 双标杆（DUT + 同精度标杆 vs FP64 真值）用 ATK 的
+# `cv_fused_double_benchmark`，阈值与交付仓 `FLA_ATK` 的 `chunk_gated_delta_rule_fwd_h`
+# 一致。它比"按模型 dtype 判"严得多（要求 DUT vs FP64 的小值域误差 ≤ 2× 同精度标杆），
+# 只有把 m 链做成 IEEE FP32（`-DPPFM_M_CHAIN_FP32=1`，代价 +65~80%）才过得去。
 DOUBLE_BENCHMARK_STANDARD = {
     "acc": {
         "cv_fused_double_benchmark": {
@@ -77,15 +83,14 @@ DOUBLE_BENCHMARK_MSS_STANDARD = {
     "mem": 1.1,
 }
 
-# `--standard` 的取值：仓内统一标准（CPU 单标杆）与 GPU 双标杆标准各一套。
+# `--standard` 的取值：交付默认（CP 组同口径，按模型 dtype 判）与双标杆备选各一套。
 STANDARD_CHOICES = {
     "mixed_tolerance_bm": (STANDARD, MSS_STANDARD),
     "cv_fused_double_benchmark": (DOUBLE_BENCHMARK_STANDARD, DOUBLE_BENCHMARK_MSS_STANDARD),
 }
-# 交付矩阵按双标杆冻结：ATK 26.7.8 / 26.9.24 的精度注册表里没有 `mixed_tolerance_bm`，
-# 直接写它会 KeyError；`cv_fused_double_benchmark` 才是两个版本都注册、且本算子实际
-# 验收口径（DUT + 同精度契约标杆 vs FP64 真值）对应的标准名。
-DEFAULT_STANDARD = "cv_fused_double_benchmark"
+# 默认 = CP 组同口径（`mixed_tolerance_bm` + 按模型 dtype 判）。
+# 注意它需要 ATK >= 26.8.8；26.7.8.dev / 26.9.24 的注册表里没有这个名字。
+DEFAULT_STANDARD = "mixed_tolerance_bm"
 
 # 每个精度用例至少 3 个固定种子（tests/atk/README.md「正式验收用例包」）。
 SEEDS_PER_CASE = 3

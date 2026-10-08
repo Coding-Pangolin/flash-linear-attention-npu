@@ -22,12 +22,15 @@ CPU 标杆：本目录 `scripts/pre_process_fwd_kernel_merged_cpu.py`
 （需要 `FLACPContext` / 进程组的编排层 `chunk_gated_delta_rule_fwd_h_pre_process`
 本身不参与比较）。CPU 双标杆同样可用，但真值与同精度标杆都在 CPU 上跑，更慢。
 
-精度口径（重要）：本算子的**验收基线是"契约版"标杆** —— `accum_dtype=fp32` +
-三个舍入点开关全开。`scripts/pre_process_fwd_kernel_merged_cpu.py` 的模块文档写明：kernel 的 h/m 累加器是 FP32，
-用 FP64 基准会让任何忠实实现平白多出 ~9.4e-3 的绝对偏差（与 H20 `ieee` 对齐时实测）。
+精度口径（重要）：**交付默认按模型 dtype 判**（与 CP 组兄弟算子
+`chunk_delta_h_bwd_preprocess` 同口径）—— 用例的 `standard.acc` 是
+`mixed_tolerance_bm` + `output_dtype_overrides {"0": "bf16"}`，**本 executor 不自造任何指标**，
+只负责构造输入、跑三方角色（DUT / 同精度 benchmark / 高精度 golden）。
+`scripts/pre_process_fwd_kernel_merged_cpu.py` 的模块文档写明：kernel 的 h/m 累加器是 FP32，
+用 FP64 基准会让任何忠实实现平白多出 ~9.4e-3 的绝对偏差（与 H20 `ieee` 对齐时实测），
 因此 **FP64 结果（`high_precision=True`）只作参考侧灵敏度对照（ATK golden 节点）**，
-与 DUT 同精度类的对照是约定容差下的混合容差比较；本工程的输入构造（模型同构分布）
-与逐段调用约定不随之改变。
+不能当逐元素判据。备选的 `cv_fused_double_benchmark`（DUT vs FP64 真值、≤2× 同精度标杆）
+比"按模型 dtype 判"严得多，只有 `-DPPFM_M_CHAIN_FP32=1` 的 IEEE FP32 m 链才过得去。
 """
 
 from __future__ import annotations
@@ -263,7 +266,9 @@ def _triton_hm(callable_obj, inputs: dict[str, Any]) -> torch.Tensor:
 
     上游 kernel 是 token-major `[B,T,H,*]`、以 `MULTI_SEQS=False` 处理**一个窗口**，
     与本算子的 DUT 契约（`hm[i]` = 第 i 段单独调用）逐段对应。
-    `AFFINE_CHAIN_PRECISION="ieee"` 对齐契约里"`M_c @ m` 每 chunk 回落 FP32"的口径。
+    `AFFINE_CHAIN_PRECISION` 跟随上游默认（NVIDIA 上 = `tf32`，与本算子 1.0× H20 的
+    性能基线同口径）；把它写成 `"ieee"` 只在做 `cv_fused_double_benchmark` 双标杆、
+    且 DUT 打开 `PPFM_M_CHAIN_FP32` 时才需要。
     """
     import triton  # 与上游 kernel 同环境；缺失时 _load_triton_callable 已经返回 None
 
@@ -300,7 +305,7 @@ def _triton_hm(callable_obj, inputs: dict[str, Any]) -> torch.Tensor:
             BLOCK_SIZE=block,
             BK1=triton.next_power_of_2(K),
             MULTI_SEQS=False,
-            AFFINE_CHAIN_PRECISION="ieee",
+            AFFINE_CHAIN_PRECISION=os.environ.get("PPFM_ATK_TRITON_PRECISION") or None,
         )
         outs.append(hm)
     return torch.stack(outs, dim=0)

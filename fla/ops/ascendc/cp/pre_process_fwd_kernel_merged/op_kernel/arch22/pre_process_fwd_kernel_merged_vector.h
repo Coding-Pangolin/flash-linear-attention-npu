@@ -895,7 +895,8 @@ private:
                 PipeBarrier<PIPE_V>();
                 for (int32_t half = 0; half < cb_ / 64; ++half) {
                     Mul(scrF_[lo * cb_ + half * 64], scrF_[lo * cb_ + half * 64], fac8_,
-                        64, SEG, {1, 1, 0, cb_ / 8, cb_ / 8, 1});
+                        64, SEG, {1, 1, 0, static_cast<uint8_t>(cb_ / 8),
+                                  static_cast<uint8_t>(cb_ / 8), 1});
                 }
 #else
 #if PPFM_ROW_PREFETCH
@@ -1102,7 +1103,8 @@ private:
                     PipeBarrier<PIPE_V>();
                     for (int32_t half = 0; half < cb_ / 64; ++half) {
                         Mul(stateBlkF_[half * 64], stateBlkF_[half * 64], fac8_,
-                            64, RB, {1, 1, 0, cb_ / 8, cb_ / 8, 1});
+                            64, RB, {1, 1, 0, static_cast<uint8_t>(cb_ / 8),
+                                     static_cast<uint8_t>(cb_ / 8), 1});
                     }
                 }
 #else
@@ -1259,7 +1261,8 @@ private:
                     PipeBarrier<PIPE_V>();
                     for (int32_t half = 0; half < cb_ / 64; ++half) {
                         Mul(stateBlkF_[half * 64], stateBlkF_[half * 64], fac8_,
-                            64, RB, {1, 1, 0, cb_ / 8, cb_ / 8, 1});
+                            64, RB, {1, 1, 0, static_cast<uint8_t>(cb_ / 8),
+                                     static_cast<uint8_t>(cb_ / 8), 1});
                     }
                 }
 #else

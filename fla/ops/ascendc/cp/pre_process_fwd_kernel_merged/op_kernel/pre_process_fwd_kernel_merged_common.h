@@ -243,17 +243,25 @@ __aicore__ inline void AicSetToAiv(uint16_t id)
 #endif
 }
 
-// 手写 tile 路径下 L1 的两个槽（A 在前、B 在后），单位字节
+// 手写 tile 路径下 L1 的两个槽（A 在前、B 在后），单位字节。
+// 两个槽都必须落在 64 KiB 边界上：A 槽（128x128 bf16）实际只占 32 KiB，若把 B 紧跟
+// 在 32 KiB 处，L1→L0B 的 LoadData 就落在非 64 KiB 对齐的 L1 基址上 —— 数值仍然正确，
+// 但 950 的 mssanitizer（CANN 9.1.0 与 9.2.0-beta.1 表现一致）会报
+//   ERROR: misaligned access of size 512 at 0x3 on L1 ... block aic(0-3)
+// 调用栈落在 catlass/gemm/tile/ascend950/copy_l1_to_l0b.hpp 的 AscendC::LoadData，
+// 并连带把 kernel 参数块的两条读也报成 illegal read，使 ATK 内存检测判 Failed。
+// 槽间距取 64 KiB 后 mssanitizer 全清（精度 111/111、确定性 5/5、性能不变）；
+// fp32 专用槽（128 / 192 KiB）本来就按 64 KiB 对齐，这里只是把 bf16 槽补齐到同一约定。
 constexpr int32_t TILED_L1_A_OFF = 0;
-constexpr int32_t TILED_L1_B_OFF = 32 * 1024;
+constexpr int32_t TILED_L1_B_OFF = 64 * 1024;
 // L1A/L1B 的「容量形状」：必须与 BlockMmad 的 L1_TILE_M/K/N 一致（zZ/nZ 分形布局的
 // stride 由 originShape 决定，用实际 (m,k) 构造会让 GM→L1 的落点与 L1→L0 的读点错位，
-// 表现为 mmad 读到空 L0、C 恒为 0）。TILED_L1_B_OFF=32KiB 正是 128x128 bf16 的 footprint。
+// 表现为 mmad 读到空 L0、C 恒为 0）。
 constexpr int32_t TILED_L1_CAP_M = 128;
 constexpr int32_t TILED_L1_CAP_K = 128;
 constexpr int32_t TILED_L1_CAP_N = 128;
 // fp32（PPFM_M_CHAIN_FP32）专用 L1 偏移：Ky 128x128 fp32 = 64 KiB、m 窗口 128x128 fp32 = 64 KiB，
-// 不能沿用 bf16 的 0 / 32 KiB（会互相覆盖）。
+// 不能沿用 bf16 的 0 / 64 KiB（会互相覆盖）。
 constexpr int32_t TILED_L1_A_F32_OFF = 128 * 1024;
 constexpr int32_t TILED_L1_B_F32_OFF = 192 * 1024;
 // 手写 tile 级 mmad 开关：1=用 TileMmadTla 手拼，0=退回 BlockMmadTla

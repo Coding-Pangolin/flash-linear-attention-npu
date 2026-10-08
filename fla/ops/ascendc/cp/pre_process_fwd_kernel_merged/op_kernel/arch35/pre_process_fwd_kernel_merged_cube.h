@@ -649,7 +649,7 @@ private:
     // m 链 fp32 化（PPFM_M_CHAIN_FP32）的 ④'：T2[K,n] = FP32(Kw[K,K] @ m[K,n])。
     // 与 RunTiledTAUb 同构（同样写回 **UB 单槽**，SPLIT_M + `freeFlag` 归还信用），
     // 只有两点不同：A/B 都是 **fp32**，且 A 是行主（NT 形态，Kw 本身就是 [K,K] 行主）。
-    // L1 用 fp32 专用偏移（TILED_L1_A_F32_OFF/B_F32_OFF），避免与 bf16 的 0/32KiB 重叠。
+    // L1 用 fp32 专用偏移（TILED_L1_A_F32_OFF/B_F32_OFF），避免与 bf16 的 0/64KiB 重叠。
     __aicore__ inline void RunMmadNTF32Ub(GlobalTensor<float> &gmA, GlobalTensor<float> &gmB,
                                           uint32_t m, uint32_t n, uint32_t k, int32_t ubOff,
                                           uint16_t freeFlag)

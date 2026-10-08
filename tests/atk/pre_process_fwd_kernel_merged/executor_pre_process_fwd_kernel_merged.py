@@ -115,6 +115,9 @@ def build_inputs(spec: dict[str, Any], device: torch.device, high_precision: boo
     spec 字段：dtype / B(=1) / HK / HV / T / K(=128) / V(=128) / chunk_size(=64)
               / cu_seqlens(可选, list[int]) / gate(g|gk) / gate_dtype(fp32|bf16) / route / soc
 
+    返回的所有张量都在 `device` 上：DUT 节点传 marker tensor 所在的 NPU，参考节点传
+    CPU/GPU。数值本身与设备无关（CPU 生成后整体搬运），三路比较因此只反映实现差异。
+
     **数据分布必须是模型同构的**：
     `k` 归一化、`w = beta · k`（`beta ~ U(0, 0.02)`），使 `|Kw| << 1`、`m` 链良态。
     若改用满幅随机 `w`，`m = Π M_c` 会把 fp32 求和顺序的 1 ulp 差异放大到 O(1)
@@ -176,7 +179,13 @@ def build_inputs(spec: dict[str, Any], device: torch.device, high_precision: boo
     else:
         inputs["g"] = real_gate((HV,)).to(elem if gate_dtype != "fp32" else torch.float32).to(calc)
         inputs["gk"] = None
-    return inputs
+    # 张量一律先在 CPU 上按固定 seed 生成（与标杆同分布、逐位一致），最后整体搬到 `device`：
+    # DUT 节点拿到 NPU 张量、参考节点拿到 CPU/GPU 张量，但三路的**输入数值完全相同**。
+    # （曾经漏掉这一步，NPU 节点拿到 CPU 张量 ⇒ 算子直接落在 CPU 分支，DUT 输出恒为空。）
+    return {
+        key: (value.to(device) if isinstance(value, torch.Tensor) else value)
+        for key, value in inputs.items()
+    }
 
 
 def _to_bnsd(x: torch.Tensor) -> torch.Tensor:

@@ -98,7 +98,9 @@ def pre_process_fwd_kernel_merged(
     _check(w.shape[2] == K, "w's last dim must equal K")
     _check(v.shape[0] == T and w.shape[0] == T, "k/v/w must share T")
     _check(u.shape == v.shape, "u must have v's shape")
-    _check(0 < chunk_size <= T, "chunk_size must be in (0, T]")
+    # 只要求 chunk_size 为正：本算子允许 **T < chunk_size** 的尾块窗口
+    # （如 ATK 的 T=1 用例；tiling 侧同样按尾块处理）。
+    _check(0 < chunk_size, "chunk_size must be positive (tail windows allow T < chunk_size)")
 
     BT = int(chunk_size)
     ratio = HV // HK

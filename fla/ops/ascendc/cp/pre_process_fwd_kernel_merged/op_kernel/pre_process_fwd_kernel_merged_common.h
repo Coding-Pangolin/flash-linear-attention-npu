@@ -329,7 +329,6 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #undef PPFM_T2_CV
 #define PPFM_T2_CV 0
 #endif
-// 实验开关：1=保留手工 DCCI/DSB（此前实现）；0=只用跨核 flag（与生产算子一致）
 // 临时诊断开关：1=在 prologue 给 AIC 要写的 C 缓冲预置哨兵（见 ProcessChain）
 #ifndef PPFM_SENTINEL_PROBE
 #define PPFM_SENTINEL_PROBE 0

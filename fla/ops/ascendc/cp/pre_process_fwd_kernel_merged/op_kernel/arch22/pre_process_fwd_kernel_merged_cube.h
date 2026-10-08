@@ -201,12 +201,12 @@ private:
         // 但**不动 m 链相位、flag 数量完全不变**）。
         // 注意： 仅当 `PPFM_T1_FIXPIPE_BF16=1`（T1 直接以 bf16 落 GM、AIV 不消费）时成立。
 #if !PPFM_VTMP_UB
-#if PPFM_LEGACY_CACHEOPS
+#if PPFM_KEEP_CACHEOPS_W
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(vTmpF_);
 #endif
 #endif
-#if PPFM_LEGACY_CACHEOPS
+#if PPFM_KEEP_CACHEOPS_W
         DataSyncBarrier<MemDsbT::DDR>();
 #endif
         AicSetToAiv(kFlagHalf1);
@@ -285,7 +285,7 @@ private:
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(lIn);
 #endif
-#if PPFM_LEGACY_CACHEOPS
+#if PPFM_KEEP_CACHEOPS_W
         DataCacheCleanAndInvalid<bfloat16_t, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1Bf_);
 #endif
@@ -322,16 +322,16 @@ private:
 
         // ④ T2 已在上面（kFlagHalf1 之后）提前算完
 #if !PPFM_DH_CV
-#if PPFM_LEGACY_CACHEOPS
+#if PPFM_KEEP_CACHEOPS_W
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(dhBuf);
 #endif
 #endif
-#if PPFM_LEGACY_CACHEOPS && !PPFM_T2_CV
+#if PPFM_KEEP_CACHEOPS_W && !PPFM_T2_CV
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t2Buf);
 #endif
-#if PPFM_LEGACY_CACHEOPS
+#if PPFM_KEEP_CACHEOPS_W
         DataSyncBarrier<MemDsbT::DDR>();
 #endif
 

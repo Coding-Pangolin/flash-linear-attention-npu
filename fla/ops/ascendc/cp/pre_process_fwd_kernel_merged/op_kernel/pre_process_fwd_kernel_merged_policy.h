@@ -81,6 +81,31 @@ constexpr int32_t PPFM_UB_CAP_BYTES = 192 * 1024;
 #endif
 #endif
 
+// ---- C3 实验（A2 专用；默认 = 现状，950 机器码按构造不变）----
+// 动机：A2 的 DCCI/DSB 目前"不分生产方"地全开（AIC 每 chunk 10 次整缓存 DCCI + AIV 6 次
+//   + 4 次 DSB），而 950 的实测记录是"去掉 DCCI 后竞态由 3/6 降到 1/6"。
+//   把 A2 的缓存操作按**数据生产方**拆成两组，做 4 组 A/B（默认都是 1 = 现状）：
+//     W 组 = AIC 抬 flag 前，对**自己算出的 C** 做的 DCCI/DSB（vTmp / t1Bf_ / dH / T2 及末尾 DSB）
+//     R 组 = AIV 读 **AIC 算出的 C** 之前做的失效（dHF_/dHF1_/t2F_/t2F1_/vTmpF_/t1F_）
+//   保留不动的是"消费 AIV 产物"的那一半（AIC 读 wBf_/kBf_/hBf_/mBf_/lBf_/vNewBf_ 前的 DCCI，
+//   以及 AivSetToAic 的 DSB）—— 那一半有明确故障证据（AIC 读到尚未可见的 bf16(h)）。
+//   实验矩阵：W1R1（基线）/ W0R1 / W1R0 / W0R0，判据 = PROC S≥40 的失败率 + L1 + perf。
+#ifndef PPFM_A2_CACHEOPS_W
+#define PPFM_A2_CACHEOPS_W 1
+#endif
+#ifndef PPFM_A2_CACHEOPS_R
+#define PPFM_A2_CACHEOPS_R 1
+#endif
+// 注意：下面两个宏在 950 上必须恒为 0（= 与 PPFM_LEGACY_CACHEOPS 同源），
+//       以保证 950 的预处理输出与 kernel .o 逐字节不变（L-A）。
+#if PPFM_ARCH_IS_950
+#define PPFM_KEEP_CACHEOPS_W 0
+#define PPFM_KEEP_CACHEOPS_R 0
+#else
+#define PPFM_KEEP_CACHEOPS_W (PPFM_LEGACY_CACHEOPS && PPFM_A2_CACHEOPS_W)
+#define PPFM_KEEP_CACHEOPS_R (PPFM_LEGACY_CACHEOPS && PPFM_A2_CACHEOPS_R)
+#endif
+
 }  // namespace GDN
 
 #endif  // PREF_PROCESS_FWD_KERNEL_MERGED_POLICY_H

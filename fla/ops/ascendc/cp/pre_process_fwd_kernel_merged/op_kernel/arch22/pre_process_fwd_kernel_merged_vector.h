@@ -421,19 +421,19 @@ private:
             //   `dhBuf`/`t2Buf`（两份）⇒ 奇数 chunk 读的 `dHF1_`/`t2F1_` 从来没被失效过，
             //   命中旧行就会把过期 T2 减进 m（表现为 m 半边小范围错、h 正常）。
             //   这个缺口在 A2 上（PPFM_LEGACY_CACHEOPS=1）才暴露得出来；补齐两份。
-#if PPFM_LEGACY_CACHEOPS
+#if PPFM_KEEP_CACHEOPS_R
             DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                      DcciDst::CACHELINE_OUT>(dHF_);
 #endif
-#if PPFM_LEGACY_CACHEOPS
+#if PPFM_KEEP_CACHEOPS_R
             DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                      DcciDst::CACHELINE_OUT>(dHF1_);
 #endif
-#if PPFM_LEGACY_CACHEOPS
+#if PPFM_KEEP_CACHEOPS_R
             DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                      DcciDst::CACHELINE_OUT>(t2F_);
 #endif
-#if PPFM_LEGACY_CACHEOPS
+#if PPFM_KEEP_CACHEOPS_R
             DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                      DcciDst::CACHELINE_OUT>(t2F1_);
 #endif
@@ -826,12 +826,12 @@ private:
         }
 #endif
 #if !PPFM_VTMP_UB
-#if PPFM_LEGACY_CACHEOPS
+#if PPFM_KEEP_CACHEOPS_R
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(vTmpF_);
 #endif
 #endif
-#if PPFM_LEGACY_CACHEOPS
+#if PPFM_KEEP_CACHEOPS_R
         DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
                                  DcciDst::CACHELINE_OUT>(t1F_);
 #endif

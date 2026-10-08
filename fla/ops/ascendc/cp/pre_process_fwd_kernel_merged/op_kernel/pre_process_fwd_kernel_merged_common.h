@@ -310,17 +310,19 @@ constexpr int32_t TILED_L1_B_F32_OFF = 192 * 1024;
 #endif
 // h 常驻 UB 依赖两件事，二者都由 提供：① 状态更新的**连续半区**行分配；
 // ② dH 已经在 UB 里（否则还要额外一份 UB 拷贝）。没有 L0C→UB 的 A2/A3 上自动关闭。
-// （2026-09-29）：**A2/A3 的版本已实现但当前不启用**（`PPFM_H_UB_A2=0`）。
+// （2026-10-08）：**已启用**（`PPFM_H_UB_A2=1`）——原来的两个阻塞都已修掉：
+//   ① 行归属竞态（prologue/epilogue 与状态更新的行分区不一致，见 arch22 的修复）；
+//   ② `UB_STATE_ROWS` 的判据用错宏 ⇒ A2 打开 H_UB 时 stateBlkF_/extBlkF_ 越界 16 KiB；
 //   实现：那边 dH 仍从 GM 回读进 `extBlkF_` 暂存，h 本体不再往返 GM
 //   （省每 chunk「h fp32 读 64 KiB + 写 64 KiB」）；910B 的 `ub_size=262144`
 //   （按保守的 192 KiB 读也够）也放得下这 32 KiB。
-//   注意： **为什么当前不启用**：910B 上实测它**数值全对但非确定**——
+//   历史记录（当时的阻塞）：910B 上实测它**数值全对但非确定**——
 //     同一 kernel 连跑 4 次 dump，两两比较有 2/3 次出现差异（每次 3/5 个用例，
 //     64 个元素、bf16 舍入量级，集中在 `m` 半边某一行）。而 （本改动的父版本）
 //     连跑 4 次**完全确定**。⇒ 它改变了时序，把 A2 上"T2 走 GM"那条边的残余窗口
 //     顶到了表面（与 950 的 之前同源）。**先把那条边收口，再打开这个开关。**
 #ifndef PPFM_H_UB_A2
-#define PPFM_H_UB_A2 0
+#define PPFM_H_UB_A2 1
 #endif
 #if PPFM_H_UB && !PPFM_DH_CV && !PPFM_H_UB_A2
 #undef PPFM_H_UB
@@ -626,8 +628,13 @@ constexpr int32_t UB_STATE_F = UB_GBLK + PPFM_NSLOT * CV_BT * 4;   // [RB,K] fp3
 //   * 950（PPFM_H_UB=1）：状态相位本体在 hUb_/dHUb，这两块只做小暂存 ⇒ 仍是 32 行；
 //   * A2（无 H_UB）：状态更新用 stateBlkF_ 载入状态本体、用 extBlkF_ 暂存 dH
 //     ⇒ 容量必须 ≥ PPFM_SBRB 行（PPFM_A2_RB64=1 时为 64 行）。
+// [FIX] 只要 **m 状态不在 UB**（PPFM_M_UB=0；A2/A3 就是这种），stateBlkF_/extBlkF_
+//   就必须放得下状态更新的整块（PPFM_SBRB 行），与 H_UB 无关。
+//   原式按 H_UB 判断 ⇒ A2 打开 H_UB 时只给 32 行、而 m 相位仍按 64 行写
+//   ⇒ UB 越界 16 KiB（多头用例整块错）。改成按 M_UB 判断后：
+//   A2 默认(H_UB=0,M_UB=0) 与 950(H_UB=1,M_UB=1) 的布局都与原式完全一致。
 constexpr int32_t UB_STATE_ROWS =
-    PPFM_H_UB ? PPFM_RB : ((PPFM_SBRB > PPFM_RB) ? PPFM_SBRB : PPFM_RB);
+    PPFM_M_UB ? PPFM_RB : ((PPFM_SBRB > PPFM_RB) ? PPFM_SBRB : PPFM_RB);
 constexpr int32_t UB_EXT_ROWS =
     PPFM_DH_CV ? (2 * PPFM_SEG)
                : ((PPFM_SBRB > 2 * PPFM_SEG) ? PPFM_SBRB : (2 * PPFM_SEG));

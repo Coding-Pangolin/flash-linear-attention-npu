@@ -160,6 +160,14 @@ constexpr int64_t WS_K_BF_1 = WS_H_F32 + 65536;        // k_c 第二槽 16384
 constexpr int64_t WS_L_BF_1 = WS_K_BF_1 + 16384;       // left 第二槽 16384
 // m 链 fp32 化（PPFM_M_CHAIN_FP32）用的 Kw = left^T @ W_c（[K,K] fp32）
 constexpr int64_t WS_KW_F32 = WS_L_BF_1 + 16384;       // Kw [K,K] fp32 65536
+// A2（910B/910_93）的 m 链 fp32 **等价**实现（PPFM_A2_M_FP32）复用这块区域
+//   （950 的 Kw 区在 A2 上本来不用）：
+//     WS_M_BF_LO  [K,cb_] bf16 32 KiB —— m 的低位（m_lo = bf16(m - bf16(m))）
+//     WS_T1_BF_HI [BT,cb_] bf16 16 KiB —— T1 的高位
+//     WS_T1_BF_LO [BT,cb_] bf16 16 KiB —— T1 的低位
+constexpr int64_t WS_M_BF_LO = WS_KW_F32;              // 32 KiB
+constexpr int64_t WS_T1_BF_HI = WS_KW_F32 + 32768;     // 16 KiB
+constexpr int64_t WS_T1_BF_LO = WS_KW_F32 + 32768 + 16384;  // 16 KiB
 constexpr int64_t WS_GATE_DG = 0;
 constexpr int64_t WS_GATE_DECAY = CV_BT * 4;
 
@@ -361,6 +369,21 @@ constexpr int32_t TILED_L1_B_F32_OFF = 192 * 1024;
 //    代价：cube 每 chunk 2→4 次 MMAD（A2 是 AIV-bound，可能大部分被隐藏）+
 //          AIV 每 chunk 多搬 64 KiB（读 t1F_ 32 KiB + 写 2×16 KiB）≈ 个位数~十几个百分点。
 //    ⇒ **待决策**：这一项是"用 A2 的一部分性能增益换契约精度"，需要产品/评审拍板后再做。
+//
+// —— `PPFM_A2_M_FP32`（默认 0，实验开关）：A2 上把上面那套等价实现真正落地。
+//    前置验证（2026-10-08，234 的 torch 选型）：把候选公式都模拟一遍，
+//    只有"Kw/m 同时 hi/lo 拆分"或"T1 走 fp32 + AIV 拆 hi/lo"能回到契约
+//    （相对误差 1.13 / 0.0999，而现状是 1.06e3）；只做一半完全没有改善。
+//    累加能力已确认：Catlass `tile_mmad.hpp` 的 `initC` 参数支持"第二次 MMAD 累加进同一 L0C"。
+#ifndef PPFM_A2_M_FP32
+#define PPFM_A2_M_FP32 0
+#endif
+#if PPFM_A2_M_FP32 && !PPFM_ARCH_IS_950
+// 该实现要求 AIC 把 T1 以 **fp32** 落 GM（AIV 再去拆 hi/lo ⇒ 复用既有 kFlagVNew 握手），
+// 所以必须关掉 fixpipe 直接落 bf16 的那条捷径。
+#undef PPFM_T1_FIXPIPE_BF16
+#define PPFM_T1_FIXPIPE_BF16 0
+#endif
 // 注意：**不动 `PPFM_T2_CV` / `PPFM_M_UB`**。T2 仍然落 UB 单槽（只是改由 fp32 的
 // `RunMmadNTF32Ub` 写），m 仍然常驻 UB；`PPFM_M_UB` 分支额外把 fp32 的 m 行块落
 // `mF32_`，供 cube 的 ④' 直接读（见 arch35 的 vector/cube）。

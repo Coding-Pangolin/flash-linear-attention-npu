@@ -152,6 +152,15 @@ def build_inputs(spec: dict[str, Any], device: torch.device, high_precision: boo
     if not cu:
         cu = [0, T]
 
+    # 门控 dtype 由 gate_dtype 决定，**不能**跟着输入 dtype / high_precision 一起降位：
+    # `calc` 既当"参考计算精度"又当"输入 dtype"，此前 gate_dtype=fp32 的用例会被
+    # `.to(calc)` 再降成 bf16，于是 DUT 永远拿不到 fp32 门控——"fp32 gate" 那一档
+    # TilingKey 在设备侧从未被真正覆盖。这里显式分开 gate 的原生 dtype 与计算 dtype：
+    #   gate_native：gate_dtype 声明的量化精度（fp32 / bf16），三路输入一致；
+    #   gate_calc  ：仅 FP64 真值节点提升到 fp64，数值仍来自 gate_native。
+    gate_native = torch.float32 if gate_dtype == "fp32" else elem
+    gate_calc = torch.float64 if high_precision else gate_native
+
     gen = torch.Generator(device="cpu")
     gen.manual_seed(seed)
 
@@ -183,10 +192,10 @@ def build_inputs(spec: dict[str, Any], device: torch.device, high_precision: boo
     }
     if gate_kind == "gk":
         # KDA：逐 K 门控，按 value head 给（HV 个），k 仍按 HK 头 ⇒ HK < HV（GVA）合法。
-        inputs["gk"] = real_gate((HV, K)).to(elem if gate_dtype != "fp32" else torch.float32).to(calc)
+        inputs["gk"] = real_gate((HV, K)).to(gate_native).to(gate_calc)
         inputs["g"] = None
     else:
-        inputs["g"] = real_gate((HV,)).to(elem if gate_dtype != "fp32" else torch.float32).to(calc)
+        inputs["g"] = real_gate((HV,)).to(gate_native).to(gate_calc)
         inputs["gk"] = None
     # 张量一律先在 CPU 上按固定 seed 生成（与标杆同分布、逐位一致），最后整体搬到 `device`：
     # DUT 节点拿到 NPU 张量、参考节点拿到 CPU/GPU 张量，但三路的**输入数值完全相同**。

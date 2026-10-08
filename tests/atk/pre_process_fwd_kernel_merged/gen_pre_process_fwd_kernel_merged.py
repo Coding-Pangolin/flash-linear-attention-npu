@@ -82,7 +82,10 @@ STANDARD_CHOICES = {
     "mixed_tolerance_bm": (STANDARD, MSS_STANDARD),
     "cv_fused_double_benchmark": (DOUBLE_BENCHMARK_STANDARD, DOUBLE_BENCHMARK_MSS_STANDARD),
 }
-DEFAULT_STANDARD = "mixed_tolerance_bm"
+# 交付矩阵按双标杆冻结：ATK 26.7.8 / 26.9.24 的精度注册表里没有 `mixed_tolerance_bm`，
+# 直接写它会 KeyError；`cv_fused_double_benchmark` 才是两个版本都注册、且本算子实际
+# 验收口径（DUT + 同精度契约标杆 vs FP64 真值）对应的标准名。
+DEFAULT_STANDARD = "cv_fused_double_benchmark"
 
 # 每个精度用例至少 3 个固定种子（tests/atk/README.md「正式验收用例包」）。
 SEEDS_PER_CASE = 3

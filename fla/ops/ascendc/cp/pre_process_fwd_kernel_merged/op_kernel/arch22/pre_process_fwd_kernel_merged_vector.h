@@ -272,12 +272,11 @@ private:
                 AIV_SET_V_MTE3();
                 AIV_WAIT_V_MTE3();
                 DataCopyParams hpF_{static_cast<uint16_t>(nr_),
-                                   static_cast<uint16_t>((cb_ * 4) / 32), 0,
-                                   static_cast<uint16_t>((cb_ * 4) / 32)};
+                                   static_cast<uint16_t>((cb_ * 4) / 32), 0, 0};
                 DataCopyParams hpB_{static_cast<uint16_t>(nr_),
-                                   static_cast<uint16_t>((cb_ * 2) / 32), 0,
-                                   static_cast<uint16_t>((cb_ * 2) / 32)};
-                const int32_t r0_ = subIdx_ + i0 * subNum_;
+                                   static_cast<uint16_t>((cb_ * 2) / 32), 0, 0};
+                // [FIX-ROWPART] 与状态更新同构：本子核写/读自己那连续半区
+                const int32_t r0_ = subIdx_ * rowsPerSub_ + i0;
                 DataCopy(hF32_[r0_ * cb_], extBlkF_, hpF_);
                 DataCopy(hBf_[r0_ * cb_], stateBlkBf_, hpB_);
                 PipeBarrier<PIPE_ALL>();
@@ -334,7 +333,7 @@ private:
                 Duplicate(extBlkF_, 0.0f, nr_ * cb_);
                 PipeBarrier<PIPE_ALL>();
                 for (int32_t n = 0; n < nr_; ++n) {
-                    const int32_t r = subIdx_ + (i0 + n) * subNum_;
+                    const int32_t r = subIdx_ * rowsPerSub_ + i0 + n;
                     const int32_t c = r - colBase_;
                     if (c >= 0 && c < cb_) {
                         extBlkF_.SetValue(n * cb_ + c, 1.0f);
@@ -345,12 +344,11 @@ private:
                 AIV_SET_V_MTE3();
                 AIV_WAIT_V_MTE3();
                 DataCopyParams mpF_{static_cast<uint16_t>(nr_),
-                                   static_cast<uint16_t>((cb_ * 4) / 32), 0,
-                                   static_cast<uint16_t>((cb_ * 4) / 32)};
+                                   static_cast<uint16_t>((cb_ * 4) / 32), 0, 0};
                 DataCopyParams mpB_{static_cast<uint16_t>(nr_),
-                                   static_cast<uint16_t>((cb_ * 2) / 32), 0,
-                                   static_cast<uint16_t>((cb_ * 2) / 32)};
-                const int32_t r0_ = subIdx_ + i0 * subNum_;
+                                   static_cast<uint16_t>((cb_ * 2) / 32), 0, 0};
+                // [FIX-ROWPART] 与状态更新同构：本子核写/读自己那连续半区
+                const int32_t r0_ = subIdx_ * rowsPerSub_ + i0;
                 DataCopy(mF32_[r0_ * cb_], extBlkF_, mpF_);
                 DataCopy(mBf_[r0_ * cb_], stateBlkBf_, mpB_);
                 PipeBarrier<PIPE_ALL>();
@@ -512,11 +510,13 @@ private:
                                         ? (rowsPerSub_ - i0) : rowsPerCopy_;
                 DataCopyParams rd_{static_cast<uint16_t>(nr_),
                                    static_cast<uint16_t>((cb_ * 4) / 32),
-                                   static_cast<uint16_t>((cb_ * 4) / 32), 0};
+                                   0, 0};
                 DataCopyParams wr_{static_cast<uint16_t>(nr_),
                                    static_cast<uint16_t>((cb_ * 4) / 32), 0,
-                                   static_cast<uint16_t>(((2 * (CV_V + CV_K) - cb_) * 4) / 32)};
-                const int32_t r0_ = subIdx_ + i0 * subNum_;
+                                   static_cast<uint16_t>(((CV_V + CV_K) - cb_) * 4 / 32)};
+                // [FIX-ROWPART] 行归属必须与状态更新一致（连续半区）：否则收尾要读
+                //               另一个子核刚写的行，而 AIV<->AIV 之间没有同步
+                const int32_t r0_ = subIdx_ * rowsPerSub_ + i0;
                 const int64_t epRow0_ = hmBase + static_cast<int64_t>(r0_) * (CV_V + CV_K);
                 DataCopy(extBlkF_, hF32_[r0_ * cb_], rd_);
                 PipeBarrier<PIPE_ALL>();

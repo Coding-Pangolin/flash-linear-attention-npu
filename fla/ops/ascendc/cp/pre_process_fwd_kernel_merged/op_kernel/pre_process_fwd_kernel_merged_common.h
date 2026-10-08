@@ -495,6 +495,15 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #else
 #define PPFM_FAC8_ON 0
 #endif
+// C10b：FAC8 打开时，状态相位的 K1-a 批量预取分支**整体让位**给 Brcb+Mul 版本
+//   （K1-a 只是把标量读提前、数量不变；Brcb+Mul 是直接取代）
+//   做法：把 PPFM_KDA_ROW_PREFETCH 置 0 ⇒ 代码走 `#else` 分支，而该分支在 FAC8 打开时
+//   已在 _vec.h 的两处 **A2 活跃**站点被换成 Brcb+Mul（h 相位非 H_UB、m 相位 !T2_CV）。
+//   只影响 A2（FAC8 需要 !PPFM_ARCH_IS_950）⇒ 950 预处理输出与机器码不变。
+#if PPFM_FAC8_ON
+#undef PPFM_KDA_ROW_PREFETCH
+#define PPFM_KDA_ROW_PREFETCH 0
+#endif
 
 // ---------------- AIV 侧 UB 布局（字节）----------------
 // 注意： 历史结论（**已修订**）：早期按"950 MIX 下 UB 由 AIC + 两个 AIV 子核共享"的

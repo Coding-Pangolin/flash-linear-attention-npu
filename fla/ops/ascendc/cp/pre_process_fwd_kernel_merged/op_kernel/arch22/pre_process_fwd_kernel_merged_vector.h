@@ -1093,10 +1093,24 @@ private:
                     }
                 }
 #else
+#if PPFM_FAC8_ON
+                // C10b：FAC8 打开时本分支取代 K1-a（_common.h 已把 PPFM_KDA_ROW_PREFETCH 置 0）。
+                // 乘数仍是 decayF_/decayPrevF_ 里同一个 fp32 ⇒ 位级不变。
+                {
+                    LocalTensor<float> decSrc = usePrevDecay ? decayPrevF_ : decayF_;
+                    Brcb(fac8_, decSrc[rb], RB / 8, {1, 8});
+                    PipeBarrier<PIPE_V>();
+                    for (int32_t half = 0; half < cb_ / 64; ++half) {
+                        Mul(stateBlkF_[half * 64], stateBlkF_[half * 64], fac8_,
+                            64, RB, {1, 1, 0, cb_ / 8, cb_ / 8, 1});
+                    }
+                }
+#else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
+#endif
 #endif
             }
             PipeBarrier<PIPE_V>();
@@ -1237,10 +1251,23 @@ private:
                     }
                 }
 #else
+#if PPFM_FAC8_ON
+                // C10b：m 相位的同一站点（非 M_UB / 非 T2_CV 路径，A2 活跃）
+                {
+                    LocalTensor<float> decSrc = usePrevDecay ? decayPrevF_ : decayF_;
+                    Brcb(fac8_, decSrc[rb], RB / 8, {1, 8});
+                    PipeBarrier<PIPE_V>();
+                    for (int32_t half = 0; half < cb_ / 64; ++half) {
+                        Mul(stateBlkF_[half * 64], stateBlkF_[half * 64], fac8_,
+                            64, RB, {1, 1, 0, cb_ / 8, cb_ / 8, 1});
+                    }
+                }
+#else
                 for (int32_t r = rb; r < rb + RB; ++r) {
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
+#endif
 #endif
             }
             PipeBarrier<PIPE_V>();

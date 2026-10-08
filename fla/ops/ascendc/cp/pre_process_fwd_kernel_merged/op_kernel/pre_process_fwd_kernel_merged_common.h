@@ -465,8 +465,9 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 //   * 950 是 RB=64 ⇒ 本来就没有这个窗口（也正因如此，这条只对 A2 有意义）。
 // 本开关只**插入一个事件对**（不改任何算术、不改 UB 布局）⇒ 位级不变；
 // 950 上展开为空 ⇒ 950 预处理输出与 kernel .o 逐字节不变。
+// **A2 默认开**（2026-10-08 上机验证：默认开 = 已验证的 allsw 产物，.o md5 d5a5ee92）。
 #ifndef PPFM_A2_WAR_FIX
-#define PPFM_A2_WAR_FIX 0
+#define PPFM_A2_WAR_FIX (!PPFM_ARCH_IS_950)
 #endif
 #if PPFM_A2_WAR_FIX && !PPFM_ARCH_IS_950
 #define AIV_WAR_BEFORE_STATE_MTE2() do { AIV_SET_V_MTE2(); AIV_WAIT_V_MTE2(); } while (0)
@@ -486,9 +487,9 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 //     Mul(dst, dst, fac8_, 64, SEG, {1,1,0, row/8, row/8, 1});     // 每 repeat 一行；行宽 >64 拆段
 //   ⇒ 32 次标量读 + 32 次 Muls 变成 1 次 Brcb + 1~2 次 Mul。乘数仍是同一个 fp32 数，
 //      Brcb 只搬数据 ⇒ **位级不变**。
-// 只作用于 A2（950 上与宏无关 ⇒ 预处理输出/机器码逐字节不变）；默认 0 = 仍走原路径。
+// 只作用于 A2（950 上与宏无关 ⇒ 预处理输出/机器码逐字节不变）。**A2 默认开**。
 #ifndef PPFM_A2_FAC_BROADCAST
-#define PPFM_A2_FAC_BROADCAST 0
+#define PPFM_A2_FAC_BROADCAST (!PPFM_ARCH_IS_950)
 #endif
 #if PPFM_A2_FAC_BROADCAST && !PPFM_ARCH_IS_950
 #define PPFM_FAC8_ON 1
@@ -529,8 +530,9 @@ constexpr int32_t PPFM_RB = 32;      // 状态更新的行块（行）16->32，
 //   全面是 950 的 3.3~11×，且**搬运被切得更碎**（MTE3 指令条数 4.2×）。
 //   开关 PPFM_A2_RB64=1 时 A2 也用 64 行块 ⇒ 每 chunk 状态相位的搬运/事件对减半
 //   （行分配由交错块自动变成连续半区，与 950 的 H_UB 情形同构；逐行数值不变）。
+// **A2 默认开**（2026-10-08 上机：单独开这一条即拿到 −8.5~12%，是四个开关里的主力）。
 #ifndef PPFM_A2_RB64
-#define PPFM_A2_RB64 0
+#define PPFM_A2_RB64 (!PPFM_ARCH_IS_950)
 #endif
 #if (PPFM_M_UB && PPFM_H_UB) || (!PPFM_ARCH_IS_950 && PPFM_A2_RB64)
 constexpr int32_t PPFM_SBRB = CV_K / PPFM_SUB;   // 64

@@ -91,7 +91,9 @@ constexpr int32_t PPFM_UB_CAP_BYTES = 192 * 1024;
 //   以及 AivSetToAic 的 DSB）—— 那一半有明确故障证据（AIC 读到尚未可见的 bf16(h)）。
 //   实验矩阵：W1R1（基线）/ W0R1 / W1R0 / W0R0，判据 = PROC S≥40 的失败率 + L1 + perf。
 #ifndef PPFM_A2_CACHEOPS_W
-#define PPFM_A2_CACHEOPS_W 1
+//   **结论（2026-10-08，234 上机）**：W0R1（=A2 默认）在 60 进程位级口径下残差 1/60，
+//   基线 W1R1 是 9/60 ⇒ 去掉 W 组的 DCCI 没有让竞态变差，反而随 C7/C9 一起变好。
+#define PPFM_A2_CACHEOPS_W (PPFM_ARCH_IS_950 ? 1 : 0)
 #endif
 #ifndef PPFM_A2_CACHEOPS_R
 #define PPFM_A2_CACHEOPS_R 1

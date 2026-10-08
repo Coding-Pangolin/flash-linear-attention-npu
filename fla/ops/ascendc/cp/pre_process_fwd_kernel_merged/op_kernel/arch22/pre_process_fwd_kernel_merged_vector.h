@@ -981,6 +981,7 @@ private:
             // 读**要先完成，
             //   否则这一个 MTE2 会覆盖它、dH 只写进去一部分 → h 的对应行整行错。
             //   （950 不踩这个坑是因为它的 dH 走 UB 槽，h 相位根本不碰 extBlkF_。）
+            AIV_WAR_BEFORE_STATE_MTE2();   // C9：把上面注释要求的 V 读序真正补上
             AIV_SET_MTE3_MTE2();
             AIV_WAIT_MTE3_MTE2();
             DataCopy(extBlkF_, dhBuf[rb * cb_], RB * cb_);
@@ -1028,6 +1029,7 @@ private:
             // 第一次搬运后的全栅栏冗余——紧随其后第二次搬运之后还有一次，
             //        足以保证两次 MTE2 都在 Muls/Add 之前完成
             // P1a：上一轮的 MTE3（写 hF32_/hBf_）读的是同一组 UB，先等它读完再覆盖
+            AIV_WAR_BEFORE_STATE_MTE2();   // C9：补上一轮对 stateBlkF_/extBlkF_ 的 V 读序
             AIV_SET_MTE3_MTE2();
             AIV_WAIT_MTE3_MTE2();
             DataCopy(stateBlkF_, hF32_[rb * cb_], RB * cb_);
@@ -1183,6 +1185,7 @@ private:
         CrossCoreSetFlag<0x4, PIPE_V>(static_cast<uint16_t>(kFlagT2Free));
 #else
         for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {
+            AIV_WAR_BEFORE_STATE_MTE2();   // C9：m 相位的同一窗口
             AIV_SET_MTE3_MTE2();
             AIV_WAIT_MTE3_MTE2();
             DataCopy(stateBlkF_, mF32_[rb * cb_], RB * cb_);

@@ -451,6 +451,29 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #define AIV_WAIT_S_V()       do { } while (0)
 #endif
 
+// ---- C9（A2 专用实验，默认 0）：状态更新循环里补 **V -> MTE2** 的 WAR 序 ----
+// 现象（离线代码审计，2026-09-30）：_vec.h 的状态更新循环（h 相位 1126-1202、m 相位 1338-1395）
+//   在每轮开头用 `AIV_SET_MTE3_MTE2/WAIT` 保护"上一轮 MTE3 读完 stateBlkBf_"，
+//   但**上一轮对 stateBlkF_ / extBlkF_ 的 V 读**（`Muls` / `Add` / `Sub` / `Cast`）没有被排序 ——
+//   下一轮的 `DataCopy(stateBlkF_, ...)` / `DataCopy(extBlkF_, ...)`（MTE2）可能覆盖仍在被读的 UB。
+//   代码注释本身写的就是"上一块（或上一相位）对 extBlkF_ 的 **V 读**要先完成"
+//   （见 _vec.h 的 H_UB 分支注释），但实际补的是 MTE3_MTE2 而不是 V_MTE2。
+//   ⇒ 这是一条**核内 UB 的 WAR 窗口**，与项目此前查的"跨核 GM 可见性"是**不同的机制**，
+//     所以 9 组跨核排除实验没有覆盖到它。
+//   * RB=32（A2 默认）时每个子核每相位 2 轮 ⇒ 每个 chunk 有 2 个这样的窗口；
+//   * RB=64（PPFM_A2_RB64=1，见 C7）时只有 1 轮 ⇒ 窗口自然消失；
+//   * 950 是 RB=64 ⇒ 本来就没有这个窗口（也正因如此，这条只对 A2 有意义）。
+// 本开关只**插入一个事件对**（不改任何算术、不改 UB 布局）⇒ 位级不变；
+// 950 上展开为空 ⇒ 950 预处理输出与 kernel .o 逐字节不变。
+#ifndef PPFM_A2_WAR_FIX
+#define PPFM_A2_WAR_FIX 0
+#endif
+#if PPFM_A2_WAR_FIX && !PPFM_ARCH_IS_950
+#define AIV_WAR_BEFORE_STATE_MTE2() do { AIV_SET_V_MTE2(); AIV_WAIT_V_MTE2(); } while (0)
+#else
+#define AIV_WAR_BEFORE_STATE_MTE2() do { } while (0)
+#endif
+
 // ---------------- AIV 侧 UB 布局（字节）----------------
 // 注意： 历史结论（**已修订**）：早期按"950 MIX 下 UB 由 AIC + 两个 AIV 子核共享"的
 //   假设，把"两个子核都会写"的 scratch 按 subIdx_ 切成两份（每个常量 =

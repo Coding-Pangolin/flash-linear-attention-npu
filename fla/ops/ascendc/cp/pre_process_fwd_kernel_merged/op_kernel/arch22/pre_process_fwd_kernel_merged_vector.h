@@ -253,10 +253,11 @@ private:
 #if PPFM_A2_BLOCKWISE
         {
             const int32_t rowsPerSub_ = CV_K / PPFM_SUB;
-            // extBlkF_ 只有 2*PPFM_SEG*CV_V 个 fp32 ⇒ 单次最多放 rowsPerCopy_ 行
-            // （cb_=128 时 32 行、cb_=64 时 64 行）。首版按 64 行整块使用，cb_=128 时
-            // 越界踩到相邻 UB（hy30/hy40 实测 m 半边出错），这里按行分块。
-            const int32_t rowsPerCopy_ = (2 * PPFM_SEG * CV_V) / cb_;
+            // extBlkF_ 的 fp32 容量由 UB_EXT_F_ELEMS 给出（A2 默认 = 2*PPFM_SEG*CV_V）
+            // ⇒ 单次最多放 rowsPerCopy_ 行（cb_=128 时 32 行、cb_=64 时 64 行）。
+            // 首版写死 64 行整块，cb_=128 时越界踩到相邻 UB（hy30/hy40 实测 m 半边出错），
+            // 这里按 **UB 实际容量** 推导，避免以后再改布局时重复同一个错。
+            const int32_t rowsPerCopy_ = UB_EXT_F_ELEMS / cb_;
             for (int32_t i0 = 0; i0 < rowsPerSub_; i0 += rowsPerCopy_) {
                 const int32_t nr_ = (rowsPerSub_ - i0 < rowsPerCopy_)
                                         ? (rowsPerSub_ - i0) : rowsPerCopy_;
@@ -320,8 +321,8 @@ private:
 #if PPFM_A2_BLOCKWISE
         {
             const int32_t rowsPerSub_ = CV_K / PPFM_SUB;
-            // 同 h 初值：按 extBlkF_ 的容量分块（cb_=128 ⇒ 32 行/块）
-            const int32_t rowsPerCopy_ = (2 * PPFM_SEG * CV_V) / cb_;
+            // 同 h 初值：按 extBlkF_ 的实际容量分块（cb_=128 ⇒ 32 行/块）
+            const int32_t rowsPerCopy_ = UB_EXT_F_ELEMS / cb_;
             for (int32_t i0 = 0; i0 < rowsPerSub_; i0 += rowsPerCopy_) {
                 const int32_t nr_ = (rowsPerSub_ - i0 < rowsPerCopy_)
                                         ? (rowsPerSub_ - i0) : rowsPerCopy_;
@@ -499,8 +500,8 @@ private:
 #if PPFM_A2_BLOCKWISE
         {
             const int32_t rowsPerSub_ = CV_K / PPFM_SUB;
-            // 同 prologue：按 extBlkF_ 容量分块搬运，避免踩相邻 UB
-            const int32_t rowsPerCopy_ = (2 * PPFM_SEG * CV_V) / cb_;
+            // 同 prologue：按 extBlkF_ 的实际容量分块搬运，避免踩相邻 UB
+            const int32_t rowsPerCopy_ = UB_EXT_F_ELEMS / cb_;
             for (int32_t i0 = 0; i0 < rowsPerSub_; i0 += rowsPerCopy_) {
                 const int32_t nr_ = (rowsPerSub_ - i0 < rowsPerCopy_)
                                         ? (rowsPerSub_ - i0) : rowsPerCopy_;

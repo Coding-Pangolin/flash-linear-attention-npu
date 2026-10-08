@@ -469,11 +469,24 @@ constexpr int32_t PPFM_RB = 32;      // 状态更新的行块（行）16->32，
 // h/m 都常驻 UB 后，状态相位按 32 行分两块已经没有意义（两块都不再搬运状态本体）
 // ⇒ 并成**一块 64 行**：每 chunk 的 V 运算与同步对从 8 次降到 4
 // 次（位级不变，只是把两块拼起来）。
-#if PPFM_M_UB && PPFM_H_UB
+// A2 版（实验，默认关）：A2 没有 h/m 常驻，但"8 次 → 4 次"的收益与常驻无关 ——
+//   状态更新本身仍是逐行 elementwise，分块的唯一作用是"每次搬运/同步的规模"。
+//   依据（A2 指令级仿真，2026-09-30）：A2 是纯 AIV-bound（96~97%），其 MTE3/MTE2/SCALARLDST
+//   全面是 950 的 3.3~11×，且**搬运被切得更碎**（MTE3 指令条数 4.2×）。
+//   开关 PPFM_A2_RB64=1 时 A2 也用 64 行块 ⇒ 每 chunk 状态相位的搬运/事件对减半
+//   （行分配由交错块自动变成连续半区，与 950 的 H_UB 情形同构；逐行数值不变）。
+#ifndef PPFM_A2_RB64
+#define PPFM_A2_RB64 0
+#endif
+#if (PPFM_M_UB && PPFM_H_UB) || (!PPFM_ARCH_IS_950 && PPFM_A2_RB64)
 constexpr int32_t PPFM_SBRB = CV_K / PPFM_SUB;   // 64
 #else
 constexpr int32_t PPFM_SBRB = PPFM_RB;           // 32（A2 与回退路径）
 #endif
+// A2 的 PPFM_UB_SHARE=0 是历史两份布局：stateBlkF_ 的每子核偏移仍按 PPFM_RB 算，
+// 与 RB=64 的容量不一致 ⇒ 直接禁止这个组合（默认 UB_SHARE=1，不受影响）。
+static_assert(!(PPFM_A2_RB64 && !PPFM_UB_SHARE),
+              "PPFM_A2_RB64 需要 PPFM_UB_SHARE=1（历史两份布局的子核偏移按 32 行算）");
 
 // ---------------- 诊断开关（定位概率性 h 错）----------------
 // 打开后：每个工作项把前 N 个 chunk 的 "AIV 读到的 vTmpF_[0]"（AIV 侧）与
@@ -505,14 +518,32 @@ constexpr int32_t UB_EXP = UB_DECAY + PPFM_NSLOT * CV_K * 4;       // [8] fp32
 constexpr int32_t UB_DECAY_PREV = UB_EXP + PPFM_NSLOT * CV_LANES * 4;
 constexpr int32_t UB_GBLK = UB_DECAY_PREV + PPFM_NSLOT * CV_K * 4;  // [BT] fp32
 constexpr int32_t UB_STATE_F = UB_GBLK + PPFM_NSLOT * CV_BT * 4;   // [RB,K] fp32
-// extBlkF_：状态更新的 dH 暂存（RB 行）+ v_new 的 vTmp 暂存（2 段）→ 每子核取大者
-constexpr int32_t UB_EXT_F = UB_STATE_F + PPFM_NSLOT * PPFM_RB * CV_V * 4;
-constexpr int32_t UB_STATE_BF = UB_EXT_F + PPFM_NSLOT * 2 * PPFM_SEG * CV_V * 4;
+// stateBlkF_ / extBlkF_ 的行容量（按用途取大者，保证 950 与 A2 默认布局逐字节不变）：
+//   * 950（PPFM_H_UB=1）：状态相位本体在 hUb_/dHUb，这两块只做小暂存 ⇒ 仍是 32 行；
+//   * A2（无 H_UB）：状态更新用 stateBlkF_ 载入状态本体、用 extBlkF_ 暂存 dH
+//     ⇒ 容量必须 ≥ PPFM_SBRB 行（PPFM_A2_RB64=1 时为 64 行）。
+constexpr int32_t UB_STATE_ROWS =
+    PPFM_H_UB ? PPFM_RB : ((PPFM_SBRB > PPFM_RB) ? PPFM_SBRB : PPFM_RB);
+constexpr int32_t UB_EXT_ROWS =
+    PPFM_DH_CV ? (2 * PPFM_SEG)
+               : ((PPFM_SBRB > 2 * PPFM_SEG) ? PPFM_SBRB : (2 * PPFM_SEG));
+constexpr int32_t UB_EXT_F = UB_STATE_F + PPFM_NSLOT * UB_STATE_ROWS * CV_V * 4;
+constexpr int32_t UB_STATE_BF = UB_EXT_F + PPFM_NSLOT * UB_EXT_ROWS * CV_V * 4;
+// extBlkF_ 的可用 fp32 元素数：A1 的整块宽度由它推导（见 _vec.h 的 rowsPerCopy_），
+// 保证"按 UB 实际容量分块"而不是写死 2*SEG。
+constexpr int32_t UB_EXT_F_ELEMS = PPFM_NSLOT * UB_EXT_ROWS * CV_V;
 // 下面这些按"段"分区。起改成**子核本地段**寻址（`lo`，每个子核只有自己那 32 行）
 // ⇒ 尺寸砍半（k/w/v/scr 合计省 48 KiB）。依据：每个 AIV 子核有独立 UB bank（/）。
 constexpr int32_t PPFM_SEGROWS = CV_BT / PPFM_SUB;                             // 32
 // stateBlkBf_ 的尺寸按 PPFM_SBRB（起 950 上是 64 行 ⇒ 16 KiB）
 constexpr int32_t UB_KBLK_BF = UB_STATE_BF + PPFM_NSLOT * PPFM_SBRB * CV_V * 2;
+// 容量自检：A2（无 H_UB）的状态相位必须放得下 PPFM_SBRB 行；950 走 hUb_/dHUb 不受此限。
+static_assert(PPFM_H_UB || (UB_EXT_F - UB_STATE_F) / 4 >= PPFM_SBRB * CV_V,
+              "stateBlkF_ 容量不足：A2 的状态更新需 >= PPFM_SBRB 行 fp32");
+static_assert(PPFM_H_UB || (UB_STATE_BF - UB_EXT_F) / 4 >= PPFM_SBRB * CV_V,
+              "extBlkF_ 容量不足：A2 的 dH 暂存需 >= PPFM_SBRB 行 fp32");
+static_assert((UB_KBLK_BF - UB_STATE_BF) / 2 >= PPFM_SBRB * CV_V,
+              "stateBlkBf_ 容量不足：需 >= PPFM_SBRB 行 bf16");
 constexpr int32_t UB_WBLK_BF = UB_KBLK_BF + PPFM_SEGROWS * CV_K * 2;          // [SEGROWS,K] bf16
 constexpr int32_t UB_VBLK_BF = UB_WBLK_BF + PPFM_SEGROWS * CV_K * 2;          // [SEGROWS,V] bf16
 constexpr int32_t UB_SCR_F = UB_VBLK_BF + PPFM_SEGROWS * CV_V * 2;            // [SEGROWS,K] fp32

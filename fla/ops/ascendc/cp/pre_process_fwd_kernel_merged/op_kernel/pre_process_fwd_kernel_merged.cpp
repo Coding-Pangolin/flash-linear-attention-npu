@@ -63,9 +63,7 @@
  * Stage/布局/同步协议详表见 *_common.h 顶部注释与 docs/design.md。
  */
 
-#include "pre_process_fwd_kernel_merged_common.h"
-#include "pre_process_fwd_kernel_merged_vec.h"
-#include "pre_process_fwd_kernel_merged_cube.h"
+#include "pre_process_fwd_kernel_merged_kernel.h"
 #include "pre_process_fwd_kernel_merged_tiling_key.h"
 
 // ---- 入口常量自检（§4.4 ②/§7.7：常量集中处配 static_assert）----

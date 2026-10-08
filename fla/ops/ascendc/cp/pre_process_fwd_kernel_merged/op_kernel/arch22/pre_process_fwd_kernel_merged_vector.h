@@ -1,3 +1,17 @@
+/**
+ * Copyright (c) 2026 Tianjin University, Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * the BSD 3-Clause License (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ */
+
+/*!
+ * \file pre_process_fwd_kernel_merged_vector.h
+ * \brief arch22（A2/A3，910B / 910_93） 的 vector 实现（与另一 arch 同名类，由 _kernel.h 二选一）。
+ */
+
 /*!
  * \file pre_process_fwd_kernel_merged_vec.h
  * \brief pre_process_fwd_kernel_merged：AIV（vector）实现
@@ -9,7 +23,7 @@
 #ifndef PREF_PROCESS_FWD_KERNEL_MERGED_VEC_H
 #define PREF_PROCESS_FWD_KERNEL_MERGED_VEC_H
 
-#include "pre_process_fwd_kernel_merged_common.h"
+#include "../pre_process_fwd_kernel_merged_common.h"
 
 namespace GDN {class PpFwdVector {
 public:
@@ -217,26 +231,6 @@ private:
     {
         curN_ = n;
         const auto *t = ctx_.tiling;
-#if PPFM_ARCH_IS_950
-        // ---- prologue：h = 0（950）----
-        Duplicate(row0F_, 0.0f, cb_);
-        Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
-        PipeBarrier<PIPE_ALL>();   // V -> MTE3 只需一次（源行不变）
-#if PPFM_H_UB
-        // h 初值直接落在常驻 UB（本子核那 64 行），GM 上只留 bf16(h) 给 AIC 的 mm1
-        Duplicate(hUb_, 0.0f, H_UB_ROWS * cb_);
-        PipeBarrier<PIPE_V>();
-        for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
-            DataCopy(hBf_[r * cb_], row0Bf_, cb_);
-        }
-#else
-        for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
-            DataCopy(hF32_[r * cb_], row0F_, cb_);
-            DataCopy(hBf_[r * cb_], row0Bf_, cb_);
-        }
-#endif
-        PipeBarrier<PIPE_ALL>();
-#else
         // ---- prologue：h = 0（910B/910_93）----
         // 实测（RD_PROBE 探针）：A2 上用"一次 Cast 出 bf16 行 + 循环内 128 次 MTE3 复用
         // 同一 UB 行"的写法，会把 bf16(h) 落到 GM 时写成 ~1e-3 量级的脏数据（同一循环里的
@@ -295,7 +289,6 @@ private:
         }
 #endif
 #endif
-#endif
 #if PPFM_RD_PROBE
         // 诊断：prologue 写完后立刻回读 h 状态第 0 行（期望全 0）
         if (subIdx_ == 0) {
@@ -316,56 +309,6 @@ private:
         // 注意： 不要用 row0F_.SetValue(r,1) 这类"标量写 UB + 向量写同一块 UB"的组合：
         //   实测标量写的落盘顺序不受 PipeBarrier<PIPE_V> 保护，会让个别行丢掉对角 1
         //   （表现为 m 只有 ~0.05% 元素错、max_abs≈1）。
-#if PPFM_ARCH_IS_950
-        // P5：列块切分后，本工作项只需要列 [colBase_, colBase_+cb_) 的对角
-        Duplicate(row2F_, 1.0f, cb_);
-        PipeBarrier<PIPE_V>();
-        ArithProgression(row1F_, static_cast<float>(colBase_), 1.0f, cb_);   // row1F_[k] = k
-        PipeBarrier<PIPE_V>();
-#if PPFM_M_UB
-        // m 常驻 UB（本子核那 64 行），行范围改成连续半区（逐行 elementwise，数值等价）
-#if PPFM_M_INIT_BLOCK
-        // 每行直接写进块内自己的偏移 ⇒ 行间无 WAR、零栅栏；最后整块 Cast + 一次落盘
-        for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
-            Adds(row0F_, row1F_, -static_cast<float>(r), cb_);
-            Abs(row0F_, row0F_, cb_);
-            Mins(row0F_, row0F_, 1.0f, cb_);
-            Sub(row0F_, row2F_, row0F_, cb_);
-            Muls(mUb_[(r - subIdx_ * H_UB_ROWS) * cb_], row0F_, 1.0f, cb_);
-        }
-        PipeBarrier<PIPE_ALL>();
-        Cast(stateBlkBf_, mUb_, RoundMode::CAST_RINT, H_UB_ROWS * cb_);
-        AIV_SET_V_MTE3();
-        AIV_WAIT_V_MTE3();
-        DataCopy(mBf_[subIdx_ * H_UB_ROWS * cb_], stateBlkBf_, H_UB_ROWS * cb_);
-        PipeBarrier<PIPE_ALL>();
-#else
-        for (int32_t r = subIdx_ * H_UB_ROWS; r < (subIdx_ + 1) * H_UB_ROWS; ++r) {
-            Adds(row0F_, row1F_, -static_cast<float>(r), cb_);   // k - r
-            Abs(row0F_, row0F_, cb_);
-            Mins(row0F_, row0F_, 1.0f, cb_);
-            Sub(row0F_, row2F_, row0F_, cb_);                    // 1 - min(|k-r|,1)
-            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
-            PipeBarrier<PIPE_ALL>();
-            Muls(mUb_[(r - subIdx_ * H_UB_ROWS) * cb_], row0F_, 1.0f, cb_);   // 精确搬移
-            DataCopy(mBf_[r * cb_], row0Bf_, cb_);
-            PipeBarrier<PIPE_ALL>();
-        }
-#endif
-#else
-        for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
-            Adds(row0F_, row1F_, -static_cast<float>(r), cb_);   // k - r
-            Abs(row0F_, row0F_, cb_);
-            Mins(row0F_, row0F_, 1.0f, cb_);
-            Sub(row0F_, row2F_, row0F_, cb_);                    // 1 - min(|k-r|,1)
-            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, cb_);
-            PipeBarrier<PIPE_ALL>();
-            DataCopy(mF32_[r * cb_], row0F_, cb_);
-            DataCopy(mBf_[r * cb_], row0Bf_, cb_);
-            PipeBarrier<PIPE_ALL>();
-        }
-#endif
-#else
         // 910B/910_93：同一套「ArithProgression + |k-r|」构造在 A2 上**实测退化**——
         //   m 变成"每行常数"（行 r 的值只随 r 变化、整行相同，对角与状态全错；
         //   用 w=0,g=0 探针可复现：m 应为 I，实到 m[r][:] 恒等于 [r%4<2]）。
@@ -421,7 +364,6 @@ private:
             DataCopy(mBf_[r * cb_], row0Bf_, cb_);
             PipeBarrier<PIPE_ALL>();
         }
-#endif
 #endif
         // 临时诊断（当前不启用）：给 AIC 即将写的 C 缓冲预置哨兵。
         //   vTmpF_ = 7.0、t1F_ = 5.0 ⇒ 若 AIC 的 fixpipe 正常覆盖，chunk0 的结果不受影响；
@@ -793,17 +735,6 @@ private:
             AIV_WAIT_MTE2_V();
             // left：USE_G 为 bf16(k·dg)，USE_GK 为 k 本身
             if (useG) {
-#if PPFM_LEFT_FUSE && PPFM_ARCH_IS_950
-                // P1-1：Cast(bf16->fp32) + 逐行 Muls + Cast(fp32->bf16) 合成一趟 RegBase
-                //（省 2 趟 UB 遍历、2 次 PIPE_V 栅栏、以及 32 次标量 GetValue）
-                MulRowScaleBf16ToBf16Regbase(
-                    RowPtrBf16(scrBf_, lo * CV_K), RowPtrBf16(kBlkBf_, lo * CV_K),
-                    RowScalePtr(dgF_, off),
-                    static_cast<uint16_t>(SEG), static_cast<uint16_t>(CV_K));
-                AIV_SET_V_MTE3();
-                AIV_WAIT_V_MTE3();   // V -> MTE3
-                DataCopy(lOut[off * CV_K], scrBf_[lo * CV_K], SEG * CV_K);
-#else
                 Cast(scrF_[lo * CV_K], kBlkBf_[lo * CV_K], RoundMode::CAST_NONE, SEG * CV_K);
                 PipeBarrier<PIPE_V>();
 #if PPFM_ROW_PREFETCH
@@ -825,7 +756,6 @@ private:
                 AIV_SET_V_MTE3();
                 AIV_WAIT_V_MTE3();   // V -> MTE3
                 DataCopy(lOut[off * CV_K], scrBf_[lo * CV_K], SEG * CV_K);
-#endif  // PPFM_LEFT_FUSE
             } else {
 #if PPFM_KDA_LEFT_ALIAS
                 // KDA（USE_GK）下 left ≡ k ⇒ 这里不再重复写一份 lBf_，
@@ -1055,38 +985,10 @@ private:
             DataCopy(extBlkF_, dhBuf[rb * cb_], RB * cb_);
             AIV_SET_MTE2_V();
 #endif
-#if PPFM_STATE_FUSE && PPFM_H_UB && PPFM_DH_CV && PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
-            if (useG) {
-                // GDN：单标量 decay ⇒ 整块 Muls+Add 已是指令数最省（~128+128），不动
-                const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
-                Muls(hUb_[lo * cb_], hUb_[lo * cb_], dc, RB * cb_);
-                PipeBarrier<PIPE_V>();
-                Add(hUb_[lo * cb_], hUb_[lo * cb_], dHUb[lo * cb_], RB * cb_);
-            } else {
-                // KDA：逐行 decay 与 +dH 合成一趟 RegBase（省一整趟遍历 + 一次 V 栅栏）
-                ApplyRowScaleAddInplaceRegbase<false>(
-                    RowScalePtr(hUb_, lo),
-                    usePrevDecay ? RowScalePtr(decayPrevF_, rb) : RowScalePtr(decayF_, rb),
-                    RowScalePtr(dHUb, lo),
-                    static_cast<uint16_t>(RB), static_cast<uint16_t>(cb_));
-            }
-#else
             if (useG) {
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(hUb_[lo * cb_], hUb_[lo * cb_], dc, RB * cb_);
             } else {
-#if PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
-                {
-                    __ubuf__ float *dstPtr_ = RowScalePtr(hUb_, lo);
-                    if (usePrevDecay) {
-                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayPrevF_, rb),
-                                                      (uint16_t)RB, (uint16_t)cb_);
-                    } else {
-                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayF_, rb),
-                                                      (uint16_t)RB, (uint16_t)cb_);
-                    }
-                }
-#else
 #if PPFM_KDA_ROW_PREFETCH
                 // K1-a：先批量标量预取 factor，再整批 Muls（纯发射顺序，位级不变）
                 for (int32_t kb = 0; kb < RB; kb += PPFM_KDA_ROW_BATCH) {
@@ -1107,7 +1009,6 @@ private:
                     Muls(hUb_[(lo + (r - rb)) * cb_], hUb_[(lo + (r - rb)) * cb_], dc, cb_);
                 }
 #endif
-#endif
             }
             PipeBarrier<PIPE_V>();
 #if PPFM_DH_CV
@@ -1116,7 +1017,6 @@ private:
             AIV_WAIT_MTE2_V();
             Add(hUb_[lo * cb_], hUb_[lo * cb_], extBlkF_, RB * cb_);
 #endif
-#endif  // PPFM_STATE_FUSE
             AIV_SET_MTE3_V();
             AIV_WAIT_MTE3_V();   // 上一次 MTE3 读完 stateBlkBf_ 才能覆盖
             Cast(stateBlkBf_, hUb_[lo * cb_], RoundMode::CAST_RINT, RB * cb_);
@@ -1149,18 +1049,6 @@ private:
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(stateBlkF_, stateBlkF_, dc, RB * cb_);
             } else {
-#if PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
-                {
-                    __ubuf__ float *dstPtr_ = RowScalePtr(stateBlkF_, 0);
-                    if (usePrevDecay) {
-                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayPrevF_, rb),
-                                                      (uint16_t)RB, (uint16_t)cb_);
-                    } else {
-                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayF_, rb),
-                                                      (uint16_t)RB, (uint16_t)cb_);
-                    }
-                }
-#else
 #if PPFM_KDA_ROW_PREFETCH
                 // K1-a：先批量标量预取 factor，再整批 Muls（纯发射顺序，位级不变）
                 for (int32_t kb = 0; kb < RB; kb += PPFM_KDA_ROW_BATCH) {
@@ -1180,7 +1068,6 @@ private:
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
-#endif
 #endif
             }
             PipeBarrier<PIPE_V>();
@@ -1215,37 +1102,10 @@ private:
             const int32_t lo = rb - mbBeg;
 #if PPFM_M_UB
             // m 常驻 UB ⇒ 就地更新（无 MTE2 载入、无 fp32 落盘），只留 bf16(m) 给 AIC 的 mm3
-#if PPFM_STATE_FUSE && PPFM_M_UB && PPFM_T2_CV && PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
-            if (useG) {
-                const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
-                Muls(mUb_[lo * cb_], mUb_[lo * cb_], dc, RB * cb_);
-                PipeBarrier<PIPE_V>();
-                Sub(mUb_[lo * cb_], mUb_[lo * cb_], t2Ub[lo * cb_], RB * cb_);
-            } else {
-                // KDA：逐行 decay 与 -T2 合成一趟 RegBase（省一整趟遍历 + 一次 V 栅栏）
-                ApplyRowScaleAddInplaceRegbase<true>(
-                    RowScalePtr(mUb_, lo),
-                    usePrevDecay ? RowScalePtr(decayPrevF_, rb) : RowScalePtr(decayF_, rb),
-                    RowScalePtr(t2Ub, lo),
-                    static_cast<uint16_t>(RB), static_cast<uint16_t>(cb_));
-            }
-#else
             if (useG) {
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(mUb_[lo * cb_], mUb_[lo * cb_], dc, RB * cb_);
             } else {
-#if PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
-                {
-                    __ubuf__ float *dstPtr_ = RowScalePtr(mUb_, lo);
-                    if (usePrevDecay) {
-                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayPrevF_, rb),
-                                                      (uint16_t)RB, (uint16_t)cb_);
-                    } else {
-                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayF_, rb),
-                                                      (uint16_t)RB, (uint16_t)cb_);
-                    }
-                }
-#else
 #if PPFM_KDA_ROW_PREFETCH
                 // K1-a：先批量标量预取 factor，再整批 Muls（纯发射顺序，位级不变）
                 for (int32_t kb = 0; kb < RB; kb += PPFM_KDA_ROW_BATCH) {
@@ -1266,11 +1126,9 @@ private:
                     Muls(mUb_[(lo + (r - rb)) * cb_], mUb_[(lo + (r - rb)) * cb_], dc, cb_);
                 }
 #endif
-#endif
             }
             PipeBarrier<PIPE_V>();
             Sub(mUb_[lo * cb_], mUb_[lo * cb_], t2Ub[lo * cb_], RB * cb_);
-#endif  // PPFM_STATE_FUSE
             AIV_SET_MTE3_V();
             AIV_WAIT_MTE3_V();
             Cast(stateBlkBf_, mUb_[lo * cb_], RoundMode::CAST_RINT, RB * cb_);
@@ -1287,18 +1145,6 @@ private:
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(stateBlkF_, stateBlkF_, dc, RB * cb_);
             } else {
-#if PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
-                {
-                    __ubuf__ float *dstPtr_ = RowScalePtr(stateBlkF_, 0);
-                    if (usePrevDecay) {
-                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayPrevF_, rb),
-                                                      (uint16_t)RB, (uint16_t)cb_);
-                    } else {
-                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayF_, rb),
-                                                      (uint16_t)RB, (uint16_t)cb_);
-                    }
-                }
-#else
 #if PPFM_KDA_ROW_PREFETCH
                 // K1-a：先批量标量预取 factor，再整批 Muls（纯发射顺序，位级不变）
                 for (int32_t kb = 0; kb < RB; kb += PPFM_KDA_ROW_BATCH) {
@@ -1318,7 +1164,6 @@ private:
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
-#endif
 #endif
             }
             PipeBarrier<PIPE_V>();
@@ -1347,18 +1192,6 @@ private:
                 const float dc = usePrevDecay ? decayPrevF_.GetValue(0) : decayF_.GetValue(0);
                 Muls(stateBlkF_, stateBlkF_, dc, RB * cb_);
             } else {
-#if PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
-                {
-                    __ubuf__ float *dstPtr_ = RowScalePtr(stateBlkF_, 0);
-                    if (usePrevDecay) {
-                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayPrevF_, rb),
-                                                      (uint16_t)RB, (uint16_t)cb_);
-                    } else {
-                        ApplyRowScaleInplaceRegbase(dstPtr_, RowScalePtr(decayF_, rb),
-                                                      (uint16_t)RB, (uint16_t)cb_);
-                    }
-                }
-#else
 #if PPFM_KDA_ROW_PREFETCH
                 // K1-a：先批量标量预取 factor，再整批 Muls（纯发射顺序，位级不变）
                 for (int32_t kb = 0; kb < RB; kb += PPFM_KDA_ROW_BATCH) {
@@ -1378,7 +1211,6 @@ private:
                     const float dc = usePrevDecay ? decayPrevF_.GetValue(r) : decayF_.GetValue(r);
                     Muls(stateBlkF_[(r - rb) * cb_], stateBlkF_[(r - rb) * cb_], dc, cb_);
                 }
-#endif
 #endif
             }
             PipeBarrier<PIPE_V>();

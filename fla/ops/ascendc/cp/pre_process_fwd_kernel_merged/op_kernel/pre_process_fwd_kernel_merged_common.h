@@ -33,6 +33,9 @@
 #include "kernel_operator.h"
 #include "lib/matmul_intf.h"
 
+// 架构分档与按 arch 的开关默认值（TilingKey/同步协议相关的常量也在这里）
+#include "pre_process_fwd_kernel_merged_policy.h"
+
 // CATLASS 的 arch 选择必须在包含 catlass 头之前给出（同 chunk_scaled_dot_kkt 的写法）
 #ifndef CATLASS_ARCH
 #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
@@ -124,216 +127,6 @@ using namespace AscendC;
 
 #ifndef PPFM_A2_BLOCKWISE
 #define PPFM_A2_BLOCKWISE 1
-#endif
-
-// ---------------- 目标 arch 分档 ----------------
-#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
-#define PPFM_ARCH_IS_950 1
-// 950：有 L0C→UB 直连通道（A2 优化方案可用）
-#ifndef PPFM_VTMP_UB
-#define PPFM_VTMP_UB 1
-#endif
-#else
-#define PPFM_ARCH_IS_950 0
-// 910B/910_93(A2/A3)：cube↔vector 必须经 GM，无 L0C→UB 通道
-#ifndef PPFM_VTMP_UB
-#define PPFM_VTMP_UB 0
-#endif
-#endif
-// 跨核 flag 模式：950 用 0x4（同 block 内 AIC↔AIV，每子核 slot），910B 用 0x2
-#if PPFM_ARCH_IS_950
-constexpr int32_t PPFM_XCORE_MODE = 0x4;
-#else
-constexpr int32_t PPFM_XCORE_MODE = 0x2;
-#endif
-
-#if PPFM_KDA_VF_ROWS && PPFM_ARCH_IS_950
-// matrix[row, :] *= rowScale[row]（逐元素 fp32 乘）
-__simd_vf__ static inline void ApplyRowScaleInplaceRegbase(
-    __ubuf__ float *matrix, __ubuf__ float *rowScale, uint16_t rows, uint16_t cols)
-{
-    using namespace AscendC::MicroAPI;
-    constexpr uint16_t FP32_PER_REG = AscendC::VECTOR_REG_WIDTH / sizeof(float);
-    RegTensor<float> matrixReg0;
-    RegTensor<float> matrixReg1;
-    RegTensor<float> scaleReg0;
-    RegTensor<float> scaleReg1;
-
-    uint16_t row = 0;
-    for (; row + 1 < rows; row += 2) {
-        LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg0, rowScale + row);
-        LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg1, rowScale + row + 1);
-        for (uint16_t col = 0; col < cols; col += FP32_PER_REG) {
-            // 注意： UpdateMask 会消耗 count 计数器：两行必须各用一个独立变量
-            //   （照 ApplyKdaRowScaleRegbase 的 activeCount0/1 写法，否则第二个 mask 为空）
-            uint32_t activeCount0 = static_cast<uint32_t>(cols - col);
-            uint32_t activeCount1 = activeCount0;
-            MaskReg mask0 = UpdateMask<float>(activeCount0);
-            MaskReg mask1 = UpdateMask<float>(activeCount1);
-            uint32_t offset0 = static_cast<uint32_t>(row) * cols + col;
-            uint32_t offset1 = static_cast<uint32_t>(row + 1) * cols + col;
-            LoadAlign(matrixReg0, matrix + offset0);
-            LoadAlign(matrixReg1, matrix + offset1);
-            Mul(matrixReg0, matrixReg0, scaleReg0, mask0);
-            Mul(matrixReg1, matrixReg1, scaleReg1, mask1);
-            StoreAlign(matrix + offset0, matrixReg0, mask0);
-            StoreAlign(matrix + offset1, matrixReg1, mask1);
-        }
-    }
-    if (row < rows) {
-        LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg0, rowScale + row);
-        for (uint16_t col = 0; col < cols; col += FP32_PER_REG) {
-            uint32_t activeCount = static_cast<uint32_t>(cols - col);
-            MaskReg mask = UpdateMask<float>(activeCount);
-            uint32_t offset = static_cast<uint32_t>(row) * cols + col;
-            LoadAlign(matrixReg0, matrix + offset);
-            Mul(matrixReg0, matrixReg0, scaleReg0, mask);
-            StoreAlign(matrix + offset, matrixReg0, mask);
-        }
-    }
-}
-
-// P0-1k：matrix = matrix 逐元素乘 rowScale[row]，再逐元素加/减 addend —— 一趟 RegBase 遍历。
-//   形态抄自同仓 chunk_fwd_h 的 FwdHStage3Arch35Vf（Mul 后接 Add）。
-//   逐元素先 Mul 再 Add/Sub（两次独立运算，**禁 FMA**）⇒ 与"先整块缩放、
-//   再整块加减"位级一致；省掉一整趟遍历与一次 PipeBarrier<PIPE_V>。
-//   仅用于逐行 decay（KDA）；GDN 的单标量 decay 仍走整块 Muls+Add。
-template <bool IS_SUB>
-__simd_vf__ static inline void ApplyRowScaleAddInplaceRegbase(
-    __ubuf__ float *matrix, __ubuf__ float *rowScale,
-    __ubuf__ float *addend, uint16_t rows, uint16_t cols)
-{
-    using namespace AscendC::MicroAPI;
-    constexpr uint16_t FP32_PER_REG = AscendC::VECTOR_REG_WIDTH / sizeof(float);
-    RegTensor<float> matrixReg0;
-    RegTensor<float> matrixReg1;
-    RegTensor<float> scaleReg0;
-    RegTensor<float> scaleReg1;
-    RegTensor<float> addReg0;
-    RegTensor<float> addReg1;
-
-    uint16_t row = 0;
-    for (; row + 1 < rows; row += 2) {
-        LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg0, rowScale + row);
-        LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg1, rowScale + row + 1);
-        for (uint16_t col = 0; col < cols; col += FP32_PER_REG) {
-            // 注意： UpdateMask 会消耗 count 计数器 ⇒ 两行各用一个独立变量
-            uint32_t activeCount0 = static_cast<uint32_t>(cols - col);
-            uint32_t activeCount1 = activeCount0;
-            MaskReg mask0 = UpdateMask<float>(activeCount0);
-            MaskReg mask1 = UpdateMask<float>(activeCount1);
-            uint32_t offset0 = static_cast<uint32_t>(row) * cols + col;
-            uint32_t offset1 = static_cast<uint32_t>(row + 1) * cols + col;
-            LoadAlign(matrixReg0, matrix + offset0);
-            LoadAlign(matrixReg1, matrix + offset1);
-            LoadAlign(addReg0, addend + offset0);
-            LoadAlign(addReg1, addend + offset1);
-            Mul(matrixReg0, matrixReg0, scaleReg0, mask0);
-            Mul(matrixReg1, matrixReg1, scaleReg1, mask1);
-            if constexpr (IS_SUB) {
-                Sub(matrixReg0, matrixReg0, addReg0, mask0);
-                Sub(matrixReg1, matrixReg1, addReg1, mask1);
-            } else {
-                Add(matrixReg0, matrixReg0, addReg0, mask0);
-                Add(matrixReg1, matrixReg1, addReg1, mask1);
-            }
-            StoreAlign(matrix + offset0, matrixReg0, mask0);
-            StoreAlign(matrix + offset1, matrixReg1, mask1);
-        }
-    }
-    if (row < rows) {
-        LoadAlign<float, LoadDist::DIST_BRC_B32>(scaleReg0, rowScale + row);
-        for (uint16_t col = 0; col < cols; col += FP32_PER_REG) {
-            uint32_t activeCount = static_cast<uint32_t>(cols - col);
-            MaskReg mask = UpdateMask<float>(activeCount);
-            uint32_t offset = static_cast<uint32_t>(row) * cols + col;
-            LoadAlign(matrixReg0, matrix + offset);
-            LoadAlign(addReg0, addend + offset);
-            Mul(matrixReg0, matrixReg0, scaleReg0, mask);
-            if constexpr (IS_SUB) {
-                Sub(matrixReg0, matrixReg0, addReg0, mask);
-            } else {
-                Add(matrixReg0, matrixReg0, addReg0, mask);
-            }
-            StoreAlign(matrix + offset, matrixReg0, mask);
-        }
-    }
-}
-
-// P1-1：行缩放 + bf16 往返，合成一趟 RegBase。
-//   dst_bf16[row, :] = cast_bf16_rint( cast_fp32(src_bf16[row, :]) · rowScale[row] )
-//   形态照同仓 chunk_fwd_h 的 FwdHLoadAsFloat / FwdHStoreBf16（1 个 bf16 寄存器 <-> 2 个
-//   fp32 寄存器，用 RegLayout::ZERO/ONE 分半）。
-//   **舍入点**：fp32->bf16 必须用 CAST_RINT（与现有 Cast(..., RoundMode::CAST_RINT) 一致），
-//   不能用 regbase.hpp 里 CastFloat2Half 的 CAST_ROUND（那是四舍五入远离零，在"恰好一半"
-//   的点上结果不同）。bf16->fp32 是加宽转换，恒精确。
-constexpr AscendC::Reg::CastTrait PPFM_B16_TO_F32_ZERO = {
-    AscendC::Reg::RegLayout::ZERO,
-    AscendC::Reg::SatMode::SAT,
-    AscendC::Reg::MaskMergeMode::ZEROING,
-    AscendC::RoundMode::CAST_NONE,
-};
-constexpr AscendC::Reg::CastTrait PPFM_B16_TO_F32_ONE = {
-    AscendC::Reg::RegLayout::ONE,
-    AscendC::Reg::SatMode::SAT,
-    AscendC::Reg::MaskMergeMode::ZEROING,
-    AscendC::RoundMode::CAST_NONE,
-};
-constexpr AscendC::Reg::CastTrait PPFM_F32_TO_B16_RINT_ZERO = {
-    AscendC::Reg::RegLayout::ZERO,
-    AscendC::Reg::SatMode::NO_SAT,
-    AscendC::Reg::MaskMergeMode::MERGING,
-    AscendC::RoundMode::CAST_RINT,
-};
-constexpr AscendC::Reg::CastTrait PPFM_F32_TO_B16_RINT_ONE = {
-    AscendC::Reg::RegLayout::ONE,
-    AscendC::Reg::SatMode::NO_SAT,
-    AscendC::Reg::MaskMergeMode::ZEROING,
-    AscendC::RoundMode::CAST_RINT,
-};
-
-__simd_vf__ static inline void MulRowScaleBf16ToBf16Regbase(
-    __ubuf__ bfloat16_t *dst, __ubuf__ bfloat16_t *src, __ubuf__ float *rowScale,
-    uint16_t rows, uint16_t cols)
-{
-    using namespace AscendC::MicroAPI;
-    constexpr uint16_t BF16_PER_REG = AscendC::VECTOR_REG_WIDTH / sizeof(bfloat16_t);
-    MaskReg mask16 = CreateMask<bfloat16_t, MaskPattern::ALL>();
-    MaskReg mask32 = CreateMask<float, MaskPattern::ALL>();
-    RegTensor<bfloat16_t> raw;
-    RegTensor<bfloat16_t> out;
-    RegTensor<float> f0;
-    RegTensor<float> f1;
-    RegTensor<float> sc;
-
-    for (uint16_t row = 0; row < rows; ++row) {
-        // 逐行标量 -> 向量 BRC 读（不再走 SCALARLDST 口）
-        LoadAlign<float, LoadDist::DIST_BRC_B32>(sc, rowScale + row);
-        for (uint16_t col = 0; col < cols; col += BF16_PER_REG) {
-            const uint32_t o = static_cast<uint32_t>(row) * cols + col;
-            LoadAlign<bfloat16_t, LoadDist::DIST_NORM>(raw, src + o);
-            Cast<float, bfloat16_t, PPFM_B16_TO_F32_ZERO>(f0, raw, mask16);
-            Cast<float, bfloat16_t, PPFM_B16_TO_F32_ONE>(f1, raw, mask16);
-            Mul(f0, f0, sc, mask32);
-            Mul(f1, f1, sc, mask32);
-            Cast<bfloat16_t, float, PPFM_F32_TO_B16_RINT_ONE>(out, f1, mask32);
-            Cast<bfloat16_t, float, PPFM_F32_TO_B16_RINT_ZERO>(out, f0, mask32);
-            StoreAlign(dst + o, out, mask16);
-        }
-    }
-}
-
-// bf16 LocalTensor 的行/段指针
-__aicore__ inline __ubuf__ bfloat16_t *RowPtrBf16(LocalTensor<bfloat16_t> &t, int32_t off)
-{
-    return (__ubuf__ bfloat16_t *)reinterpret_cast<uint64_t>(t.GetPhyAddr()) + off;
-}
-
-// LocalTensor 的行指针（PhyAddr 是字节地址，转 float* 后按元素步进）
-__aicore__ inline __ubuf__ float *RowScalePtr(LocalTensor<float> &t, int32_t rowOff)
-{
-    return (__ubuf__ float *)reinterpret_cast<uint64_t>(t.GetPhyAddr()) + rowOff;
-}
 #endif
 
 constexpr int32_t CV_BT = 64;
@@ -448,94 +241,6 @@ __aicore__ inline void AicSetToAiv(uint16_t id)
 #endif
 }
 
-// ---------------- matmul 类型 ----------------
-using MmAType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, bfloat16_t>;
-using MmBType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, bfloat16_t>;
-using MmCType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, float>;
-using MmBiasType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, float>;
-constexpr MatmulConfig CV_MM_CFG = GetNormalConfig(true);
-
-// ---------------- CATLASS BlockMmad（950 的核内 cube→vector 惯用法）----------------
-// 与仓内 chunk_scaled_dot_kkt 的 950 路径一致：BlockMmad + preSetFlags/finalWaitFlags
-// 才是"C 已写回 GM"的保证；MatmulImpl::IterateAll 不提供这个保证。
-#if PPFM_ARCH_IS_950
-using MmArchTag = Catlass::Arch::Ascend950;
-#else
-using MmArchTag = Catlass::Arch::AtlasA2;
-#endif
-using MmDispatchPolicy = Catlass::Gemm::MmadPingpongTlaMulti<MmArchTag, true, false>;
-using MmL1Shape = tla::Shape<tla::Int<128>, tla::Int<128>, tla::Int<128>>;
-using MmL0Shape = MmL1Shape;
-// A 行主（matmul①③：W_c[BT,K] @ X[K,N]）
-using MmTileCopyNT = Catlass::Gemm::Tile::PackedTileCopyTla<
-    MmArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor, float,
-    Catlass::layout::RowMajor>;
-using MmBlockNT = Catlass::Gemm::Block::BlockMmadTla<MmDispatchPolicy, MmL1Shape, MmL0Shape, bfloat16_t,
-                                                     bfloat16_t, float, void, MmTileCopyNT>;
-// A 列主（matmul②④：left[BT,K]^T @ X[BT,N]）
-using MmTileCopyTA = Catlass::Gemm::Tile::PackedTileCopyTla<
-    MmArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor, float,
-    Catlass::layout::RowMajor>;
-using MmBlockTA = Catlass::Gemm::Block::BlockMmadTla<MmDispatchPolicy, MmL1Shape, MmL0Shape, bfloat16_t,
-                                                     bfloat16_t, float, void, MmTileCopyTA>;
-
-// ---------------- A5 手写 tile 级（L0C→UB）类型 ----------------
-// 与仓内 chunk_fwd_h_cube.h / chunk_kda_fwd_fwd_h.h 同一套 API：
-//   PackedTileCopyTlaToUB 提供 CopyGmToL1A/B、CopyL1ToL0A/B、CopyL0CToDst（落 UB）；
-//   TileMmadTla 做单 tile MMAD。A2/A3 没有 UB 直连通道，仍用上面的 PackedTileCopyTla 落 GM。
-#if PPFM_ARCH_IS_950
-using TiledArchTag = Catlass::Arch::Ascend950;
-#else
-using TiledArchTag = Catlass::Arch::AtlasA2;
-#endif
-#if PPFM_ARCH_IS_950
-using TiledCopyNT = Common::Tile::PackedTileCopyTlaToUB<
-    TiledArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor,
-    float, Catlass::layout::RowMajor>;
-using TiledCopyTA = Common::Tile::PackedTileCopyTlaToUB<
-    TiledArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor,
-    float, Catlass::layout::RowMajor>;
-#else
-// 910B：没有 L0C→UB，这里只用它的 L1A 布局标签喂给 TileMmadTla
-using TiledCopyNT = Catlass::Gemm::Tile::PackedTileCopyTla<
-    TiledArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor,
-    float, Catlass::layout::RowMajor>;
-using TiledCopyTA = Catlass::Gemm::Tile::PackedTileCopyTla<
-    TiledArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor,
-    float, Catlass::layout::RowMajor>;
-#endif
-#if PPFM_ARCH_IS_950
-// NT 形态的 C 直接落 UB，SPLIT_M（前一半行→低半区、后一半行→高半区）
-using TiledCopyNTSplitUb = Common::Tile::PackedTileCopyTlaToUB<
-    TiledArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor,
-    float, Catlass::layout::RowMajor, void, Catlass::Gemm::Tile::CopyL0CToUBMode::SPLIT_M>;
-// TA 形态（A 列主）的 C 直接落 UB，同样是 SPLIT_M
-// （A 列主 = 逻辑 [m,k] 在内存里按 [k,m] 存，正是「转置 A」的 mm2/mm4）
-using TiledCopyTASplitUb = Common::Tile::PackedTileCopyTlaToUB<
-    TiledArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor,
-    float, Catlass::layout::RowMajor, void, Catlass::Gemm::Tile::CopyL0CToUBMode::SPLIT_M>;
-#endif
-using TiledMmadNT = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
-                                                     typename TiledCopyNT::LayoutTagL1A>;
-using TiledMmadTA = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
-                                                     typename TiledCopyTA::LayoutTagL1A>;
-// GM 落点的 tile+C 回写类型（A2/A3 与 A5 的 A1 增量都用它）
-// C 落 GM 的 tile-copy 别名（两代 API 名字不同）
-#if PPFM_ARCH_IS_950
-template <class TensorC>
-using MmCopyL0CToGm = typename MmTileCopyNT::template CopyL0CToDst<TensorC>;
-template <class TensorC>
-using MMTACopyL0CToGm = typename MmTileCopyTA::template CopyL0CToDst<TensorC>;
-#else
-template <class TensorC>
-using MmCopyL0CToGm = typename MmTileCopyNT::template CopyL0CToGm<TensorC>;
-template <class TensorC>
-using MMTACopyL0CToGm = typename MmTileCopyTA::template CopyL0CToGm<TensorC>;
-#endif
-using MmTileMmadNT = Catlass::Gemm::Tile::TileMmadTla<MmArchTag, bfloat16_t,
-                                                      typename MmTileCopyNT::LayoutTagL1A>;
-using MmTileMmadTA = Catlass::Gemm::Tile::TileMmadTla<MmArchTag, bfloat16_t,
-                                                      typename MmTileCopyTA::LayoutTagL1A>;
 // 手写 tile 路径下 L1 的两个槽（A 在前、B 在后），单位字节
 constexpr int32_t TILED_L1_A_OFF = 0;
 constexpr int32_t TILED_L1_B_OFF = 32 * 1024;
@@ -569,17 +274,6 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #define PPFM_VTMP_UB_DIAG 0
 #endif
 // （默认 950=1 / A2A3=0）：dH 的 C 由 fixpipe 直落 UB（L0C->UB，SPLIT_M），
-// 省掉 dH 每 chunk 的 GM 往返；0 = 旧路径（AIC 写 dHF_/dHF1_ GM，AIV 回读）。
-// 注意： SPLIT_M 的语义是「M 方向对半、两半分别写进两个 AIV 子核各自 bank
-// 的同一偏移」，
-//   所以 AIV 侧按**连续半区**（子核 i = 行 [i*K/2, (i+1)*K/2)）取自己那半。
-#ifndef PPFM_DH_CV
-#if PPFM_ARCH_IS_950
-#define PPFM_DH_CV 1
-#else
-#define PPFM_DH_CV 0
-#endif
-#endif
 // （默认 1）：回收 UB 布局里"按子核切两份"的冗余。
 // 依据（实测）：`SPLIT_M` 的 fixpipe 把 C 的 M 两半分别写进两个 AIV 子核
 // **各自 bank 的同一偏移**，且两个子核从**同一个 UB 偏移**读到了**不同**的数据
@@ -631,33 +325,11 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #undef PPFM_M_UB
 #define PPFM_M_UB 0
 #endif
-// **T2 也走 L0C→UB**（与 dH 同一套 SPLIT_M 落点）。
-// 动机不只是性能：把 dH 挪进 UB 之后，T2 成了 m 链上**唯一**剩下的 "AIC→AIV 经 GM" 边，
-// 而 950 上这条边历史上就是薄弱点（validation 的九组排除实验）。
-// 顺带省掉每 chunk「T2 写 GM 64 KiB + 回读 64 KiB」。
-#ifndef PPFM_T2_CV
-#if PPFM_ARCH_IS_950
-#define PPFM_T2_CV 1
-#else
-#define PPFM_T2_CV 0
-#endif
-#endif
 #if PPFM_T2_CV && !PPFM_DH_CV
 #undef PPFM_T2_CV
 #define PPFM_T2_CV 0
 #endif
 // 实验开关：1=保留手工 DCCI/DSB（此前实现）；0=只用跨核 flag（与生产算子一致）
-// 950：实测只用跨核 flag 就够（并且去掉 DCCI 后竞态由 3/6 降到 1/6），默认 0。
-// 910B/910_93：实测 AIC 会读到 AIV 尚未对其他核可见的 bf16(h)（chunk0 的 h≡0 探针
-//   仍得到 1.6e-2 的 h），故先按 A2 老做法启用 DCCI/DSB；若后续定位到更精确的边，
-//   可只保留必要的那一条。
-#ifndef PPFM_LEGACY_CACHEOPS
-#if PPFM_ARCH_IS_950
-#define PPFM_LEGACY_CACHEOPS 0
-#else
-#define PPFM_LEGACY_CACHEOPS 1
-#endif
-#endif
 // 临时诊断开关：1=在 prologue 给 AIC 要写的 C 缓冲预置哨兵（见 ProcessChain）
 #ifndef PPFM_SENTINEL_PROBE
 #define PPFM_SENTINEL_PROBE 0
@@ -892,7 +564,7 @@ constexpr int32_t PPFM_VEC_UB_BYTES = UB_CV_END;
 
 // ---- 编译期自检（§7.7：常量集中 + 空间上限配 static_assert）----
 // 950 的 AIV UB 上限 256 KiB；A2/910B 为 192 KiB。
-static_assert(PPFM_VEC_UB_BYTES <= (PPFM_ARCH_IS_950 ? 256 * 1024 : 192 * 1024),
+static_assert(PPFM_VEC_UB_BYTES <= PPFM_UB_CAP_BYTES,
               "AIV UB 用量超上限：950=256KiB / A2=192KiB，请按 UB_* 布局重算");
 // 状态常驻区：每个 AIV 子核 64 行 x cb_（cb_ 最大 CV_V）fp32 x h/m 两份
 static_assert(H_UB_ROWS * CV_V * 4 * 2 <= 96 * 1024,

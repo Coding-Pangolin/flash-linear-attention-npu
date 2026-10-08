@@ -1,3 +1,17 @@
+/**
+ * Copyright (c) 2026 Tianjin University, Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * the BSD 3-Clause License (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ */
+
+/*!
+ * \file pre_process_fwd_kernel_merged_cube.h
+ * \brief arch35（A5 / Ascend950，dav-3510） 的 cube 实现（与另一 arch 同名类，由 _kernel.h 二选一）。
+ */
+
 /*!
  * \file pre_process_fwd_kernel_merged_cube.h
  * \brief pre_process_fwd_kernel_merged：AIC（cube）实现
@@ -6,12 +20,75 @@
  * Stage/布局/同步协议的完整说明见 pre_process_fwd_kernel_merged_common.h 顶部注释与 docs/design.md。
  */
 
-#ifndef PREF_PROCESS_FWD_KERNEL_MERGED_CUBE_H
-#define PREF_PROCESS_FWD_KERNEL_MERGED_CUBE_H
+#ifndef PREF_PROCESS_FWD_KERNEL_MERGED_ARCH35_CUBE_H
+#define PREF_PROCESS_FWD_KERNEL_MERGED_ARCH35_CUBE_H
 
-#include "pre_process_fwd_kernel_merged_common.h"
+#include "../pre_process_fwd_kernel_merged_common.h"
 
-namespace GDN {class PpFwdCube {
+namespace GDN {
+// ---------------- matmul 类型 ----------------
+using MmAType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, bfloat16_t>;
+using MmBType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, bfloat16_t>;
+using MmCType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, float>;
+using MmBiasType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, float>;
+constexpr MatmulConfig CV_MM_CFG = GetNormalConfig(true);
+
+// ---------------- CATLASS BlockMmad（950 的核内 cube→vector 惯用法）----------------
+// 与仓内 chunk_scaled_dot_kkt 的 950 路径一致：BlockMmad + preSetFlags/finalWaitFlags
+// 才是"C 已写回 GM"的保证；MatmulImpl::IterateAll 不提供这个保证。
+using MmArchTag = Catlass::Arch::Ascend950;
+using MmDispatchPolicy = Catlass::Gemm::MmadPingpongTlaMulti<MmArchTag, true, false>;
+using MmL1Shape = tla::Shape<tla::Int<128>, tla::Int<128>, tla::Int<128>>;
+using MmL0Shape = MmL1Shape;
+// A 行主（matmul①③：W_c[BT,K] @ X[K,N]）
+using MmTileCopyNT = Catlass::Gemm::Tile::PackedTileCopyTla<
+    MmArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor, float,
+    Catlass::layout::RowMajor>;
+using MmBlockNT = Catlass::Gemm::Block::BlockMmadTla<MmDispatchPolicy, MmL1Shape, MmL0Shape, bfloat16_t,
+                                                     bfloat16_t, float, void, MmTileCopyNT>;
+// A 列主（matmul②④：left[BT,K]^T @ X[BT,N]）
+using MmTileCopyTA = Catlass::Gemm::Tile::PackedTileCopyTla<
+    MmArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor, float,
+    Catlass::layout::RowMajor>;
+using MmBlockTA = Catlass::Gemm::Block::BlockMmadTla<MmDispatchPolicy, MmL1Shape, MmL0Shape, bfloat16_t,
+                                                     bfloat16_t, float, void, MmTileCopyTA>;
+
+// ---------------- A5 手写 tile 级（L0C→UB）类型 ----------------
+// 与仓内 chunk_fwd_h_cube.h / chunk_kda_fwd_fwd_h.h 同一套 API：
+//   PackedTileCopyTlaToUB 提供 CopyGmToL1A/B、CopyL1ToL0A/B、CopyL0CToDst（落 UB）；
+//   TileMmadTla 做单 tile MMAD。A2/A3 没有 UB 直连通道，仍用上面的 PackedTileCopyTla 落 GM。
+using TiledArchTag = Catlass::Arch::Ascend950;
+using TiledCopyNT = Common::Tile::PackedTileCopyTlaToUB<
+    TiledArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor,
+    float, Catlass::layout::RowMajor>;
+using TiledCopyTA = Common::Tile::PackedTileCopyTlaToUB<
+    TiledArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor,
+    float, Catlass::layout::RowMajor>;
+// NT 形态的 C 直接落 UB，SPLIT_M（前一半行→低半区、后一半行→高半区）
+using TiledCopyNTSplitUb = Common::Tile::PackedTileCopyTlaToUB<
+    TiledArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor,
+    float, Catlass::layout::RowMajor, void, Catlass::Gemm::Tile::CopyL0CToUBMode::SPLIT_M>;
+// TA 形态（A 列主）的 C 直接落 UB，同样是 SPLIT_M
+// （A 列主 = 逻辑 [m,k] 在内存里按 [k,m] 存，正是「转置 A」的 mm2/mm4）
+using TiledCopyTASplitUb = Common::Tile::PackedTileCopyTlaToUB<
+    TiledArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor,
+    float, Catlass::layout::RowMajor, void, Catlass::Gemm::Tile::CopyL0CToUBMode::SPLIT_M>;
+using TiledMmadNT = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
+                                                     typename TiledCopyNT::LayoutTagL1A>;
+using TiledMmadTA = Catlass::Gemm::Tile::TileMmadTla<TiledArchTag, bfloat16_t,
+                                                     typename TiledCopyTA::LayoutTagL1A>;
+// GM 落点的 tile+C 回写类型（A2/A3 与 A5 的 A1 增量都用它）
+// C 落 GM 的 tile-copy 别名（两代 API 名字不同）
+template <class TensorC>
+using MmCopyL0CToGm = typename MmTileCopyNT::template CopyL0CToDst<TensorC>;
+template <class TensorC>
+using MMTACopyL0CToGm = typename MmTileCopyTA::template CopyL0CToDst<TensorC>;
+using MmTileMmadNT = Catlass::Gemm::Tile::TileMmadTla<MmArchTag, bfloat16_t,
+                                                      typename MmTileCopyNT::LayoutTagL1A>;
+using MmTileMmadTA = Catlass::Gemm::Tile::TileMmadTla<MmArchTag, bfloat16_t,
+                                                      typename MmTileCopyTA::LayoutTagL1A>;
+
+class PpFwdCube {
 public:
     __aicore__ inline PpFwdCube(const PpFwdCtx &ctx) : ctx_(ctx) {}
 
@@ -352,7 +429,6 @@ private:
         if constexpr (std::is_same_v<CT, float>) {
             // fp32 C：950 可直接 L0C→UB（SPLIT_M），A2/A3 只能落 GM
             bool handled = false;
-#if PPFM_ARCH_IS_950
             if (toUb) {
                 // 写进 UB_EXT_F 区（64x128 fp32 = 32KB，正好是该区尺寸）。
 
@@ -370,7 +446,6 @@ private:
 #endif
                 handled = true;
             }
-#endif
             if (!handled) {
                 MmCopyL0CToGm<decltype(bC)> copyC;
                 // 注意： 必须走 3 参重载 (dst, src, unitFlag)：4 参会误选 (l0Batch, dstNdStride)
@@ -592,4 +667,4 @@ private:
 
 } // namespace GDN
 
-#endif  // PREF_PROCESS_FWD_KERNEL_MERGED_CUBE_H
+#endif  // PREF_PROCESS_FWD_KERNEL_MERGED_ARCH35_CUBE_H

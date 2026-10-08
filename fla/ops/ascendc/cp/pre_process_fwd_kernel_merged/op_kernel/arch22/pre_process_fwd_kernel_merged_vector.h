@@ -893,10 +893,15 @@ private:
                 // C10：同 left 路径 —— Brcb 广播 factor + 反复式 Mul（行宽 cb_，>64 时拆段）
                 Brcb(fac8_, dgF_[off], SEG / 8, {1, 8});
                 PipeBarrier<PIPE_V>();
-                for (int32_t half = 0; half < cb_ / 64; ++half) {
-                    Mul(scrF_[lo * cb_ + half * 64], scrF_[lo * cb_ + half * 64], fac8_,
-                        64, SEG, {1, 1, 0, static_cast<uint8_t>(cb_ / 8),
-                                  static_cast<uint8_t>(cb_ / 8), 1});
+                // ⚠ 列宽 cb_ 可能 < 64（hybridS=4 的分片任务 cb_=32）⇒ 必须按 ≤64 一段扫，
+                //   不能写成 for (half = 0; half < cb_/64; ...)：cb_=32 时 cb_/64=0，整段缩放会被跳过
+                //   （首版就是这个错，L1 在 gdn-hy64 上抓到 max|diff|=4.14e-02）。
+                for (int32_t c0 = 0; c0 < cb_; c0 += 64) {
+                    const int32_t n = (cb_ - c0 < 64) ? (cb_ - c0) : 64;
+                    Mul(scrF_[lo * cb_ + c0], scrF_[lo * cb_ + c0], fac8_,
+                        static_cast<uint16_t>(n), SEG,
+                        {1, 1, 0, static_cast<uint8_t>(cb_ / 8),
+                         static_cast<uint8_t>(cb_ / 8), 1});
                 }
 #else
 #if PPFM_ROW_PREFETCH
@@ -1101,10 +1106,13 @@ private:
                     LocalTensor<float> decSrc = usePrevDecay ? decayPrevF_ : decayF_;
                     Brcb(fac8_, decSrc[rb], RB / 8, {1, 8});
                     PipeBarrier<PIPE_V>();
-                    for (int32_t half = 0; half < cb_ / 64; ++half) {
-                        Mul(stateBlkF_[half * 64], stateBlkF_[half * 64], fac8_,
-                            64, RB, {1, 1, 0, static_cast<uint8_t>(cb_ / 8),
-                                     static_cast<uint8_t>(cb_ / 8), 1});
+                    // 同 C10：按 ≤64 一段扫（cb_ 可为 32 ⇒ 不能假设 cb_/64 >= 1）
+                    for (int32_t c0 = 0; c0 < cb_; c0 += 64) {
+                        const int32_t n = (cb_ - c0 < 64) ? (cb_ - c0) : 64;
+                        Mul(stateBlkF_[c0], stateBlkF_[c0], fac8_,
+                            static_cast<uint16_t>(n), RB,
+                            {1, 1, 0, static_cast<uint8_t>(cb_ / 8),
+                             static_cast<uint8_t>(cb_ / 8), 1});
                     }
                 }
 #else
@@ -1259,10 +1267,13 @@ private:
                     LocalTensor<float> decSrc = usePrevDecay ? decayPrevF_ : decayF_;
                     Brcb(fac8_, decSrc[rb], RB / 8, {1, 8});
                     PipeBarrier<PIPE_V>();
-                    for (int32_t half = 0; half < cb_ / 64; ++half) {
-                        Mul(stateBlkF_[half * 64], stateBlkF_[half * 64], fac8_,
-                            64, RB, {1, 1, 0, static_cast<uint8_t>(cb_ / 8),
-                                     static_cast<uint8_t>(cb_ / 8), 1});
+                    // 同 C10：按 ≤64 一段扫（cb_ 可为 32 ⇒ 不能假设 cb_/64 >= 1）
+                    for (int32_t c0 = 0; c0 < cb_; c0 += 64) {
+                        const int32_t n = (cb_ - c0 < 64) ? (cb_ - c0) : 64;
+                        Mul(stateBlkF_[c0], stateBlkF_[c0], fac8_,
+                            static_cast<uint16_t>(n), RB,
+                            {1, 1, 0, static_cast<uint8_t>(cb_ / 8),
+                             static_cast<uint8_t>(cb_ / 8), 1});
                     }
                 }
 #else

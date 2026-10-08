@@ -51,7 +51,7 @@ struct PreProcessFwdKernelMergedParams {
     const aclTensor *hmOut = nullptr;
 };
 
-aclnnStatus CheckNotNull(PreProcessFwdKernelMergedParams params)
+static aclnnStatus CheckNotNull(PreProcessFwdKernelMergedParams params)
 {
     CHECK_COND(params.k != nullptr, ACLNN_ERR_PARAM_NULLPTR, "k must not be nullptr.");
     CHECK_COND(params.w != nullptr, ACLNN_ERR_PARAM_NULLPTR, "w must not be nullptr.");
@@ -62,7 +62,7 @@ aclnnStatus CheckNotNull(PreProcessFwdKernelMergedParams params)
     return ACLNN_SUCCESS;
 }
 
-aclnnStatus CheckDtype(PreProcessFwdKernelMergedParams params)
+static aclnnStatus CheckDtype(PreProcessFwdKernelMergedParams params)
 {
     const auto bf16 = DataType::DT_BF16;
     CHECK_COND(params.k->GetDataType() == bf16, ACLNN_ERR_PARAM_INVALID, "k must be BF16.");
@@ -83,7 +83,7 @@ aclnnStatus CheckDtype(PreProcessFwdKernelMergedParams params)
     return ACLNN_SUCCESS;
 }
 
-aclnnStatus CheckShape(PreProcessFwdKernelMergedParams params)
+static aclnnStatus CheckShape(PreProcessFwdKernelMergedParams params)
 {
     const auto kShape = params.k->GetViewShape();
     const auto wShape = params.w->GetViewShape();
@@ -130,7 +130,7 @@ aclnnStatus CheckShape(PreProcessFwdKernelMergedParams params)
     return ACLNN_SUCCESS;
 }
 
-aclnnStatus DataContiguous(const aclTensor *&tensor, aclOpExecutor *executor)
+static aclnnStatus DataContiguous(const aclTensor *&tensor, aclOpExecutor *executor)
 {
     if (tensor == nullptr) {
         return ACLNN_SUCCESS;
@@ -140,7 +140,7 @@ aclnnStatus DataContiguous(const aclTensor *&tensor, aclOpExecutor *executor)
     return ACLNN_SUCCESS;
 }
 
-aclnnStatus ParamsDataContiguous(PreProcessFwdKernelMergedParams &params, aclOpExecutor *executor)
+static aclnnStatus ParamsDataContiguous(PreProcessFwdKernelMergedParams &params, aclOpExecutor *executor)
 {
     CHECK_COND(DataContiguous(params.k, executor) == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID, "Contiguous k failed.");
     CHECK_COND(DataContiguous(params.w, executor) == ACLNN_SUCCESS, ACLNN_ERR_PARAM_INVALID, "Contiguous w failed.");
@@ -153,7 +153,7 @@ aclnnStatus ParamsDataContiguous(PreProcessFwdKernelMergedParams &params, aclOpE
 }
 
 // gate 统一成 FP32：BF16 gate 先 Cast（kernel v1 只处理 FP32 gate；bf16 标量转换在设备侧不合法）
-aclnnStatus ParamsGateToFp32(PreProcessFwdKernelMergedParams &params, aclOpExecutor *executor)
+static aclnnStatus ParamsGateToFp32(PreProcessFwdKernelMergedParams &params, aclOpExecutor *executor)
 {
     if (params.g != nullptr && params.g->GetDataType() != DataType::DT_FLOAT) {
         params.g = l0op::Cast(params.g, DataType::DT_FLOAT, executor);

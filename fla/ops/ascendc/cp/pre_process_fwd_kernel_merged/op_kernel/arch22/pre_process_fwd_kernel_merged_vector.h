@@ -87,7 +87,8 @@ public:
         diagG_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_DIAG), 16);
 #endif
 
-        pipe_.InitBuffer(ubBuf_, PPFM_VEC_UB_BYTES);
+        // PPFM_VEC_UB_BYTES_TOTAL = PPFM_VEC_UB_BYTES + C10 的 factor 暂存（默认 0 ⇒ 值不变）
+        pipe_.InitBuffer(ubBuf_, PPFM_VEC_UB_BYTES_TOTAL);
         // per-subcore 视图：两个 AIV 子核共享同一块 UB，凡"两个子核都会写"的 scratch
         // 都按 subIdx_ 偏移一份，段分区缓冲（kBlk/wBlk/vBlk/scr）保持不偏移。
         // PPFM_UB_SHARE=1 时不再偏移（每个 AIV 子核有独立 bank，见布局注释）。
@@ -111,6 +112,10 @@ public:
         gBlkF_ = ubBuf_.Get<float>()[UB_GBLK_ELEM + sdg];
         stateBlkF_ = ubBuf_.Get<float>()[UB_STATE_F_ELEM + sstate];
         extBlkF_ = ubBuf_.Get<float>()[UB_EXT_F_ELEM + sext];
+#if PPFM_FAC8_ON
+        // C10：factor 广播暂存（追加在 UB 末尾，见 _common.h 的 UB_FAC8）
+        fac8_ = ubBuf_.Get<float>()[UB_FAC8_ELEM];
+#endif
 #if PPFM_H_UB
         // h 的常驻半步。共享基址（不偏移）：每个 AIV 子核在自己的 bank 里用同一偏移，
         // 各自存自己那 64 行 —— 正是 里 SPLIT_M 的同一套 bank 语义。
@@ -738,6 +743,16 @@ private:
             if (useG) {
                 Cast(scrF_[lo * CV_K], kBlkBf_[lo * CV_K], RoundMode::CAST_NONE, SEG * CV_K);
                 PipeBarrier<PIPE_V>();
+#if PPFM_FAC8_ON
+                // C10：Brcb 广播 factor（[SEG] → [SEG,8]）+ 反复式 Mul，取代 32 次标量读 + 32 次 Muls。
+                // 行宽 CV_K=128 > 64 ⇒ 拆两段（向量一次最多 64 个 fp32）；乘数仍是 dgF_ 里的同一个 fp32 ⇒ 位级不变。
+                Brcb(fac8_, dgF_[off], SEG / 8, {1, 8});
+                PipeBarrier<PIPE_V>();
+                for (int32_t half = 0; half < CV_K / 64; ++half) {
+                    Mul(scrF_[lo * CV_K + half * 64], scrF_[lo * CV_K + half * 64], fac8_,
+                        64, SEG, {1, 1, 0, CV_K / 8, CV_K / 8, 1});
+                }
+#else
 #if PPFM_ROW_PREFETCH
                 float facBuf_[PPFM_SEGROWS];
                 for (int32_t i = 0; i < SEG; ++i) {
@@ -752,6 +767,7 @@ private:
                     Muls(scrF_[(lo + i) * CV_K], scrF_[(lo + i) * CV_K], dgF_.GetValue(off + i), CV_K);
                 }
 #endif
+#endif  // PPFM_FAC8_ON
                 PipeBarrier<PIPE_V>();
                 Cast(scrBf_[lo * CV_K], scrF_[lo * CV_K], RoundMode::CAST_RINT, SEG * CV_K);
                 AIV_SET_V_MTE3();
@@ -873,6 +889,15 @@ private:
 #endif
             PipeBarrier<PIPE_V>();
             if (useG) {
+#if PPFM_FAC8_ON
+                // C10：同 left 路径 —— Brcb 广播 factor + 反复式 Mul（行宽 cb_，>64 时拆段）
+                Brcb(fac8_, dgF_[off], SEG / 8, {1, 8});
+                PipeBarrier<PIPE_V>();
+                for (int32_t half = 0; half < cb_ / 64; ++half) {
+                    Mul(scrF_[lo * cb_ + half * 64], scrF_[lo * cb_ + half * 64], fac8_,
+                        64, SEG, {1, 1, 0, cb_ / 8, cb_ / 8, 1});
+                }
+#else
 #if PPFM_ROW_PREFETCH
                 float facBuf_[PPFM_SEGROWS];
                 for (int32_t i = 0; i < SEG; ++i) {
@@ -887,6 +912,7 @@ private:
                     Muls(scrF_[(lo + i) * cb_], scrF_[(lo + i) * cb_], dgF_.GetValue(off + i), cb_);
                 }
 #endif
+#endif  // PPFM_FAC8_ON
                 PipeBarrier<PIPE_V>();
             }
             Cast(scrBf_[lo * cb_], scrF_[lo * cb_], RoundMode::CAST_RINT, SEG * cb_);
@@ -1257,6 +1283,9 @@ private:
 #endif
     LocalTensor<float> vTmpUb_;   // 共享基址的 vTmp 落点视图
     LocalTensor<bfloat16_t> stateBlkBf_;
+#if PPFM_FAC8_ON
+    LocalTensor<float> fac8_;          // C10：factor 广播暂存 [FAC8_ROWS, 8] fp32
+#endif
     LocalTensor<bfloat16_t> kBlkBf_;
     LocalTensor<bfloat16_t> wBlkBf_;
     LocalTensor<bfloat16_t> vBlkBf_;

@@ -474,6 +474,28 @@ constexpr int32_t TILED_L1_CAP_N = 128;
 #define AIV_WAR_BEFORE_STATE_MTE2() do { } while (0)
 #endif
 
+// ---- C10（A2 专用实验，默认 0）：逐行缩放改用 Brcb 广播 + 反复式 Mul ----
+// 依据（A2 指令级仿真）：A2 的最大单一成本是**标量 load**（同 shape `LD_XD_XN_IMM`
+//   4.2 万条 / 1041.6 µs，是 950 的 4.9~11×），而 A2 又是纯 AIV-bound（96~97%）
+//   ⇒ 砍标量指令直接兑现。这些标量读主要来自 `left` / `v_new` 与状态相位的逐行缩放：
+//   每 chunk 每子核各 32 次 `GetValue` + 32 次 `Muls`（K1-a 只是把标量读提前，数量不变）。
+//   950 用 RegBase/VF 一趟做完，A2 没有 VF。
+// A2 可用、且仓内同类算子已在用的等价写法（见 chunk_bwd_dqkwg / chunk_bwd_dv_local 的
+//   vector 实现："Brcb 处理数据个数需要 8 对齐"，随后用带 BinaryRepeatParams 的反复式 Mul）：
+//     Brcb(fac8_, dgF_[off], SEG / 8, {1, 8});                    // [SEG] → [SEG,8]（每行 8 份）
+//     Mul(dst, dst, fac8_, 64, SEG, {1,1,0, row/8, row/8, 1});     // 每 repeat 一行；行宽 >64 拆段
+//   ⇒ 32 次标量读 + 32 次 Muls 变成 1 次 Brcb + 1~2 次 Mul。乘数仍是同一个 fp32 数，
+//      Brcb 只搬数据 ⇒ **位级不变**。
+// 只作用于 A2（950 上与宏无关 ⇒ 预处理输出/机器码逐字节不变）；默认 0 = 仍走原路径。
+#ifndef PPFM_A2_FAC_BROADCAST
+#define PPFM_A2_FAC_BROADCAST 0
+#endif
+#if PPFM_A2_FAC_BROADCAST && !PPFM_ARCH_IS_950
+#define PPFM_FAC8_ON 1
+#else
+#define PPFM_FAC8_ON 0
+#endif
+
 // ---------------- AIV 侧 UB 布局（字节）----------------
 // 注意： 历史结论（**已修订**）：早期按"950 MIX 下 UB 由 AIC + 两个 AIV 子核共享"的
 //   假设，把"两个子核都会写"的 scratch 按 subIdx_ 切成两份（每个常量 =
@@ -619,6 +641,17 @@ constexpr int32_t PPFM_VEC_UB_BYTES = UB_CV_END;
 // 950 的 AIV UB 上限 256 KiB；A2/910B 为 192 KiB。
 static_assert(PPFM_VEC_UB_BYTES <= PPFM_UB_CAP_BYTES,
               "AIV UB 用量超上限：950=256KiB / A2=192KiB，请按 UB_* 布局重算");
+// ---- C10 的 factor 广播暂存（[FAC8_ROWS, 8] fp32）----
+// 行数取两种用法的较大者：`left`/`v_new` 用 PPFM_SEGROWS 行；状态相位的 decay 缩放用 PPFM_SBRB 行。
+// 追加在当前用量的**末尾**并对齐 32B ⇒ 前面所有偏移一个都不变；PPFM_FAC8_ON=0（默认）时
+// 该区不占空间、总用量与现状完全相同（两个平台的 PPFM_VEC_UB_BYTES 本来就 32B 对齐）。
+constexpr int32_t FAC8_ROWS = (PPFM_SEGROWS > PPFM_SBRB) ? PPFM_SEGROWS : PPFM_SBRB;
+constexpr int32_t UB_FAC8 = ((PPFM_VEC_UB_BYTES + 31) / 32) * 32;
+constexpr int32_t UB_FAC8_ELEM = UB_FAC8 / 4;
+constexpr int32_t FAC8_BYTES = PPFM_FAC8_ON ? (FAC8_ROWS * 8 * 4) : 0;
+constexpr int32_t PPFM_VEC_UB_BYTES_TOTAL = UB_FAC8 + FAC8_BYTES;
+static_assert(PPFM_VEC_UB_BYTES_TOTAL <= (PPFM_ARCH_IS_950 ? 256 * 1024 : 192 * 1024),
+              "AIV UB 用量（含 C10 的 factor 暂存）超上限");
 // 状态常驻区：每个 AIV 子核 64 行 x cb_（cb_ 最大 CV_V）fp32 x h/m 两份
 static_assert(H_UB_ROWS * CV_V * 4 * 2 <= 96 * 1024,
               "h/m 常驻 UB 超过预留的 96 KiB");

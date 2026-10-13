@@ -122,6 +122,10 @@ GitHub Release (--gh-release)
                              通常很小，/root 下放不下一次编译的中间产物)
     FLA_PKG_DOCKER_IMAGE_ASCEND950   ascend950 的 x86 镜像，
                              默认 fla-npu-ci:9.1.0-950 (与发布路径 pypi.yml 一致)
+    FLA_PKG_BUILD_JOBS       容器内编译并行度 (OPS_CPU_NUMBER)，默认 64。
+                             出包机 system.slice 有内存上限 (246 是 128GiB) 时
+                             必须限流: 不限流会在 kernel 生成阶段被 OOM kill
+                             (容器 exit 137，编译中间态与产物一起丢)
 远程 x86 编译运行控制:
     FLA_PKG_CONNECT_WAIT     启动时远程连接重试窗口秒数，默认 1800 (半小时内
                              每 30s 重试一次，每次尝试都打日志)
@@ -165,6 +169,12 @@ SUPPORTED_ARCHES = ("arm", "x86")
 
 DEFAULT_DOCKER_IMAGE = "fla-npu-ci:9.1.0-910b"
 DEFAULT_DOCKER_IMAGE_ASCEND950 = "fla-npu-ci:9.1.0-950"
+
+# 出包机 system.slice 通常带 cgroup 内存上限 (246 是 128GiB)。build.sh 默认按
+# 2 x nproc 起编译器，248 核机器上 kernel 生成阶段会被内核 OOM kill —— 容器
+# 以 exit 137 结束，编译中间态与产物一起丢。发布路径 pypi.yml 同样按行限制
+# 并行度 (OPS_CPU_NUMBER)，这里跟随同一个开关，出包机可用 FLA_PKG_BUILD_JOBS 覆盖。
+DEFAULT_BUILD_JOBS = "64"
 DEFAULT_REMOTE_HOST = "192.168.13.247"
 DEFAULT_REMOTE_USER = "root"
 DEFAULT_SSH_KEY = "/workspace/huangjunzhe/ci/id_rsa"
@@ -770,7 +780,11 @@ class RemoteWorkspace:
         # 编译环境由容器提供，宿主只负责 rsync 与启动 docker: CANN / torch /
         # torch_npu / 工具链都取自镜像，宿主 pip 一次或升级 gcc / CANN 不会再
         # 改变产物 (旧路径直接跑宿主的 atk_fla conda env，是水位越线的来源)。
-        container_env = ""
+        container_env = (
+            "  -e OPS_CPU_NUMBER="
+            + shlex.quote(env_or("FLA_PKG_BUILD_JOBS", DEFAULT_BUILD_JOBS))
+            + " \\\n"
+        )
         for name in ("FLA_NPU_OPS", "FLA_NPU_BUILD_ARGS",
                      "FLA_NPU_BRANCH_NAME", "FLA_NPU_COMMIT_ID",
                      "FLA_NPU_DISABLE_LOCAL_VERSION"):

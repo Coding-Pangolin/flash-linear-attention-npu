@@ -139,8 +139,12 @@ jobs:
       FLA_NPU_COMMIT_ID: ${{ github.sha }}
       CI_IMAGE: ${{ matrix.image }}
       # Same warm cache the NPU CI uses, so the embedded offline bundle is built
-      # from a seeded third_party tree instead of a network fetch.
-      CI_CACHE_ROOT: ${{ vars.FLA_NPU_CI_CACHE_ROOT || '/workspace/flash-linear-attention-npu-ci/cache' }}
+      # from a seeded third_party tree instead of a network fetch.  The default
+      # path is resolved in the step below rather than here: hardcoding /workspace
+      # made the workflow depend on one build host's filesystem layout, and on a
+      # host without it the cache -- and its backend build tree -- would land on a
+      # small, shared root filesystem.
+      CI_CACHE_ROOT: ${{ vars.FLA_NPU_CI_CACHE_ROOT }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -154,7 +158,21 @@ jobs:
           VERSION_MODE_GUARD: ${{ inputs.release_build == false && '--allow-local-version' || '' }}
         run: |
           set -euo pipefail
-          third_party_cache="${CI_CACHE_ROOT}/third_party"
+          # Mirror the guard in ci/run_ci_container.sh: a host that provides
+          # /workspace keeps the cache there (warm across runs), anyone else gets
+          # one beside the checkout rather than inside it -- actions/checkout
+          # cleans the checkout itself, so a cache kept there would be wiped on
+          # every run.  The image ships the seed at /opt/fla-ci/third_party, so a
+          # cold cache costs a local copy instead of a network fetch.
+          cache_root="${CI_CACHE_ROOT:-}"
+          if [ -z "$cache_root" ]; then
+            if [ -d /workspace ]; then
+              cache_root=/workspace/flash-linear-attention-npu-ci/cache
+            else
+              cache_root="$(dirname "$PWD")/.fla-ci-cache"
+            fi
+          fi
+          third_party_cache="$cache_root/third_party"
           mkdir -p "$third_party_cache"
           docker run --rm --network host \
             -v "$PWD:/workspace/repo" \

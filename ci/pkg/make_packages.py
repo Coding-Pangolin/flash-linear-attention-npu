@@ -497,7 +497,12 @@ class Remote:
             "-o", "ServerAliveCountMax=20",
             "-o", "BatchMode=yes",
         ]
-        self.rsync_shell = "ssh " + " ".join(self.ssh_options[0:6])
+        # rsync 的 ssh 必须显式带上 -i <key> 与 BatchMode=yes: 远端通常只授权
+        # FLA_PKG_SSH_KEY 这一把 key (默认 key 恰好也被授权时才会"看起来正常"，
+        # 246 就是这种情况)，缺 -i 会直接 Permission denied (publickey)，缺
+        # BatchMode 则可能卡在交互式提示上。
+        self.rsync_shell = ("ssh -i " + shlex.quote(self.key) + " "
+                            + " ".join(self.ssh_options))
 
     @property
     def target(self) -> str:

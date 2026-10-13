@@ -65,7 +65,7 @@
         "FLA_NPU_SOC=<SOC> python3 scripts/build_wheel.py"。
         容器内 <repo> 挂载到 /workspace/repo (third_party 在仓库目录
         内由编译脚本自动下载)，wheel 输出到独立目录。
-* x86 : 通过 SSH 连接远程服务器 (默认 root@192.168.13.246，IdentityFile
+* x86 : 通过 SSH 连接远程服务器 (默认 root@192.168.13.247，IdentityFile
         /workspace/huangjunzhe/ci/id_rsa)，把本地当前仓库 (已包含 PR 代码)
         直接同步到远程后按 SOC 顺序执行同样的编译命令，再把 wheel 同步回
         本机，无需在远程重新拉取代码。
@@ -115,10 +115,11 @@ GitHub Release (--gh-release)
     FLA_PKG_DOCKER_IMAGE        arm 侧全部 SOC 与 x86 侧 910b/910_93 用；
                              默认 fla-npu-ci:9.1.0-910b
 远程 x86 编译 (宿主只同步代码并启动容器):
-    FLA_PKG_REMOTE_HOST      默认 192.168.13.246
+    FLA_PKG_REMOTE_HOST      默认 192.168.13.247
     FLA_PKG_REMOTE_USER      默认 root
     FLA_PKG_SSH_KEY          默认 /workspace/huangjunzhe/ci/id_rsa
-    FLA_PKG_REMOTE_WORKROOT  默认 /root/fla-npu-pkg
+    FLA_PKG_REMOTE_WORKROOT  默认 /data/fla-npu-pkg (必须在数据盘上: 出包机根分区
+                             通常很小，/root 下放不下一次编译的中间产物)
     FLA_PKG_DOCKER_IMAGE_ASCEND950   ascend950 的 x86 镜像，
                              默认 fla-npu-ci:9.1.0-950 (与发布路径 pypi.yml 一致)
 远程 x86 编译运行控制:
@@ -164,10 +165,10 @@ SUPPORTED_ARCHES = ("arm", "x86")
 
 DEFAULT_DOCKER_IMAGE = "fla-npu-ci:9.1.0-910b"
 DEFAULT_DOCKER_IMAGE_ASCEND950 = "fla-npu-ci:9.1.0-950"
-DEFAULT_REMOTE_HOST = "192.168.13.246"
+DEFAULT_REMOTE_HOST = "192.168.13.247"
 DEFAULT_REMOTE_USER = "root"
 DEFAULT_SSH_KEY = "/workspace/huangjunzhe/ci/id_rsa"
-DEFAULT_REMOTE_WORKROOT = "/root/fla-npu-pkg"
+DEFAULT_REMOTE_WORKROOT = "/data/fla-npu-pkg"
 
 # --gh-release (cron / 独立调用) 模式: 代码始终来自目标仓 flashserve，
 # 在固定目录 clone 最新代码后编译，产物上传到目标仓 Release。

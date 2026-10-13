@@ -75,6 +75,15 @@ jobs:
           # libraries compiled on that runner (the OPP host libraries and the
           # Stable-ABI launcher), and FLA_NPU_ARCH only labels the artifact.  A
           # new arch therefore means a new row here once its runner is registered.
+          #
+          # build_jobs caps the compiler parallelism of the row (build.sh
+          # defaults to 2 x nproc).  The runners are shared hosts, and at the
+          # default the AscendC kernel generator starts hundreds of asc_opc
+          # jobs at once: when one of them fails, build.sh's wrapper touches
+          # compile_stop.flag and kill -9's every sibling compile, so the build
+          # dies within seconds with "Stop flag detected" on every kernel and
+          # no compiler error in the log.  64 keeps a complete a5 wheel building
+          # in ~15 min while staying inside the host's spare capacity.
           ROWS: |
             [
               {
@@ -82,21 +91,24 @@ jobs:
                 "tier": "a2",
                 "arch": "aarch64",
                 "runner_labels": "[\"self-hosted\",\"linux\",\"arm64\",\"npu\",\"flash-linear-attention-npu\"]",
-                "image": "fla-npu-ci:9.1.0-910b"
+                "image": "fla-npu-ci:9.1.0-910b",
+                "build_jobs": "64"
               },
               {
                 "soc": "ascend910_93",
                 "tier": "a3",
                 "arch": "aarch64",
                 "runner_labels": "[\"self-hosted\",\"linux\",\"arm64\",\"npu\",\"flash-linear-attention-npu\"]",
-                "image": "fla-npu-ci:9.1.0-910b"
+                "image": "fla-npu-ci:9.1.0-910b",
+                "build_jobs": "64"
               },
               {
                 "soc": "ascend950",
                 "tier": "a5",
                 "arch": "x86_64",
                 "runner_labels": "[\"self-hosted\",\"linux\",\"x64\",\"npu\",\"ascend950\",\"flash-linear-attention-npu-a5\"]",
-                "image": "fla-npu-ci:9.1.0-950"
+                "image": "fla-npu-ci:9.1.0-950",
+                "build_jobs": "64"
               }
             ]
           REQUESTED_SOC: ${{ inputs.soc }}
@@ -163,6 +175,7 @@ jobs:
             -e FLA_NPU_DISABLE_LOCAL_VERSION -e FLA_NPU_BUILD_OFFLINE_BUNDLE \
             -e FLA_NPU_SOC -e FLA_NPU_ARCH -e FLA_NPU_EXPECT_TIER -e VERSION_MODE_GUARD \
             -e FLA_NPU_BRANCH_NAME -e FLA_NPU_COMMIT_ID \
+            -e OPS_CPU_NUMBER=${{ matrix.build_jobs }} \
             "$CI_IMAGE" bash -lc '
               set -euo pipefail
               source /usr/local/Ascend/ascend-toolkit/set_env.sh

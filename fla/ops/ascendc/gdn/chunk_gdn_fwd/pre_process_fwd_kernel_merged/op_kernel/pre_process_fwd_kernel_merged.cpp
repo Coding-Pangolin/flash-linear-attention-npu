@@ -68,7 +68,7 @@ using namespace AscendC;
 #define PPFM_ARCH_IS_950 1
 // 950：有 L0C→UB 直连通道（A2 优化方案可用）
 #ifndef PPFM_VTMP_UB
-#define PPFM_VTMP_UB 0
+#define PPFM_VTMP_UB 1
 #endif
 #else
 #define PPFM_ARCH_IS_950 0

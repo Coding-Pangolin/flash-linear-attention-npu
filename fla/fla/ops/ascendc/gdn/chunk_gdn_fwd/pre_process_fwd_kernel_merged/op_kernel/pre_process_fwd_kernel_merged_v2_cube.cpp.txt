@@ -1,0 +1,891 @@
+/**
+ * Copyright (c) 2026 Tianjin University, Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * the BSD 3-Clause License (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ */
+
+/*!
+ * \file pre_process_fwd_kernel_merged.cpp
+ * \brief CP 前处理算子 kernel（v2：Cube/MIX 版，AIC 4 个 bf16 matmul + AIV elementwise）。
+ *
+ * 一个工作项 = 一条链（段 n × value-head hv），链内逐 chunk 串行。所有中间量放在
+ * 本核 user workspace（GM），AIC/AIV 用 CrossCore flag 串联：
+ *
+ *   AIV  prologue : h←0（fp32+bf16）、m←I（fp32+bf16）        → kFlagState
+ *   AIV  stage c  : 载入 W/k/left/v（bf16，尾块零填充）+ dg/decay → kFlagInputs
+ *   AIC  ①③       : vTmp = W_c@bf16(h)、T1 = W_c@bf16(m)      → kFlagHalf1
+ *   AIV           : v_new = (v - vTmp)·dg → bf16(v_new)；bf16(T1) → kFlagVNew
+ *   AIC  ②        : dH = k_c^T @ bf16(v_new)                  → kFlagDH
+ *   AIV           : h = decay⊙h + dH（同步存 bf16(h)）          → kFlagHUpd
+ *   AIC  ④        : T2 = left^T @ bf16(T1)                    → kFlagT2
+ *   AIV           : m = decay⊙m - T2（同步存 bf16(m)）          → kFlagState（下一 chunk）
+ *
+ * 语义与竞品/标杆对齐（见 docs/api.md、reference/reference.py）：
+ *   * h 项用**未加门控的 k**，门控只作用在 v_new 上；m 项用 left = k·2^(g_last-g_t)；
+ *   * h/m 的衰减：USE_G 为标量 2^(g_last)，USE_GK 为逐 k 的 2^(gk_last[k])；
+ *   * m 链在 FP32 上做（这里的乘积把 m 量化到 bf16，与竞品 default/TF32 口径一致，
+ *     在模型同构数据下实测 matched=1.000000）。
+ */
+
+#include "kernel_operator.h"
+#include "lib/matmul_intf.h"
+
+// CATLASS 的 arch 选择必须在包含 catlass 头之前给出（同 chunk_scaled_dot_kkt 的写法）
+#ifndef CATLASS_ARCH
+#if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+#define CATLASS_ARCH 3510
+#else
+#define CATLASS_ARCH 2201
+#endif
+#endif
+
+#include "catlass/arch/arch.hpp"
+#include "catlass/arch/cross_core_sync.hpp"
+#include "catlass/arch/resource.hpp"
+#include "catlass/catlass.hpp"
+#include "catlass/gemm/block/block_mmad.hpp"
+#include "catlass/gemm/dispatch_policy.hpp"
+#include "catlass/gemm/gemm_type.hpp"
+#include "catlass/gemm/tile/tile_copy.hpp"
+#include "catlass/gemm_coord.hpp"
+#include "catlass/layout/layout.hpp"
+#include "kernel_utils/block/block_mmad_pingpong_tla_multi.hpp"
+#include "tla/layout.hpp"
+#include "tla/tensor.hpp"
+#include "pre_process_fwd_kernel_merged_struct.h"
+
+
+namespace GDN {
+using namespace AscendC;
+
+constexpr int32_t CV_BT = 64;
+constexpr int32_t CV_K = 128;
+constexpr int32_t CV_V = 128;
+constexpr int32_t CV_LANES = 8;
+
+// ---------------- 每核 GM 暂存区（字节偏移）----------------
+// [实验] 把 h 的 fp32 状态从偏移 0 挪到最后：CATLASS matmul 可能在本核 workspace 起始处
+// 使用自己的暂存区，之前 hF32_（偏移 0 起）恒被冲成 0，而更靠后的 hBf_ 是对的。
+constexpr int64_t WS_M_F32 = 0;                        // m  [K,K] fp32 65536
+constexpr int64_t WS_H_BF = WS_M_F32 + 65536;          // bf16(h) [K,V] 32768
+constexpr int64_t WS_M_BF = WS_H_BF + 32768;           // bf16(m) [K,K] 32768
+constexpr int64_t WS_W_BF = WS_M_BF + 32768;           // W_c  [BT,K] bf16 16384
+constexpr int64_t WS_K_BF = WS_W_BF + 16384;           // k_c  [BT,K] bf16 16384
+constexpr int64_t WS_L_BF = WS_K_BF + 16384;           // left [BT,K] bf16 16384
+constexpr int64_t WS_V_BF = WS_L_BF + 16384;           // v_c  [BT,V] bf16 16384
+constexpr int64_t WS_VTMP_F32 = WS_V_BF + 16384;       // W@h   [BT,V] fp32 32768
+constexpr int64_t WS_VNEW_BF = WS_VTMP_F32 + 32768;    // bf16(v_new) [BT,V] 16384
+constexpr int64_t WS_DH_F32 = WS_VNEW_BF + 16384;      // dH [K,V] fp32 65536
+constexpr int64_t WS_T1_F32 = WS_DH_F32 + 65536;       // T1 [BT,K] fp32 32768
+constexpr int64_t WS_T1_BF = WS_T1_F32 + 32768;        // bf16(T1) [BT,K] 16384
+constexpr int64_t WS_T2_F32 = WS_T1_BF + 16384;        // T2 [K,K] fp32 65536
+// dH / T2 各双缓冲一份：AIC 写 chunk c 用的那份，AIV 在 chunk c 读 c-1 写的那份
+constexpr int64_t WS_DH_F32_1 = WS_T2_F32 + 65536;     // dH 第二份 65536
+constexpr int64_t WS_T2_F32_1 = WS_DH_F32_1 + 65536;   // T2 第二份 65536
+constexpr int64_t WS_GATE = WS_T2_F32_1 + 65536;       // dg[BT] + decay[K] 1024
+constexpr int64_t WS_H_F32 = WS_GATE + 4096;           // h  [K,V] fp32 65536（最后一段）
+constexpr int64_t WS_GATE_DG = 0;
+constexpr int64_t WS_GATE_DECAY = CV_BT * 4;
+
+// ---------------- CrossCore flag ----------------
+constexpr int32_t kFlagInputs = 1;   // AIV -> AIC：本 chunk staging 就位
+constexpr int32_t kFlagState = 2;    // AIV -> AIC：h/m 状态就位
+constexpr int32_t kFlagHalf1 = 3;    // AIC -> AIV：vTmp 与 T1 就位
+constexpr int32_t kFlagVNew = 4;     // AIV -> AIC：bf16(v_new) 与 bf16(T1) 就位
+constexpr int32_t kFlagDH = 5;       // AIC -> AIV：dH 就位
+constexpr int32_t kFlagHUpd = 6;     // AIV -> AIC：h 已更新
+constexpr int32_t kFlagT2 = 7;       // AIC -> AIV：T2 就位
+
+// ---------------- matmul 类型 ----------------
+using MmAType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, bfloat16_t>;
+using MmBType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, bfloat16_t>;
+using MmCType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, float>;
+using MmBiasType = matmul::MatmulType<TPosition::GM, CubeFormat::ND, float>;
+constexpr MatmulConfig CV_MM_CFG = GetNormalConfig(true);
+
+// ---------------- CATLASS BlockMmad（950 的核内 cube→vector 惯用法）----------------
+// 与仓内 chunk_scaled_dot_kkt 的 950 路径一致：BlockMmad + preSetFlags()/finalWaitFlags()
+// 才是"C 已写回 GM"的保证；MatmulImpl::IterateAll 不提供这个保证（见 docs/validation.md §12.11）。
+using MmArchTag = Catlass::Arch::Ascend950;
+using MmDispatchPolicy = Catlass::Gemm::MmadPingpongTlaMulti<MmArchTag, true, false>;
+using MmL1Shape = tla::Shape<tla::Int<128>, tla::Int<128>, tla::Int<128>>;
+using MmL0Shape = MmL1Shape;
+// A 行主（matmul①③：W_c[BT,K] @ X[K,N]）
+using MmTileCopyNT = Catlass::Gemm::Tile::PackedTileCopyTla<
+    MmArchTag, bfloat16_t, Catlass::layout::RowMajor, bfloat16_t, Catlass::layout::RowMajor, float,
+    Catlass::layout::RowMajor>;
+using MmBlockNT = Catlass::Gemm::Block::BlockMmadTla<MmDispatchPolicy, MmL1Shape, MmL0Shape, bfloat16_t,
+                                                     bfloat16_t, float, void, MmTileCopyNT>;
+// A 列主（matmul②④：left[BT,K]^T @ X[BT,N]）
+using MmTileCopyTA = Catlass::Gemm::Tile::PackedTileCopyTla<
+    MmArchTag, bfloat16_t, Catlass::layout::ColumnMajor, bfloat16_t, Catlass::layout::RowMajor, float,
+    Catlass::layout::RowMajor>;
+using MmBlockTA = Catlass::Gemm::Block::BlockMmadTla<MmDispatchPolicy, MmL1Shape, MmL0Shape, bfloat16_t,
+                                                     bfloat16_t, float, void, MmTileCopyTA>;
+
+// ---------------- AIV 侧 UB 布局（字节）----------------
+constexpr int32_t UB_ROW0_BF = 0;        // [K] bf16 (256)
+constexpr int32_t UB_ROW1_BF = 256;      // [K] bf16
+constexpr int32_t UB_ROW2_BF = 512;      // [K] bf16
+constexpr int32_t UB_ROW0_F32 = 768;     // [K] fp32 (512)
+constexpr int32_t UB_ROW1_F32 = 1280;    // [K] fp32
+constexpr int32_t UB_ROW2_F32 = 1792;    // [K] fp32
+constexpr int32_t UB_DG = 2304;          // [BT] fp32 (256)
+constexpr int32_t UB_DECAY = 2560;       // [K] fp32 (512)
+constexpr int32_t UB_EXP = 3072;         // [8] fp32 (32)
+constexpr int32_t UB_IDENT = 3136;       // [K,K] fp32 (65536)，32B 对齐
+constexpr int32_t UB_DECAY_PREV = UB_IDENT + CV_K * CV_K * 4;   // [K] fp32 上一 chunk 的 decay
+constexpr int32_t UB_GBLK = UB_DECAY_PREV + CV_K * 4;           // [BT] fp32 gate 整块
+// 状态更新用的大块缓冲（按 16 行分块搬运，减少 DataCopy/PIPE_ALL 次数）
+constexpr int32_t PPFM_RB = 16;                                 // 状态更新的行块
+constexpr int32_t UB_STATE_F = UB_GBLK + CV_BT * 4;             // [RB,K] fp32 8192
+// extBlkF_ 同时被状态更新（RB 行）和 v_new（整块 [BT,V]）使用 → 按整块尺寸分配
+constexpr int32_t UB_EXT_F = UB_STATE_F + CV_BT * CV_K * 4;     // [BT,K] fp32 32768
+constexpr int32_t UB_STATE_BF = UB_EXT_F + PPFM_RB * CV_K * 4;  // [RB,K] bf16 4096
+// staging / v_new 的整块缓冲
+constexpr int32_t UB_KBLK_BF = UB_STATE_BF + PPFM_RB * CV_K * 2;   // [BT,K] bf16 16384
+constexpr int32_t UB_WBLK_BF = UB_KBLK_BF + CV_BT * CV_K * 2;      // [BT,K] bf16
+constexpr int32_t UB_VBLK_BF = UB_WBLK_BF + CV_BT * CV_K * 2;      // [BT,V] bf16
+constexpr int32_t UB_SCR_F = UB_VBLK_BF + CV_BT * CV_V * 2;        // [BT,K] fp32 32768
+constexpr int32_t UB_SCR_BF = UB_SCR_F + CV_BT * CV_K * 4;         // [BT,K] bf16 16384
+constexpr int32_t PPFM_VEC_UB_BYTES = UB_SCR_BF + CV_BT * CV_K * 2;
+
+// 上面都是**字节**偏移，取 Tensor 时要按元素大小换算（bf16 → /2，fp32 → /4）
+constexpr int32_t UB_ROW0_BF_ELEM = UB_ROW0_BF / 2;
+constexpr int32_t UB_ROW1_BF_ELEM = UB_ROW1_BF / 2;
+constexpr int32_t UB_ROW2_BF_ELEM = UB_ROW2_BF / 2;
+constexpr int32_t UB_ROW0_F_ELEM = UB_ROW0_F32 / 4;
+constexpr int32_t UB_ROW1_F_ELEM = UB_ROW1_F32 / 4;
+constexpr int32_t UB_ROW2_F_ELEM = UB_ROW2_F32 / 4;
+constexpr int32_t UB_DG_ELEM = UB_DG / 4;
+constexpr int32_t UB_DECAY_ELEM = UB_DECAY / 4;
+constexpr int32_t UB_EXP_ELEM = UB_EXP / 4;
+constexpr int32_t UB_IDENT_ELEM = UB_IDENT / 4;
+constexpr int32_t UB_DECAY_PREV_ELEM = UB_DECAY_PREV / 4;
+constexpr int32_t UB_GBLK_ELEM = UB_GBLK / 4;
+constexpr int32_t UB_STATE_F_ELEM = UB_STATE_F / 4;
+constexpr int32_t UB_EXT_F_ELEM = UB_EXT_F / 4;
+constexpr int32_t UB_STATE_BF_ELEM = UB_STATE_BF / 2;
+constexpr int32_t UB_KBLK_BF_ELEM = UB_KBLK_BF / 2;
+constexpr int32_t UB_WBLK_BF_ELEM = UB_WBLK_BF / 2;
+constexpr int32_t UB_VBLK_BF_ELEM = UB_VBLK_BF / 2;
+constexpr int32_t UB_SCR_F_ELEM = UB_SCR_F / 4;
+constexpr int32_t UB_SCR_BF_ELEM = UB_SCR_BF / 2;
+
+struct PpFwdCtx {
+    GM_ADDR k = nullptr;
+    GM_ADDR w = nullptr;
+    GM_ADDR u = nullptr;
+    GM_ADDR g = nullptr;
+    GM_ADDR gk = nullptr;
+    GM_ADDR v = nullptr;
+    GM_ADDR cu = nullptr;
+    GM_ADDR hm = nullptr;
+    GM_ADDR ws = nullptr;
+    const PreProcessFwdKernelMergedTilingData *tiling = nullptr;
+};
+
+// =====================================================================================
+// AIV：elementwise
+// =====================================================================================
+class PpFwdVector {
+public:
+    __aicore__ inline PpFwdVector(const PpFwdCtx &ctx) : ctx_(ctx) {}
+
+    __aicore__ inline void Run()
+    {
+        const auto *t = ctx_.tiling;
+        kGm_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ctx_.k));
+        wGm_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ctx_.w));
+        vGm_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(
+            (ctx_.v == nullptr) ? ctx_.u : ctx_.v));
+        gGm_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ctx_.g));
+        gkGm_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ctx_.gk));
+        cuGm_.SetGlobalBuffer(reinterpret_cast<__gm__ int64_t *>(ctx_.cu));
+        hmGm_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ctx_.hm));
+
+        // AIV 子核在 MIX 下拿到的是 AIV 编号：换算回 AIC 编号（两个子核做同一份工作，
+        // 但**必须切分工作**，否则两个子核互相覆盖；flag 计数天然平衡）。
+        const int64_t coreIdx = static_cast<int64_t>(GetBlockIdx()) / GetSubBlockNum();
+        subIdx_ = static_cast<int32_t>(GetSubBlockIdx());
+        subNum_ = static_cast<int32_t>(GetSubBlockNum());
+        if (subNum_ <= 0) {
+            subNum_ = 1;
+        }
+        __gm__ uint8_t *ws = reinterpret_cast<__gm__ uint8_t *>(ctx_.ws) + coreIdx * PPFM_CORE_WS_BYTES;
+
+        hF32_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_H_F32), CV_K * CV_V);
+        mF32_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_M_F32), CV_K * CV_K);
+        hBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_H_BF), CV_K * CV_V);
+        mBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_M_BF), CV_K * CV_K);
+        wBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_W_BF), CV_BT * CV_K);
+        kBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_K_BF), CV_BT * CV_K);
+        lBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_L_BF), CV_BT * CV_K);
+        vBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_V_BF), CV_BT * CV_V);
+        vTmpF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_VTMP_F32), CV_BT * CV_V);
+        vNewBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_VNEW_BF), CV_BT * CV_V);
+        dHF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_DH_F32), CV_K * CV_V);
+        dHF1_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_DH_F32_1), CV_K * CV_V);
+        t1F_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T1_F32), CV_BT * CV_K);
+        t1Bf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_T1_BF), CV_BT * CV_K);
+        t2F_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T2_F32), CV_K * CV_K);
+        t2F1_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T2_F32_1), CV_K * CV_K);
+        gateF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_GATE), CV_BT + CV_K);
+
+        pipe_.InitBuffer(ubBuf_, PPFM_VEC_UB_BYTES);
+        row0Bf_ = ubBuf_.Get<bfloat16_t>()[UB_ROW0_BF_ELEM];
+        row1Bf_ = ubBuf_.Get<bfloat16_t>()[UB_ROW1_BF_ELEM];
+        row2Bf_ = ubBuf_.Get<bfloat16_t>()[UB_ROW2_BF_ELEM];
+        row0F_ = ubBuf_.Get<float>()[UB_ROW0_F_ELEM];
+        row1F_ = ubBuf_.Get<float>()[UB_ROW1_F_ELEM];
+        row2F_ = ubBuf_.Get<float>()[UB_ROW2_F_ELEM];
+        dgF_ = ubBuf_.Get<float>()[UB_DG_ELEM];
+        decayF_ = ubBuf_.Get<float>()[UB_DECAY_ELEM];
+        expScratch_ = ubBuf_.Get<float>()[UB_EXP_ELEM];
+        identF_ = ubBuf_.Get<float>()[UB_IDENT_ELEM];
+        decayPrevF_ = ubBuf_.Get<float>()[UB_DECAY_PREV_ELEM];
+        gBlkF_ = ubBuf_.Get<float>()[UB_GBLK_ELEM];
+        stateBlkF_ = ubBuf_.Get<float>()[UB_STATE_F_ELEM];
+        extBlkF_ = ubBuf_.Get<float>()[UB_EXT_F_ELEM];
+        stateBlkBf_ = ubBuf_.Get<bfloat16_t>()[UB_STATE_BF_ELEM];
+        kBlkBf_ = ubBuf_.Get<bfloat16_t>()[UB_KBLK_BF_ELEM];
+        wBlkBf_ = ubBuf_.Get<bfloat16_t>()[UB_WBLK_BF_ELEM];
+        vBlkBf_ = ubBuf_.Get<bfloat16_t>()[UB_VBLK_BF_ELEM];
+        scrF_ = ubBuf_.Get<float>()[UB_SCR_F_ELEM];
+        scrBf_ = ubBuf_.Get<bfloat16_t>()[UB_SCR_BF_ELEM];
+
+        const int64_t taskNum = t->nSeq * t->Hv;
+        for (int64_t task = coreIdx; task < taskNum; task += static_cast<int64_t>(t->usedAicNum)) {
+            const int64_t hv = task % t->Hv;
+            const int64_t n = task / t->Hv;
+            const int64_t bos = cuGm_.GetValue(n);
+            const int64_t eos = cuGm_.GetValue(n + 1);
+            ProcessChain(n, hv, bos, eos - bos);
+        }
+    }
+
+private:
+    // ---- 调试用：把一段 GM 内容用向量 Cast 转 fp32 后取前 2 个值 ----
+    __aicore__ inline void ProbeBf16(const GlobalTensor<bfloat16_t> &src, int32_t idx)
+    {
+        DataCopy(row2Bf_, src, CV_K);
+        PipeBarrier<PIPE_ALL>();
+        Cast(row1F_, row2Bf_, RoundMode::CAST_NONE, CV_K);
+        PipeBarrier<PIPE_ALL>();
+        row0F_.SetValue(idx, row1F_.GetValue(0));
+        row0F_.SetValue(idx + 1, row1F_.GetValue(1));
+        PipeBarrier<PIPE_ALL>();
+    }
+
+    __aicore__ inline void ProbeF32(const GlobalTensor<float> &src, int32_t idx, int32_t lane)
+    {
+        DataCopy(row1F_, src, CV_K);
+        PipeBarrier<PIPE_ALL>();
+        row0F_.SetValue(idx, row1F_.GetValue(lane));
+        row0F_.SetValue(idx + 1, row1F_.GetValue(lane + 1));
+        PipeBarrier<PIPE_ALL>();
+    }
+
+    // 把 src[0] 用 DataCopy 回读到 UB 后存进 row1F_ 指定 lane（供 epilogue 带出）
+    __aicore__ inline void ProbeState(const GlobalTensor<float> &src, int32_t dstLane)
+    {
+        DataCopy(row0F_, src, CV_K);
+        PipeBarrier<PIPE_ALL>();
+        row1F_.SetValue(dstLane, row0F_.GetValue(0));
+        PipeBarrier<PIPE_ALL>();
+    }
+
+    __aicore__ inline float Exp2Scalar(float x)
+    {
+        expScratch_.SetValue(0, x * 0.6931471805599453f);
+        PipeBarrier<PIPE_ALL>();
+        Exp(expScratch_, expScratch_, CV_LANES);
+        PipeBarrier<PIPE_ALL>();
+        return expScratch_.GetValue(0);
+    }
+
+    __aicore__ inline void SetDecay(int64_t hv, int64_t tGlobal)
+    {
+        if (ctx_.tiling->gateMode == PPFM_GATE_USE_G) {
+            const float glast = gGm_.GetValue(hv * ctx_.tiling->T + tGlobal);
+            const float dc = Exp2Scalar(glast);
+            for (int32_t k = 0; k < CV_K; ++k) {
+                decayF_.SetValue(k, dc);
+            }
+        } else {
+            for (int32_t k = 0; k < CV_K; ++k) {
+                const float gk = gkGm_.GetValue((hv * ctx_.tiling->T + tGlobal) * CV_K + k);
+                decayF_.SetValue(k, Exp2Scalar(gk));
+            }
+        }
+        PipeBarrier<PIPE_ALL>();
+    }
+
+    // m 初值 = I（纯向量构造，已实测正确）
+    __aicore__ inline void InitIdentity()
+    {
+        Duplicate(identF_, 0.0f, CV_K * CV_K);
+        PipeBarrier<PIPE_V>();
+        Duplicate(row2F_, 1.0f, CV_K);
+        PipeBarrier<PIPE_V>();
+        ArithProgression(row0F_, 0.0f, 1.0f, CV_K);
+        PipeBarrier<PIPE_V>();
+        for (int32_t i = 0; i < CV_K; ++i) {
+            Adds(row1F_, row0F_, -static_cast<float>(i), CV_K);
+            PipeBarrier<PIPE_V>();
+            Abs(row1F_, row1F_, CV_K);
+            PipeBarrier<PIPE_V>();
+            Mins(row1F_, row1F_, 1.0f, CV_K);
+            PipeBarrier<PIPE_V>();
+            Sub(row1F_, row2F_, row1F_, CV_K);
+            PipeBarrier<PIPE_V>();
+            Add(identF_[i * CV_K], identF_[i * CV_K], row1F_, CV_K);
+            PipeBarrier<PIPE_V>();
+        }
+        PipeBarrier<PIPE_ALL>();
+    }
+
+    __aicore__ inline void ProcessChain(int64_t n, int64_t hv, int64_t bos, int64_t len)
+    {
+        const auto *t = ctx_.tiling;
+        // ---- prologue：h = 0，m = I ----
+        Duplicate(row0F_, 0.0f, CV_V);
+        PipeBarrier<PIPE_ALL>();
+        for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
+            DataCopy(hF32_[r * CV_V], row0F_, CV_V);
+            PipeBarrier<PIPE_ALL>();
+            Cast(row0Bf_, row0F_, RoundMode::CAST_RINT, CV_V);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(hBf_[r * CV_V], row0Bf_, CV_V);
+            PipeBarrier<PIPE_ALL>();
+        }
+        InitIdentity();
+        for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
+            DataCopy(mF32_[r * CV_K], identF_[r * CV_K], CV_K);
+            PipeBarrier<PIPE_ALL>();
+            Cast(row0Bf_, identF_[r * CV_K], RoundMode::CAST_RINT, CV_K);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(mBf_[r * CV_K], row0Bf_, CV_K);
+            PipeBarrier<PIPE_ALL>();
+        }
+        const int64_t nt = (len + CV_BT - 1) / CV_BT;
+        for (int64_t c = 0; c < nt; ++c) {
+            const int64_t t0 = bos + c * CV_BT;
+            const int64_t left = len - c * CV_BT;
+            const int64_t rows = (left < CV_BT) ? left : CV_BT;
+            if (c > 0) {
+                // StageChunk 会覆盖 decayF_；先把上一 chunk 的 decay 存下来，
+                // 供"推迟一个 chunk 的状态更新"使用
+                for (int32_t k = 0; k < CV_K; ++k) {
+                    decayPrevF_.SetValue(k, decayF_.GetValue(k));
+                }
+                PipeBarrier<PIPE_ALL>();
+            }
+            StageChunk(n, hv, t0, rows);
+            if (c > 0) {
+                // 上一 chunk 的 dH / T2 此刻早已落地（其间 AIC 已完成本 chunk 的 mm1/mm3）
+                ApplyStateUpdates(true, c - 1);
+            }
+            CrossCoreSetFlag<0x2, PIPE_MTE3>(kFlagState);
+            UpdateVNew(hv, t0, rows);
+            CrossCoreWaitFlag(kFlagDH);
+            // 读别的核（AIC）写的 GM 前必须让本核缓存行失效，否则会读到过期数据
+            // （与 CANN matmul_client.h 中"读跨核 GM flag 前先 DCCI"的用法一致）
+            DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                     DcciDst::CACHELINE_OUT>(dHF_);
+            DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                     DcciDst::CACHELINE_OUT>(t2F_);
+#ifdef PPFM_DEBUG_HEADER
+            // [临时调试] 在各更新点之后立刻回读状态（fp32 标量直读，最可靠）
+            // 结果先放 UB（row1F_ 高位 lane），最后由 epilogue 的 header 块带出
+            ProbeState(hF32_, 100);
+            ProbeState(mF32_, 101);
+            ProbeState(dHF_, 102);
+            ProbeState(t2F_, 103);
+            PipeBarrier<PIPE_ALL>();
+#endif
+        }
+        // 最后一个 chunk 的状态更新（此时 decayF_ 就是它的 decay，dH/T2 也已落地）
+        ApplyStateUpdates(false, nt - 1);
+        // ---- epilogue：写 hm ----
+        const int64_t hmBase = ((n * t->Hv + hv) * CV_K) * (CV_V + CV_K);
+        for (int32_t r = subIdx_; r < CV_K; r += subNum_) {
+            DataCopy(row0F_, hF32_[r * CV_V], CV_V);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(hmGm_[hmBase + r * (CV_V + CV_K)], row0F_, CV_V);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(row0F_, mF32_[r * CV_K], CV_K);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(hmGm_[hmBase + r * (CV_V + CV_K) + CV_V], row0F_, CV_K);
+            PipeBarrier<PIPE_ALL>();
+        }
+#ifdef PPFM_DEBUG_HEADER
+        // [临时调试] 收尾后覆盖 hm 第 0 行的 m 半边，写入 tiling/cu 关键值
+        for (int32_t i = 0; i < CV_K; ++i) {
+            row0F_.SetValue(i, 0.0f);
+        }
+        PipeBarrier<PIPE_ALL>();
+        row0F_.SetValue(0, static_cast<float>(t->nSeq));
+        row0F_.SetValue(1, static_cast<float>(t->Hv));
+        row0F_.SetValue(2, static_cast<float>(t->T));
+        row0F_.SetValue(3, static_cast<float>(t->K));
+        row0F_.SetValue(4, static_cast<float>(t->V));
+        row0F_.SetValue(5, static_cast<float>(t->chunkSize));
+        row0F_.SetValue(6, static_cast<float>(t->gateMode));
+        row0F_.SetValue(7, static_cast<float>(t->usedAicNum));
+        row0F_.SetValue(8, static_cast<float>(t->taskNum));
+        row0F_.SetValue(9, static_cast<float>(bos));
+        row0F_.SetValue(10, static_cast<float>(len));
+        row0F_.SetValue(11, static_cast<float>(nt));
+        row0F_.SetValue(12, static_cast<float>(GetBlockIdx()));
+        row0F_.SetValue(13, static_cast<float>(GetSubBlockNum()));
+        // 各阶段中间量抽样：bf16 一律走"向量 Cast 转 fp32"（标量 bf16 转换不可靠）
+        ProbeBf16(kGm_, 20);            // 输入 k（第 0 行前 2 个）
+        ProbeBf16(wGm_, 22);            // 输入 w
+        ProbeBf16(vGm_, 24);            // 输入 v
+        row0F_.SetValue(26, gGm_.GetValue(0));
+        row0F_.SetValue(27, gGm_.GetValue(1));
+        ProbeBf16(kBf_, 28);            // staging k
+        ProbeBf16(wBf_, 30);            // staging w
+        ProbeBf16(lBf_, 32);            // staging left
+        ProbeBf16(vBf_, 34);            // staging v
+        ProbeF32(gateF_, 36, 0);        // dg[0], dg[1]
+        ProbeF32(gateF_, 38, CV_BT);    // decay[0], decay[1]
+        ProbeF32(vTmpF_, 40, 0);        // matmul1 输出
+        ProbeF32(t1F_, 42, 0);          // matmul3 输出
+        ProbeF32(dHF_, 44, 0);          // matmul2 输出
+        ProbeF32(t2F_, 46, 0);          // matmul4 输出
+        ProbeF32(hF32_, 48, 0);         // h 状态
+        ProbeF32(mF32_, 50, 0);         // m 状态
+        ProbeBf16(vNewBf_, 52);         // bf16(v_new) 前 2 个
+        ProbeBf16(t1Bf_, 54);           // bf16(T1) 前 2 个
+        ProbeBf16(mBf_, 56);            // bf16(m) 第 0 行前 2 个
+        ProbeBf16(hBf_, 58);            // bf16(h) 第 0 行前 2 个
+        // 更新点回读（见 chunk 循环里的插桩，值放在 row1F_ 的 100..103 lane）
+        row0F_.SetValue(52, row1F_.GetValue(100));   // hF32_[0] @ UpdateH 之后
+        row0F_.SetValue(53, row1F_.GetValue(101));   // mF32_[0] @ UpdateM 之后
+        row0F_.SetValue(54, row1F_.GetValue(102));   // dHF_[0] @ DH 之后
+        row0F_.SetValue(55, row1F_.GetValue(103));   // t2F_[0] @ T2 之后
+        PipeBarrier<PIPE_ALL>();
+        PipeBarrier<PIPE_ALL>();
+        DataCopy(hmGm_[hmBase + CV_V], row0F_, CV_K);
+        PipeBarrier<PIPE_ALL>();
+#endif
+    }
+
+    // staging：W / k / left / v（bf16，尾块零填充）+ dg / decay
+    __aicore__ inline void StageChunk(int64_t n, int64_t hv, int64_t t0, int64_t rows)
+    {
+        const auto *t = ctx_.tiling;
+        const int64_t hk = hv / (t->hvPerHk == 0 ? 1 : t->hvPerHk);
+        const bool useG = (t->gateMode == PPFM_GATE_USE_G);
+        float glast = 0.0f;
+        if (useG) {
+            glast = gGm_.GetValue(hv * t->T + (t0 + rows - 1));
+            // 向量化：dg[t] = exp2(glast - g[t])（整块一次算完，替代逐 token 标量 Exp）
+            DataCopy(gBlkF_, gGm_[hv * t->T + t0], static_cast<uint32_t>(rows));
+            PipeBarrier<PIPE_ALL>();
+            Muls(gBlkF_, gBlkF_, -1.0f, static_cast<int32_t>(rows));
+            PipeBarrier<PIPE_V>();
+            Adds(gBlkF_, gBlkF_, glast, static_cast<int32_t>(rows));
+            PipeBarrier<PIPE_V>();
+            Muls(gBlkF_, gBlkF_, 0.6931471805599453f, static_cast<int32_t>(rows));
+            PipeBarrier<PIPE_V>();
+            Exp(dgF_, gBlkF_, static_cast<int32_t>(rows));
+            if (rows < CV_BT) {
+                Duplicate(dgF_[rows], 0.0f, static_cast<int32_t>(CV_BT - rows));
+            }
+            PipeBarrier<PIPE_ALL>();
+        } else {
+            for (int64_t i = subIdx_; i < CV_BT; i += subNum_) {
+                dgF_.SetValue(i, 1.0f);
+            }
+        }
+        PipeBarrier<PIPE_ALL>();
+        SetDecay(hv, t0 + rows - 1);
+        // ---- staging：**按整段（16 行）分配 subcore**，段内自己完成"清零/搬运/left 计算/落盘"----
+        // 这样既没有两个 subcore 重复搬运，也不存在"块级算术读另一个 subcore 半成品"的竞态
+        constexpr int32_t SEG = 16;
+        for (int32_t seg = subIdx_; seg < CV_BT / SEG; seg += subNum_) {
+            const int32_t off = seg * SEG;
+            const int32_t valid = (rows > off) ? ((rows - off < SEG) ? (rows - off) : SEG) : 0;
+            Duplicate(kBlkBf_[off * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
+            Duplicate(wBlkBf_[off * CV_K], static_cast<bfloat16_t>(0), SEG * CV_K);
+            Duplicate(vBlkBf_[off * CV_V], static_cast<bfloat16_t>(0), SEG * CV_V);
+            PipeBarrier<PIPE_V>();
+            if (valid > 0) {
+                DataCopy(kBlkBf_[off * CV_K], kGm_[(hk * t->T + t0 + off) * CV_K],
+                         static_cast<uint32_t>(valid * CV_K));
+                DataCopy(wBlkBf_[off * CV_K], wGm_[(hv * t->T + t0 + off) * CV_K],
+                         static_cast<uint32_t>(valid * CV_K));
+                DataCopy(vBlkBf_[off * CV_V], vGm_[(hv * t->T + t0 + off) * CV_V],
+                         static_cast<uint32_t>(valid * CV_V));
+            }
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(kBf_[off * CV_K], kBlkBf_[off * CV_K], SEG * CV_K);
+            DataCopy(wBf_[off * CV_K], wBlkBf_[off * CV_K], SEG * CV_K);
+            DataCopy(vBf_[off * CV_V], vBlkBf_[off * CV_V], SEG * CV_V);
+            PipeBarrier<PIPE_ALL>();
+            // left：USE_G 为 bf16(k·dg)，USE_GK 为 k 本身
+            if (useG) {
+                Cast(scrF_[off * CV_K], kBlkBf_[off * CV_K], RoundMode::CAST_NONE, SEG * CV_K);
+                PipeBarrier<PIPE_V>();
+                for (int32_t i = 0; i < SEG; ++i) {
+                    Muls(scrF_[(off + i) * CV_K], scrF_[(off + i) * CV_K], dgF_.GetValue(off + i), CV_K);
+                }
+                PipeBarrier<PIPE_V>();
+                Cast(scrBf_[off * CV_K], scrF_[off * CV_K], RoundMode::CAST_RINT, SEG * CV_K);
+                PipeBarrier<PIPE_ALL>();   // V -> MTE3
+                DataCopy(lBf_[off * CV_K], scrBf_[off * CV_K], SEG * CV_K);
+                PipeBarrier<PIPE_ALL>();
+            } else {
+                DataCopy(lBf_[off * CV_K], kBlkBf_[off * CV_K], SEG * CV_K);
+                PipeBarrier<PIPE_ALL>();
+            }
+        }
+        PipeBarrier<PIPE_ALL>();
+        // dg / decay 落 GM（供 kernel 自身调试与一致性检查）
+        DataCopy(gateF_[WS_GATE_DG / 4], dgF_, CV_BT);
+        PipeBarrier<PIPE_ALL>();
+        DataCopy(gateF_[WS_GATE_DECAY / 4], decayF_, CV_K);
+        PipeBarrier<PIPE_ALL>();
+        CrossCoreSetFlag<0x2, PIPE_MTE3>(kFlagInputs);
+    }
+
+    __aicore__ inline void UpdateVNew(int64_t hv, int64_t t0, int64_t rows)
+    {
+        const bool useG = (ctx_.tiling->gateMode == PPFM_GATE_USE_G);
+        CrossCoreWaitFlag(kFlagHalf1);
+        DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(vTmpF_);
+        DataCacheCleanAndInvalid<float, CacheLine::ENTIRE_DATA_CACHE,
+                                 DcciDst::CACHELINE_OUT>(t1F_);
+        // v_new = (v - vTmp) · dg → bf16（逐行；整块版本会引入 ~0.4% 的 GDN 偏差，待查）
+        // v_new = (v - vTmp)·dg → bf16：同样**按整段分配 subcore**，段内做完 Cast/Sub/缩放/Cast/落盘
+        constexpr int32_t SEG = 16;
+        for (int32_t seg = subIdx_; seg < CV_BT / SEG; seg += subNum_) {
+            const int32_t off = seg * SEG;
+            DataCopy(extBlkF_[off * CV_V], vTmpF_[off * CV_V], SEG * CV_V);
+            PipeBarrier<PIPE_ALL>();
+            Cast(scrF_[off * CV_V], vBlkBf_[off * CV_V], RoundMode::CAST_NONE, SEG * CV_V);
+            PipeBarrier<PIPE_V>();
+            Sub(scrF_[off * CV_V], scrF_[off * CV_V], extBlkF_[off * CV_V], SEG * CV_V);
+            PipeBarrier<PIPE_V>();
+            if (useG) {
+                for (int32_t i = 0; i < SEG; ++i) {
+                    Muls(scrF_[(off + i) * CV_V], scrF_[(off + i) * CV_V], dgF_.GetValue(off + i), CV_V);
+                }
+                PipeBarrier<PIPE_V>();
+            }
+            Cast(scrBf_[off * CV_V], scrF_[off * CV_V], RoundMode::CAST_RINT, SEG * CV_V);
+            PipeBarrier<PIPE_ALL>();   // V -> MTE3
+            DataCopy(vNewBf_[off * CV_V], scrBf_[off * CV_V], SEG * CV_V);
+            PipeBarrier<PIPE_ALL>();
+        }
+        // bf16(T1)：同样按段分配
+        for (int32_t seg = subIdx_; seg < CV_BT / SEG; seg += subNum_) {
+            const int32_t off = seg * SEG;
+            DataCopy(scrF_[off * CV_K], t1F_[off * CV_K], SEG * CV_K);
+            PipeBarrier<PIPE_ALL>();
+            Cast(scrBf_[off * CV_K], scrF_[off * CV_K], RoundMode::CAST_RINT, SEG * CV_K);
+            PipeBarrier<PIPE_ALL>();   // V -> MTE3
+            DataCopy(t1Bf_[off * CV_K], scrBf_[off * CV_K], SEG * CV_K);
+            PipeBarrier<PIPE_ALL>();
+        }
+        CrossCoreSetFlag<0x2, PIPE_MTE3>(kFlagVNew);
+    }
+
+    // h = decay⊙h + dH ; m = decay⊙m - T2
+    // usePrevDecay=true 时用上一 chunk 的 decay（配合"状态更新推迟一个 chunk"）
+    __aicore__ inline void ApplyStateUpdates(bool usePrevDecay, int64_t dataChunk)
+    {
+        const bool useG = (ctx_.tiling->gateMode == PPFM_GATE_USE_G);
+        // dH / T2 双缓冲：按数据所属 chunk 的奇偶选 buffer（不用拷贝，直接分支）
+        const bool evenChunk = ((dataChunk & 1) == 0);
+        GlobalTensor<float> &dhBuf = evenChunk ? dHF_ : dHF1_;
+        GlobalTensor<float> &t2Buf = evenChunk ? t2F_ : t2F1_;
+        // 每 RB 行一次搬运：块内逐行 Muls（廉价、无需栅栏），块级 Add/Sub/Cast
+        constexpr int32_t RB = 16;
+        for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {
+            DataCopy(stateBlkF_, hF32_[rb * CV_V], RB * CV_V);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(extBlkF_, dhBuf[rb * CV_V], RB * CV_V);
+            PipeBarrier<PIPE_ALL>();
+            for (int32_t r = rb; r < rb + RB; ++r) {
+                const float dc = usePrevDecay ? decayPrevF_.GetValue(useG ? 0 : r)
+                                              : (useG ? decayF_.GetValue(0) : decayF_.GetValue(r));
+                Muls(stateBlkF_[(r - rb) * CV_V], stateBlkF_[(r - rb) * CV_V], dc, CV_V);
+            }
+            PipeBarrier<PIPE_V>();
+            Add(stateBlkF_, stateBlkF_, extBlkF_, RB * CV_V);
+            PipeBarrier<PIPE_ALL>();   // V -> MTE3
+            DataCopy(hF32_[rb * CV_V], stateBlkF_, RB * CV_V);
+            PipeBarrier<PIPE_ALL>();
+            Cast(stateBlkBf_, stateBlkF_, RoundMode::CAST_RINT, RB * CV_V);
+            PipeBarrier<PIPE_ALL>();   // V -> MTE3
+            DataCopy(hBf_[rb * CV_V], stateBlkBf_, RB * CV_V);
+            PipeBarrier<PIPE_ALL>();
+        }
+        for (int32_t rb = subIdx_ * RB; rb < CV_K; rb += subNum_ * RB) {
+            DataCopy(stateBlkF_, mF32_[rb * CV_K], RB * CV_K);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(extBlkF_, t2Buf[rb * CV_K], RB * CV_K);
+            PipeBarrier<PIPE_ALL>();
+            for (int32_t r = rb; r < rb + RB; ++r) {
+                const float dc = usePrevDecay ? decayPrevF_.GetValue(useG ? 0 : r)
+                                              : (useG ? decayF_.GetValue(0) : decayF_.GetValue(r));
+                Muls(stateBlkF_[(r - rb) * CV_K], stateBlkF_[(r - rb) * CV_K], dc, CV_K);
+            }
+            PipeBarrier<PIPE_V>();
+            Sub(stateBlkF_, stateBlkF_, extBlkF_, RB * CV_K);
+            PipeBarrier<PIPE_ALL>();   // V -> MTE3
+            DataCopy(mF32_[rb * CV_K], stateBlkF_, RB * CV_K);
+            PipeBarrier<PIPE_ALL>();
+            Cast(stateBlkBf_, stateBlkF_, RoundMode::CAST_RINT, RB * CV_K);
+            PipeBarrier<PIPE_ALL>();   // V -> MTE3
+            DataCopy(mBf_[rb * CV_K], stateBlkBf_, RB * CV_K);
+            PipeBarrier<PIPE_ALL>();
+        }
+    }
+
+    const PpFwdCtx &ctx_;
+    TPipe pipe_;
+    TBuf<TPosition::VECCALC> ubBuf_;
+    LocalTensor<bfloat16_t> row0Bf_;
+    LocalTensor<bfloat16_t> row1Bf_;
+    LocalTensor<bfloat16_t> row2Bf_;
+    LocalTensor<float> row0F_;
+    LocalTensor<float> row1F_;
+    LocalTensor<float> row2F_;
+    LocalTensor<float> dgF_;
+    LocalTensor<float> decayF_;
+    LocalTensor<float> expScratch_;
+    LocalTensor<float> identF_;
+    LocalTensor<float> decayPrevF_;
+    LocalTensor<float> gBlkF_;
+    LocalTensor<float> stateBlkF_;
+    LocalTensor<float> extBlkF_;
+    LocalTensor<bfloat16_t> stateBlkBf_;
+    LocalTensor<bfloat16_t> kBlkBf_;
+    LocalTensor<bfloat16_t> wBlkBf_;
+    LocalTensor<bfloat16_t> vBlkBf_;
+    LocalTensor<float> scrF_;
+    LocalTensor<bfloat16_t> scrBf_;
+    int32_t subIdx_ = 0;
+    int32_t subNum_ = 1;
+    GlobalTensor<bfloat16_t> kGm_;
+    GlobalTensor<bfloat16_t> wGm_;
+    GlobalTensor<bfloat16_t> vGm_;
+    GlobalTensor<float> gGm_;
+    GlobalTensor<float> gkGm_;
+    GlobalTensor<int64_t> cuGm_;
+    GlobalTensor<float> hmGm_;
+    GlobalTensor<float> hF32_;
+    GlobalTensor<float> mF32_;
+    GlobalTensor<bfloat16_t> hBf_;
+    GlobalTensor<bfloat16_t> mBf_;
+    GlobalTensor<bfloat16_t> wBf_;
+    GlobalTensor<bfloat16_t> kBf_;
+    GlobalTensor<bfloat16_t> lBf_;
+    GlobalTensor<bfloat16_t> vBf_;
+    GlobalTensor<float> vTmpF_;
+    GlobalTensor<bfloat16_t> vNewBf_;
+    GlobalTensor<float> dHF_;
+    GlobalTensor<float> dHF1_;
+    GlobalTensor<float> t1F_;
+    GlobalTensor<bfloat16_t> t1Bf_;
+    GlobalTensor<float> t2F_;
+    GlobalTensor<float> t2F1_;
+    GlobalTensor<float> gateF_;
+};
+
+// =====================================================================================
+// AIC：4 个 matmul
+// =====================================================================================
+class PpFwdCube {
+public:
+    __aicore__ inline PpFwdCube(const PpFwdCtx &ctx) : ctx_(ctx) {}
+
+    __aicore__ inline void Run()
+    {
+        const auto *t = ctx_.tiling;
+        const int64_t coreIdx = static_cast<int64_t>(GetBlockIdx());
+        __gm__ uint8_t *ws = reinterpret_cast<__gm__ uint8_t *>(ctx_.ws) + coreIdx * PPFM_CORE_WS_BYTES;
+
+        wBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_W_BF), CV_BT * CV_K);
+        kBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_K_BF), CV_BT * CV_K);
+        lBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_L_BF), CV_BT * CV_K);
+        hBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_H_BF), CV_K * CV_V);
+        mBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_M_BF), CV_K * CV_K);
+        vNewBf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_VNEW_BF), CV_BT * CV_V);
+        t1Bf_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ws + WS_T1_BF), CV_BT * CV_K);
+        vTmpF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_VTMP_F32), CV_BT * CV_V);
+        dHF_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_DH_F32), CV_K * CV_V);
+        dHF1_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_DH_F32_1), CV_K * CV_V);
+        t1F_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T1_F32), CV_BT * CV_K);
+        t2F_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T2_F32), CV_K * CV_K);
+        t2F1_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(ws + WS_T2_F32_1), CV_K * CV_K);
+
+        cuGm_.SetGlobalBuffer(reinterpret_cast<__gm__ int64_t *>(ctx_.cu));
+        const int64_t taskNum = t->nSeq * t->Hv;
+        for (int64_t task = coreIdx; task < taskNum; task += static_cast<int64_t>(t->usedAicNum)) {
+            const int64_t hv = task % t->Hv;
+            const int64_t n = task / t->Hv;
+            const int64_t bos = cuGm_.GetValue(n);
+            const int64_t eos = cuGm_.GetValue(n + 1);
+            const int64_t len = eos - bos;
+            const int64_t nt = (len + CV_BT - 1) / CV_BT;
+            (void)hv;
+            for (int64_t c = 0; c < nt; ++c) {
+                ProcessChunk(c);
+            }
+        }
+    }
+
+private:
+    __aicore__ inline void ProcessChunk(int64_t c)
+    {
+        // dH / T2 双缓冲：本 chunk 写到自己那一份（不用拷贝，直接分支）
+        const bool evenChunk = ((c & 1) == 0);
+        GlobalTensor<float> &dhBuf = evenChunk ? dHF_ : dHF1_;
+        GlobalTensor<float> &t2Buf = evenChunk ? t2F_ : t2F1_;
+        // ① vTmp[BT,V] = W_c[BT,K] @ bf16(h)[K,V]
+        CrossCoreWaitFlag(kFlagInputs);
+        CrossCoreWaitFlag(kFlagState);
+        RunMmadNT(wBf_, hBf_, vTmpF_, CV_BT, CV_V, CV_K);
+
+        // ③ T1[BT,K] = W_c[BT,K] @ bf16(m)[K,K]
+        RunMmadNT(wBf_, mBf_, t1F_, CV_BT, CV_K, CV_K);
+        CrossCoreSetFlag<0x2, PIPE_FIX>(kFlagHalf1);
+
+        // ② dH[K,V] = k_c^T @ bf16(v_new)[BT,V]
+        CrossCoreWaitFlag(kFlagVNew);
+        RunMmadTA(kBf_, vNewBf_, dhBuf, CV_K, CV_V, CV_BT);
+
+        // ④ T2[K,K] = left^T @ bf16(T1)[BT,K]
+        RunMmadTA(lBf_, t1Bf_, t2Buf, CV_K, CV_K, CV_BT);
+        // dH 与 T2 都由 AIV 在**下一个 chunk 开头**使用，合并为一次跨核通知（省一次 flag 往返）
+        CrossCoreSetFlag<0x2, PIPE_FIX>(kFlagDH);
+    }
+
+    // A 行主：C[m,n] = A[m,k] @ B[k,n]（A/B 都是 bf16、行主；C 是 fp32 行主）
+    __aicore__ inline void RunMmadNT(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
+                                     GlobalTensor<float> &gmC, uint32_t m, uint32_t n, uint32_t k)
+    {
+        Catlass::Arch::Resource<MmArchTag> resource;
+        MmBlockNT mm(resource);
+        mm.preSetFlags();
+        auto layoutA = tla::MakeLayout<bfloat16_t, Catlass::layout::RowMajor>(m, k);
+        auto layoutB = tla::MakeLayout<bfloat16_t, Catlass::layout::RowMajor>(k, n);
+        auto layoutC = tla::MakeLayout<float, Catlass::layout::RowMajor>(m, n);
+        auto tA = tla::MakeTensor(gmA[0], layoutA, Catlass::Arch::PositionGM{});
+        auto tB = tla::MakeTensor(gmB[0], layoutB, Catlass::Arch::PositionGM{});
+        auto tC = tla::MakeTensor(gmC[0], layoutC, Catlass::Arch::PositionGM{});
+        Catlass::GemmCoord shape{m, n, k};
+        auto bA = GetTile(tA, tla::MakeCoord(0, 0), tla::MakeShape(shape.m(), shape.k()));
+        auto bB = GetTile(tB, tla::MakeCoord(0, 0), tla::MakeShape(shape.k(), shape.n()));
+        auto bC = GetTile(tC, tla::MakeCoord(0, 0), tla::MakeShape(shape.m(), shape.n()));
+        mm(bA, bB, bC, shape);
+        mm.finalWaitFlags();
+    }
+
+    // A 列主（= 逻辑 [m,k] 在内存里按 [k,m] 存，正好对应"转置 A"）：C[m,n] = A^T @ B
+    __aicore__ inline void RunMmadTA(GlobalTensor<bfloat16_t> &gmA, GlobalTensor<bfloat16_t> &gmB,
+                                     GlobalTensor<float> &gmC, uint32_t m, uint32_t n, uint32_t k)
+    {
+        Catlass::Arch::Resource<MmArchTag> resource;
+        MmBlockTA mm(resource);
+        mm.preSetFlags();
+        auto layoutA = tla::MakeLayout<bfloat16_t, Catlass::layout::ColumnMajor>(m, k);
+        auto layoutB = tla::MakeLayout<bfloat16_t, Catlass::layout::RowMajor>(k, n);
+        auto layoutC = tla::MakeLayout<float, Catlass::layout::RowMajor>(m, n);
+        auto tA = tla::MakeTensor(gmA[0], layoutA, Catlass::Arch::PositionGM{});
+        auto tB = tla::MakeTensor(gmB[0], layoutB, Catlass::Arch::PositionGM{});
+        auto tC = tla::MakeTensor(gmC[0], layoutC, Catlass::Arch::PositionGM{});
+        Catlass::GemmCoord shape{m, n, k};
+        auto bA = GetTile(tA, tla::MakeCoord(0, 0), tla::MakeShape(shape.m(), shape.k()));
+        auto bB = GetTile(tB, tla::MakeCoord(0, 0), tla::MakeShape(shape.k(), shape.n()));
+        auto bC = GetTile(tC, tla::MakeCoord(0, 0), tla::MakeShape(shape.m(), shape.n()));
+        mm(bA, bB, bC, shape);
+        mm.finalWaitFlags();
+    }
+
+    const PpFwdCtx &ctx_;
+    GlobalTensor<bfloat16_t> wBf_;
+    GlobalTensor<bfloat16_t> kBf_;
+    GlobalTensor<bfloat16_t> lBf_;
+    GlobalTensor<bfloat16_t> hBf_;
+    GlobalTensor<bfloat16_t> mBf_;
+    GlobalTensor<bfloat16_t> vNewBf_;
+    GlobalTensor<bfloat16_t> t1Bf_;
+    GlobalTensor<float> vTmpF_;
+    GlobalTensor<float> dHF_;
+    GlobalTensor<float> dHF1_;
+    GlobalTensor<float> t1F_;
+    GlobalTensor<float> t2F_;
+    GlobalTensor<float> t2F1_;
+    GlobalTensor<int64_t> cuGm_;
+};
+
+} // namespace GDN
+
+#ifndef TORCH_MODE
+extern "C" __global__ __aicore__ void pre_process_fwd_kernel_merged(
+    GM_ADDR k, GM_ADDR w, GM_ADDR u, GM_ADDR g, GM_ADDR gk, GM_ADDR bg, GM_ADDR v,
+    GM_ADDR cu_seqlens, GM_ADDR hm, GM_ADDR workspace, GM_ADDR tiling)
+{
+    REGISTER_TILING_DEFAULT(GDN::PreProcessFwdKernelMergedTilingData);
+    GET_TILING_DATA_WITH_STRUCT(GDN::PreProcessFwdKernelMergedTilingData, tilingData, tiling);
+    GM_ADDR userWS = AscendC::GetUserWorkspace(workspace);
+    if (userWS == nullptr) {
+        return;
+    }
+    (void)bg;   // DPLR（USE_BG）本轮不实现
+    GDN::PpFwdCtx ctx;
+    ctx.k = k;
+    ctx.w = w;
+    ctx.u = u;
+    ctx.g = g;
+    ctx.gk = gk;
+    ctx.v = v;
+    ctx.cu = cu_seqlens;
+    ctx.hm = hm;
+    ctx.ws = userWS;
+    ctx.tiling = &tilingData;
+    // TilingKey：1=USE_G / 2=USE_GK / 3=USE_BG（与 host 侧 SetTilingKey 一致）
+    if (TILING_KEY_IS(1)) {
+        KERNEL_TASK_TYPE(1, KERNEL_TYPE_MIX_AIC_1_2);
+        if ASCEND_IS_AIC {
+            GDN::PpFwdCube cube(ctx);
+            cube.Run();
+        }
+        if ASCEND_IS_AIV {
+            GDN::PpFwdVector vec(ctx);
+            vec.Run();
+        }
+    } else if (TILING_KEY_IS(2)) {
+        KERNEL_TASK_TYPE(2, KERNEL_TYPE_MIX_AIC_1_2);
+        if ASCEND_IS_AIC {
+            GDN::PpFwdCube cube(ctx);
+            cube.Run();
+        }
+        if ASCEND_IS_AIV {
+            GDN::PpFwdVector vec(ctx);
+            vec.Run();
+        }
+    } else if (TILING_KEY_IS(3)) {
+        KERNEL_TASK_TYPE(3, KERNEL_TYPE_MIX_AIC_1_2);
+        if ASCEND_IS_AIC {
+            GDN::PpFwdCube cube(ctx);
+            cube.Run();
+        }
+        if ASCEND_IS_AIV {
+            GDN::PpFwdVector vec(ctx);
+            vec.Run();
+        }
+    }
+}
+#endif

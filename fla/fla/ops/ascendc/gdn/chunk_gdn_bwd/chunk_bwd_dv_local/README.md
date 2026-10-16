@@ -1,0 +1,324 @@
+# ChunkBwdDvLocal 算子说明
+`ChunkBwdDvLocal` 是 Gated Delta Rule（门控 Delta 规则）线性注意力机制反向传播过程中的自定义算子。该算子根据查询（Q）、键（K）、门控（g）和输出梯度（dO）计算 Value 的本地梯度 $dV_{\text{local}}$。
+
+---
+
+## 1. 算子功能
+
+在分块序列模型反向传播中，计算以下张量的梯度：
+
+- **dV**：Value 的本地梯度
+
+计算公式为：
+
+对每个 `doHead`，先映射到对应的 Q/K head：
+
+```text
+qkHead = doHead / hRatio
+hRatio = H_do / H_qk
+```
+
+再计算：
+
+$$dV_{\text{local}}[doHead] = \left(\text{mask}\!\left(\exp(g[doHead]_{\text{col}} - g[doHead]_{\text{row}})\right) \odot (K[qkHead] Q[qkHead]^T)\right) \cdot dO[doHead]$$
+
+分解为三个阶段：
+
+| 阶段 | 执行单元 | 计算 | 说明 |
+|------|----------|------|------|
+| Phase 1 | Cube (AIC) | $W_s[qkHead] = K[qkHead] \times Q[qkHead]^T$ | 对每个 Q/K head 生成 chunk 内 attention score 矩阵 |
+| Phase 1.5 | Vector (AIV) | $W_{s\_gated}[doHead] = \text{mask}(\exp(g_{col} - g_{row})) \odot W_s[qkHead]$ | 每个 dO head 使用映射到的 Q/K score 做 gating：差值、exp、上三角含对角线 mask、逐元素乘 |
+| Phase 2 | Cube (AIC) | $dV[doHead] = W_{s\_gated}[doHead] \times dO[doHead]$ | 矩阵乘，生成最终梯度输出 |
+
+---
+
+## 2. 接口定义
+
+### 2.1 ACLNN 接口
+
+每个算子分为两段式调用流程：
+
+1. **获取 workspace 与执行器**  
+   调用 `aclnnChunkBwdDvLocalGetWorkspaceSize` 接口，获取算子执行所需的 workspace 大小，并创建执行器（executor）。
+
+2. **执行算子计算**  
+   调用 `aclnnChunkBwdDvLocal` 接口，在指定的 workspace 和执行器下完成计算。
+
+对应以下 C++ 接口：
+```cpp
+// 获取执行所需的 workspace 大小
+aclnnStatus aclnnChunkBwdDvLocalGetWorkspaceSize(
+    const aclTensor *q,
+    const aclTensor *k,
+    const aclTensor *dO,
+    const aclTensor *g,
+    const aclTensor *gGammaOptional,
+    const aclTensor *aOptional,
+    const aclIntArray *cuSeqlensOptional,
+    const aclIntArray *chunkIndicesOptional,
+    double scale,
+    int64_t chunkSize,
+    const aclTensor *out,
+    uint64_t *workspaceSize,
+    aclOpExecutor **executor);
+
+// 执行算子
+aclnnStatus aclnnChunkBwdDvLocal(
+    void *workspace,
+    uint64_t workspaceSize,
+    aclOpExecutor *executor,
+    aclrtStream stream);
+```
+
+---
+
+## 3. 参数说明
+
+### 3.1 输入参数（Inputs）
+
+| 参数名 | 输入/输出 | 必选/可选 | 描述 | 使用说明 | 数据类型 | 数据格式 | 维度（Shape） | 非连续 Tensor |
+|---|---|---|---|---|---|---|---|---|
+| `q` | 输入 | 必选 | Query 输入张量 | 参与反向计算，使用 Q/K head 数 | `FLOAT16`、`BFLOAT16` | `ND` | `[B, H_qk, T, K]` | 支持 |
+| `k` | 输入 | 必选 | Key 输入张量 | 参与反向计算，形状必须与 `q` 一致 | `FLOAT16`、`BFLOAT16` | `ND` | `[B, H_qk, T, K]` | 支持 |
+| `dO` | 输入 | 必选 | 前向输出的梯度张量 | 参与反向计算，使用 dO/dV head 数 | `FLOAT16`、`BFLOAT16` | `ND` | `[B, H_do, T, V]` | 支持 |
+| `g` | 输入 | 必选 | chunk 内累计 log-decay | H 轴与 `dO` 一致；每个序列的每个有效 chunk 内沿 T 维单调不增 | `FLOAT16`、`BFLOAT16`、`FLOAT` | `ND` | `[B, H_do, T]` | 支持 |
+| `gGammaOptional` | 输入 | 可选 | 预留门控参数输入 | 当前版本不支持，须传 `None` | `FLOAT` | `ND` | - | - |
+| `aOptional` | 输入 | 可选 | 预留参数输入 | 当前版本不支持，须传 `None` | `FLOAT16`、`BFLOAT16` | `ND` | - | - |
+| `cuSeqlensOptional` | 输入 | 可选 | 变长序列的累计长度信息 | 变长模式输入，形如 `[0, T1, T1+T2, ...]`，形状为 `[N+1]`（N 为 batch 内序列段数，等于 B） | `INT64` | `ND` | 1 维 | - |
+| `chunkIndicesOptional` | 输入 | 可选 | 分块索引信息 | 变长模式输入，形状为 `[num_chunks, 2]`（num_chunks 为所有序列的总分块数，每行为 `[batch_idx, chunk_idx]`） | `INT64` | `ND` | 2 维 | - |
+
+### 3.2 属性参数（Attributes）
+
+| 参数名 | 输入/输出 | 必选/可选 | 描述 | 使用说明 | 数据类型 | 取值约束 |
+|---|---|---|---|---|---|---|
+| `scale` | 输入 | 必选 | 缩放系数 | 推荐按 `1 / sqrt(K)` 设置 | `double` | 建议按 `1 / sqrt(K)` 设置 |
+| `chunkSize` | 输入 | 必选 | 分块大小 | 仅支持 `64` 或 `128` | `int64_t` | 仅支持 `64` / `128` |
+
+### 3.3 输出参数（Outputs）
+
+| 参数名 | 输入/输出 | 描述 | 数据类型 | 数据格式 | 维度（Shape） | 非连续 Tensor |
+|---|---|---|---|---|---|---|
+| `out`（即 `dV`） | 输出 | Value 的本地梯度输出张量，H 轴与 `dO` 一致 | `FLOAT16`、`BFLOAT16` | `ND` | `[B, H_do, T, V]` | 支持 |
+| `workspaceSize` | 输出 | Device 侧所需 workspace 大小 | `uint64_t` | - | 标量 | - |
+| `executor` | 输出 | 算子执行器，封装了计算流程 | `aclOpExecutor*` | - | - | - |
+
+### 3.4 形状与约束
+
+- `q`、`k` 的形状必须为 `[B, H_qk, T, K]`，且二者形状完全一致。
+- `dO` 的形状必须为 `[B, H_do, T, V]`。
+- `g` 的形状必须为 `[B, H_do, T]`。
+- `B`、`T` 在 `q/k` 与 `dO/g/out` 之间必须一致。
+- `H_do` 必须能被 `H_qk` 整除，即 `H_do % H_qk == 0`。
+- `K` 须为 `128`。
+- `V` 须为 `128` 或 `256`。
+- `chunkSize` 仅支持 `64` 或 `128`。
+- 当启用变长模式时，`cuSeqlensOptional` 和 `chunkIndicesOptional` 必须同时提供；变长模式仅支持 `B = 1`。
+- `gGammaOptional` 和 `aOptional` 须传 `None`（当前版本不支持）。
+
+### 3.5 补充说明
+
+- `q`、`k`、`dO`、`g` 支持非连续 Tensor 输入。
+- 输出 `dV` 支持非连续视图作为输出目标。
+
+---
+
+## 4. 调用约束与执行语义
+
+### 4.1 可选参数约束
+
+- `cuSeqlensOptional` 和 `chunkIndicesOptional`：
+  - 同时出现时启用变长模式（varlen）
+  - 变长模式仅支持 `B = 1`
+
+- `gGammaOptional` 和 `aOptional`：
+  - 接口层存在，但当前实现未启用
+  - **必须传入空指针，否则执行失败**
+
+---
+
+### 4.2 形状约束（强约束）
+
+必须满足以下条件：
+
+- `q, k`: `[B, H_qk, T, K]`
+- `dO`: `[B, H_do, T, V]`
+- `g`: `[B, H_do, T]`
+- `out`: `[B, H_do, T, V]`
+- `q` 和 `k` 的形状完全一致。
+- `q/k` 与 `dO/g/out` 的 `B`、`T` 一致。
+- `H_do % H_qk == 0`，`hRatio = H_do / H_qk`。
+
+额外限制：
+
+- `K = 128`
+- `V = 128` 或 `V = 256`
+- `chunkSize ∈ {64, 128}`
+
+---
+
+### 4.3 变长模式（VarLen）
+
+当提供 `cuSeqlensOptional` 时：
+
+- `chunkIndicesOptional` 必须同时提供
+- 当前实现仅支持：
+
+```text
+B = 1
+```
+
+---
+
+### 4.4 数值语义
+
+- `g` 是 GDN gate activation 后按 chunk 累计得到的 log-decay；在每个序列的每个有效 chunk 内沿 T 维单调不增，序列边界和 chunk 边界重新累计。
+- 对上三角 mask 保留的位置，`g_col - g_row <= 0`，门控因子 `exp(g_col - g_row)` 的取值不超过 1。
+- 非单调 `g` 不满足算子输入契约，不在支持范围内。
+- `scale`：
+  - 必须显式传入
+  - 推荐设置为：
+
+```text
+1 / sqrt(K)
+```
+
+---
+
+### 4.5 核间同步与 QK 流水
+
+- Cube 通过 3 个 GM ring slot 预填 QK，并为每个 QK head 向两个 Vector 子核发送一次 ready。
+- 两个 Vector 子核消费 ready 后立即共同返回一个 QK free credit；Cube 在淘汰对应的旧 head 时消费该 credit。因此未消费的 QK ready 最多为 3 个，不会触及硬件 flag 计数上限。
+- QK free credit 只负责限制 ready 的在途数量；gated-ready 握手仍保证所有 `hRatio` 个 gated workspace 写回完成后，Cube 才复用对应的 QK slot。
+- QK 与 gated-ready 不使用相同的批量反向确认节奏，避免高 `hRatio` 下两条同步链在计数边界相互等待。
+
+---
+
+## 5. Torch 测试调用示例
+
+### 5.1 定长场景（Padding-mode）
+
+```python
+import torch
+import torch_npu
+import math
+
+def test_chunk_bwd_dv_local_fixed():
+    B, H_qk, h_ratio, T, K, V = 2, 4, 2, 128, 128, 128
+    H_do = H_qk * h_ratio
+    chunk_size = 64
+    scale = 1.0 / math.sqrt(K)
+    device = "npu:0"
+    dtype = torch.bfloat16
+
+    q   = torch.randn(B, H_qk, T, K, device=device, dtype=dtype)
+    k   = torch.randn(B, H_qk, T, K, device=device, dtype=dtype)
+    d_o = torch.randn(B, H_do, T, V, device=device, dtype=dtype)
+    g   = torch.randn(B, H_do, T,    device=device, dtype=torch.float32)
+
+    # 定长模式：cu_seqlens=None, chunk_indices=None
+    dv = torch_npu.npu_chunk_bwd_dv_local(
+        q, k, d_o, g,
+        g_gamma=None,
+        A=None,
+        cu_seqlens=None,
+        chunk_indices=None,
+        scale=scale,
+        chunk_size=chunk_size
+    )
+
+    assert dv.shape == (B, H_do, T, V)
+    print("dv shape:", dv.shape)  # (2, 8, 128, 128)
+
+if __name__ == "__main__":
+    test_chunk_bwd_dv_local_fixed()
+```
+
+### 5.2 变长场景（VarLen-mode）
+
+变长模式需要额外准备 `cu_seqlens` 和 `chunk_indices`（当前仅支持 `B = 1`）。
+
+```python
+import torch
+import torch_npu
+import math
+
+def prepare_chunk_indices(cu_seqlens, chunk_size):
+    """根据累积序列长度生成分块索引，返回形如 [num_chunks, 2] 的张量。"""
+    seq_lens = cu_seqlens[1:] - cu_seqlens[:-1]
+    result = []
+    for batch_idx, sl in enumerate(seq_lens.tolist()):
+        num_chunks = (sl + chunk_size - 1) // chunk_size
+        for ci in range(num_chunks):
+            result.append([batch_idx, ci])
+    return torch.tensor(result, dtype=torch.long)
+
+def test_chunk_bwd_dv_local_varlen():
+    H_qk, h_ratio, K, V = 4, 2, 128, 128
+    H_do = H_qk * h_ratio
+    chunk_size = 64
+    scale = 1.0 / math.sqrt(K)
+    device = "npu:0"
+    dtype = torch.bfloat16
+
+    # 变长：B=1，包含两段序列，长度分别为 192 和 64，总长 256
+    cu_seqlens = torch.tensor([0, 192, 256], dtype=torch.long)
+    T = int(cu_seqlens[-1])
+
+    q   = torch.randn(1, H_qk, T, K, device=device, dtype=dtype)
+    k   = torch.randn(1, H_qk, T, K, device=device, dtype=dtype)
+    d_o = torch.randn(1, H_do, T, V, device=device, dtype=dtype)
+    g   = torch.randn(1, H_do, T,    device=device, dtype=torch.float32)
+
+    # 每行 [batch_idx, chunk_idx]，展平后传入
+    chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size)
+
+    dv = torch_npu.npu_chunk_bwd_dv_local(
+        q, k, d_o, g,
+        g_gamma=None,
+        A=None,
+        cu_seqlens=cu_seqlens.tolist(),
+        chunk_indices=chunk_indices.flatten().tolist(),
+        scale=scale,
+        chunk_size=chunk_size
+    )
+
+    assert dv.shape == (1, H_do, T, V)
+    print("dv shape:", dv.shape)  # (1, 8, 256, 128)
+
+if __name__ == "__main__":
+    test_chunk_bwd_dv_local_varlen()
+```
+
+### 5.3 GQA Golden 回归覆盖
+
+共享 CPU 高精度 golden 在定长和变长模式下均遍历全部 `H_do`，并按
+`qkHead = doHead // hRatio` 复用对应的 Q/K head。定长回归覆盖
+`H_qk=4`、`H_do=16`、`T=198`、`chunkSize=64` 的 BF16 场景，变长回归覆盖
+`H_qk=4`、`H_do=16` 的 FP16 场景。精度检查使用与算子测试一致的同精度标杆和
+高精度标杆，不通过放宽阈值规避误差。Fast-Kernel-Launch 还覆盖
+`B=1`、`H_qk=15`、`H_do=120`、`T=1`、`hRatio=8` 的同步边界，验证执行完成并通过 golden 精度对比。
+
+---
+
+## 6. 目录结构
+
+```text
+chunk_bwd_dv_local/
+├── examples/
+│   └── test_aclnn_chunk_bwd_dv_local_variable.cpp
+├── op_api/
+│   ├── aclnn_chunk_bwd_dv_local.cpp
+│   ├── aclnn_chunk_bwd_dv_local.h
+│   ├── chunk_bwd_dv_local.cpp
+│   └── chunk_bwd_dv_local.h
+├── op_host/
+│   ├── chunk_bwd_dv_local_def.cpp
+│   ├── chunk_bwd_dv_local_tiling.cpp
+│   ├── chunk_bwd_dv_local_tiling.h
+│   └── CMakeLists.txt
+└── op_kernel/
+    ├── chunk_bwd_dv_local_common.h
+    ├── chunk_bwd_dv_local_cube.h
+    ├── chunk_bwd_dv_local_vector.h
+    └── chunk_bwd_dv_local.cpp
+```

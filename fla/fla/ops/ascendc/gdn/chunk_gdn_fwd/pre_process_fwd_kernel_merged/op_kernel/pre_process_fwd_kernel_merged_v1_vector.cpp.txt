@@ -1,0 +1,512 @@
+/**
+ * Copyright (c) 2026 Tianjin University, Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * the BSD 3-Clause License (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ */
+
+/*!
+ * \file pre_process_fwd_kernel_merged.cpp
+ * \brief CP 前处理算子 kernel 入口 + v1（正确性优先）向量实现。
+ *
+ * v1 约束与取舍（性能版本按 design.md 2.2–2.6 换成 Cube/CATLASS tile）：
+ *   * 只走 AIV（KERNEL_TYPE_AIV_ONLY），一个工作项 = 一条链（段 n × head hv），h/m 常驻 UB；
+ *   * 4 个矩阵乘（W_c@h、L_c^T@v_new、L_c^T@W_c、M_c@m）用 UB 向量 FMA 手写；
+ *   * gate 统一 FP32（BF16 gate 由 aclnn 层先 Cast 成 FP32 再进 kernel）；
+ *   * bf16↔fp32 一律走向量 Cast（bisheng 后端不支持标量 bf16 转换）；
+ *   * 规格固定 K = V = 128、BT = 64（host 侧已拦截）。
+ */
+
+#include "kernel_operator.h"
+#include "pre_process_fwd_kernel_merged_struct.h"
+
+namespace GDN {
+using namespace AscendC;
+
+constexpr int32_t PPFM_K_DIM = 128;
+constexpr int32_t PPFM_V_DIM = 128;
+constexpr int32_t PPFM_BT = 64;
+constexpr int32_t PPFM_KB = 32;    // dH / Kw 的 K 行块高
+constexpr int32_t PPFM_LANES = 8;  // 标量 scratch 的向量宽度（32B）
+
+// UB 缓冲按 dtype 精确分配（每个缓冲一个 TBuf，避免不同 dtype 共用同一条
+// 线性偏移导致的越界/别名）。总需求 ≈ 212 KiB，硬上限 248 KiB（ub_size=253952）。
+//
+//   hF [K,V] fp32 64K | mF [K,K] fp32 64K | k/w/v/vNew bf16 各 16K（共 64K）
+//   blkF [KB,max(V,K)] fp32 16K | scratch 3.8K | kRowBf bf16 0.25K
+constexpr int32_t PPFM_SCRATCH_VNF = 0;                                   // vNewF [V]
+constexpr int32_t PPFM_SCRATCH_ROWA = PPFM_SCRATCH_VNF + PPFM_V_DIM;      // rowA [V]
+constexpr int32_t PPFM_SCRATCH_ROWB = PPFM_SCRATCH_ROWA + PPFM_V_DIM;     // rowB [max(V,K)]
+constexpr int32_t PPFM_SCRATCH_ROWC = PPFM_SCRATCH_ROWB + PPFM_K_DIM;     // rowC [max(V,K)]
+constexpr int32_t PPFM_SCRATCH_WROW = PPFM_SCRATCH_ROWC + PPFM_K_DIM;     // wRowF [K]
+constexpr int32_t PPFM_SCRATCH_KROW = PPFM_SCRATCH_WROW + PPFM_K_DIM;     // kRowF [K]
+constexpr int32_t PPFM_SCRATCH_DECAY = PPFM_SCRATCH_KROW + PPFM_K_DIM;    // decay [K]
+constexpr int32_t PPFM_SCRATCH_DG = PPFM_SCRATCH_DECAY + PPFM_K_DIM;      // dg [BT]
+constexpr int32_t PPFM_SCRATCH_EXP = PPFM_SCRATCH_DG + PPFM_BT;           // exp scratch [LANES]
+constexpr int32_t PPFM_SCRATCH_ROWD = PPFM_SCRATCH_EXP + PPFM_LANES;      // rowD [K]（第 4 条行缓冲）
+constexpr int32_t PPFM_SCRATCH_FLOATS = PPFM_SCRATCH_ROWD + PPFM_K_DIM;
+
+class PreProcessFwdKernelMergedVector {
+public:
+    __aicore__ inline void Init(GM_ADDR k, GM_ADDR w, GM_ADDR u, GM_ADDR g, GM_ADDR gk, GM_ADDR bg, GM_ADDR v,
+                                GM_ADDR cuSeqlens, GM_ADDR hm, GM_ADDR userWorkspace,
+                                const PreProcessFwdKernelMergedTilingData *tilingData)
+    {
+        kGm_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(k));
+        wGm_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(w));
+        uGm_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(u));
+        vGm_.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>((v == nullptr) ? u : v));
+        gGm_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(g));
+        gkGm_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(gk));
+        cuGm_.SetGlobalBuffer(reinterpret_cast<__gm__ int64_t *>(cuSeqlens));
+        hmGm_.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(hm));
+        (void)bg;  // DPLR（USE_BG）预留：v1 未实现分支
+        Hk_ = tilingData->Hk;
+        Hv_ = tilingData->Hv;
+        hvPerHk_ = tilingData->hvPerHk;
+        T_ = tilingData->T;
+        K_ = tilingData->K;
+        V_ = tilingData->V;
+        chunkSize_ = tilingData->chunkSize;
+        nSeq_ = tilingData->nSeq;
+        taskNum_ = tilingData->taskNum;
+        usedNum_ = tilingData->usedAicNum;
+        gateMode_ = tilingData->gateMode;
+        pipe_.InitBuffer(hBuf_, PPFM_K_DIM * PPFM_V_DIM * sizeof(float));
+        pipe_.InitBuffer(mBuf_, PPFM_K_DIM * PPFM_K_DIM * sizeof(float));
+        // [实验] 两个"累加器"缓冲（blkBuf_/scratchBuf_）放到低地址，输入 staging 缓冲后置，
+        // 验证精度问题是否来自 UB 高地址区间。
+        pipe_.InitBuffer(blkBuf_, PPFM_KB * ((PPFM_V_DIM > PPFM_K_DIM) ? PPFM_V_DIM : PPFM_K_DIM) *
+                                       sizeof(float));
+        pipe_.InitBuffer(scratchBuf_, PPFM_SCRATCH_FLOATS * sizeof(float));
+        pipe_.InitBuffer(kBuf_, PPFM_BT * PPFM_K_DIM * sizeof(bfloat16_t));
+        pipe_.InitBuffer(wBuf_, PPFM_BT * PPFM_K_DIM * sizeof(bfloat16_t));
+        pipe_.InitBuffer(vBuf_, PPFM_BT * PPFM_V_DIM * sizeof(bfloat16_t));
+        pipe_.InitBuffer(vnBuf_, PPFM_BT * PPFM_V_DIM * sizeof(bfloat16_t));
+        pipe_.InitBuffer(kRowBfBuf_, PPFM_K_DIM * sizeof(bfloat16_t));
+        hF_ = hBuf_.Get<float>();
+        mF_ = mBuf_.Get<float>();
+        blkF_ = blkBuf_.Get<float>();
+        kUb_ = kBuf_.Get<bfloat16_t>();
+        wUb_ = wBuf_.Get<bfloat16_t>();
+        vUb_ = vBuf_.Get<bfloat16_t>();
+        vNewBf_ = vnBuf_.Get<bfloat16_t>();
+        vNewF_ = scratchBuf_.Get<float>()[PPFM_SCRATCH_VNF];
+        rowA_ = scratchBuf_.Get<float>()[PPFM_SCRATCH_ROWA];
+        rowB_ = scratchBuf_.Get<float>()[PPFM_SCRATCH_ROWB];
+        rowC_ = scratchBuf_.Get<float>()[PPFM_SCRATCH_ROWC];
+        rowD_ = scratchBuf_.Get<float>()[PPFM_SCRATCH_ROWD];
+        wRowF_ = scratchBuf_.Get<float>()[PPFM_SCRATCH_WROW];
+        kRowF_ = scratchBuf_.Get<float>()[PPFM_SCRATCH_KROW];
+        kRowBf_ = kRowBfBuf_.Get<bfloat16_t>();
+        decay_ = scratchBuf_.Get<float>()[PPFM_SCRATCH_DECAY];
+        dg_ = scratchBuf_.Get<float>()[PPFM_SCRATCH_DG];
+        expScratch_ = scratchBuf_.Get<float>()[PPFM_SCRATCH_EXP];
+        __gm__ float *coreGm = reinterpret_cast<__gm__ float *>(userWorkspace) +
+                               static_cast<int64_t>(GetBlockIdx()) * (PPFM_CORE_WS_BYTES / sizeof(float));
+        mGt_.SetGlobalBuffer(coreGm + GDN::PPFM_CORE_M_OFFSET, PPFM_K_DIM * PPFM_K_DIM);
+        t1Gt_.SetGlobalBuffer(coreGm + GDN::PPFM_CORE_T1_OFFSET, PPFM_BT * PPFM_K_DIM);
+        t2Gt_.SetGlobalBuffer(coreGm + GDN::PPFM_CORE_T2_OFFSET, PPFM_K_DIM * PPFM_K_DIM);
+        mNextGt_.SetGlobalBuffer(coreGm + GDN::PPFM_CORE_MNEXT_OFFSET, PPFM_K_DIM * PPFM_K_DIM);
+    }
+
+    __aicore__ inline void Process()
+    {
+        for (int64_t task = GetBlockIdx(); task < taskNum_; task += usedNum_) {
+            const int64_t n = task / Hv_;
+            const int64_t hv = task % Hv_;
+            const int64_t bos = cuGm_.GetValue(n);
+            const int64_t eos = cuGm_.GetValue(n + 1);
+            ProcessChain(n, hv, bos, eos - bos);
+        }
+    }
+
+private:
+    __aicore__ inline float Exp2Scalar(float x)
+    {
+        // 标量 exp2 = exp(x*ln2)：借 8 元素 scratch 走向量 Exp（AscendC 无标量 exp）
+        expScratch_.SetValue(0, x * 0.6931471805599453f);
+        PipeBarrier<PIPE_ALL>();
+        Exp(expScratch_, expScratch_, PPFM_LANES);
+        PipeBarrier<PIPE_ALL>();
+        return expScratch_.GetValue(0);
+    }
+
+    __aicore__ inline float GateValue(int64_t hv, int64_t tGlobal, int32_t k) const
+    {
+        if (gateMode_ == PPFM_GATE_USE_G) {
+            return gGm_.GetValue(hv * T_ + tGlobal);
+        }
+        return gkGm_.GetValue((hv * T_ + tGlobal) * PPFM_K_DIM + k);
+    }
+
+    // 逐 token 准备一行 `left`：
+    //   * `gateScale = true`（m 半边 / Kw）：USE_G 下 left = bf16(2^(g_last-g_t) * K_c)，
+    //     再升回 fp32；USE_GK 下就是 K_c（gk 门控已经含在 k 里）。
+    //   * `gateScale = false`（h 半边 dH）：left = K_c 本身——**标杆里 h 项用未加门控的 k**，
+    //     门控只作用在 v_new 上（`v_new *= 2^(g_last-g_t)`）。两处都用门控后的 L 会把
+    //     门控算两遍，GDN 下 h 会随 chunk 数发散（实测 T=256 时偏差到 1e7）。
+    __aicore__ inline void PrepareLRow(int64_t tLocal, bool gateScale)
+    {
+        Cast(kRowF_, kUb_[tLocal * PPFM_K_DIM], RoundMode::CAST_NONE, PPFM_K_DIM);
+        PipeBarrier<PIPE_V>();
+        if (gateScale && (gateMode_ == PPFM_GATE_USE_G)) {
+            Muls(kRowF_, kRowF_, dg_.GetValue(tLocal), PPFM_K_DIM);
+            PipeBarrier<PIPE_V>();
+            Cast(kRowBf_, kRowF_, RoundMode::CAST_RINT, PPFM_K_DIM);
+            PipeBarrier<PIPE_V>();
+            Cast(kRowF_, kRowBf_, RoundMode::CAST_NONE, PPFM_K_DIM);
+            // 收尾用 PIPE_ALL：调用方随后会用标量 GetValue 读 kRowF_（V -> S 同步）
+            PipeBarrier<PIPE_ALL>();
+            return;
+        }
+        PipeBarrier<PIPE_ALL>();
+    }
+
+    // m 的初值 = I（单位阵）。**只用向量指令构造**：实测在 64 KiB 的
+    // Duplicate 之后紧接 128 次标量 SetValue，落盘结果不可靠（列 >= 96 会整片为 0，
+    // 且两次调用不一致），改用 ArithProgression + Abs/Mins/Sub 逐行生成单位行。
+    __aicore__ inline void InitIdentityM()
+    {
+        Duplicate(mF_, 0.0f, PPFM_K_DIM * PPFM_K_DIM);
+        PipeBarrier<PIPE_V>();
+        Duplicate(rowC_, 1.0f, PPFM_K_DIM);              // 全 1 行
+        PipeBarrier<PIPE_V>();
+        ArithProgression(rowA_, 0.0f, 1.0f, PPFM_K_DIM); // rowA_[j] = j
+        PipeBarrier<PIPE_V>();
+        for (int32_t i = 0; i < PPFM_K_DIM; ++i) {
+            Adds(rowB_, rowA_, -static_cast<float>(i), PPFM_K_DIM); // j - i
+            PipeBarrier<PIPE_V>();
+            Abs(rowB_, rowB_, PPFM_K_DIM);
+            PipeBarrier<PIPE_V>();
+            Mins(rowB_, rowB_, 1.0f, PPFM_K_DIM);                  // j==i -> 0，其余 1
+            PipeBarrier<PIPE_V>();
+            Sub(rowB_, rowC_, rowB_, PPFM_K_DIM);                  // j==i -> 1
+            PipeBarrier<PIPE_V>();
+            Add(mF_[i * PPFM_K_DIM], mF_[i * PPFM_K_DIM], rowB_, PPFM_K_DIM);
+            PipeBarrier<PIPE_V>();
+        }
+        PipeBarrier<PIPE_ALL>();
+    }
+
+    __aicore__ inline void ProcessChain(int64_t n, int64_t hv, int64_t bos, int64_t len)
+    {
+        Duplicate(hF_, 0.0f, PPFM_K_DIM * PPFM_V_DIM);
+        PipeBarrier<PIPE_ALL>();
+        InitIdentityM();
+#ifdef PPFM_DEBUG_DUMP_IDENTITY
+        // [临时调试] 直接把 m 的初值（应为单位阵）转储到 hm 的 h 半边
+        {
+            const int64_t base = ((n * Hv_ + hv) * PPFM_K_DIM) * (PPFM_V_DIM + PPFM_K_DIM);
+            for (int32_t i = 0; i < PPFM_K_DIM; ++i) {
+                DataCopy(hmGm_[base + i * (PPFM_V_DIM + PPFM_K_DIM)], mF_[i * PPFM_K_DIM], PPFM_K_DIM);
+                PipeBarrier<PIPE_ALL>();
+            }
+        }
+        return;
+#endif
+
+        // m 常驻 GM：初值 I 在 UB 里构造好之后整块落到 GM（UB 侧不再按行读写 m）
+        for (int32_t i = 0; i < PPFM_K_DIM; ++i) {
+            DataCopy(mGt_[i * PPFM_K_DIM], mF_[i * PPFM_K_DIM], PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();
+        }
+        const int64_t hk = hv / hvPerHk_;
+        const int64_t nt = (len + PPFM_BT - 1) / PPFM_BT;
+        for (int64_t c = 0; c < nt; ++c) {
+            const int64_t t0 = bos + c * PPFM_BT;
+            const int64_t left = len - c * PPFM_BT;
+            const int64_t rows = (left < PPFM_BT) ? left : PPFM_BT;
+            ProcessChunk(hk, hv, t0, rows);
+        }
+        PipeBarrier<PIPE_ALL>();
+        const int64_t hmBase = ((n * Hv_ + hv) * PPFM_K_DIM) * (PPFM_V_DIM + PPFM_K_DIM);
+#ifdef PPFM_DEBUG_DUAL_DUMP
+        // [临时调试] h 半边转储 UB 里的 mF_（S4 读回后），m 半边转储 GM 常驻区 mGt_
+        for (int32_t i = 0; i < PPFM_K_DIM; ++i) {
+            DataCopy(hmGm_[hmBase + i * (PPFM_V_DIM + PPFM_K_DIM)], mF_[i * PPFM_K_DIM], PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(rowC_, mGt_[i * PPFM_K_DIM], PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(hmGm_[hmBase + i * (PPFM_V_DIM + PPFM_K_DIM) + PPFM_V_DIM], rowC_, PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();
+        }
+#elif defined(PPFM_DEBUG_DUMP_INPUTS)
+        // [临时调试] h 半边 := 最后一 chunk 的 vNewBf_（fp32，64 行），
+        //             m 半边 := 最后一 chunk 的 wUb_（fp32，64 行）
+        for (int32_t t = 0; t < PPFM_BT; ++t) {
+            Cast(rowC_, vNewBf_[t * PPFM_V_DIM], RoundMode::CAST_NONE, PPFM_V_DIM);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(hmGm_[hmBase + t * (PPFM_V_DIM + PPFM_K_DIM)], rowC_, PPFM_V_DIM);
+            PipeBarrier<PIPE_ALL>();
+            Cast(rowC_, wUb_[t * PPFM_K_DIM], RoundMode::CAST_NONE, PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(hmGm_[hmBase + t * (PPFM_V_DIM + PPFM_K_DIM) + PPFM_V_DIM], rowC_, PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();
+        }
+#else
+        for (int32_t i = 0; i < PPFM_K_DIM; ++i) {
+            DataCopy(hmGm_[hmBase + i * (PPFM_V_DIM + PPFM_K_DIM)], hF_[i * PPFM_V_DIM], PPFM_V_DIM);
+        }
+        PipeBarrier<PIPE_ALL>();
+        // m 半边：从 GM 常驻区按行读回后写出
+        for (int32_t i = 0; i < PPFM_K_DIM; ++i) {
+            DataCopy(rowA_, mGt_[i * PPFM_K_DIM], PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(hmGm_[hmBase + i * (PPFM_V_DIM + PPFM_K_DIM) + PPFM_V_DIM], rowA_, PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();
+        }
+        PipeBarrier<PIPE_ALL>();
+#endif
+    }
+
+    __aicore__ inline void ProcessChunk(int64_t hk, int64_t hv, int64_t t0, int64_t rows)
+    {
+        DataCopy(kUb_, kGm_[(hk * T_ + t0) * PPFM_K_DIM], rows * PPFM_K_DIM);
+        DataCopy(wUb_, wGm_[(hv * T_ + t0) * PPFM_K_DIM], rows * PPFM_K_DIM);
+        DataCopy(vUb_, vGm_[(hv * T_ + t0) * PPFM_V_DIM], rows * PPFM_V_DIM);
+        PipeBarrier<PIPE_ALL>();
+
+        const int64_t tLast = t0 + rows - 1;
+        if (gateMode_ == PPFM_GATE_USE_G) {
+            const float glast = GateValue(hv, tLast, 0);
+            // 实测：`Duplicate(dst, <运行时算出的标量>, N)` 在本编译链上会写进垃圾
+            // （GDN 的 h 因此爆到 1e7），改成逐 lane 标量写（与 KDA 路径同写法）。
+            const float decayScalar = Exp2Scalar(glast);
+            for (int32_t k = 0; k < PPFM_K_DIM; ++k) {
+                decay_.SetValue(k, decayScalar);
+            }
+            for (int64_t t = 0; t < rows; ++t) {
+                dg_.SetValue(t, Exp2Scalar(glast - GateValue(hv, t0 + t, 0)));
+            }
+        } else {
+            for (int32_t k = 0; k < PPFM_K_DIM; ++k) {
+                decay_.SetValue(k, Exp2Scalar(GateValue(hv, tLast, k)));
+            }
+        }
+        PipeBarrier<PIPE_ALL>();
+
+        // ---- S0/S1：v_new = V_c - W_c @ bf16(h)，按 gate 缩放后量化到 BF16 ----
+        for (int64_t t = 0; t < rows; ++t) {
+            Cast(wRowF_, wUb_[t * PPFM_K_DIM], RoundMode::CAST_NONE, PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();   // V -> S：下面按标量读 wRowF_
+            Duplicate(rowA_, 0.0f, PPFM_V_DIM);
+            PipeBarrier<PIPE_V>();
+            for (int32_t r = 0; r < PPFM_K_DIM; ++r) {
+                // 契约：h 进 w @ h 前先降到输入 dtype（BF16），再升回 FP32 累加
+                Cast(kRowBf_, hF_[r * PPFM_V_DIM], RoundMode::CAST_RINT, PPFM_V_DIM);
+                PipeBarrier<PIPE_V>();
+                Cast(rowB_, kRowBf_, RoundMode::CAST_NONE, PPFM_V_DIM);
+                PipeBarrier<PIPE_V>();
+                Muls(rowB_, rowB_, wRowF_.GetValue(r), PPFM_V_DIM);
+                Add(rowA_, rowA_, rowB_, PPFM_V_DIM);
+                PipeBarrier<PIPE_V>();
+            }
+            Cast(rowB_, vUb_[t * PPFM_V_DIM], RoundMode::CAST_NONE, PPFM_V_DIM);
+            PipeBarrier<PIPE_V>();
+            Sub(rowA_, rowB_, rowA_, PPFM_V_DIM);
+            PipeBarrier<PIPE_V>();
+            if (gateMode_ == PPFM_GATE_USE_G) {
+                Muls(rowA_, rowA_, dg_.GetValue(t), PPFM_V_DIM);
+                PipeBarrier<PIPE_V>();
+            }
+            Cast(vNewBf_[t * PPFM_V_DIM], rowA_, RoundMode::CAST_RINT, PPFM_V_DIM);
+            PipeBarrier<PIPE_ALL>();
+        }
+
+        // ---- S2：dH = L_c^T @ bf16(v_new)（按 K 行分块）；同时更新 h ----
+        for (int32_t kb = 0; kb < PPFM_K_DIM / PPFM_KB; ++kb) {
+            const int32_t kBase = kb * PPFM_KB;
+            Duplicate(blkF_, 0.0f, PPFM_KB * PPFM_V_DIM);
+            PipeBarrier<PIPE_V>();
+            for (int64_t t = 0; t < rows; ++t) {
+                PrepareLRow(t, false);   // h 半边：dH = K_c^T @ bf16(v_new)，k 不重复加门控
+                Cast(vNewF_, vNewBf_[t * PPFM_V_DIM], RoundMode::CAST_NONE, PPFM_V_DIM);
+                PipeBarrier<PIPE_V>();
+                for (int32_t kk = 0; kk < PPFM_KB; ++kk) {
+                    Muls(rowB_, vNewF_, kRowF_.GetValue(kBase + kk), PPFM_V_DIM);
+                    PipeBarrier<PIPE_V>();
+                    Add(blkF_[kk * PPFM_V_DIM], blkF_[kk * PPFM_V_DIM], rowB_, PPFM_V_DIM);
+                    PipeBarrier<PIPE_V>();
+                }
+                PipeBarrier<PIPE_ALL>();
+            }
+            PipeBarrier<PIPE_ALL>();
+            for (int32_t kk = 0; kk < PPFM_KB; ++kk) {
+                const int32_t row = kBase + kk;
+                const float dc = (gateMode_ == PPFM_GATE_USE_G) ? decay_.GetValue(0) : decay_.GetValue(row);
+                Muls(rowB_, hF_[row * PPFM_V_DIM], dc, PPFM_V_DIM);
+                PipeBarrier<PIPE_V>();
+                Add(hF_[row * PPFM_V_DIM], rowB_, blkF_[kk * PPFM_V_DIM], PPFM_V_DIM);
+                PipeBarrier<PIPE_V>();
+            }
+            PipeBarrier<PIPE_ALL>();
+        }
+
+        // ---- S3/S4：m_new = diag(decay) @ m - L_c^T @ (W_c @ m) ----
+        //
+        // 数学与设计一致（不显式物化 Kw = L_c^T W_c）：
+        //   M_c = diag(decay) - Kw,  m_new = M_c @ m = diag(decay) @ m - L_c^T @ (W_c @ m)
+        // 两条矩阵乘都复用已经实测**逐位正确**的累加模式：
+        //   ① W_c @ m：与 S0/S1 的 w@h 同构；② L_c^T @ T1：与 S2 的 dH 同构。
+        // T1 落在本核 user workspace 的第二段（每核 T1_OFFSET 处），避免占用 UB。
+        // m 行一律从 GM 常驻区用 DataCopy 取到小缓冲 rowD_ 再参与向量运算：
+        // 实测只有"小缓冲之间"的 Muls/Add 链稳定，直接从 64 KiB 的 UB 大缓冲取行会丢 lane。
+        for (int64_t t = 0; t < rows; ++t) {
+            Cast(wRowF_, wUb_[t * PPFM_K_DIM], RoundMode::CAST_NONE, PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();   // V -> S：下面按标量读 wRowF_
+            Duplicate(rowA_, 0.0f, PPFM_K_DIM);
+            PipeBarrier<PIPE_V>();
+            for (int32_t r = 0; r < PPFM_K_DIM; ++r) {
+                DataCopy(rowD_, mGt_[r * PPFM_K_DIM], PPFM_K_DIM);
+                PipeBarrier<PIPE_ALL>();   // GM -> UB
+                Muls(rowB_, rowD_, wRowF_.GetValue(r), PPFM_K_DIM);
+                PipeBarrier<PIPE_V>();
+                Add(rowA_, rowA_, rowB_, PPFM_K_DIM);
+                PipeBarrier<PIPE_V>();
+            }
+            // V -> MTE3：向量结果写回 GM 前必须全同步（否则每个循环的第 0 次迭代会丢）
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(t1Gt_[t * PPFM_K_DIM], rowA_, PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();
+        }
+        for (int32_t kb = 0; kb < PPFM_K_DIM / PPFM_KB; ++kb) {
+            const int32_t kBase = kb * PPFM_KB;
+            Duplicate(blkF_, 0.0f, PPFM_KB * PPFM_K_DIM);
+            PipeBarrier<PIPE_V>();
+            for (int64_t t = 0; t < rows; ++t) {
+                PrepareLRow(t, true);    // m 半边：left = 2^(g_last-g_t) * K_c
+                DataCopy(rowC_, t1Gt_[t * PPFM_K_DIM], PPFM_K_DIM);
+                PipeBarrier<PIPE_ALL>();   // GM -> UB
+                for (int32_t kk = 0; kk < PPFM_KB; ++kk) {
+                    Muls(rowB_, rowC_, kRowF_.GetValue(kBase + kk), PPFM_K_DIM);
+                    PipeBarrier<PIPE_V>();
+                    Add(blkF_[kk * PPFM_K_DIM], blkF_[kk * PPFM_K_DIM], rowB_, PPFM_K_DIM);
+                    PipeBarrier<PIPE_V>();
+                }
+                PipeBarrier<PIPE_ALL>();
+            }
+            for (int32_t kk = 0; kk < PPFM_KB; ++kk) {
+                DataCopy(t2Gt_[(kBase + kk) * PPFM_K_DIM], blkF_[kk * PPFM_K_DIM], PPFM_K_DIM);
+                PipeBarrier<PIPE_ALL>();
+            }
+        }
+        // m_new[row,:] = decay_row * m_prev[row,:] - T2[row,:]
+        // 结果先写独立 GM 区 mNext（避免对 m 做"就地读改写"），整块算完再拷回 m
+        for (int32_t i = 0; i < PPFM_K_DIM; ++i) {
+            const float dc =
+                (gateMode_ == PPFM_GATE_USE_G) ? decay_.GetValue(0) : decay_.GetValue(i);
+            DataCopy(rowA_, mGt_[i * PPFM_K_DIM], PPFM_K_DIM);    // m_prev 行
+            PipeBarrier<PIPE_ALL>();
+            Muls(rowB_, rowA_, dc, PPFM_K_DIM);
+            PipeBarrier<PIPE_V>();
+            DataCopy(rowC_, t2Gt_[i * PPFM_K_DIM], PPFM_K_DIM);   // T2 行
+            PipeBarrier<PIPE_ALL>();
+            Sub(rowD_, rowB_, rowC_, PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();   // V -> MTE3（同上：缺了它第 0 行会写成上一轮的残留）
+            DataCopy(mNextGt_[i * PPFM_K_DIM], rowD_, PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();
+        }
+        for (int32_t i = 0; i < PPFM_K_DIM; ++i) {
+            DataCopy(rowA_, mNextGt_[i * PPFM_K_DIM], PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();
+            DataCopy(mGt_[i * PPFM_K_DIM], rowA_, PPFM_K_DIM);
+            PipeBarrier<PIPE_ALL>();
+        }
+    }
+
+    TPipe pipe_;
+    TBuf<TPosition::VECCALC> hBuf_;
+    TBuf<TPosition::VECCALC> mBuf_;
+    TBuf<TPosition::VECCALC> kBuf_;
+    TBuf<TPosition::VECCALC> wBuf_;
+    TBuf<TPosition::VECCALC> vBuf_;
+    TBuf<TPosition::VECCALC> vnBuf_;
+    TBuf<TPosition::VECCALC> blkBuf_;
+    TBuf<TPosition::VECCALC> scratchBuf_;
+    TBuf<TPosition::VECCALC> kRowBfBuf_;
+    GlobalTensor<bfloat16_t> kGm_;
+    GlobalTensor<bfloat16_t> wGm_;
+    GlobalTensor<bfloat16_t> uGm_;
+    GlobalTensor<bfloat16_t> vGm_;
+    GlobalTensor<float> gGm_;
+    GlobalTensor<float> gkGm_;
+    GlobalTensor<int64_t> cuGm_;
+    GlobalTensor<float> hmGm_;
+    GlobalTensor<float> mGt_;
+    GlobalTensor<float> t2Gt_;
+    GlobalTensor<float> mNextGt_;
+    GlobalTensor<float> t1Gt_;
+    LocalTensor<float> hF_;
+    LocalTensor<float> mF_;
+    LocalTensor<float> blkF_;
+    LocalTensor<bfloat16_t> kUb_;
+    LocalTensor<bfloat16_t> wUb_;
+    LocalTensor<bfloat16_t> vUb_;
+    LocalTensor<bfloat16_t> vNewBf_;
+    LocalTensor<float> vNewF_;
+    LocalTensor<float> rowA_;
+    LocalTensor<float> rowB_;
+    LocalTensor<float> rowC_;
+    LocalTensor<float> rowD_;
+    LocalTensor<float> wRowF_;
+    LocalTensor<float> kRowF_;
+    LocalTensor<bfloat16_t> kRowBf_;
+    LocalTensor<float> decay_;
+    LocalTensor<float> dg_;
+    LocalTensor<float> expScratch_;
+    int64_t Hk_ = 0;
+    int64_t Hv_ = 0;
+    int64_t hvPerHk_ = 1;
+    int64_t T_ = 0;
+    int64_t K_ = 0;
+    int64_t V_ = 0;
+    int64_t chunkSize_ = PPFM_BT;
+    int64_t nSeq_ = 0;
+    int64_t taskNum_ = 0;
+    int64_t usedNum_ = 1;
+    int64_t gateMode_ = PPFM_GATE_USE_G;
+};
+
+__aicore__ inline void PreProcessFwdKernelMergedLaunch(GM_ADDR k, GM_ADDR w, GM_ADDR u, GM_ADDR g, GM_ADDR gk,
+                                                       GM_ADDR bg, GM_ADDR v, GM_ADDR cuSeqlens, GM_ADDR hm,
+                                                       GM_ADDR userWorkspace,
+                                                       const PreProcessFwdKernelMergedTilingData *tilingData)
+{
+    PreProcessFwdKernelMergedVector op;
+    op.Init(k, w, u, g, gk, bg, v, cuSeqlens, hm, userWorkspace, tilingData);
+    op.Process();
+}
+} // namespace GDN
+
+extern "C" __global__ __aicore__ void pre_process_fwd_kernel_merged(GM_ADDR k, GM_ADDR w, GM_ADDR u, GM_ADDR g,
+                                                                   GM_ADDR gk, GM_ADDR bg, GM_ADDR v,
+                                                                   GM_ADDR cu_seqlens, GM_ADDR hm,
+                                                                   GM_ADDR workspace, GM_ADDR tiling)
+{
+    REGISTER_TILING_DEFAULT(GDN::PreProcessFwdKernelMergedTilingData);
+    GET_TILING_DATA_WITH_STRUCT(GDN::PreProcessFwdKernelMergedTilingData, tilingData, tiling);
+    GM_ADDR userWS = AscendC::GetUserWorkspace(workspace);
+    if (userWS == nullptr) {
+        return;
+    }
+    // gate 已在 aclnn 层统一成 FP32；TilingKey 只区分 gate 模式（1=USE_G, 2=USE_GK, 3=USE_BG 预留）。
+    //
+    // 每个 TilingKey 必须各自带一条 KERNEL_TASK_TYPE：kernel 二进制按宏出现的
+    // (key, taskType) 组合生成入口名 `..._<idx>`；只用 KERNEL_TASK_TYPE_DEFAULT 时
+    // 只会产出 `_0` 一个入口，host 侧按 key=1 查表就会报
+    //   rtsFuncGetByEntry failed / kernel name: PreProcessFwdKernelMerged, tiling key: 1
+    if (TILING_KEY_IS(1)) {
+        KERNEL_TASK_TYPE(1, KERNEL_TYPE_AIV_ONLY);
+        GDN::PreProcessFwdKernelMergedLaunch(k, w, u, g, gk, bg, v, cu_seqlens, hm, userWS, &tilingData);
+    } else if (TILING_KEY_IS(2)) {
+        KERNEL_TASK_TYPE(2, KERNEL_TYPE_AIV_ONLY);
+        GDN::PreProcessFwdKernelMergedLaunch(k, w, u, g, gk, bg, v, cu_seqlens, hm, userWS, &tilingData);
+    } else if (TILING_KEY_IS(3)) {
+        // DPLR（USE_BG）预留：本轮不实现，走到这里说明 tiling 与 kernel 未对齐
+        KERNEL_TASK_TYPE(3, KERNEL_TYPE_AIV_ONLY);
+        GDN::PreProcessFwdKernelMergedLaunch(k, w, u, g, gk, bg, v, cu_seqlens, hm, userWS, &tilingData);
+    }
+}

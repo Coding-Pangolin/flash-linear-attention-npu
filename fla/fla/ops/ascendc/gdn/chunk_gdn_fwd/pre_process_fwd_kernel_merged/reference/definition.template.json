@@ -1,0 +1,81 @@
+{
+  "name": "pre_process_fwd_kernel_merged",
+  "workflow_id": "catlass-linear-attention-v1",
+  "layout": "token-major [T, H, D]",
+  "semantics_source": "fla-org/flash-linear-attention@e52dbc0e fla/ops/cp/chunk_delta_h.py::pre_process_fwd_kernel_merged",
+  "inputs": [
+    {
+      "name": "k",
+      "shape": "[T, HK, K]",
+      "dtype": "bfloat16",
+      "required": true,
+      "desc": "g 路径为 raw key; gk/DPLR 路径为已完成 gate 准备的 kg, 此时 HK == HV"
+    },
+    {
+      "name": "v",
+      "shape": "[T, HV, V]",
+      "dtype": "bfloat16",
+      "required": true,
+      "desc": "value; DPLR 下与 u 分离, GDN/KDA 下与 u 为同一张量"
+    },
+    {
+      "name": "w",
+      "shape": "GDN/KDA: [T, HV, K]; DPLR: [T, HK, K]",
+      "dtype": "bfloat16",
+      "required": true,
+      "desc": "erase/WY 输出, h 与 m 的左矩阵"
+    },
+    {
+      "name": "u",
+      "shape": "[T, HV, V]",
+      "dtype": "bfloat16",
+      "required": false,
+      "default": "等于 v",
+      "desc": "仅 DPLR 分支被读取"
+    },
+    {
+      "name": "g",
+      "shape": "[T, HV]",
+      "dtype": "float32 或 bfloat16",
+      "required": false,
+      "mutually_exclusive_with": "gk",
+      "desc": "标量 gate, base-2 的 chunk 内累积对数衰减"
+    },
+    {
+      "name": "gk",
+      "shape": "[T, HV, K]",
+      "dtype": "float32 或 bfloat16",
+      "required": false,
+      "mutually_exclusive_with": "g",
+      "desc": "逐 K gate, 同为 base-2 的 chunk 内累积量"
+    },
+    {
+      "name": "bg",
+      "shape": "[T, HK, K]",
+      "dtype": "bfloat16",
+      "required": false,
+      "desc": "仅 DPLR; 要求同时给出 gk"
+    },
+    {
+      "name": "cu_seqlens",
+      "shape": "[2]",
+      "dtype": "int32 或 int64",
+      "required": false,
+      "default": "整个 T, 即 [0, T]",
+      "desc": "当前窗口的起止 [bos, eos]; 本算子一次只处理一个窗口"
+    }
+  ],
+  "attributes": {
+    "chunk_size": {"type": "int", "default": 64, "desc": "本轮固定 64"}
+  },
+  "outputs": [
+    {
+      "name": "hm",
+      "shape": "[HV, K, V+K]",
+      "dtype": "float32",
+      "desc": "单个 head 的 [K, V+K]; 左 [0, V) 为 h, 右 [V, V+K) 为 m",
+      "required_regions": ["h_half", "m_half", "head0", "head_last"]
+    }
+  ],
+  "reference": ""
+}

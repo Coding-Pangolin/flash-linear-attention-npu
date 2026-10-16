@@ -1,0 +1,33 @@
+### pwd
+/home/npu_user7/BartonFang/ppfm-race/repo
+### branch
+feat/ppfm-tile-a5
+### remotes
+fork	git@github.com:Coding-Pangolin/flash-linear-attention-npu.git (fetch)
+fork	git@github.com:Coding-Pangolin/flash-linear-attention-npu.git (push)
+origin	git@github.com:flashserve/flash-linear-attention-npu.git (fetch)
+origin	git@github.com:flashserve/flash-linear-attention-npu.git (push)
+### head
+95cb364a sandbox: 同步到 R9 tip 0c06582
+dce8a64a sandbox: 同步到 tip 5d5df4a（仅本地沙箱）
+17eab762 perf(ppfm A2 opt) ITER10: vTmp 的 UB 读改共享基址视图（按"UB 分 bank、同偏移"假设正向修）
+1c8b63a1 refactor(ppfm): A2 优化方案(vTmp->UB/SPLIT_M)收进 PPFM_VTMP_UB 宏（默认 0，代码保留待实测 UB 语义）
+e9b8ab8d fix(ppfm A2 opt): 修 SEG_PER_SUB 在同一函数内重复定义（编译错误）
+### status
+ M fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/op_kernel/pre_process_fwd_kernel_merged.cpp
+?? .agents/
+?? .codex/
+?? catlass/
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/docs/race_status_20260929.md
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/docs/refactor_iteration_protocol.md
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/docs/refactor_plan.md
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/docs/switch_remediation_plan.md
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/scripts/gates/convention_audit.sh
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/scripts/gates/perf_ab.py
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/scripts/gates/race_probe_cached.py
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/scripts/gates/race_soak.sh
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/scripts/gates/race_timing.py
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/scripts/gates/switch_audit.sh
+### diffstat
+ .../op_kernel/pre_process_fwd_kernel_merged.cpp                         | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)

@@ -1,0 +1,27 @@
+### pwd
+/home/npu_user7/BartonFang/flash-linear-attention-npu
+### branch
+feat/ppfm-tile-a5
+### remotes
+fork	git@github.com:Coding-Pangolin/flash-linear-attention-npu.git (fetch)
+fork	git@github.com:Coding-Pangolin/flash-linear-attention-npu.git (push)
+origin	git@github.com:flashserve/flash-linear-attention-npu.git (fetch)
+origin	git@github.com:flashserve/flash-linear-attention-npu.git (push)
+### head
+17eab762 perf(ppfm A2 opt) ITER10: vTmp 的 UB 读改共享基址视图（按"UB 分 bank、同偏移"假设正向修）
+1c8b63a1 refactor(ppfm): A2 优化方案(vTmp->UB/SPLIT_M)收进 PPFM_VTMP_UB 宏（默认 0，代码保留待实测 UB 语义）
+e9b8ab8d fix(ppfm A2 opt): 修 SEG_PER_SUB 在同一函数内重复定义（编译错误）
+cb9b9262 perf+fix(ppfm A2): ITER8 mm1 的 C 改 fixpipe(SPLIT_M) 直落 UB_EXT_F 区（去掉 C 的 GM 往返与可见性窗口）；段按连续半区分配；删过渡探读
+7dba9a36 docs(ppfm gate): 追加独立进程命中率证据——6 进程 4 次算错整 head（h max_abs 0.83~1.23），同进程 8 轮 0/40
+### status
+?? .agents/
+?? .codex/
+?? catlass/
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/design_a2a3_analysis_plan.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/design_a2a3_budget_4head_vs_2head.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/design_a2a3_opt_opportunities.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/design_a2a3_stage_division.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/design_a2a3_stage_final.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/design_a2a3_stage_redesign.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/design_a2a3_stage_redesign_experiments.md
+### diffstat

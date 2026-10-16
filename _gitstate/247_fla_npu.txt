@@ -1,0 +1,79 @@
+### pwd
+/data/admin123/flash-linear-attention-npu
+### branch
+feat/ppfm-tile-a5
+### remotes
+origin	https://ghp_REDACTED_SEE_SECURITY_NOTE@github.com/Coding-Pangolin/flash-linear-attention-npu.git (fetch)
+origin	https://ghp_REDACTED_SEE_SECURITY_NOTE@github.com/Coding-Pangolin/flash-linear-attention-npu.git (push)
+upstream	https://ghp_REDACTED_SEE_SECURITY_NOTE@github.com/flashserve/flash-linear-attention-npu.git (fetch) [blob:none]
+upstream	https://ghp_REDACTED_SEE_SECURITY_NOTE@github.com/flashserve/flash-linear-attention-npu.git (push)
+### head
+91272e6c refactor(ppfm): 按评审挪到 cp/ 目录并清理交付件
+cd6f6d2e Merge remote-tracking branch 'upstream/main' into tmp/atk
+1dfe3198 test(atk)+fix(ppfm): 补 GPU 双标杆；按评审去掉 DPLR
+f8cdc507 fix(atk): 去掉误导性的 GPU 分支，明确本工程只有 NPU DUT + CPU golden
+76649e11 refactor(ppfm): 目录结构对齐上游算子 + 修正 ATK 交付件的 5 处问题
+### status
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/CMakeLists.txt
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/docs/api.md
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/docs/design.md
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_host/CMakeLists.txt
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_host/op_api/aclnn_pre_process_fwd_kernel_merged.cpp
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_host/op_api/aclnn_pre_process_fwd_kernel_merged.h
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_host/op_api/pre_process_fwd_kernel_merged.cpp
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_host/op_api/pre_process_fwd_kernel_merged.h
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_host/pre_process_fwd_kernel_merged_def.cpp
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_host/pre_process_fwd_kernel_merged_tiling.cpp
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_host/pre_process_fwd_kernel_merged_tiling.h
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_host/pre_process_fwd_kernel_merged_tiling_processor.h
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_kernel/pre_process_fwd_kernel_merged.cpp
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_kernel/pre_process_fwd_kernel_merged_common.h
+ D fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_kernel/pre_process_fwd_kernel_merged_cube.h
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_kernel/pre_process_fwd_kernel_merged_struct.h
+ M fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_kernel/pre_process_fwd_kernel_merged_tiling_key.h
+ D fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_kernel/pre_process_fwd_kernel_merged_vec.h
+ M tests/atk/pre_process_fwd_kernel_merged/README.md
+ M tests/atk/pre_process_fwd_kernel_merged/atk_pre_process_fwd_kernel_merged.json
+ M tests/atk/pre_process_fwd_kernel_merged/atk_pre_process_fwd_kernel_merged_mss.json
+ M tests/atk/pre_process_fwd_kernel_merged/atk_pre_process_fwd_kernel_merged_perf.json
+ M tests/atk/pre_process_fwd_kernel_merged/executor_pre_process_fwd_kernel_merged.py
+ M tests/atk/pre_process_fwd_kernel_merged/gen_pre_process_fwd_kernel_merged.py
+ M tests/atk/pre_process_fwd_kernel_merged/pre_process_fwd_kernel_merged.yaml
+ M tests/atk/pre_process_fwd_kernel_merged/scripts/pre_process_fwd_kernel_merged_cpu.py
+?? .agents/
+?? .codex/
+?? atk_output/
+?? fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_kernel/arch22/
+?? fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_kernel/arch35/
+?? fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_kernel/pre_process_fwd_kernel_merged_kernel.h
+?? fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/op_kernel/pre_process_fwd_kernel_merged_policy.h
+?? fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/scripts/
+?? tests/atk/pre_process_fwd_kernel_merged/core.35424
+### diffstat
+ .../pre_process_fwd_kernel_merged/CMakeLists.txt   |    36 +-
+ .../cp/pre_process_fwd_kernel_merged/docs/api.md   |   603 +-
+ .../pre_process_fwd_kernel_merged/docs/design.md   |   140 +-
+ .../op_host/CMakeLists.txt                         |    78 +-
+ .../op_api/aclnn_pre_process_fwd_kernel_merged.cpp |   410 +-
+ .../op_api/aclnn_pre_process_fwd_kernel_merged.h   |   132 +-
+ .../op_api/pre_process_fwd_kernel_merged.cpp       |   110 +-
+ .../op_host/op_api/pre_process_fwd_kernel_merged.h |    60 +-
+ .../op_host/pre_process_fwd_kernel_merged_def.cpp  |   220 +-
+ .../pre_process_fwd_kernel_merged_tiling.cpp       |   262 +-
+ .../op_host/pre_process_fwd_kernel_merged_tiling.h |    50 +-
+ ...re_process_fwd_kernel_merged_tiling_processor.h |   396 +-
+ .../op_kernel/pre_process_fwd_kernel_merged.cpp    |   234 +-
+ .../pre_process_fwd_kernel_merged_common.h         |  1778 +-
+ .../op_kernel/pre_process_fwd_kernel_merged_cube.h |   595 -
+ .../pre_process_fwd_kernel_merged_struct.h         |   182 +-
+ .../pre_process_fwd_kernel_merged_tiling_key.h     |    84 +-
+ .../op_kernel/pre_process_fwd_kernel_merged_vec.h  |  1477 -
+ tests/atk/pre_process_fwd_kernel_merged/README.md  |     0
+ .../atk_pre_process_fwd_kernel_merged.json         | 50176 ++++++++++---------
+ .../atk_pre_process_fwd_kernel_merged_mss.json     |  2274 +-
+ .../atk_pre_process_fwd_kernel_merged_perf.json    |  1812 +-
+ .../executor_pre_process_fwd_kernel_merged.py      |   700 +-
+ .../gen_pre_process_fwd_kernel_merged.py           |   684 +-
+ .../pre_process_fwd_kernel_merged.yaml             |    33 +-
+ .../scripts/pre_process_fwd_kernel_merged_cpu.py   |     0
+ 26 files changed, 31615 insertions(+), 30911 deletions(-)

@@ -1,0 +1,23 @@
+### pwd
+/data/admin123/bartonfang/flash-linear-attention-npu
+### branch
+feat/ppfm-tile-a5
+### remotes
+fork	https://ghp_REDACTED_SEE_SECURITY_NOTE@github.com/Coding-Pangolin/flash-linear-attention-npu.git (fetch)
+fork	https://ghp_REDACTED_SEE_SECURITY_NOTE@github.com/Coding-Pangolin/flash-linear-attention-npu.git (push)
+origin	https://github.com/flashserve/flash-linear-attention-npu.git (fetch)
+origin	https://github.com/flashserve/flash-linear-attention-npu.git (push)
+### head
+879857f6 chore(ppfm R9-prep): 把 4 处过渡探读收进 PPFM_LEGACY_PROBE_READS（默认 1，主线行为不变），留给 R9 做 A/B
+b7236edf docs(ppfm): §18 补回退后的两平台确认结果与 246 宿主重启/tmpfs 环境事实
+fd79fe8b revert(ppfm): AIC 直读输入 w/k 实测两平台均为负收益（+1.6~3.0%）→ 默认关闭并记录证据（validation §18）
+26cbf715 perf(ppfm): 满 chunk 时 AIC 直接读输入 w/k（PPFM_AIC_DIRECT_INPUTS=1），省掉 AIV 每 chunk 48KiB staging；尾块保留零填充路径
+876dfea0 docs(ppfm): §17 补 910B 的 T1 收益与 221 磁盘/statvfs 事故的 tmpfs 解法
+### status
+?? .agents/
+?? .codex/
+?? catlass/
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/docs/H20_perf_baseline_pre_process_fwd.md
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/docs/PROFILING_GUIDE.md
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/docs/interface_vs_competitor.md
+### diffstat

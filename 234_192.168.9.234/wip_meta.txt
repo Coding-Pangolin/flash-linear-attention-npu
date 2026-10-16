@@ -1,0 +1,1252 @@
+### branch
+codex/fix-kda-gate-softplus
+### head
+bd54fda fix(kda): 提升 chunk_kda_fwd raw gate 的 log1p 精度
+### status
+ M fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/arch35/gemm/block/block_scheduler_gdn_fwd_h.hpp
+ M fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/block/block_scheduler_gdn_fwd_h.hpp
+ M fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp
+ M fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/arch35/chunk_kda_fwd_prepare.h
+ M fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/chunk_kda_fwd_prepare.h
+ M fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h
+ M fla/ops/ascendc/kda/kda_gate_cumsum/op_kernel/kda_gate_cumsum_kernel.h
+?? fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/arch35/chunk_kda_fwd_post_wu.h.a2v_snapshot
+?? fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/arch35/chunk_kda_fwd_prepare.h.a2v_snapshot
+?? fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/chunk_kda_fwd_prepare.h.a2v_snapshot
+?? "fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/chunk_kda_fwd_prepare_stage\345\210\222\345\210\206.md"
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_A4_leaf_inverse_to_cube.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_A4_prime_probe_result.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_aic_hidden_evidence.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_aiv_levers_evidence.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_budget_4head_vs_2head.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_e2_stage_attribution.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_opt_opportunities.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_redesign_final.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_stage_division.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_stage_final.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_stage_redesign_experiments.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_vs_fla_v052_consistency.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_cube.h.p0
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h.e2sub
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h.leafpair
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h.p0
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h.probe9bak
+?? tests/atk/chunk_gated_delta_rule_fwd_h/atk_chunk_gated_delta_rule_fwd_h_db.json
+?? tests/atk/chunk_kda_fwd_prepare/atk_chunk_kda_fwd_prepare_a2.json
+?? tests/atk/chunk_kda_fwd_prepare/atk_chunk_kda_fwd_prepare_ablate.json
+?? tests/atk/chunk_kda_fwd_prepare/atk_chunk_kda_fwd_prepare_ablate2.json
+?? tests/atk/chunk_kda_fwd_prepare/atk_chunk_kda_fwd_prepare_perf_a2.json
+### diffstat
+ .../gemm/block/block_scheduler_gdn_fwd_h.hpp       |  40 ++-
+ .../gemm/block/block_scheduler_gdn_fwd_h.hpp       |  43 ++-
+ .../op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp     |  35 ++
+ .../op_kernel/arch35/chunk_kda_fwd_prepare.h       | 145 +++++---
+ .../op_kernel/chunk_kda_fwd_prepare.h              |  84 ++++-
+ .../op_kernel/arch22/chunk_kda_fwd_prepare_vec.h   | 397 ++++++++++++++-------
+ .../op_kernel/kda_gate_cumsum_kernel.h             |  31 +-
+ 7 files changed, 541 insertions(+), 234 deletions(-)
+### diff
+diff --git a/fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/arch35/gemm/block/block_scheduler_gdn_fwd_h.hpp b/fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/arch35/gemm/block/block_scheduler_gdn_fwd_h.hpp
+index 5702037..edf1ada 100644
+--- a/fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/arch35/gemm/block/block_scheduler_gdn_fwd_h.hpp
++++ b/fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/arch35/gemm/block/block_scheduler_gdn_fwd_h.hpp
+@@ -197,8 +197,8 @@ struct BlockSchedulerGdnFwdH {
+                 }
+                 prevSeq = currSeq;
+             }
+-            tokenBatch = actualBatch;
+-            batch = actualBatch;
++            // 与 arch22 一致：batch/tokenBatch 保持"逻辑序列总数"（含零长度序列），
++            // 否则尾部序列的任务会越界，h 与 final_state 都不会被写入。
+             totalChunks = chunkPrefix;
+             totalTokens = prevSeq;
+         } else {
+@@ -226,25 +226,26 @@ struct BlockSchedulerGdnFwdH {
+ 
+ 
+     CATLASS_DEVICE
+-    void ResolveVarlenSequence(uint32_t compactBatchIdx, GDNFwdHStream& stream) {
++    // 序列序号与 cu_seqlens 的位置一一对应（空序列也占一个序号），
++    // 与 host 侧 tokenBatch = len(cu_seqlens) - 1 的任务枚举保持一致。
++    void ResolveVarlenSequence(uint32_t seqIdx, GDNFwdHStream& stream) {
+         uint32_t actualBatch = 0;
+         int64_t chunkPrefix = 0;
+         int64_t prevSeq = 0;
+         for (uint32_t b = 1; b <= inputTokenBatch; ++b) {
+             int64_t currSeq = gmSeqlen.GetValue(b);
+             int64_t batchTokens = currSeq - prevSeq;
+-            if (batchTokens > 0) {
+-                int64_t batchChunks = (batchTokens + chunkSize - 1) / chunkSize;
+-                if (actualBatch == compactBatchIdx) {
+-                    stream.chunkOffset = static_cast<uint32_t>(chunkPrefix);
+-                    stream.batchChunks = static_cast<uint32_t>(batchChunks);
+-                    stream.tokenOffset = static_cast<uint32_t>(prevSeq);
+-                    stream.batchTokens = static_cast<uint32_t>(batchTokens);
+-                    return;
+-                }
+-                ++actualBatch;
+-                chunkPrefix += batchChunks;
++            int64_t batchChunks =
++                batchTokens > 0 ? (batchTokens + chunkSize - 1) / chunkSize : 0;
++            if (actualBatch == seqIdx) {
++                stream.chunkOffset = static_cast<uint32_t>(chunkPrefix);
++                stream.batchChunks = static_cast<uint32_t>(batchChunks);
++                stream.tokenOffset = static_cast<uint32_t>(prevSeq);
++                stream.batchTokens = static_cast<uint32_t>(batchTokens);
++                return;
+             }
++            ++actualBatch;
++            chunkPrefix += batchChunks;
+             prevSeq = currSeq;
+         }
+         stream.chunkOffset = 0;
+@@ -254,12 +255,19 @@ struct BlockSchedulerGdnFwdH {
+     }
+ 
+     CATLASS_DEVICE
+-    uint32_t GetVarlenChunkOffset(uint32_t compactBatchIdx) {
++    uint32_t GetVarlenChunkOffset(uint32_t seqIdx) {
+         GDNFwdHStream stream;
+-        ResolveVarlenSequence(compactBatchIdx, stream);
++        ResolveVarlenSequence(seqIdx, stream);
+         return stream.chunkOffset;
+     }
+ 
++    CATLASS_DEVICE
++    uint32_t GetVarlenBatchChunks(uint32_t seqIdx) {
++        GDNFwdHStream stream;
++        ResolveVarlenSequence(seqIdx, stream);
++        return stream.batchChunks;
++    }
++
+     CATLASS_DEVICE
+     void InitNewStream(GDNFwdHStream& newStream) {
+         newStream.batchIdx = taskIdx / vNumHead;
+diff --git a/fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/block/block_scheduler_gdn_fwd_h.hpp b/fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/block/block_scheduler_gdn_fwd_h.hpp
+index c7a1870..c2a3686 100644
+--- a/fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/block/block_scheduler_gdn_fwd_h.hpp
++++ b/fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/block/block_scheduler_gdn_fwd_h.hpp
+@@ -197,8 +197,11 @@ struct BlockSchedulerGdnFwdH {
+                 }
+                 prevSeq = currSeq;
+             }
+-            tokenBatch = actualBatch;
+-            batch = actualBatch;
++            // batch/tokenBatch 必须保持"逻辑序列总数"（含零长度序列）：
++            // 任务是按 (序列, value head) 枚举的，零长度序列同样占一个任务槽，
++            // 由 kernel 侧把 initial_state 回写为 final_state。若这里改成
++            // actualBatch（仅非空序列数），尾部序列的任务会整体越界，表现为
++            // 最后一条序列的 h 与 final_state 全部不被写入。
+             totalChunks = chunkPrefix;
+             totalTokens = prevSeq;
+         } else {
+@@ -227,25 +230,26 @@ struct BlockSchedulerGdnFwdH {
+     }
+ 
+     CATLASS_DEVICE
+-    void ResolveVarlenSequence(uint32_t compactBatchIdx, GDNFwdHStream& stream) {
++    // 序列序号与 cu_seqlens 的位置一一对应（空序列也占一个序号），
++    // 与 host 侧 tokenBatch = len(cu_seqlens) - 1 的任务枚举保持一致。
++    void ResolveVarlenSequence(uint32_t seqIdx, GDNFwdHStream& stream) {
+         uint32_t actualBatch = 0;
+         int64_t chunkPrefix = 0;
+         int64_t prevSeq = 0;
+         for (uint32_t b = 1; b <= inputTokenBatch; ++b) {
+             int64_t currSeq = gmSeqlen.GetValue(b);
+             int64_t batchTokens = currSeq - prevSeq;
+-            if (batchTokens > 0) {
+-                int64_t batchChunks = (batchTokens + chunkSize - 1) / chunkSize;
+-                if (actualBatch == compactBatchIdx) {
+-                    stream.chunkOffset = static_cast<uint32_t>(chunkPrefix);
+-                    stream.batchChunks = static_cast<uint32_t>(batchChunks);
+-                    stream.tokenOffset = static_cast<uint32_t>(prevSeq);
+-                    stream.batchTokens = static_cast<uint32_t>(batchTokens);
+-                    return;
+-                }
+-                ++actualBatch;
+-                chunkPrefix += batchChunks;
++            int64_t batchChunks =
++                batchTokens > 0 ? (batchTokens + chunkSize - 1) / chunkSize : 0;
++            if (actualBatch == seqIdx) {
++                stream.chunkOffset = static_cast<uint32_t>(chunkPrefix);
++                stream.batchChunks = static_cast<uint32_t>(batchChunks);
++                stream.tokenOffset = static_cast<uint32_t>(prevSeq);
++                stream.batchTokens = static_cast<uint32_t>(batchTokens);
++                return;
+             }
++            ++actualBatch;
++            chunkPrefix += batchChunks;
+             prevSeq = currSeq;
+         }
+         stream.chunkOffset = 0;
+@@ -255,12 +259,19 @@ struct BlockSchedulerGdnFwdH {
+     }
+ 
+     CATLASS_DEVICE
+-    uint32_t GetVarlenChunkOffset(uint32_t compactBatchIdx) {
++    uint32_t GetVarlenChunkOffset(uint32_t seqIdx) {
+         GDNFwdHStream stream;
+-        ResolveVarlenSequence(compactBatchIdx, stream);
++        ResolveVarlenSequence(seqIdx, stream);
+         return stream.chunkOffset;
+     }
+ 
++    CATLASS_DEVICE
++    uint32_t GetVarlenBatchChunks(uint32_t seqIdx) {
++        GDNFwdHStream stream;
++        ResolveVarlenSequence(seqIdx, stream);
++        return stream.batchChunks;
++    }
++
+     CATLASS_DEVICE
+     void InitNewStream(GDNFwdHStream& newStream) {
+         newStream.batchIdx = taskIdx / vNumHead;
+diff --git a/fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp b/fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp
+index 2ca2c40..52e0778 100644
+--- a/fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp
++++ b/fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp
+@@ -399,6 +399,41 @@ public:
+                         (shapeBatchIdx * vNumHead * totalChunks + vHeadIdx * totalChunks + chunkOffset) *
+                         stateBlockSize;
+                     uint32_t initialStateBaseOffset = taskIdx * stateBlockSize;
++                    if (isVariedLen &&
++                        vecBlockScheduler.GetVarlenBatchChunks(batchIdx) == 0) {
++                        // 空序列没有 chunk：h/v_new 没有对应槽位，直接把初始状态写回 final_state。
++                        if (storeFinalState &&
++                            std::is_same<ElementFinalState, float>::value) {
++                            for (uint32_t rowOffset = rowBegin; rowOffset < rowEnd;
++                                 rowOffset += rowsPerTile) {
++                                uint32_t rowsThisTile = Min(rowsPerTile, rowEnd - rowOffset);
++                                uint32_t stateTileElems = rowsThisTile * vHeadDim;
++                                uint32_t stateOffset =
++                                    initialStateBaseOffset + rowOffset * vHeadDim;
++                                AscendC::LocalTensor<ElementInitialState> stateUbTensor =
++                                    pingpongFlag ? stateUbTensorPing : stateUbTensorPong;
++                                auto eventId = pingpongFlag ? EVENT_ID1 : EVENT_ID0;
++                                AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(eventId);
++                                if (useInitialState) {
++                                    AscendC::DataCopy(
++                                        stateUbTensor, gmInitialState[stateOffset], stateTileElems);
++                                    AscendC::SetFlag<AscendC::HardEvent::MTE2_MTE3>(eventId);
++                                    AscendC::WaitFlag<AscendC::HardEvent::MTE2_MTE3>(eventId);
++                                } else {
++                                    AscendC::Duplicate(
++                                        stateUbTensor, static_cast<ElementInitialState>(0),
++                                        stateTileElems);
++                                    AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(eventId);
++                                    AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(eventId);
++                                }
++                                AscendC::DataCopy(gmFinalState[stateOffset], stateUbTensor,
++                                                  stateTileElems);
++                                AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(eventId);
++                                pingpongFlag = 1 - pingpongFlag;
++                            }
++                        }
++                        continue;
++                    }
+                     for (uint32_t rowOffset = rowBegin; rowOffset < rowEnd; rowOffset += rowsPerTile) {
+                         uint32_t rowsThisTile = Min(rowsPerTile, rowEnd - rowOffset);
+                         uint32_t stateTileElems = rowsThisTile * vHeadDim;
+diff --git a/fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/arch35/chunk_kda_fwd_prepare.h b/fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/arch35/chunk_kda_fwd_prepare.h
+index 46d06a5..796a9ab 100644
+--- a/fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/arch35/chunk_kda_fwd_prepare.h
++++ b/fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/arch35/chunk_kda_fwd_prepare.h
+@@ -75,6 +75,8 @@ constexpr uint32_t KDA_SOLVE_DIAG_BLOCKS = KDA_SOLVE_BT / KDA_SOLVE_DIAG_BT;
+ constexpr uint32_t KDA_SOLVE_DIAG_MCH_ITERS = 3;
+ // Keep the local safe-gate exponent span within the BF16 score range while
+ // reducing repeated gate-factor work and AIV/AIC handshakes.
++// arch35 的 cube 分形专门按 32 行 score 块特化（见下方 static_assert），
++// 这里保持 32；计分因子的量程问题由 SCORE_T 统一为 bf16 解决。
+ constexpr uint32_t KDA_SCORE_REF_BC = 32;
+ constexpr uint32_t KDA_SAFE_SCORE_REF_BC = 32;
+ constexpr uint32_t KDA_VEC_ARENA_ELEMENTS = 32768;
+@@ -840,8 +842,10 @@ class ChunkKdaFwdPrepareKernel {
+ public:
+     using OUT_T = T;
+     using AKK_T = float;
++    // 与 arch22 一致：计分因子在 fp16 下的指数跨度裕度不足，raw gate 场景会
++    // 在大跨度时失去 q*2^(g-ref) 与 k*2^(ref-g) 的对消精度，统一改存 bf16。
+     using SCORE_T =
+-        std::conditional_t<SAFE_GATE && IsSameType<T, half>::value, bfloat16_t, T>;
++        std::conditional_t<IsSameType<T, half>::value, bfloat16_t, T>;
+     template <typename TilingData>
+     __aicore__ inline void Init(GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR gk, GM_ADDR rawG,
+                                 GM_ADDR aLog, GM_ADDR dtBias, GM_ADDR beta, GM_ADDR initialState,
+@@ -2951,10 +2955,26 @@ private:
+         constexpr uint8_t rowBlk = diagSize * sizeof(float) / 32;
+ 
+ #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+-        ForwardSubDiag16Regbase(
+-            (__ubuf__ float *)reinterpret_cast<uint64_t>(diag.GetPhyAddr()),
+-            static_cast<uint16_t>(valid));
+-#else
++        if constexpr (SAFE_GATE && COMPILE_BT == 64 && COMPILE_K == 128 &&
++                      COMPILE_V == 128) {
++            ForwardSubDiag16Regbase(
++                (__ubuf__ float *)reinterpret_cast<uint64_t>(diag.GetPhyAddr()),
++                static_cast<uint16_t>(valid));
++            SetFlag<HardEvent::V_S>(EXP2_EVENT_ID);
++            WaitFlag<HardEvent::V_S>(EXP2_EVENT_ID);
++            for (uint32_t i = 0; i < diagSize; ++i) {
++                uint32_t diagOffset = i * diagSize + i;
++                if (i < valid) {
++                    diag.SetValue(diagOffset, diag.GetValue(diagOffset) + 1.0f);
++                } else {
++                    diag.SetValue(diagOffset, 1.0f);
++                }
++            }
++            SetFlag<HardEvent::S_V>(EXP2_EVENT_ID);
++            WaitFlag<HardEvent::S_V>(EXP2_EVENT_ID);
++            return;
++        }
++#endif
+         for (uint64_t i = 2; i < valid; ++i) {
+             uint32_t rowOffset = static_cast<uint32_t>(i * diagSize);
+             DataCopy(row, diag[rowOffset], diagSize);
+@@ -2982,7 +3002,6 @@ private:
+             DataCopy(diag[rowOffset], row, diagSize);
+             PipeBarrier<PIPE_V>();
+         }
+-#endif
+ 
+         SetFlag<HardEvent::V_S>(EXP2_EVENT_ID);
+         WaitFlag<HardEvent::V_S>(EXP2_EVENT_ID);
+@@ -3007,38 +3026,42 @@ private:
+         constexpr uint32_t brcbElements = diagSize * 8;
+ 
+ #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+-        (void)akkMat;
+-        (void)arena;
+-        (void)scratchBase;
+-        uint64_t rowEnd = rowBegin + rowCount;
+-        for (uint64_t blockBegin = 0; blockBegin < BT_; blockBegin += diagSize) {
+-            if (blockBegin < rowBegin || blockBegin + diagSize > rowEnd) {
+-                continue;
+-            }
+-            uint64_t localBlockRow = blockBegin - rowBegin;
+-            uint64_t valid = blockBegin < curT ? curT - blockBegin : 0;
+-            if (valid > diagSize) {
+-                valid = diagSize;
+-            }
+-            ForwardSubDiag16StridedRegbase(
+-                (__ubuf__ float *)reinterpret_cast<uint64_t>(xMat.GetPhyAddr()),
+-                static_cast<uint16_t>(BT_), static_cast<uint16_t>(localBlockRow),
+-                static_cast<uint16_t>(blockBegin), static_cast<uint16_t>(valid));
+-            SetFlag<HardEvent::V_S>(EXP2_EVENT_ID);
+-            WaitFlag<HardEvent::V_S>(EXP2_EVENT_ID);
+-            for (uint32_t rowIdx = 0; rowIdx < diagSize; ++rowIdx) {
+-                uint32_t diagOffset =
+-                    static_cast<uint32_t>((localBlockRow + rowIdx) * BT_ + blockBegin + rowIdx);
+-                if (rowIdx < valid) {
+-                    xMat.SetValue(diagOffset, xMat.GetValue(diagOffset) + 1.0f);
+-                } else {
+-                    xMat.SetValue(diagOffset, 1.0f);
++        if constexpr (SAFE_GATE && COMPILE_BT == 64 && COMPILE_K == 128 &&
++                      COMPILE_V == 128) {
++            (void)akkMat;
++            (void)arena;
++            (void)scratchBase;
++            uint64_t rowEnd = rowBegin + rowCount;
++            for (uint64_t blockBegin = 0; blockBegin < BT_; blockBegin += diagSize) {
++                if (blockBegin < rowBegin || blockBegin + diagSize > rowEnd) {
++                    continue;
++                }
++                uint64_t localBlockRow = blockBegin - rowBegin;
++                uint64_t valid = blockBegin < curT ? curT - blockBegin : 0;
++                if (valid > diagSize) {
++                    valid = diagSize;
+                 }
++                ForwardSubDiag16StridedRegbase(
++                    (__ubuf__ float *)reinterpret_cast<uint64_t>(xMat.GetPhyAddr()),
++                    static_cast<uint16_t>(BT_), static_cast<uint16_t>(localBlockRow),
++                    static_cast<uint16_t>(blockBegin), static_cast<uint16_t>(valid));
++                SetFlag<HardEvent::V_S>(EXP2_EVENT_ID);
++                WaitFlag<HardEvent::V_S>(EXP2_EVENT_ID);
++                for (uint32_t rowIdx = 0; rowIdx < diagSize; ++rowIdx) {
++                    uint32_t diagOffset =
++                        static_cast<uint32_t>((localBlockRow + rowIdx) * BT_ + blockBegin + rowIdx);
++                    if (rowIdx < valid) {
++                        xMat.SetValue(diagOffset, xMat.GetValue(diagOffset) + 1.0f);
++                    } else {
++                        xMat.SetValue(diagOffset, 1.0f);
++                    }
++                }
++                SetFlag<HardEvent::S_V>(EXP2_EVENT_ID);
++                WaitFlag<HardEvent::S_V>(EXP2_EVENT_ID);
+             }
+-            SetFlag<HardEvent::S_V>(EXP2_EVENT_ID);
+-            WaitFlag<HardEvent::S_V>(EXP2_EVENT_ID);
++            return;
+         }
+-#else
++#endif
+         LocalTensor<float> diag = arena[scratchBase];
+         LocalTensor<float> row = diag[diagElements];
+         LocalTensor<float> prod = row[diagSize];
+@@ -3071,7 +3094,6 @@ private:
+             }
+             PipeBarrier<PIPE_V>();
+         }
+-#endif
+     }
+ 
+     __aicore__ inline void BuildPrefixMask(LocalTensor<float> dst, uint64_t prefix, uint64_t count)
+@@ -3394,14 +3416,18 @@ private:
+             WaitFlag<HardEvent::MTE2_V>(mte2ToVEvent_);
+         }
+ #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+-        if (!scoreIncludesBeta) {
+-            ApplyKdaRowScaleRegbase(
+-                (__ubuf__ float *)reinterpret_cast<uint64_t>(akkMat.GetPhyAddr()),
+-                (__ubuf__ float *)reinterpret_cast<uint64_t>(betaLocal.GetPhyAddr()),
+-                static_cast<uint16_t>(rowCount), static_cast<uint16_t>(BT_));
+-            PipeBarrier<PIPE_V>();
+-        }
+-#else
++        if constexpr (SAFE_GATE && COMPILE_BT == 64 && COMPILE_K == 128 &&
++                      COMPILE_V == 128) {
++            if (!scoreIncludesBeta) {
++                ApplyKdaRowScaleRegbase(
++                    (__ubuf__ float *)reinterpret_cast<uint64_t>(akkMat.GetPhyAddr()),
++                    (__ubuf__ float *)reinterpret_cast<uint64_t>(betaLocal.GetPhyAddr()),
++                    static_cast<uint16_t>(rowCount), static_cast<uint16_t>(BT_));
++                PipeBarrier<PIPE_V>();
++            }
++        } else
++#endif
++        {
+         Brcb(betaBrcb, betaLocal, static_cast<uint8_t>((rowCount + 7) / 8), {1, 8});
+         PipeBarrier<PIPE_V>();
+         uint8_t rowStride = static_cast<uint8_t>(BT_ * sizeof(float) / 32);
+@@ -3410,7 +3436,7 @@ private:
+                 {1, 1, 0, rowStride, rowStride, 1});
+         }
+         PipeBarrier<PIPE_V>();
+-#endif
++        }
+         if (validRowCount > 0) {
+             SelectCausalRows(aqkMat, akkMat, rowBegin, validRowCount);
+         }
+@@ -4069,11 +4095,17 @@ private:
+         }
+ 
+ #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+-        ApplyKdaRowScaleRegbase(
+-            (__ubuf__ float *)reinterpret_cast<uint64_t>(matrixLocal.GetPhyAddr()),
+-            (__ubuf__ float *)reinterpret_cast<uint64_t>(betaLocal.GetPhyAddr()),
+-            static_cast<uint16_t>(rowCount), static_cast<uint16_t>(dim));
+-#else
++        if constexpr (SAFE_GATE && COMPILE_BT == 64 && COMPILE_K == 128 &&
++                      COMPILE_V == 128) {
++            ApplyKdaRowScaleRegbase(
++                (__ubuf__ float *)reinterpret_cast<uint64_t>(matrixLocal.GetPhyAddr()),
++                (__ubuf__ float *)reinterpret_cast<uint64_t>(betaLocal.GetPhyAddr()),
++                static_cast<uint16_t>(rowCount), static_cast<uint16_t>(dim));
++        } else
++#endif
++        {
++        Brcb(betaBrcb, betaLocal, static_cast<uint8_t>((rowCount + 7) / 8), {1, 8});
++        PipeBarrier<PIPE_V>();
+         uint8_t repeatStride = static_cast<uint8_t>(dim * sizeof(float) / 32);
+         for (uint64_t col = 0; col < dim; col += vecElemsPerRepeat) {
+             uint64_t mask = dim - col;
+@@ -4084,7 +4116,7 @@ private:
+                 {1, 1, 0, repeatStride, repeatStride, 1});
+         }
+         PipeBarrier<PIPE_V>();
+-#endif
++        }
+ 
+         if constexpr (IsSameType<T, float>::value) {
+             SetFlag<HardEvent::V_MTE3>(vToMte3Event_);
+@@ -4386,9 +4418,15 @@ private:
+             ? scoreBlockCount
+             : (scoreBlockCount + KDA_SCORE_QUEUE_DEPTH - 1) / KDA_SCORE_QUEUE_DEPTH *
+                   KDA_SCORE_QUEUE_DEPTH;
++        // direct-score UB 路径的 UB/L1 槽位和 32/64 行模板都按 K=V=128 固定，
++        // 只有 chunk=64 且 K=V=128 的专用模板真正支持它：该模板才会发布
++        // direct-score 的初始 free flag。通用模板必须回落到逐 lane 的 cube
++        // 计分路径，否则 AIC 会等待 AIV 从未发布过的 direct-score flag 而死锁。
+         const bool useDirectScoreUb =
+ #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+-            KDA_ARCH35_ENABLE_DIRECT_SCORE_UB && pairHeads && curT == 64 && scoreBlockCount == 2;
++            SAFE_GATE && COMPILE_BT == 64 && COMPILE_K == 128 && COMPILE_V == 128 &&
++            KDA_ARCH35_ENABLE_DIRECT_SCORE_UB && pairHeads && curT == 64 &&
++            scoreBlockCount == 2;
+ #else
+             false;
+ #endif
+@@ -4639,7 +4677,8 @@ private:
+                     : block % KDA_SCORE_QUEUE_DEPTH;
+ #if defined(__CCE_AICORE__) && __CCE_AICORE__ == 310
+                 bool directScoreDispatched = false;
+-                if constexpr (SAFE_GATE) {
++                if constexpr (SAFE_GATE && COMPILE_BT == 64 && COMPILE_K == 128 &&
++                              COMPILE_V == 128) {
+                     if (KDA_ARCH35_ENABLE_DIRECT_SCORE_UB && curT == 64 && rowCount == 32) {
+                         uint64_t scoreSlotBase = ScoreScratchSlot(queueSlot, 0, true);
+                         if (rowBegin == 0) {
+diff --git a/fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/chunk_kda_fwd_prepare.h b/fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/chunk_kda_fwd_prepare.h
+index 21b5c42..9ca80a1 100644
+--- a/fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/chunk_kda_fwd_prepare.h
++++ b/fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/chunk_kda_fwd_prepare.h
+@@ -63,6 +63,14 @@ constexpr uint32_t KDA_SOLVE_DIAG_MCH_ITERS = 3;
+ constexpr uint32_t KDA_SCORE_REF_BC = 32;
+ constexpr uint32_t KDA_SAFE_SCORE_REF_BC = 32;
+ constexpr uint32_t KDA_VEC_ARENA_ELEMENTS = 32768;
++// FP32 计分因子缓冲的 arena 起点：必须避开 solve 路径使用的
++// [0, 3*KDA_SOLVE_MATRIX_ELEMENTS + 2*KDA_SOLVE_BT + 512) 区间，
++// 以及 ScaleRowsByBeta 的 fp32 typed 区（自 20480 起）；
++// chunk=128 时 PrepareAqkAkkSolveInputRows 最多用到
++// 3*(BT_*BT_) + 2*BT_ + 512 ≈ 25344 float，因此因子缓冲放到
++// 25344 之上的空隙（掩码区从 120 KiB = 30720 float 开始）。
++constexpr uint32_t KDA_FACTOR_ARENA_OFFSET = 26624;
++constexpr uint32_t KDA_FACTOR_ARENA_WINDOW = 30720 - KDA_FACTOR_ARENA_OFFSET;
+ constexpr uint32_t KDA_BITS_PER_MASK_BYTE = 8;
+ constexpr uint32_t KDA_SELECT_COL_BLOCKS = 2;
+ constexpr uint32_t KDA_SELECT_COL_MASK_BYTES = KDA_SOLVE_MATRIX_ELEMENTS / KDA_BITS_PER_MASK_BYTE;
+@@ -100,7 +108,9 @@ static_assert(KdaScoreDispatchPolicy::L1B_STAGES == 1,
+ using KdaSolveDispatchPolicy = Catlass::Gemm::MmadPingpong<KdaArchTag, true, false>;
+ static_assert(!KdaSolveDispatchPolicy::USE_HF32_MODE, "KDA triangular solve must use IEEE FP32 Cube mode");
+ using KdaL1TileShape = tla::Shape<KdaInt64, KdaInt128, KdaInt128>;
+-using KdaL0TileShape = KdaL1TileShape;
++// 计分因子按 FP32 存放后 L0A/L0B 每元素字节数翻倍，L0 的 K 维收敛到 64，
++// 使 2 段流水仍能装下（L0B = 64*128*4 = 32 KiB 每段）。
++using KdaL0TileShape = tla::Shape<KdaInt64, KdaInt128, KdaInt64>;
+ using KdaSolveL1TileShape = tla::Shape<KdaInt64, KdaInt64, KdaInt64>;
+ using KdaSolveL0TileShape = KdaSolveL1TileShape;
+ 
+@@ -164,8 +174,13 @@ class ChunkKdaFwdPrepareKernel {
+ public:
+     using OUT_T = T;
+     using AKK_T = float;
+-    using SCORE_T =
+-        std::conditional_t<SAFE_GATE && IsSameType<T, half>::value, bfloat16_t, T>;
++    // 计分因子（QG/W/KG）按 FP32 存放并参与 cube 计分。
++    // 按输入 dtype（fp16）或 bf16 存放时，单个因子只有 8~11 bit 尾数，
++    // k_i*2^(g_i-ref) 与 k_j*2^(ref-g_j) 的对消、以及计分矩阵本身都只有
++    // ~2^-8 相对精度；WY 逆矩阵（Akk）对小值域元素极其敏感，会把该扰动
++    // 放大到超出双标杆允许的最大相对误差比例。FP32 存放后算子侧精度
++    // 优于“同精度标杆模型”，Akk 及下游 w/u 的双标杆比值显著下降。
++    using SCORE_T = float;
+     template <typename TilingData>
+     __aicore__ inline void Init(GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR gk, GM_ADDR beta, GM_ADDR initialState,
+                                 GM_ADDR cuSeqlens, GM_ADDR chunkIndices, GM_ADDR preparedQG, GM_ADDR preparedAqk,
+@@ -411,10 +426,11 @@ private:
+ 
+     __aicore__ inline void ClampScoreExpInput(LocalTensor<float> &tensor, uint32_t count)
+     {
++        // 只有 fp16 存放需要收窄夹取范围；bf16 与 fp32 的指数域都足够宽。
+         constexpr float expInputMax =
+-            IsSameType<SCORE_T, bfloat16_t>::value ? KDA_SCORE_EXP_INPUT_MAX : KDA_EXP_INPUT_MAX;
++            IsSameType<SCORE_T, half>::value ? KDA_EXP_INPUT_MAX : KDA_SCORE_EXP_INPUT_MAX;
+         constexpr float expInputMin =
+-            IsSameType<SCORE_T, bfloat16_t>::value ? KDA_SCORE_EXP_INPUT_MIN : KDA_EXP_INPUT_MIN;
++            IsSameType<SCORE_T, half>::value ? KDA_EXP_INPUT_MIN : KDA_SCORE_EXP_INPUT_MIN;
+         Mins(tensor, tensor, expInputMax, count);
+         PipeBarrier<PIPE_V>();
+         Maxs(tensor, tensor, expInputMin, count);
+@@ -516,7 +532,17 @@ private:
+         uint64_t bytesPerRow =
+             K_ * KDA_GATE_PIPELINE_DEPTH * (3 * sizeof(T) + sizeof(GK_T));
+         uint64_t rows = bytesPerRow == 0 ? 0 : availableBytes / bytesPerRow;
+-        return rows < KDA_GATE_TILE_ROWS ? rows : KDA_GATE_TILE_ROWS;
++        rows = rows < KDA_GATE_TILE_ROWS ? rows : KDA_GATE_TILE_ROWS;
++        // 计分因子（qScore/wScore/kgScore 三块）需落在 KDA_FACTOR_ARENA_WINDOW
++        // 之内，因此按窗口反推每个 tile 的行数上限；行数变化不影响逐元素因子
++        // 数值，只影响流水切分粒度。
++        if (K_ != 0) {
++            const uint64_t windowRows = KDA_FACTOR_ARENA_WINDOW / (3 * K_);
++            if (rows > windowRows) {
++                rows = windowRows;
++            }
++        }
++        return rows;
+     }
+ 
+     __aicore__ inline uint64_t GateInputSlotBytes() const
+@@ -713,8 +739,6 @@ private:
+             uint64_t elems = tileRows * K_;
+             LocalTensor<T> qTyped = GateQTyped(qwSlot);
+             LocalTensor<T> kTyped = GateKTyped(qwSlot);
+-            LocalTensor<SCORE_T> qScore = qTyped.template ReinterpretCast<SCORE_T>();
+-            LocalTensor<SCORE_T> kScore = kTyped.template ReinterpretCast<SCORE_T>();
+             LocalTensor<GK_T> gateTyped = GateGTyped(qwSlot);
+             LocalTensor<float> arena = vecBuf_.Get<float>();
+             LocalTensor<float> qFp32 = arena;
+@@ -722,8 +746,15 @@ private:
+             LocalTensor<float> gFp32 = arena[2 * elems];
+             LocalTensor<float> expFp32 = arena[3 * elems];
+             LocalTensor<float> outFp32 = arena[4 * elems];
++            // 计分因子单独使用 FP32 缓冲，不再复用输入 dtype 的 gate 暂存区。
++            LocalTensor<SCORE_T> qScore = arena[KDA_FACTOR_ARENA_OFFSET];
++            LocalTensor<SCORE_T> kScore = arena[KDA_FACTOR_ARENA_OFFSET + elems];
+ 
+             WaitGateInputReady();
++            // 计分因子使用固定地址的 fp32 缓冲（不再借 gate slot 双缓冲），
++            // 写入前必须等上一块的 MTE3 写出完成，否则存在 WAR 竞争。
++            SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
++            WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+             Cast(qFp32, qTyped, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
+             Cast(kFp32, kTyped, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
+             if constexpr (IsSameType<GK_T, float>::value) {
+@@ -756,12 +787,12 @@ private:
+             Mul(outFp32, qFp32, expFp32, static_cast<uint32_t>(elems));
+             PipeBarrier<PIPE_V>();
+             ClampFp32ForCast<SCORE_T>(outFp32, static_cast<uint32_t>(elems));
+-            Cast(qScore, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
++            CopyLocalFloat(qScore, outFp32, static_cast<uint32_t>(elems));
+             PipeBarrier<PIPE_V>();
+             Mul(outFp32, kFp32, expFp32, static_cast<uint32_t>(elems));
+             PipeBarrier<PIPE_V>();
+             ClampFp32ForCast<SCORE_T>(outFp32, static_cast<uint32_t>(elems));
+-            Cast(kScore, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
++            CopyLocalFloat(kScore, outFp32, static_cast<uint32_t>(elems));
+             PipeBarrier<PIPE_V>();
+ 
+             if (qwOutputPending) {
+@@ -781,6 +812,9 @@ private:
+             WaitGateOutputForMte2();
+             WaitGateOutputForVector();
+         }
++        // 因子的固定缓冲后续会被 solve 路径复用：段尾必须等 MTE3 排空（WAR）。
++        SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
++        WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+ 
+         uint64_t kgBegin = (validColEnd * subBlockIdx) / subBlockNum;
+         uint64_t kgEnd = (validColEnd * (subBlockIdx + 1)) / subBlockNum;
+@@ -801,15 +835,18 @@ private:
+             }
+             uint64_t elems = tileRows * K_;
+             LocalTensor<T> kTyped = GateQTyped(kgSlot);
+-            LocalTensor<SCORE_T> kgScore = kTyped.template ReinterpretCast<SCORE_T>();
+             LocalTensor<GK_T> gateTyped = GateGTyped(kgSlot);
+             LocalTensor<float> arena = vecBuf_.Get<float>();
+             LocalTensor<float> kFp32 = arena;
+             LocalTensor<float> gFp32 = arena[elems];
+             LocalTensor<float> expFp32 = arena[2 * elems];
+             LocalTensor<float> outFp32 = arena[3 * elems];
++            LocalTensor<SCORE_T> kgScore = arena[KDA_FACTOR_ARENA_OFFSET];
+ 
+             WaitGateInputReady();
++            // 同上：kg 因子缓冲固定复用，写前等上一块的 MTE3 写出完成。
++            SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
++            WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+             Cast(kFp32, kTyped, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
+             if constexpr (IsSameType<GK_T, float>::value) {
+                 gFp32 = gateTyped;
+@@ -840,7 +877,7 @@ private:
+             Mul(outFp32, kFp32, expFp32, static_cast<uint32_t>(elems));
+             PipeBarrier<PIPE_V>();
+             ClampFp32ForCast<SCORE_T>(outFp32, static_cast<uint32_t>(elems));
+-            Cast(kgScore, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
++            CopyLocalFloat(kgScore, outFp32, static_cast<uint32_t>(elems));
+             PipeBarrier<PIPE_V>();
+ 
+             if (kgOutputPending) {
+@@ -858,6 +895,9 @@ private:
+             WaitGateOutputForMte2();
+             WaitGateOutputForVector();
+         }
++        // 同上：kg 因子段尾排空 MTE3，避免后续 solve 复用该缓冲造成 WAR。
++        SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
++        WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+     }
+ 
+     __aicore__ inline void PrepareGateProductsBulk(uint64_t b, uint64_t h, uint64_t hv, uint64_t start,
+@@ -902,9 +942,6 @@ private:
+             LocalTensor<T> qTyped = GateQTyped(gateSlot);
+             LocalTensor<T> kTyped = GateKTyped(gateSlot);
+             LocalTensor<T> kgTyped = GateKgTyped(gateSlot);
+-            LocalTensor<SCORE_T> qScore = qTyped.template ReinterpretCast<SCORE_T>();
+-            LocalTensor<SCORE_T> wScore = kTyped.template ReinterpretCast<SCORE_T>();
+-            LocalTensor<SCORE_T> kgScore = kgTyped.template ReinterpretCast<SCORE_T>();
+             LocalTensor<GK_T> gateTyped = GateGTyped(gateSlot);
+             LocalTensor<float> arena = vecBuf_.Get<float>();
+             LocalTensor<float> qFp32 = arena;
+@@ -912,9 +949,17 @@ private:
+             LocalTensor<float> gFp32 = arena[2 * elems];
+             LocalTensor<float> expFp32 = arena[3 * elems];
+             LocalTensor<float> outFp32 = arena[4 * elems];
++            // score-scratch 分支把 FP32 计分因子写到独立缓冲；
++            // 非 scratch 分支仍把输出（qg/w/kg）写回输入 dtype 的 gate 暂存区。
++            LocalTensor<SCORE_T> qScore = arena[KDA_FACTOR_ARENA_OFFSET];
++            LocalTensor<SCORE_T> wScore = arena[KDA_FACTOR_ARENA_OFFSET + elems];
++            LocalTensor<SCORE_T> kgScore = arena[KDA_FACTOR_ARENA_OFFSET + 2 * elems];
+ 
+             uint64_t token = start + tileRow;
+             WaitGateInputReady();
++            // 同上：qg/w/kg 因子缓冲固定复用，写前等上一块的 MTE3 写出完成。
++            SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
++            WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+             Cast(qFp32, qTyped, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
+             Cast(kFp32, kTyped, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
+             if constexpr (IsSameType<GK_T, float>::value) {
+@@ -957,7 +1002,7 @@ private:
+             PipeBarrier<PIPE_V>();
+             if (writeScoreScratch) {
+                 ClampFp32ForCast<SCORE_T>(outFp32, static_cast<uint32_t>(elems));
+-                Cast(qScore, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
++                CopyLocalFloat(qScore, outFp32, static_cast<uint32_t>(elems));
+             } else {
+                 ClampFp32ToOutputType(outFp32, static_cast<uint32_t>(elems));
+                 Cast(qTyped, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
+@@ -968,7 +1013,7 @@ private:
+             PipeBarrier<PIPE_V>();
+             if (writeScoreScratch) {
+                 ClampFp32ForCast<SCORE_T>(outFp32, static_cast<uint32_t>(elems));
+-                Cast(wScore, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
++                CopyLocalFloat(wScore, outFp32, static_cast<uint32_t>(elems));
+             } else {
+                 ClampFp32ToOutputType(outFp32, static_cast<uint32_t>(elems));
+                 Cast(kTyped, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
+@@ -1011,7 +1056,7 @@ private:
+                 WaitGateOutputForVector();
+             }
+             if (writeScoreScratch) {
+-                Cast(kgScore, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
++                CopyLocalFloat(kgScore, outFp32, static_cast<uint32_t>(elems));
+             } else {
+                 Cast(kgTyped, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
+             }
+@@ -1039,6 +1084,9 @@ private:
+             WaitGateOutputForMte2();
+             WaitGateOutputForVector();
+         }
++        // qg/w/kg 因子段尾同样排空 MTE3（缓冲随后被 solve 路径复用）。
++        SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
++        WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+         return;
+     }
+ 
+diff --git a/fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h b/fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h
+index 98bae71..3a769c4 100644
+--- a/fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h
++++ b/fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h
+@@ -16,13 +16,10 @@
+ 
+ namespace KdaPrepare::Arch22 {
+ 
+-// softplus 的 log1p 分段：u=exp(-|x|) 小于该阈值时走 7 阶级数，否则走 Ln(1+u)。
+-// 级数与 mask 复用共享 scratch 的空闲区（V0 阶段只用到前 8 KiB，末尾 0x1F00
+-// 起是 sequence-major 的 beta gather 偏移表）。
+-constexpr float kGateSeriesThreshold = 0.125F;
+-constexpr uint32_t kGateSeriesOffsetBytes = 0x2000;
+-constexpr uint32_t kGateMaskOffsetBytes = 0xB000;
+-constexpr uint32_t kGateSelectElemsPerRepeat = 64;
++// softplus 的 log1p 补偿：u=exp(-|x|)，log1p(u)=Ln(1+u)+r/(1+u)，
++// r=u-(fl(1+u)-1)。两个 FP32 临时区固定复用共享 scratch 的前 7 KiB（与 V1Vf
++// 同一约定）：scratch 之后紧邻第二份 private 槽，0x1F00 起是 sequence-major 的
++// beta gather 偏移表，因此临时区不得越过 0x1C00。
+ 
+ template <typename GateT, typename BetaT, typename CompilePolicy>
+ class ChunkKdaFwdPrepareVec {
+@@ -706,84 +703,215 @@ private:
+         }
+     }
+ 
+-    __aicore__ inline void V0Vf(
+-        AscendC::LocalTensor<bfloat16_t> q, AscendC::LocalTensor<bfloat16_t> k,
+-        AscendC::LocalTensor<float> qRstd, AscendC::LocalTensor<float> kRstd,
+-        AscendC::LocalTensor<GateT> gate, AscendC::LocalTensor<BetaT> beta,
+-        AscendC::LocalTensor<float> betaEff, AscendC::LocalTensor<float> dtBias,
+-        AscendC::LocalTensor<float> aLog, AscendC::LocalTensor<float> g,
+-        AscendC::LocalTensor<float> scratch,
+-        AscendC::LocalTensor<float> tileBuf, uint32_t validRows)
++    // 块状行 L2 归一化：src（BF16 [validRows,128]）原地改写为 BF16(x*rstd)，
++    // 同时把 rstd 写进 rstdOut（FP32 [validRows]）。
++    //
++    // 逐行版本每个 (chunk,head) 要下发 64x2 行 x ~20 条指令、~512 个
++    // PipeBarrier 和 128 次 V_S/S_V 标量往返；234 实测这一项占整算子 45.5%
++    // （case 63：8,620 / 18,949.7 us）。块状版本把同样的数学压成：
++    //   Cast 整块 -> 平方 -> 折半 Add + WholeReduceSum 出行和 ->
++    //   标量压紧 -> 块状 eps/Sqrt/Div -> 标量读一次 -> 逐行 Muls/Cast
++    // 折半 + WholeReduceSum 的写法与本仓 arch22 已上量的
++    // recurrent_gated_delta_rule.h::ReduceSumAddFoldK128 保持一致。
++    __aicore__ inline void L2NormRowsBlock(
++        AscendC::LocalTensor<bfloat16_t> src,
++        AscendC::LocalTensor<float> rstdOut,
++        AscendC::LocalTensor<float> staging,
++        AscendC::LocalTensor<float> workspace, uint32_t validRows)
+     {
++        constexpr uint32_t kRepeatLanes = 64;                // 一个 vector repeat
++        constexpr uint32_t kRowBlocks = Shape::kHeadDim / 8; // 16 个 32B block/行
++        // 块状链的准入行数：<32 行的尾块退回逐行实现（见下方注释）。
++        constexpr uint32_t kBlockNormMinRows = 32;
++        auto sumBlocks = workspace;                          // 每行 1 个 block
++        auto rowSum = workspace[Shape::kChunkRows * 8];
++        auto oneVec = workspace[Shape::kChunkRows * 9];
+         const uint32_t count = validRows * Shape::kHeadDim;
+-        if constexpr (CompilePolicy::normMode == QkNormMode::L2) {
+-            // 每行按冻结语义执行 x * rsqrt(sum(x^2) + epsilon)。AR
+-            // ReduceSum 以 isReuseSource=true 调用，归约复用平方结果区；
+-            // 传入的临时区从 1 KiB 对齐地址开始，不额外占用 UB。
++        const int32_t rows = static_cast<int32_t>(validRows);
++        const int32_t rowStrideBlocks = static_cast<int32_t>(kRowBlocks);
++
++        // 尾块很小（实测 validRows=1 时块状链拿到的 scale 恒为 1.0，rstd 本身
++        // 却是对的）⇒ 这种尾块退回改动前的逐行实现，逐位与基线一致。
++        if (validRows < kBlockNormMinRows) {
+             uint32_t reduceShape[2] = {1, Shape::kHeadDim};
++            auto rowStage = workspace;
++            auto rowSq = workspace[Shape::kHeadDim];
++            auto rowRstd = workspace[2 * Shape::kHeadDim];
++            auto rowOne = workspace[3 * Shape::kHeadDim];
++            // level-2 ReduceSum 的临时区参数要求 uint8_t 视图（与改动前一致）。
++            auto rowWork =
++                workspace[4 * Shape::kHeadDim].template ReinterpretCast<uint8_t>();
+             for (uint32_t row = 0; row < validRows; ++row) {
+-                AscendC::Cast(scratch, q[row * Shape::kHeadDim],
++                AscendC::Cast(rowStage, src[row * Shape::kHeadDim],
+                               AscendC::RoundMode::CAST_NONE, Shape::kHeadDim);
+                 AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Mul(scratch[Shape::kHeadDim], scratch, scratch,
+-                             Shape::kHeadDim);
++                AscendC::Mul(rowSq, rowStage, rowStage, Shape::kHeadDim);
+                 AscendC::PipeBarrier<PIPE_V>();
+                 AscendC::ReduceSum<float, AscendC::Pattern::Reduce::AR, true>(
+-                    betaEff, scratch[Shape::kHeadDim],
+-                    scratch[2 * Shape::kHeadDim]
+-                        .template ReinterpretCast<uint8_t>(),
+-                    reduceShape, true);
++                    rowRstd, rowSq, rowWork, reduceShape, true);
+                 AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Adds(betaEff, betaEff, args_.tiling.epsilon, 1);
++                AscendC::Adds(rowRstd, rowRstd, args_.tiling.epsilon, 1);
++                AscendC::Sqrt(rowRstd, rowRstd, 1);
++                AscendC::Duplicate(rowOne, 1.0F, 1);
+                 AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Sqrt(betaEff, betaEff, 1);
+-                auto qOne = scratch[3 * Shape::kHeadDim];
+-                AscendC::Duplicate(qOne, 1.0F, 1);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Div(betaEff, qOne, betaEff, 1);
++                AscendC::Div(rowRstd, rowOne, rowRstd, 1);
++                // 标量取一次 scale：dst 必须是 32B 对齐的临时区，rstdOut[row]
++                // 只有 4B 对齐，直接当向量 dst 会触发 aicore exception。
+                 AscendC::SetFlag<AscendC::HardEvent::V_S>(scalarRead_);
+                 AscendC::WaitFlag<AscendC::HardEvent::V_S>(scalarRead_);
+-                const float qScale = betaEff.GetValue(0);
+-                qRstd.SetValue(row, qScale);
++                const float rowScale = rowRstd.GetValue(0);
++                rstdOut.SetValue(row, rowScale);
+                 AscendC::SetFlag<AscendC::HardEvent::S_V>(scalarWrite_);
+                 AscendC::WaitFlag<AscendC::HardEvent::S_V>(scalarWrite_);
+-                AscendC::Muls(scratch, scratch, qScale, Shape::kHeadDim);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Cast(q[row * Shape::kHeadDim], scratch,
+-                              AscendC::RoundMode::CAST_RINT, Shape::kHeadDim);
+-                AscendC::PipeBarrier<PIPE_V>();
+-
+-                AscendC::Cast(scratch, k[row * Shape::kHeadDim],
++                AscendC::Cast(rowStage, src[row * Shape::kHeadDim],
+                               AscendC::RoundMode::CAST_NONE, Shape::kHeadDim);
+                 AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Mul(scratch[Shape::kHeadDim], scratch, scratch,
+-                             Shape::kHeadDim);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::ReduceSum<float, AscendC::Pattern::Reduce::AR, true>(
+-                    betaEff, scratch[Shape::kHeadDim],
+-                    scratch[2 * Shape::kHeadDim]
+-                        .template ReinterpretCast<uint8_t>(),
+-                    reduceShape, true);
++                AscendC::Muls(rowStage, rowStage, rowScale, Shape::kHeadDim);
+                 AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Adds(betaEff, betaEff, args_.tiling.epsilon, 1);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Sqrt(betaEff, betaEff, 1);
+-                auto kOne = scratch[3 * Shape::kHeadDim];
+-                AscendC::Duplicate(kOne, 1.0F, 1);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Div(betaEff, kOne, betaEff, 1);
+-                AscendC::SetFlag<AscendC::HardEvent::V_S>(scalarRead_);
+-                AscendC::WaitFlag<AscendC::HardEvent::V_S>(scalarRead_);
+-                const float kScale = betaEff.GetValue(0);
+-                kRstd.SetValue(row, kScale);
+-                AscendC::SetFlag<AscendC::HardEvent::S_V>(scalarWrite_);
+-                AscendC::WaitFlag<AscendC::HardEvent::S_V>(scalarWrite_);
+-                AscendC::Muls(scratch, scratch, kScale, Shape::kHeadDim);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Cast(k[row * Shape::kHeadDim], scratch,
++                AscendC::Cast(src[row * Shape::kHeadDim], rowStage,
+                               AscendC::RoundMode::CAST_RINT, Shape::kHeadDim);
+                 AscendC::PipeBarrier<PIPE_V>();
+             }
++            return;
++        }
++
++        AscendC::Cast(staging, src, AscendC::RoundMode::CAST_NONE, count);
++        AscendC::PipeBarrier<PIPE_V>();
++        AscendC::Mul(staging, staging, staging, count);
++        AscendC::PipeBarrier<PIPE_V>();
++        // 列方向折半：把每行 [64,128) 的和写回该行的 [64,128)。
++        AscendC::Add(staging[kRepeatLanes], staging, staging[kRepeatLanes],
++                     static_cast<uint64_t>(kRepeatLanes), rows,
++                     {1, 1, 1, static_cast<uint8_t>(rowStrideBlocks),
++                      static_cast<uint8_t>(rowStrideBlocks),
++                      static_cast<uint8_t>(rowStrideBlocks)});
++        AscendC::PipeBarrier<PIPE_V>();
++        AscendC::WholeReduceSum(sumBlocks, staging[kRepeatLanes],
++                                static_cast<int32_t>(kRepeatLanes), rows, 1, 1,
++                                rowStrideBlocks);
++        AscendC::PipeBarrier<PIPE_V>();
++        // WholeReduceSum 的结果在 dst 上**连续**落位（dst[repeat]，实测确认：
++        // 若按 1 block/repeat 去读，第 i 行会读到第 8i 行的和），这里直接取
++        // 第 row 个元素；随后用块指令完成 eps -> Sqrt -> 倒数。
++        // P3-A：WholeReduceSum 的结果在 dst 上连续落位 ⇒ 原地做
++        // eps→Sqrt→Div，省掉 64 次 GetValue/SetValue 与一次 V_S/S_V 往返。
++        AscendC::Adds(sumBlocks, sumBlocks, args_.tiling.epsilon, validRows);
++        AscendC::PipeBarrier<PIPE_V>();
++        AscendC::Sqrt(sumBlocks, sumBlocks, validRows);
++        AscendC::Duplicate(oneVec, 1.0F, validRows);
++        AscendC::PipeBarrier<PIPE_V>();
++        AscendC::Div(rstdOut, oneVec, sumBlocks, validRows);
++        // 折半 Add 覆盖了 staging 的后半列，这里重新下发一次原始 BF16 值。
++        AscendC::Cast(staging, src, AscendC::RoundMode::CAST_NONE, count);
++        AscendC::PipeBarrier<PIPE_V>();
++        // P4：逐行缩放改成 "Brcb + 行列重复展开 + 整块 Mul"（与 V6 beta 路径同款），
++        // 去掉 64 次标量 GetValue 与 64 条逐行 Muls/Cast；数学不变（结果应逐位一致）。
++        // 缓冲区：workspace 共 2048 fp32，这里用 [640,1152) 与 [1152,1600)。
++        auto brcbScalars = workspace[640];       // 64 blocks = 512 fp32
++        auto repeatScalars = workspace[1152];    // 7 行 x 8 block = 448 fp32
++        AscendC::Brcb(brcbScalars, rstdOut,
++                      static_cast<uint8_t>(Shape::kChunkRows / 8), {1, 8});
++        AscendC::PipeBarrier<PIPE_V>();
++        constexpr uint32_t kScaleRows = 7;
++        for (uint32_t rowBegin = 0; rowBegin < validRows;
++             rowBegin += kScaleRows) {
++            const uint32_t rows = validRows - rowBegin < kScaleRows
++                                      ? validRows - rowBegin
++                                      : kScaleRows;
++            ReplicateRowScalarsToRepeat(repeatScalars,
++                                        brcbScalars[8 * rowBegin], rows);
++            AscendC::PipeBarrier<PIPE_V>();
++            MulTileByRowScalars(staging[rowBegin * Shape::kHeadDim],
++                                staging[rowBegin * Shape::kHeadDim],
++                                repeatScalars, rows);
++            AscendC::PipeBarrier<PIPE_V>();
++            AscendC::Cast(src[rowBegin * Shape::kHeadDim],
++                          staging[rowBegin * Shape::kHeadDim],
++                          AscendC::RoundMode::CAST_RINT,
++                          rows * Shape::kHeadDim);
++            AscendC::PipeBarrier<PIPE_V>();
++        }
++    }
++    // 两个叶子的 right-looking 三角逆合并进同一个循环：X0 与 X1 互不依赖，
++    // 原来两次调用各 31 步 × 3 屏障 = 186 个屏障，合并后 31 步 × 3 屏障 = 93，
++    // 而且两条独立链可以在 vector pipe 里互相掩盖。每步的算子与顺序（Gather→
++    // Mul→Sub）与单叶版本完全一致，因此逐位舍入顺序不变。
++    __aicore__ inline void SolveTwoLeavesRightLooking(
++        AscendC::LocalTensor<float> x0, AscendC::LocalTensor<float> x1,
++        AscendC::LocalTensor<float> lkk,
++        AscendC::LocalTensor<uint32_t> coeffOffset,
++        AscendC::LocalTensor<float> coeffA,
++        AscendC::LocalTensor<float> prodA,
++        AscendC::LocalTensor<float> coeffB,
++        AscendC::LocalTensor<float> prodB, uint32_t topRows,
++        uint32_t bottomRows, uint32_t baseA, uint32_t baseB,
++        uint32_t rowStride)
++    {
++        constexpr uint32_t kLeaf = 32;
++        constexpr uint8_t kLeafRepStride =
++            static_cast<uint8_t>(kLeaf * sizeof(float) / 32);
++        const uint32_t maxRows = topRows > bottomRows ? topRows : bottomRows;
++        for (uint32_t k = 0; k + 1 < maxRows; ++k) {
++            const uint32_t rowsA = k + 1 < topRows ? topRows - k - 1 : 0;
++            const uint32_t rowsB =
++                k + 1 < bottomRows ? bottomRows - k - 1 : 0;
++            // 系数区：偏移表与 k 无关，只有基址随 k 前进（与单叶版本一致）。
++            if (rowsA > 0) {
++                AscendC::Gather(
++                    coeffA, lkk, coeffOffset,
++                    static_cast<uint32_t>(
++                        (baseA + (rowStride + 1) * k) * sizeof(float)),
++                    rowsA * kLeaf);
++            }
++            if (rowsB > 0) {
++                AscendC::Gather(
++                    coeffB, lkk, coeffOffset,
++                    static_cast<uint32_t>(
++                        (baseB + (rowStride + 1) * k) * sizeof(float)),
++                    rowsB * kLeaf);
++            }
++            AscendC::PipeBarrier<PIPE_V>();
++            // src0 用 repStride=0 反复读本叶的 X[k,:]，src1 是逐行系数。
++            if (rowsA > 0) {
++                AscendC::Mul(prodA, x0[k * kLeaf], coeffA, kLeaf,
++                             static_cast<uint8_t>(rowsA),
++                             {1, 1, 1, kLeafRepStride, 0, kLeafRepStride});
++            }
++            if (rowsB > 0) {
++                AscendC::Mul(prodB, x1[k * kLeaf], coeffB, kLeaf,
++                             static_cast<uint8_t>(rowsB),
++                             {1, 1, 1, kLeafRepStride, 0, kLeafRepStride});
++            }
++            AscendC::PipeBarrier<PIPE_V>();
++            if (rowsA > 0) {
++                AscendC::Sub(x0[(k + 1) * kLeaf], x0[(k + 1) * kLeaf], prodA,
++                             static_cast<int32_t>(rowsA * kLeaf));
++            }
++            if (rowsB > 0) {
++                AscendC::Sub(x1[(k + 1) * kLeaf], x1[(k + 1) * kLeaf], prodB,
++                             static_cast<int32_t>(rowsB * kLeaf));
++            }
++            AscendC::PipeBarrier<PIPE_V>();
++        }
++    }
++
++    __aicore__ inline void V0Vf(
++        AscendC::LocalTensor<bfloat16_t> q, AscendC::LocalTensor<bfloat16_t> k,
++        AscendC::LocalTensor<float> qRstd, AscendC::LocalTensor<float> kRstd,
++        AscendC::LocalTensor<GateT> gate, AscendC::LocalTensor<BetaT> beta,
++        AscendC::LocalTensor<float> betaEff, AscendC::LocalTensor<float> dtBias,
++        AscendC::LocalTensor<float> aLog, AscendC::LocalTensor<float> g,
++        AscendC::LocalTensor<float> scratch,
++        AscendC::LocalTensor<float> tileBuf, uint32_t validRows)
++    {
++        const uint32_t count = validRows * Shape::kHeadDim;
++        if constexpr (CompilePolicy::normMode == QkNormMode::L2) {
++            // staging 需要 64x128 FP32 = 32 KiB：KDA（FP32 gate，gate 在共享 G）
++            // 用 V1 之前空闲的 kGateOrKMinus 私有区；GDN（BF16 gate）的 gate
++            // 本身就落在该私有区，改用尚未写入的共享 G 区。
++            auto normStaging = (sizeof(GateT) == 4) ? tileBuf : g;
++            L2NormRowsBlock(q, qRstd, normStaging, scratch, validRows);
++            L2NormRowsBlock(k, kRstd, normStaging, scratch, validRows);
+         } else {
+             // 固定输出合同下 Identity 仍写确定值；反向关闭 L2Norm 时不会
+             // 使用 rstd，但不能留下未初始化输出。
+@@ -792,6 +920,7 @@ private:
+             AscendC::PipeBarrier<PIPE_V>();
+         }
+ 
++
+         if constexpr (CompilePolicy::betaMode == BetaMode::Raw) {
+             // Raw 模式只统一转成 FP32，公开 betaEff 不做 sigmoid 变换。
+             if constexpr (std::is_same_v<BetaT, float>) {
+@@ -844,59 +973,56 @@ private:
+             }
+             if constexpr (!CompilePolicy::safeGate &&
+                           CompilePolicy::gateMode == GateMode::Softplus) {
+-                // deltaG=-a*(max(x,0)+log(1+exp(-abs(x))))。
+-                // log(1+u) 在小 u 处会把 1+u 的舍入放大成 1e-4~1e-3 的相对
+-                // 误差（u 是 exp(-|x|)，档位越小放大越明显），因此把 log1p
+-                // 拆成两段：u<0.125 走 7 阶级数（相对误差 ≤6.3e-8），其余仍
+-                // 走 Ln(1+u)（阈值处相对误差 ≤4.5e-7），最后用 Select 合并。
+-                // 整块（validRows x 128）一次下发，替代原先每行逐指令。
++                // deltaG=-a*(max(x,0)+log(1+exp(-abs(x))))，其中
++                // log1p(u)=Ln(1+u)+r/(1+u)，r=u-(fl(1+u)-1)。直接取 Ln(1+u)
++                // 会把 1+u 的舍入按 1/u 放大（u=exp(-|x|) 越小越明显），双标杆
++                // L1 下会超限，故用补偿项抵消。
++                //
++                // 两个 FP32 临时区只能落在共享 scratch 的前 7 KiB：scratch 之后
++                // 紧邻第二份 private 槽（q/k/gate/kMinus/score），0x1F00 起又是
++                // sequence-major 的 beta gather 偏移表，因此按 7 行一个 tile
++                // 下发，与 V1Vf 使用同一段 scratch 的约定保持一致。
+                 const float factor = -gateA;
+-                auto gateSeries = scratch[kGateSeriesOffsetBytes / sizeof(float)];
+-                auto gateMask = scratch[kGateMaskOffsetBytes / sizeof(float)]
+-                                    .template ReinterpretCast<uint8_t>();
+-                AscendC::Abs(tileBuf, g, count);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Muls(tileBuf, tileBuf, -1.0F, count);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Exp(tileBuf, tileBuf, count);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::CompareScalar<float, uint8_t>(
+-                    gateMask, tileBuf, kGateSeriesThreshold,
+-                    AscendC::CMPMODE::LT, count);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                // Horner：p(u)=1-u/2+u^2/3-u^3/4+u^4/5-u^5/6+u^6/7，
+-                // 初始 r=1/7，每级 r = -u*r + c。
+-                AscendC::Duplicate(gateSeries, 1.0F / 7.0F, count);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                for (uint32_t level = 0; level < 6; ++level) {
+-                    AscendC::Muls(gateSeries, gateSeries, -1.0F, count);
++                constexpr uint32_t kLog1pRows = 7;
++                constexpr uint32_t kLog1pElems = kLog1pRows * Shape::kHeadDim;
++                auto gateSum = scratch;
++                auto gateResidual = scratch[kLog1pElems];
++                for (uint32_t rowBegin = 0; rowBegin < validRows;
++                     rowBegin += kLog1pRows) {
++                    const uint32_t rows = validRows - rowBegin < kLog1pRows
++                                              ? validRows - rowBegin
++                                              : kLog1pRows;
++                    const uint32_t elems = rows * Shape::kHeadDim;
++                    const uint32_t offset = rowBegin * Shape::kHeadDim;
++                    AscendC::Abs(tileBuf, g[offset], elems);
++                    AscendC::PipeBarrier<PIPE_V>();
++                    AscendC::Muls(tileBuf, tileBuf, -1.0F, elems);
++                    AscendC::PipeBarrier<PIPE_V>();
++                    AscendC::Exp(tileBuf, tileBuf, elems);
++                    AscendC::PipeBarrier<PIPE_V>();
++                    AscendC::Adds(gateSum, tileBuf, 1.0F, elems);
++                    AscendC::PipeBarrier<PIPE_V>();
++                    AscendC::Adds(gateResidual, gateSum, -1.0F, elems);
++                    AscendC::PipeBarrier<PIPE_V>();
++                    // r = u - (fl(1+u) - 1)：补偿 1+u 的舍入残差。
++                    AscendC::Sub(gateResidual, tileBuf, gateResidual, elems);
+                     AscendC::PipeBarrier<PIPE_V>();
+-                    AscendC::Mul(gateSeries, gateSeries, tileBuf, count);
++                    AscendC::Adds(tileBuf, gateSum, 0.0F, elems);
+                     AscendC::PipeBarrier<PIPE_V>();
+-                    AscendC::Adds(gateSeries, gateSeries,
+-                                  1.0F / static_cast<float>(6 - level), count);
++                    AscendC::Ln(tileBuf, tileBuf, elems);
++                    AscendC::PipeBarrier<PIPE_V>();
++                    // log1p(u) = Ln(1+u) + r/(1+u)
++                    AscendC::Div(gateResidual, gateResidual, gateSum, elems);
++                    AscendC::PipeBarrier<PIPE_V>();
++                    AscendC::Add(tileBuf, tileBuf, gateResidual, elems);
++                    AscendC::PipeBarrier<PIPE_V>();
++                    AscendC::Maxs(g[offset], g[offset], 0.0F, elems);
++                    AscendC::PipeBarrier<PIPE_V>();
++                    AscendC::Add(tileBuf, tileBuf, g[offset], elems);
++                    AscendC::PipeBarrier<PIPE_V>();
++                    AscendC::Muls(g[offset], tileBuf, factor, elems);
+                     AscendC::PipeBarrier<PIPE_V>();
+                 }
+-                AscendC::Mul(gateSeries, gateSeries, tileBuf, count);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Adds(tileBuf, tileBuf, 1.0F, count);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Ln(tileBuf, tileBuf, count);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                // mask 位为 1（u<0.125）取级数，否则取 Ln(1+u)。
+-                AscendC::BinaryRepeatParams selectRepeat{1, 1, 1, 8, 8, 8};
+-                AscendC::Select(tileBuf, gateMask, tileBuf, gateSeries,
+-                                AscendC::SELMODE::VSEL_TENSOR_TENSOR_MODE,
+-                                kGateSelectElemsPerRepeat,
+-                                static_cast<uint8_t>(count /
+-                                                     kGateSelectElemsPerRepeat),
+-                                selectRepeat);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Maxs(g, g, 0.0F, count);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Add(tileBuf, tileBuf, g, count);
+-                AscendC::PipeBarrier<PIPE_V>();
+-                AscendC::Muls(g, tileBuf, factor, count);
+             } else {
+                 // deltaG=lower_bound/(1+exp(-a*x))。
+                 // 整块一次下发，替代原先每行 5 条指令。
+@@ -917,14 +1043,30 @@ private:
+             AscendC::Muls(g, g, Domain::stepScale, count);
+             AscendC::PipeBarrier<PIPE_V>();
+         }
+-        // token 维前缀和保留 headDim 向量宽度，不跨 chunk 传播。
+-        // 这里刻意保留逐行累加：保证 gk（FP32 公开输出）与改动前逐位一致，
+-        // 63 步累加相对整块指令链的开销很小。
+-        for (uint32_t row = 1; row < validRows; ++row) {
+-            AscendC::Add(g[row * Shape::kHeadDim],
+-                         g[row * Shape::kHeadDim],
+-                         g[(row - 1) * Shape::kHeadDim], Shape::kHeadDim);
+-            AscendC::PipeBarrier<PIPE_V>();
++        // P3-B：token 维前缀和改成 Hillis-Steele 对数扫描。
++        // 原来 63 步"逐行 Add + 1 个屏障"= 63 次流水排空（屏蔽实测 333 µs）；
++        // 现在 log2(validRows) 轮、每轮 2 条块指令 + 1 个屏障，源/目的在
++        // g（共享区）与 tileBuf（私有区 0x8000，本 Stage 的 norm/gate 已用完）
++        // 之间乒乓。⚠ gk 的求和顺序变成树形，末位与改动前不同（相对 ~1e-7）。
++        {
++            auto scanSrc = g;
++            auto scanDst = tileBuf;
++            bool inG = true;
++            for (uint32_t d = 1; d < validRows; d <<= 1) {
++                AscendC::Adds(scanDst, scanSrc, 0.0F, d * Shape::kHeadDim);
++                AscendC::Add(scanDst[d * Shape::kHeadDim],
++                             scanSrc[d * Shape::kHeadDim], scanSrc,
++                             (validRows - d) * Shape::kHeadDim);
++                AscendC::PipeBarrier<PIPE_V>();
++                auto swap = scanSrc;
++                scanSrc = scanDst;
++                scanDst = swap;
++                inG = !inG;
++            }
++            if (!inG) {
++                AscendC::Adds(g, tileBuf, 0.0F, count);
++                AscendC::PipeBarrier<PIPE_V>();
++            }
+         }
+         if (validRows < Shape::kChunkRows) {
+             const uint32_t tail =
+@@ -1237,11 +1379,14 @@ private:
+         auto coeffOffset = coeffOffsetInt.template ReinterpretCast<uint32_t>();
+         auto coeffTile = raw;
+         auto prodTile = raw[2048];
+-        SolveLeafRightLooking(x0, lkk, coeffOffset, coeffTile, prodTile,
+-                              topRows, 0, Shape::kChunkRows);
+-        SolveLeafRightLooking(x1, lkk, coeffOffset, coeffTile, prodTile,
+-                              bottomRows, 32 * Shape::kChunkRows + 32,
+-                              Shape::kChunkRows);
++        // 合并两个叶子的逆：4 块 scratch 各 1024 FP32，仍在 compact raw 区间内
++        // （raw 可用到 5120 FP32，解包已经消费完，之后不再读 raw）。
++        auto coeffTileB = raw[3072];
++        auto prodTileB = raw[4096];
++        SolveTwoLeavesRightLooking(
++            x0, x1, lkk, coeffOffset, coeffTile, prodTile, coeffTileB,
++            prodTileB, topRows, bottomRows, 0,
++            32 * Shape::kChunkRows + 32, Shape::kChunkRows);
+         // B 已在解包 rawAkk 时直接写入；其余行保持零。
+         AscendC::PipeBarrier<PIPE_V>();
+         // C5 直接执行普通 MMAD：negX1@T，不依赖不存在的 negate 参数。
+diff --git a/fla/ops/ascendc/kda/kda_gate_cumsum/op_kernel/kda_gate_cumsum_kernel.h b/fla/ops/ascendc/kda/kda_gate_cumsum/op_kernel/kda_gate_cumsum_kernel.h
+index 4d43db6..1f3bf4c 100644
+--- a/fla/ops/ascendc/kda/kda_gate_cumsum/op_kernel/kda_gate_cumsum_kernel.h
++++ b/fla/ops/ascendc/kda/kda_gate_cumsum/op_kernel/kda_gate_cumsum_kernel.h
+@@ -182,6 +182,8 @@ public:
+         pipe_->InitBuffer(chunkBuf_, 2 * GATE_BULK_ELEMENTS * sizeof(float));
+         pipe_->InitBuffer(scalarBuf_, 32);
+         pipe_->InitBuffer(scalarI64Buf_, 32);
++        pipe_->InitBuffer(gateResidualBuf_,
++                          GATE_ROW_ELEMENTS * sizeof(float));
+         AllocEvents();
+     }
+ 
+@@ -422,18 +424,34 @@ private:
+             } else {
+                 LocalTensor<float> positive = oneBuf_.Get<float>();
+                 LocalTensor<float> tmp = tmpBuf_.Get<float>();
+-                Maxs(positive, row, 0.0f, static_cast<uint32_t>(k_));
++                LocalTensor<float> residual = gateResidualBuf_.Get<float>();
++                // log1p(u) = Ln(1+u) + r/(1+u)，r = u - (fl(1+u) - 1)。
++                // 直接把 Ln(1+u) 当作 log1p 会把 1+u 的舍入按 1/u 放大，
++                // 小 u（门控接近 0）时相对误差可达 1e-4~1e-2；补偿项正好
++                // 补回这半个 ULP 的残差。
+                 Abs(tmp, row, static_cast<uint32_t>(k_));
+                 PipeBarrier<PIPE_V>();
+                 Muls(tmp, tmp, -1.0f, static_cast<uint32_t>(k_));
+                 PipeBarrier<PIPE_V>();
+-                Exp(tmp, tmp, static_cast<uint32_t>(k_));
++                Exp(tmp, tmp, static_cast<uint32_t>(k_));               // u
+                 PipeBarrier<PIPE_V>();
+-                Adds(tmp, tmp, 1.0f, static_cast<uint32_t>(k_));
++                Adds(positive, tmp, 1.0f, static_cast<uint32_t>(k_));   // s=1+u
++                PipeBarrier<PIPE_V>();
++                Adds(residual, positive, -1.0f, static_cast<uint32_t>(k_));
++                PipeBarrier<PIPE_V>();
++                Sub(residual, tmp, residual, static_cast<uint32_t>(k_)); // r
++                PipeBarrier<PIPE_V>();
++                Adds(tmp, positive, 0.0f, static_cast<uint32_t>(k_));
++                PipeBarrier<PIPE_V>();
++                Ln(tmp, tmp, static_cast<uint32_t>(k_));                 // Ln(s)
++                PipeBarrier<PIPE_V>();
++                Div(residual, residual, positive, static_cast<uint32_t>(k_));
++                PipeBarrier<PIPE_V>();
++                Add(tmp, tmp, residual, static_cast<uint32_t>(k_));      // log1p
+                 PipeBarrier<PIPE_V>();
+-                Ln(tmp, tmp, static_cast<uint32_t>(k_));
++                Maxs(row, row, 0.0f, static_cast<uint32_t>(k_));
+                 PipeBarrier<PIPE_V>();
+-                Add(row, positive, tmp, static_cast<uint32_t>(k_));
++                Add(row, row, tmp, static_cast<uint32_t>(k_));
+                 PipeBarrier<PIPE_V>();
+                 Muls(row, row, -expA_, static_cast<uint32_t>(k_));
+                 PipeBarrier<PIPE_V>();
+@@ -716,6 +734,9 @@ private:
+     TBuf<TPosition::VECCALC> chunkBuf_;
+     TBuf<TPosition::VECCALC> scalarBuf_;
+     TBuf<TPosition::VECCALC> scalarI64Buf_;
++    // raw softplus 分段使用的比较 mask（k_ 至多 128，16 字节足够）。
++    // raw softplus 的 log1p 补偿残差缓冲（一行 k_ 个 FP32）。
++    TBuf<TPosition::VECCALC> gateResidualBuf_;
+     TEventID inputMte2ToVEvent_[GATE_PIPELINE_DEPTH];
+     TEventID inputVToMte2Event_[GATE_PIPELINE_DEPTH];
+     TEventID outputVToMte3Event_[GATE_PIPELINE_DEPTH];

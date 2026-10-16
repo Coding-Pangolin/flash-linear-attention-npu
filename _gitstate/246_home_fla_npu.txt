@@ -1,0 +1,18 @@
+### pwd
+/home/admin123/flash-linear-attention-npu
+### branch
+main
+### remotes
+origin	git@github.com:flashserve/flash-linear-attention-npu.git (fetch)
+origin	git@github.com:flashserve/flash-linear-attention-npu.git (push)
+### head
+e22e0bf4 Merge pull request #584 from WWKGB/gdn_bwd_exp_false
+66dd7a35 feat(gdn): 支持融合反向 use_exp2 false
+2a840f95 feat(kda): 实现 A2/A3/A5 chunk_kda_fwd_finalize (#566)
+7272c200 fix(gdn): 对齐融合反向接口与标量布局 (#583)
+60572796 fix: 对齐 GDN 正向六输出与混合精度接口 (#582)
+### status
+?? .agents/
+?? .codex/
+?? fla/ops/ascendc/gdn/chunk_gdn_fwd/pre_process_fwd_kernel_merged/
+### diffstat

@@ -1,0 +1,56 @@
+### pwd
+/home/admin123/kda_a2/repo
+### branch
+codex/fix-kda-gate-softplus
+### remotes
+origin	https://github.com/weinachuan/flash-linear-attention-npu.git (fetch)
+origin	https://github.com/weinachuan/flash-linear-attention-npu.git (push)
+### head
+bd54fda fix(kda): 提升 chunk_kda_fwd raw gate 的 log1p 精度
+55ad9d6 fix(kda): 补齐 Gate 标量暂存区读后写依赖，消除 chunk_kda_fwd UB WAR hazard (#700)
+3a920ee fix(kda): chunk_kda_fwd 空 tensor 在 host 侧返回明确错误信息 (#698)
+a1e599c docs(chunk_local_cumsum): remove sensitive local path (#714)
+0a822a6 docs: rework homepage README for usability (#457)
+### status
+ M fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/arch35/gemm/block/block_scheduler_gdn_fwd_h.hpp
+ M fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/block/block_scheduler_gdn_fwd_h.hpp
+ M fla/ops/ascendc/gdn/chunk_gdn_fwd/chunk_gated_delta_rule_fwd_h/op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp
+ M fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/arch35/chunk_kda_fwd_prepare.h
+ M fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/chunk_kda_fwd_prepare.h
+ M fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h
+ M fla/ops/ascendc/kda/kda_gate_cumsum/op_kernel/kda_gate_cumsum_kernel.h
+?? fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/arch35/chunk_kda_fwd_post_wu.h.a2v_snapshot
+?? fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/arch35/chunk_kda_fwd_prepare.h.a2v_snapshot
+?? fla/ops/ascendc/kda/chunk_kda_fwd/op_kernel/chunk_kda_fwd_prepare.h.a2v_snapshot
+?? "fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/chunk_kda_fwd_prepare_stage\345\210\222\345\210\206.md"
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_A4_leaf_inverse_to_cube.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_A4_prime_probe_result.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_aic_hidden_evidence.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_aiv_levers_evidence.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_budget_4head_vs_2head.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_e2_stage_attribution.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_opt_opportunities.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_redesign_final.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_stage_division.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_stage_final.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_stage_redesign_experiments.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/docs/kda_prepare_a2a3_vs_fla_v052_consistency.md
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_cube.h.p0
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h.e2sub
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h.leafpair
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h.p0
+?? fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_kernel/arch22/chunk_kda_fwd_prepare_vec.h.probe9bak
+?? tests/atk/chunk_gated_delta_rule_fwd_h/atk_chunk_gated_delta_rule_fwd_h_db.json
+?? tests/atk/chunk_kda_fwd_prepare/atk_chunk_kda_fwd_prepare_a2.json
+?? tests/atk/chunk_kda_fwd_prepare/atk_chunk_kda_fwd_prepare_ablate.json
+?? tests/atk/chunk_kda_fwd_prepare/atk_chunk_kda_fwd_prepare_ablate2.json
+?? tests/atk/chunk_kda_fwd_prepare/atk_chunk_kda_fwd_prepare_perf_a2.json
+### diffstat
+ .../gemm/block/block_scheduler_gdn_fwd_h.hpp       |  40 ++-
+ .../gemm/block/block_scheduler_gdn_fwd_h.hpp       |  43 ++-
+ .../op_kernel/gemm/kernel/gdn_fwd_h_kernel.hpp     |  35 ++
+ .../op_kernel/arch35/chunk_kda_fwd_prepare.h       | 145 +++++---
+ .../op_kernel/chunk_kda_fwd_prepare.h              |  84 ++++-
+ .../op_kernel/arch22/chunk_kda_fwd_prepare_vec.h   | 397 ++++++++++++++-------
+ .../op_kernel/kda_gate_cumsum_kernel.h             |  31 +-
+ 7 files changed, 541 insertions(+), 234 deletions(-)

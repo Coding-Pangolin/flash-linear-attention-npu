@@ -1,0 +1,15 @@
+### pwd
+/home/npu_user7/BartonFang/flash-linear-attention
+### branch
+main
+### remotes
+origin	git@github.com:fla-org/flash-linear-attention.git (fetch)
+origin	git@github.com:fla-org/flash-linear-attention.git (push)
+### head
+e52dbc0e [Ops] Enable TMA on AMD gfx1250 (#1237)
+19350a3d [Ops] Add Triton-Ascend compatibility for GDN-2 (#1213)
+8ee22533 [Fix] Eliminate per-call reference cycle in launch_grid_chunked (#1235)
+516143e3 [Fix] Reject odd K/V for 16-bit dtypes in chunk_bwd_dv (#1241)
+f470469e [Fix] Restore package imports with precompile caching (#980)
+### status
+### diffstat

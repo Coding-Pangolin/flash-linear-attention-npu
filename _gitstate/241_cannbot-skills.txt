@@ -1,0 +1,15 @@
+### pwd
+/home/npu_user7/BartonFang/cannbot-skills
+### branch
+pr-1069
+### remotes
+origin	https://gitcode.com/cann/cannbot-skills.git (fetch)
+origin	https://gitcode.com/cann/cannbot-skills.git (push)
+### head
+4950cbd7 docs(catlass): 补充完整详设写法示例
+acfdeaa6 feat(catlass): consolidate linear attention workflow changes
+5dcf8bc9 feat(ascendc-port-orchestrator): 补齐 ascendc-cross-gen-port-light 的 L2/Cube/L3 与 Stage5 迁移能力
+34b5151c feat(ops-direct-invoke): 架构选型新增离散访存 SIMT 推荐准则并调整静默模式默认决策
+5a63d644 fix(tests): 移除 bash 4.2-only 的 declare -g，修复 macOS bash 3.2 兼容性问题
+### status
+### diffstat

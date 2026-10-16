@@ -16,6 +16,11 @@ working-tree delta streamed straight back to this PC.
 
 ## What is in this directory
 
+* 234_192.168.9.234/kda_a2_scripts.tgz - the whole 234 experiment harness:
+  acc_ab.py / acc_cmp.py / bench_*.sh / probe*.py and friends from
+  /home/admin123/kda_a2 (451 files, 63.8 MB unpacked, 36 MB packed) plus
+  src_snap/ and out/ logs. This tree exists nowhere else, so it is the single
+  most valuable thing in this branch.
 * 234_192.168.9.234/wip_delta.tgz - the 7 modified files of kda_a2/repo plus the
   untracked *.a2v_snapshot files and chunk_kda_fwd_prepare/docs/, paths relative
   to the repo root. Unpack with: tar xzf wip_delta.tgz -C <repo_root>

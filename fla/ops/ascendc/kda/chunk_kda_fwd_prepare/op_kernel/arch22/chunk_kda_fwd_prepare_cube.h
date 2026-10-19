@@ -130,6 +130,8 @@ public:
                             StageC4(chunk, localHead);
                         }
                     }
+                    AscendC::CrossCoreSetFlag<0x2, PIPE_MTE2>(
+                        kFreeFlagId[pair]);
                 }
 
                 // C5：只在下半块存在时计算 Akk[32:M,0:32]=negX1@T。
@@ -144,6 +146,8 @@ public:
                 // C7：每个 pair 一次调用；先搬完两个 head 的 RHS 并归还
                 // workspace，再分别计算 W 与 U。
                 for (uint32_t pair = 0; pair < 2; ++pair) {
+                    AscendC::CrossCoreWaitFlag<0x2, PIPE_MTE2>(
+                        kReadyFlagId[pair]);
                     StageC7(chunk, groupBegin, activeHeads, pair,
                             kFreeFlagId[pair]);
                 }

@@ -82,13 +82,35 @@ public:
             return false;
         }
 
-        // 先仅按 chunk 分核。chunk 数不足时，才以完整 GVA QK 头组为单位分 head。
-        uint64_t headsPerPartition = context_.valueHeadNum;
-        uint64_t partitionCount = 1;
-        if (chunkWorkItems < context_.aicCoreNum && context_.qkHeadNum > 1) {
-            headsPerPartition = context_.valueHeadNum / context_.qkHeadNum;
-            partitionCount = context_.qkHeadNum;
+        // head 切分数 P 直接决定每核的 head-chunk 数：
+        //   cost(P) = ceil(chunkWorkItems*P/cores) * (HV/P)
+        // 只在"多切一刀能减少最忙核工作量"时才切；切分必须落在完整 GVA
+        // QK 头组边界上，保证 q_hat/k_hat 的 owner 语义不变。
+        const uint64_t qkGroup =
+            context_.valueHeadNum / context_.qkHeadNum;
+        uint64_t bestPartitionCount = 1;
+        uint64_t bestCost = ~0ULL;
+        for (uint64_t p = 1; p <= context_.qkHeadNum && p <= 4; ++p) {
+            if (context_.valueHeadNum % p != 0) {
+                continue;
+            }
+            const uint64_t perPartition = context_.valueHeadNum / p;
+            if (qkGroup != 0 && perPartition % qkGroup != 0) {
+                continue;
+            }
+            const uint64_t items = chunkWorkItems * p;
+            const uint64_t cores =
+                items < context_.aicCoreNum ? items : context_.aicCoreNum;
+            const uint64_t trips = (items + cores - 1) / cores;
+            const uint64_t cost = trips * perPartition;
+            if (cost < bestCost) {
+                bestCost = cost;
+                bestPartitionCount = p;
+            }
         }
+        const uint64_t partitionCount = bestPartitionCount;
+        const uint64_t headsPerPartition =
+            context_.valueHeadNum / partitionCount;
 
         uint64_t totalWorkItems = 0;
         if (!CheckedMultiply(chunkWorkItems, partitionCount, totalWorkItems)) {

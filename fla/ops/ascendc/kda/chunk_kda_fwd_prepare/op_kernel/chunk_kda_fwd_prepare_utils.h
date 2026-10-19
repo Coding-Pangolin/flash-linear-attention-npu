@@ -55,10 +55,12 @@ __aicore__ inline uint32_t WorkEnd(uint32_t total, uint32_t rank,
 __aicore__ inline bool UseHeadSplit(
     const PrepareRuntimeTiling &tiling)
 {
-    const uint32_t chunkWork = tiling.isVarLen
-                                   ? tiling.totalChunks
-                                   : tiling.batch * tiling.totalChunks;
-    return chunkWork < tiling.usedCoreNum;
+    // 与 host 侧的切分决策保持一致：只要 headsPerPartition 小于总 head 数，
+    // 就说明 tiling 选择了按 head 切分（用于把每核的 head-chunk 数摊平）。
+    const uint32_t headsPerPartition =
+        tiling.headsPerPartition == 0 ? tiling.valueHeadNum
+                                      : tiling.headsPerPartition;
+    return headsPerPartition < tiling.valueHeadNum;
 }
 
 __aicore__ inline uint32_t HeadPartitionCount(

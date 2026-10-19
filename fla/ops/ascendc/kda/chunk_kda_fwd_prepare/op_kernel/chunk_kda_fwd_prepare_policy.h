@@ -270,6 +270,10 @@ constexpr uint32_t kQRstd = 0x10F00;
 constexpr uint32_t kKRstd = 0x11000;
 constexpr uint32_t kGLast = 0x11200;
 constexpr uint32_t kBetaGatherOffsets = kSharedScratch + 0x1F00;
+// sequence-major beta 的 64 个 gather 偏移（64 x uint32 = 256 B）放在
+// 第一个 private 槽的尾部，释放共享 scratch 的 0x1F00 限制，
+// 使 V1/V6 的 FP32 tile 可以从 7 行提升到 8 行。
+constexpr uint32_t kBetaGatherOffsetsPrivate = 0x11300;
 
 constexpr uint32_t kV3Aqk = 0x0000;
 constexpr uint32_t kV3Lkk = 0x2000;

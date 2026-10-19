@@ -78,15 +78,6 @@ public:
         // 基础 API 能看到占用状态；注释给出 CANN 9.1 分配器的预期返回值。
         scalarRead_ = pipe_->AllocEventID<AscendC::HardEvent::V_S>(); // ID 0
         scalarWrite_ = pipe_->AllocEventID<AscendC::HardEvent::S_V>(); // ID 0
-        if (args_.tiling.inputSequenceMajor) {
-            auto offsets = ubBuf_.Get<uint8_t>()[Arch22Ub::kBetaGatherOffsets]
-                               .template ReinterpretCast<uint32_t>();
-            for (uint32_t row = 0; row < Shape::kChunkRows; ++row) {
-                offsets.SetValue(row, row * 32U);
-            }
-            AscendC::SetFlag<AscendC::HardEvent::S_V>(scalarWrite_);
-            AscendC::WaitFlag<AscendC::HardEvent::S_V>(scalarWrite_);
-        }
         sharedFree_ = pipe_->AllocEventID<AscendC::HardEvent::V_MTE2>(); // ID 0
         // 两个 pair 分时复用共享 G/scratch；初始许可只发布一次。
         AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(sharedFree_);
@@ -304,8 +295,15 @@ private:
         AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
         if (args_.tiling.inputSequenceMajor) {
-            auto offsets = ub[Arch22Ub::kBetaGatherOffsets]
+            // 偏移表放在本 pair 的 private 尾部，V1 的 Kminus 会覆盖它，
+            // 因此每个 work 的 StageV0 都重写一次；只影响 sequence-major。
+            auto offsets = ub[base + Arch22Ub::kBetaGatherOffsetsPrivate]
                                .template ReinterpretCast<uint32_t>();
+            for (uint32_t row = 0; row < Shape::kChunkRows; ++row) {
+                offsets.SetValue(row, row * 32U);
+            }
+            AscendC::SetFlag<AscendC::HardEvent::S_V>(scalarWrite_);
+            AscendC::WaitFlag<AscendC::HardEvent::S_V>(scalarWrite_);
             AscendC::Gather(beta, betaStrided, offsets,
                             static_cast<uint32_t>(0), chunk.validRows);
             AscendC::PipeBarrier<PIPE_V>();
@@ -1092,9 +1090,9 @@ private:
         constexpr float clampMax = Domain::StoredBound(base2Max);
         // 共享 scratch 8 KiB 切成两块 8 行 FP32：factor 存参考行差值取指后的
         // 指数因子，stage 存 BF16 输入展开的 FP32 落位。
-        // 注意 scratch 末尾 0x1F00 起是 sequence-major 场景的 beta gather
-        // 偏移表，本 Stage 只使用前 7 KiB，因此每块最多 7 行 FP32。
-        constexpr uint32_t kTileRows = 7;
+        // beta gather 偏移表已移到 private 槽尾部，scratch 可整块使用；
+        // 每块 8 行 FP32（factor + stage 各 4 KiB）。
+        constexpr uint32_t kTileRows = 8;
         constexpr uint32_t kTileElems = kTileRows * Shape::kHeadDim;
         auto factor = scratch;
         auto stage = scratch[kTileElems];
@@ -1436,9 +1434,8 @@ private:
             Domain::StoredBound(ExpDomain::kV6UpperBase2);
         // 同样的公式按整块（8 行）下发，逐行只影响行列步长参数，
         // 数学与舍入顺序与逐行版本完全一致。
-        // 与 V1 相同：共享 scratch 前 7 KiB 可用（0x1F00 起是 beta gather
-        // 偏移表），因此每块 7 行 FP32。
-        constexpr uint32_t kTileRows = 7;
+        // 与 V1 相同：beta gather 偏移表已移出 scratch，每块 8 行 FP32。
+        constexpr uint32_t kTileRows = 8;
         constexpr uint32_t kTileElems = kTileRows * Shape::kHeadDim;
         auto factor = scratch;
         auto stage = scratch[kTileElems];

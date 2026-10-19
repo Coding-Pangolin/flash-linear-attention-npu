@@ -388,12 +388,13 @@ private:
         auto g = ub[Arch22Ub::kSharedG].template ReinterpretCast<float>();
         auto scratch = ub[Arch22Ub::kSharedScratch].template ReinterpretCast<float>();
         auto scratchTail = ub[Arch22Ub::kScratchTail].template ReinterpretCast<float>();
+        auto bandDelta = ub[base + Arch22Ub::kBandDelta].template ReinterpretCast<float>();
         // 唯一一次 VF：按四个 16 行中点广播 Gref，生成 Qplus/Kplus 和
         // 16/32/48/64 行 Kminus；Gref 不物化为矩阵。
         // SIMD 路径按 USE_EXP2 选择等价截断域；仅 log2 分支乘 ln(2)，
         // 两个分支最终都调用自然底 Exp。
         V1Vf(qHat, kHat, qPlus, kPlus, kMinus, g, scratch, scratchTail,
-             chunk.validRows);
+             bandDelta, chunk.validRows);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(sharedFree_);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
         AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
@@ -1085,7 +1086,8 @@ private:
         AscendC::LocalTensor<bfloat16_t> kMinus,
         AscendC::LocalTensor<float> g,
         AscendC::LocalTensor<float> scratch,
-        AscendC::LocalTensor<float> stageBuf, uint32_t validRows)
+        AscendC::LocalTensor<float> stageBuf,
+        AscendC::LocalTensor<float> bandDeltaBuf, uint32_t validRows)
     {
         constexpr float base2Min = ExpDomain::kV1Bf16LowerBase2;
         constexpr float base2Max = ExpDomain::kV1Bf16UpperBase2;
@@ -1117,37 +1119,79 @@ private:
                                Shape::kPrefixRows[s] * Shape::kHeadDim);
             AscendC::PipeBarrier<PIPE_V>();
         }
-        // Kminus 前缀整体按 8 行一块下发：参考行差值用行广播指令生成，
-        // 之后 clamp/缩放/Exp/Cast/Mul/Cast 全部是整块指令。
-        for (uint32_t s = 0; s < active; ++s) {
-            const uint32_t blockBegin = s * Shape::kSubChunkRows;
-            const uint32_t blockEnd = blockEnds[s];
-            auto kMinusBlock = kMinus[
-                (Arch22Ub::kKMinus[s] - Arch22Ub::kGateOrKMinus) /
-                sizeof(bfloat16_t)];
-            // 半开区间 [begin,end) 的中点取 floor((begin+end)/2)。
-            const uint32_t midpoint = (blockBegin + blockEnd) / 2;
-            const uint32_t prefix = blockEnd;
-            for (uint32_t rowBegin = 0; rowBegin < prefix;
-                 rowBegin += kTileRows) {
-                const uint32_t rows = prefix - rowBegin < kTileRows
-                                          ? prefix - rowBegin
-                                          : kTileRows;
-                const uint32_t elems = rows * Shape::kHeadDim;
-                SubRowMinusTile(factor, g[midpoint * Shape::kHeadDim],
-                                g[rowBegin * Shape::kHeadDim], rows);
+        // Kminus 前缀：band s 的列范围 [0,prefix(s)) 与 band s-1 高度重叠
+        // （160 行 vs 64 行唯一数据）。把「列 tile」放外层、「band」放内层：
+        // 同一列 tile 只算一次 exp 链，后续 band 用 fp32 因子乘
+        // exp(g[m_s]-g[m_{s-1}]) 递推。因子在 fp32 里递乘，最后仍只做一次
+        // bf16 舍入，数值与直接计算只差 fp32 级误差。
+        auto bandDelta = bandDeltaBuf;
+        for (uint32_t s = 1; s < active; ++s) {
+            const uint32_t prevBegin = (s - 1) * Shape::kSubChunkRows;
+            const uint32_t prevMid =
+                (prevBegin + blockEnds[s - 1]) / 2;
+            const uint32_t mid =
+                (s * Shape::kSubChunkRows + blockEnds[s]) / 2;
+            auto delta = bandDelta[(s - 1) * Shape::kHeadDim];
+            SubRowMinusTile(delta, g[mid * Shape::kHeadDim],
+                            g[prevMid * Shape::kHeadDim], 1);
+            AscendC::PipeBarrier<PIPE_V>();
+            AscendC::Maxs(delta, delta, clampMin, Shape::kHeadDim);
+            AscendC::PipeBarrier<PIPE_V>();
+            AscendC::Mins(delta, delta, clampMax, Shape::kHeadDim);
+            AscendC::PipeBarrier<PIPE_V>();
+            if constexpr (Domain::useExp2) {
+                AscendC::Muls(delta, delta, Domain::expInputScale,
+                              Shape::kHeadDim);
                 AscendC::PipeBarrier<PIPE_V>();
-                AscendC::Maxs(factor, factor, clampMin, elems);
-                AscendC::PipeBarrier<PIPE_V>();
-                AscendC::Mins(factor, factor, clampMax, elems);
-                AscendC::PipeBarrier<PIPE_V>();
-                if constexpr (Domain::useExp2) {
-                    AscendC::Muls(factor, factor, Domain::expInputScale,
-                                  elems);
+            }
+            AscendC::Exp(delta, delta, Shape::kHeadDim);
+            AscendC::PipeBarrier<PIPE_V>();
+        }
+        const uint8_t kFp32RowStride =
+            static_cast<uint8_t>(Shape::kHeadDim * sizeof(float) / 32);
+        const uint32_t tileCount = CeilDiv(validRows, kTileRows);
+        for (uint32_t tile = 0; tile < tileCount; ++tile) {
+            const uint32_t rowBegin = tile * kTileRows;
+            const uint32_t rows = validRows - rowBegin < kTileRows
+                                      ? validRows - rowBegin
+                                      : kTileRows;
+            const uint32_t elems = rows * Shape::kHeadDim;
+            for (uint32_t s = tile; s < active; ++s) {
+                const uint32_t blockBegin = s * Shape::kSubChunkRows;
+                const uint32_t blockEnd = blockEnds[s];
+                const uint32_t midpoint = (blockBegin + blockEnd) / 2;
+                auto kMinusBlock = kMinus[
+                    (Arch22Ub::kKMinus[s] - Arch22Ub::kGateOrKMinus) /
+                    sizeof(bfloat16_t)];
+                if (s == tile) {
+                    SubRowMinusTile(factor, g[midpoint * Shape::kHeadDim],
+                                    g[rowBegin * Shape::kHeadDim], rows);
+                    AscendC::PipeBarrier<PIPE_V>();
+                    AscendC::Maxs(factor, factor, clampMin, elems);
+                    AscendC::PipeBarrier<PIPE_V>();
+                    AscendC::Mins(factor, factor, clampMax, elems);
+                    AscendC::PipeBarrier<PIPE_V>();
+                    if constexpr (Domain::useExp2) {
+                        AscendC::Muls(factor, factor,
+                                      Domain::expInputScale, elems);
+                        AscendC::PipeBarrier<PIPE_V>();
+                    }
+                    AscendC::Exp(factor, factor, elems);
+                    AscendC::PipeBarrier<PIPE_V>();
+                } else {
+                    // factor *= exp(g[m_s]-g[m_{s-1}])，逐行广播同一个
+                    // 128-lane 向量。
+                    auto delta = bandDelta[(s - 1) * Shape::kHeadDim];
+                    AscendC::Mul(factor, delta, factor, 64,
+                                 static_cast<uint8_t>(rows),
+                                 {1, 1, 1, kFp32RowStride, 0,
+                                  kFp32RowStride});
+                    AscendC::Mul(factor[64], delta[64], factor[64], 64,
+                                 static_cast<uint8_t>(rows),
+                                 {1, 1, 1, kFp32RowStride, 0,
+                                  kFp32RowStride});
                     AscendC::PipeBarrier<PIPE_V>();
                 }
-                AscendC::Exp(factor, factor, elems);
-                AscendC::PipeBarrier<PIPE_V>();
                 AscendC::Cast(stage, kHat[rowBegin * Shape::kHeadDim],
                               AscendC::RoundMode::CAST_NONE, elems);
                 AscendC::PipeBarrier<PIPE_V>();

@@ -279,6 +279,9 @@ constexpr uint32_t kBetaGatherOffsets = kSharedScratch + 0x1F00;
 // 第一个 private 槽的尾部，释放共享 scratch 的 0x1F00 限制，
 // 使 V1/V6 的 FP32 tile 可以从 7 行提升到 8 行。
 constexpr uint32_t kBetaGatherOffsetsPrivate = 0x11300;
+// band 之间的参考行比值 exp(g[m_s]-g[m_{s-1}])，3 个 128-vector（1.5 KiB）。
+// 0x11400..0x12000 在 private 槽里未被其它状态使用。
+constexpr uint32_t kBandDelta = 0x11400;
 
 constexpr uint32_t kV3Aqk = 0x0000;
 constexpr uint32_t kV3Lkk = 0x2000;

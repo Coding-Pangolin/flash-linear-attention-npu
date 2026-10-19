@@ -371,8 +371,18 @@ private:
                                     chunk.validRows * sizeof(float)),
                              0, 0, 0});
         }
-        AscendC::DataCopy(gkGm_[headOutputOffset], g,
-                          chunk.validRows * Shape::kHeadDim);
+        // g 内部按自然对数单位存放；gk 输出契约仍是 log2 域，这里换算一次。
+        if constexpr (Domain::useExp2) {
+            auto gkStage = ub[base + Arch22Ub::kGateOrKMinus]
+                               .template ReinterpretCast<float>();
+            const uint32_t gkCount = chunk.validRows * Shape::kHeadDim;
+            AscendC::Muls(gkStage, g, Domain::stepScale, gkCount);
+            AscendC::PipeBarrier<PIPE_V>();
+            AscendC::DataCopy(gkGm_[headOutputOffset], gkStage, gkCount);
+        } else {
+            AscendC::DataCopy(gkGm_[headOutputOffset], g,
+                              chunk.validRows * Shape::kHeadDim);
+        }
         AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(mte3ToV_[pair]);
     }
 
@@ -560,6 +570,13 @@ private:
             AscendC::DataCopyPadExtParams<bfloat16_t>{false, 0, 0, 0});
         AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
+        if constexpr (Domain::useExp2) {
+            // gk 从 GM 取回的是 log2 域（公开契约），内部统一转成自然对数，
+            // 这样 V6 的 8 个 tile 都省掉一次 ×ln2。
+            AscendC::Muls(g, g, Domain::expInputScale,
+                          chunk.validRows * Shape::kHeadDim);
+            AscendC::PipeBarrier<PIPE_V>();
+        }
         // 本 Stage 一次生成 qg、qgScaled、kg、两次舍入的 K_beta_g 和
         // V_beta；两条编译路径先在对应域截断，再统一调用自然底 Exp。
         V6Vf(qg, qgScaled, kg, vBeta, kBetaG, g, betaEff, scratch,
@@ -1063,10 +1080,8 @@ private:
             }
             AscendC::PipeBarrier<PIPE_V>();
         }
-        if constexpr (Domain::useExp2) {
-            AscendC::Muls(g, g, Domain::stepScale, count);
-            AscendC::PipeBarrier<PIPE_V>();
-        }
+        // gate 统一按自然对数单位存放：exp2 域只在写出 gk 时做一次换算，
+        // 省掉 V1/V6 里每个 tile 各一次的 ×ln2。
         // P3-B：token 维前缀和改成 Hillis-Steele 对数扫描。
         // 原来 63 步"逐行 Add + 1 个屏障"= 63 次流水排空（屏蔽实测 333 µs）；
         // 现在 log2(validRows) 轮、每轮 2 条块指令 + 1 个屏障，源/目的在
@@ -1168,11 +1183,7 @@ private:
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Mins(delta, delta, clampMax, Shape::kHeadDim);
             AscendC::PipeBarrier<PIPE_V>();
-            if constexpr (Domain::useExp2) {
-                AscendC::Muls(delta, delta, Domain::expInputScale,
-                              Shape::kHeadDim);
-                AscendC::PipeBarrier<PIPE_V>();
-            }
+            // g 已是自然单位，直接 exp。
             AscendC::Exp(delta, delta, Shape::kHeadDim);
             AscendC::PipeBarrier<PIPE_V>();
         }
@@ -1200,11 +1211,7 @@ private:
                     AscendC::PipeBarrier<PIPE_V>();
                     AscendC::Mins(factor, factor, clampMax, elems);
                     AscendC::PipeBarrier<PIPE_V>();
-                    if constexpr (Domain::useExp2) {
-                        AscendC::Muls(factor, factor,
-                                      Domain::expInputScale, elems);
-                        AscendC::PipeBarrier<PIPE_V>();
-                    }
+                    // g 已是自然单位。
                     AscendC::Exp(factor, factor, elems);
                     AscendC::PipeBarrier<PIPE_V>();
                 } else {
@@ -1251,12 +1258,7 @@ private:
                 AscendC::PipeBarrier<PIPE_V>();
                 AscendC::Mins(factor, factor, clampMax, elems);
                 AscendC::PipeBarrier<PIPE_V>();
-                // SIMD 侧统一调用自然 Exp；log2 域显式换算，ln 域直接计算。
-                if constexpr (Domain::useExp2) {
-                    AscendC::Muls(factor, factor, Domain::expInputScale,
-                                  elems);
-                    AscendC::PipeBarrier<PIPE_V>();
-                }
+                // g 已是自然单位，直接 Exp。
                 AscendC::Exp(factor, factor, elems);
                 AscendC::PipeBarrier<PIPE_V>();
                 AscendC::Cast(stage, qHat[rowBegin * Shape::kHeadDim],
@@ -1529,10 +1531,6 @@ private:
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Mins(factor, factor, directMax, elems);
             AscendC::PipeBarrier<PIPE_V>();
-            if constexpr (Domain::useExp2) {
-                AscendC::Muls(factor, factor, Domain::expInputScale, elems);
-                AscendC::PipeBarrier<PIPE_V>();
-            }
             AscendC::Exp(factor, factor, elems);
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Cast(stage, qg[offset], AscendC::RoundMode::CAST_NONE,
@@ -1559,10 +1557,6 @@ private:
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Mins(factor, factor, directMax, elems);
             AscendC::PipeBarrier<PIPE_V>();
-            if constexpr (Domain::useExp2) {
-                AscendC::Muls(factor, factor, Domain::expInputScale, elems);
-                AscendC::PipeBarrier<PIPE_V>();
-            }
             AscendC::Exp(factor, factor, elems);
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Cast(stage, kg[offset], AscendC::RoundMode::CAST_NONE,

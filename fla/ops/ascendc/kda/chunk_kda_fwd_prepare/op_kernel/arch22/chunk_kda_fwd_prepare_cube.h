@@ -130,8 +130,6 @@ public:
                             StageC4(chunk, localHead);
                         }
                     }
-                    AscendC::CrossCoreSetFlag<0x2, PIPE_MTE2>(
-                        kFreeFlagId[pair]);
                 }
 
                 // C5：只在下半块存在时计算 Akk[32:M,0:32]=negX1@T。
@@ -146,8 +144,6 @@ public:
                 // C7：每个 pair 一次调用；先搬完两个 head 的 RHS 并归还
                 // workspace，再分别计算 W 与 U。
                 for (uint32_t pair = 0; pair < 2; ++pair) {
-                    AscendC::CrossCoreWaitFlag<0x2, PIPE_MTE2>(
-                        kReadyFlagId[pair]);
                     StageC7(chunk, groupBegin, activeHeads, pair,
                             kFreeFlagId[pair]);
                 }
@@ -568,11 +564,9 @@ private:
             AscendC::GlobalTensor<bfloat16_t> kBetaRelay;
             AscendC::GlobalTensor<bfloat16_t> vBetaRelay;
             kBetaRelay.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(
-                args_.workspace + slot + Workspace::kPayload +
-                Workspace::kKBetaG));
+                args_.workspace + slot + Workspace::kArch22RhsKBetaG));
             vBetaRelay.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(
-                args_.workspace + slot + Workspace::kPayload +
-                Workspace::kVBeta));
+                args_.workspace + slot + Workspace::kArch22RhsVBeta));
             AscendC::DataCopy(kBetaL1, kBetaRelay, rhsCopy);
             AscendC::DataCopy(vBetaL1, vBetaRelay, rhsCopy);
         }

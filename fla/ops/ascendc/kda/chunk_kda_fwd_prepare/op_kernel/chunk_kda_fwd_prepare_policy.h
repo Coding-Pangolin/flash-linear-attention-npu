@@ -150,8 +150,15 @@ constexpr uint32_t kArch35SlotStride = kSlotStride;
 constexpr uint32_t kArch22CubeRelay = 0x1A400;
 constexpr uint32_t kArch22RawScoreBytes = 0x5000;
 constexpr uint32_t kArch22TRelay = kArch22CubeRelay;
-constexpr uint32_t kArch22SlotStride =
+// Arch22：V6→C7 的 RHS（K_beta_g/V_beta）使用 slot 尾部独立 32 KiB，
+// 不再与 V1 payload 复用地址；这样 V6 可以前移到 C2 之前。
+constexpr uint32_t kArch22RhsBase =
     kArch22CubeRelay + kArch22RawScoreBytes;
+constexpr uint32_t kArch22RhsMatrixBytes = 0x4000; // [64,128] * BF16
+constexpr uint32_t kArch22RhsKBetaG = kArch22RhsBase;
+constexpr uint32_t kArch22RhsVBeta = kArch22RhsBase + kArch22RhsMatrixBytes;
+constexpr uint32_t kArch22RhsBytes = 2 * kArch22RhsMatrixBytes;
+constexpr uint32_t kArch22SlotStride = kArch22RhsBase + kArch22RhsBytes;
 
 // payload 在不同 Stage 原址换义，不在 UB/L1 内搬位。
 constexpr uint32_t kX0 = 0x0000;

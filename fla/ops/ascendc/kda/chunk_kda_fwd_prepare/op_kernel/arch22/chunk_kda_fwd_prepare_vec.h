@@ -150,6 +150,11 @@ public:
                         const uint32_t valueHead = groupBegin + localHead;
                         StageV0(chunk, valueHead, localHead, pair);
                         StageV1(chunk, localHead, pair);
+                        // 设计前移：qg/qgScaled/kg/K_beta/V_beta 只依赖
+                        // V0 的 qhat/khat/Z/beta，不依赖 C2/C4/C5；在
+                        // V1 的 payload 落 GM 后立即计算，C7 的 RHS 在
+                        // C2 之前就绪，不再占用 C5 之后的第三轮。
+                        StageV6(chunk, valueHead, localHead, pair);
                     }
                     // 尾部无任务的 AIV 仍参加集合，但不计算地址或访问 GM。
                     AscendC::CrossCoreSetFlag<0x2, PIPE_MTE3>(
@@ -162,17 +167,6 @@ public:
                     if (localHead < activeHeads) {
                         const uint32_t valueHead = groupBegin + localHead;
                         StageV3(chunk, valueHead, localHead, pair);
-                    }
-                    AscendC::CrossCoreSetFlag<0x2, PIPE_MTE3>(
-                        kReadyFlagId[pair]);
-                }
-                for (uint32_t pair = 0; pair < 2; ++pair) {
-                    const uint32_t localHead = pair * 2 + aiv_;
-                    AscendC::CrossCoreWaitFlag<0x2, PIPE_MTE2>(
-                        kFreeFlagId[pair]);
-                    if (localHead < activeHeads) {
-                        const uint32_t valueHead = groupBegin + localHead;
-                        StageV6(chunk, valueHead, localHead, pair);
                     }
                     AscendC::CrossCoreSetFlag<0x2, PIPE_MTE3>(
                         kReadyFlagId[pair]);
@@ -579,11 +573,9 @@ private:
         AscendC::GlobalTensor<bfloat16_t> kBetaRelay;
         AscendC::GlobalTensor<bfloat16_t> vBetaRelay;
         kBetaRelay.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(
-            args_.workspace + slot + Workspace::kPayload +
-            Workspace::kKBetaG));
+            args_.workspace + slot + Workspace::kArch22RhsKBetaG));
         vBetaRelay.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(
-            args_.workspace + slot + Workspace::kPayload +
-            Workspace::kVBeta));
+            args_.workspace + slot + Workspace::kArch22RhsVBeta));
         AscendC::DataCopy(kBetaRelay, kBetaG, rhsRows * Shape::kHeadDim);
         AscendC::DataCopy(vBetaRelay, vBeta, rhsRows * Shape::kValueDim);
         AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(ioFree_[pair]);

@@ -313,7 +313,9 @@ private:
         // tileBuf 复用 kMinus 所在的私有区（V1 之前未被使用；BF16 gate
         // 场景下 gate 自身也在此区，但已整体 Cast 到 g，可以安全复用）。
         V0Vf(q, k, qRstd, kRstd, gate, beta, betaEff, dtBias, aLog, g,
-             scratch, ub[base + Arch22Ub::kGateOrKMinus]
+             scratch,
+             ub[Arch22Ub::kScratchTail].template ReinterpretCast<float>(),
+             ub[base + Arch22Ub::kGateOrKMinus]
                           .template ReinterpretCast<float>(),
              chunk.validRows);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
@@ -716,7 +718,8 @@ private:
         AscendC::LocalTensor<bfloat16_t> src,
         AscendC::LocalTensor<float> rstdOut,
         AscendC::LocalTensor<float> staging,
-        AscendC::LocalTensor<float> workspace, uint32_t validRows)
+        AscendC::LocalTensor<float> workspace,
+        AscendC::LocalTensor<float> scaleBuf, uint32_t validRows)
     {
         constexpr uint32_t kRepeatLanes = 64;                // 一个 vector repeat
         constexpr uint32_t kRowBlocks = Shape::kHeadDim / 8; // 16 个 32B block/行
@@ -807,11 +810,16 @@ private:
         // 去掉 64 次标量 GetValue 与 64 条逐行 Muls/Cast；数学不变（结果应逐位一致）。
         // 缓冲区：workspace 共 2048 fp32，这里用 [640,1152) 与 [1152,1600)。
         auto brcbScalars = workspace[640];       // 64 blocks = 512 fp32
-        auto repeatScalars = workspace[1152];    // 7 行 x 8 block = 448 fp32
+        // 展开表放在 UB 尾部 8 KiB（V0 阶段 V1/V6 尚未使用），每 tile 16 行，
+        // 把 8-block 展开的 DataCopy 调用数从 80 降到 32。
+        auto repeatScalars = scaleBuf;           // 16 行 x 8 block = 1024 fp32
         AscendC::Brcb(brcbScalars, rstdOut,
                       static_cast<uint8_t>(Shape::kChunkRows / 8), {1, 8});
         AscendC::PipeBarrier<PIPE_V>();
-        constexpr uint32_t kScaleRows = 7;
+        // 单/双 chunk 是纯延迟场景，16 行 tile 在这里反而更慢（实测 T64 +33%）；
+        // 大规模吞吐场景才用 16 行。
+        const uint32_t kScaleRows =
+            args_.tiling.totalChunks <= 2 ? 7U : 16U;
         for (uint32_t rowBegin = 0; rowBegin < validRows;
              rowBegin += kScaleRows) {
             const uint32_t rows = validRows - rowBegin < kScaleRows
@@ -915,6 +923,7 @@ private:
         AscendC::LocalTensor<float> betaEff, AscendC::LocalTensor<float> dtBias,
         AscendC::LocalTensor<float> aLog, AscendC::LocalTensor<float> g,
         AscendC::LocalTensor<float> scratch,
+        AscendC::LocalTensor<float> scaleBuf,
         AscendC::LocalTensor<float> tileBuf, uint32_t validRows)
     {
         const uint32_t count = validRows * Shape::kHeadDim;
@@ -923,8 +932,10 @@ private:
             // 用 V1 之前空闲的 kGateOrKMinus 私有区；GDN（BF16 gate）的 gate
             // 本身就落在该私有区，改用尚未写入的共享 G 区。
             auto normStaging = (sizeof(GateT) == 4) ? tileBuf : g;
-            L2NormRowsBlock(q, qRstd, normStaging, scratch, validRows);
-            L2NormRowsBlock(k, kRstd, normStaging, scratch, validRows);
+            L2NormRowsBlock(q, qRstd, normStaging, scratch, scaleBuf,
+                            validRows);
+            L2NormRowsBlock(k, kRstd, normStaging, scratch, scaleBuf,
+                            validRows);
         } else {
             // 固定输出合同下 Identity 仍写确定值；反向关闭 L2Norm 时不会
             // 使用 rstd，但不能留下未初始化输出。

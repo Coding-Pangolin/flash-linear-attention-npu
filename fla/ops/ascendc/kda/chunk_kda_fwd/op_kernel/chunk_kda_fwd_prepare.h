@@ -63,6 +63,14 @@ constexpr uint32_t KDA_SOLVE_DIAG_MCH_ITERS = 3;
 constexpr uint32_t KDA_SCORE_REF_BC = 32;
 constexpr uint32_t KDA_SAFE_SCORE_REF_BC = 32;
 constexpr uint32_t KDA_VEC_ARENA_ELEMENTS = 32768;
+// FP32 计分因子缓冲的 arena 起点：必须避开 solve 路径使用的
+// [0, 3*KDA_SOLVE_MATRIX_ELEMENTS + 2*KDA_SOLVE_BT + 512) 区间，
+// 以及 ScaleRowsByBeta 的 fp32 typed 区（自 20480 起）；
+// chunk=128 时 PrepareAqkAkkSolveInputRows 最多用到
+// 3*(BT_*BT_) + 2*BT_ + 512 ≈ 25344 float，因此因子缓冲放到
+// 25344 之上的空隙（掩码区从 120 KiB = 30720 float 开始）。
+constexpr uint32_t KDA_FACTOR_ARENA_OFFSET = 26624;
+constexpr uint32_t KDA_FACTOR_ARENA_WINDOW = 30720 - KDA_FACTOR_ARENA_OFFSET;
 constexpr uint32_t KDA_BITS_PER_MASK_BYTE = 8;
 constexpr uint32_t KDA_SELECT_COL_BLOCKS = 2;
 constexpr uint32_t KDA_SELECT_COL_MASK_BYTES = KDA_SOLVE_MATRIX_ELEMENTS / KDA_BITS_PER_MASK_BYTE;
@@ -100,7 +108,9 @@ static_assert(KdaScoreDispatchPolicy::L1B_STAGES == 1,
 using KdaSolveDispatchPolicy = Catlass::Gemm::MmadPingpong<KdaArchTag, true, false>;
 static_assert(!KdaSolveDispatchPolicy::USE_HF32_MODE, "KDA triangular solve must use IEEE FP32 Cube mode");
 using KdaL1TileShape = tla::Shape<KdaInt64, KdaInt128, KdaInt128>;
-using KdaL0TileShape = KdaL1TileShape;
+// 计分因子按 FP32 存放后 L0A/L0B 每元素字节数翻倍，L0 的 K 维收敛到 64，
+// 使 2 段流水仍能装下（L0B = 64*128*4 = 32 KiB 每段）。
+using KdaL0TileShape = tla::Shape<KdaInt64, KdaInt128, KdaInt64>;
 using KdaSolveL1TileShape = tla::Shape<KdaInt64, KdaInt64, KdaInt64>;
 using KdaSolveL0TileShape = KdaSolveL1TileShape;
 
@@ -164,8 +174,13 @@ class ChunkKdaFwdPrepareKernel {
 public:
     using OUT_T = T;
     using AKK_T = float;
-    using SCORE_T =
-        std::conditional_t<SAFE_GATE && IsSameType<T, half>::value, bfloat16_t, T>;
+    // 计分因子（QG/W/KG）按 FP32 存放并参与 cube 计分。
+    // 按输入 dtype（fp16）或 bf16 存放时，单个因子只有 8~11 bit 尾数，
+    // k_i*2^(g_i-ref) 与 k_j*2^(ref-g_j) 的对消、以及计分矩阵本身都只有
+    // ~2^-8 相对精度；WY 逆矩阵（Akk）对小值域元素极其敏感，会把该扰动
+    // 放大到超出双标杆允许的最大相对误差比例。FP32 存放后算子侧精度
+    // 优于“同精度标杆模型”，Akk 及下游 w/u 的双标杆比值显著下降。
+    using SCORE_T = float;
     template <typename TilingData>
     __aicore__ inline void Init(GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR gk, GM_ADDR beta, GM_ADDR initialState,
                                 GM_ADDR cuSeqlens, GM_ADDR chunkIndices, GM_ADDR preparedQG, GM_ADDR preparedAqk,
@@ -411,10 +426,11 @@ private:
 
     __aicore__ inline void ClampScoreExpInput(LocalTensor<float> &tensor, uint32_t count)
     {
+        // 只有 fp16 存放需要收窄夹取范围；bf16 与 fp32 的指数域都足够宽。
         constexpr float expInputMax =
-            IsSameType<SCORE_T, bfloat16_t>::value ? KDA_SCORE_EXP_INPUT_MAX : KDA_EXP_INPUT_MAX;
+            IsSameType<SCORE_T, half>::value ? KDA_EXP_INPUT_MAX : KDA_SCORE_EXP_INPUT_MAX;
         constexpr float expInputMin =
-            IsSameType<SCORE_T, bfloat16_t>::value ? KDA_SCORE_EXP_INPUT_MIN : KDA_EXP_INPUT_MIN;
+            IsSameType<SCORE_T, half>::value ? KDA_EXP_INPUT_MIN : KDA_SCORE_EXP_INPUT_MIN;
         Mins(tensor, tensor, expInputMax, count);
         PipeBarrier<PIPE_V>();
         Maxs(tensor, tensor, expInputMin, count);
@@ -516,7 +532,17 @@ private:
         uint64_t bytesPerRow =
             K_ * KDA_GATE_PIPELINE_DEPTH * (3 * sizeof(T) + sizeof(GK_T));
         uint64_t rows = bytesPerRow == 0 ? 0 : availableBytes / bytesPerRow;
-        return rows < KDA_GATE_TILE_ROWS ? rows : KDA_GATE_TILE_ROWS;
+        rows = rows < KDA_GATE_TILE_ROWS ? rows : KDA_GATE_TILE_ROWS;
+        // 计分因子（qScore/wScore/kgScore 三块）需落在 KDA_FACTOR_ARENA_WINDOW
+        // 之内，因此按窗口反推每个 tile 的行数上限；行数变化不影响逐元素因子
+        // 数值，只影响流水切分粒度。
+        if (K_ != 0) {
+            const uint64_t windowRows = KDA_FACTOR_ARENA_WINDOW / (3 * K_);
+            if (rows > windowRows) {
+                rows = windowRows;
+            }
+        }
+        return rows;
     }
 
     __aicore__ inline uint64_t GateInputSlotBytes() const
@@ -713,8 +739,6 @@ private:
             uint64_t elems = tileRows * K_;
             LocalTensor<T> qTyped = GateQTyped(qwSlot);
             LocalTensor<T> kTyped = GateKTyped(qwSlot);
-            LocalTensor<SCORE_T> qScore = qTyped.template ReinterpretCast<SCORE_T>();
-            LocalTensor<SCORE_T> kScore = kTyped.template ReinterpretCast<SCORE_T>();
             LocalTensor<GK_T> gateTyped = GateGTyped(qwSlot);
             LocalTensor<float> arena = vecBuf_.Get<float>();
             LocalTensor<float> qFp32 = arena;
@@ -722,8 +746,15 @@ private:
             LocalTensor<float> gFp32 = arena[2 * elems];
             LocalTensor<float> expFp32 = arena[3 * elems];
             LocalTensor<float> outFp32 = arena[4 * elems];
+            // 计分因子单独使用 FP32 缓冲，不再复用输入 dtype 的 gate 暂存区。
+            LocalTensor<SCORE_T> qScore = arena[KDA_FACTOR_ARENA_OFFSET];
+            LocalTensor<SCORE_T> kScore = arena[KDA_FACTOR_ARENA_OFFSET + elems];
 
             WaitGateInputReady();
+            // 计分因子使用固定地址的 fp32 缓冲（不再借 gate slot 双缓冲），
+            // 写入前必须等上一块的 MTE3 写出完成，否则存在 WAR 竞争。
+            SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+            WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
             Cast(qFp32, qTyped, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
             Cast(kFp32, kTyped, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
             if constexpr (IsSameType<GK_T, float>::value) {
@@ -756,12 +787,12 @@ private:
             Mul(outFp32, qFp32, expFp32, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
             ClampFp32ForCast<SCORE_T>(outFp32, static_cast<uint32_t>(elems));
-            Cast(qScore, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
+            CopyLocalFloat(qScore, outFp32, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
             Mul(outFp32, kFp32, expFp32, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
             ClampFp32ForCast<SCORE_T>(outFp32, static_cast<uint32_t>(elems));
-            Cast(kScore, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
+            CopyLocalFloat(kScore, outFp32, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
 
             if (qwOutputPending) {
@@ -781,6 +812,9 @@ private:
             WaitGateOutputForMte2();
             WaitGateOutputForVector();
         }
+        // 因子的固定缓冲后续会被 solve 路径复用：段尾必须等 MTE3 排空（WAR）。
+        SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+        WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
 
         uint64_t kgBegin = (validColEnd * subBlockIdx) / subBlockNum;
         uint64_t kgEnd = (validColEnd * (subBlockIdx + 1)) / subBlockNum;
@@ -801,15 +835,18 @@ private:
             }
             uint64_t elems = tileRows * K_;
             LocalTensor<T> kTyped = GateQTyped(kgSlot);
-            LocalTensor<SCORE_T> kgScore = kTyped.template ReinterpretCast<SCORE_T>();
             LocalTensor<GK_T> gateTyped = GateGTyped(kgSlot);
             LocalTensor<float> arena = vecBuf_.Get<float>();
             LocalTensor<float> kFp32 = arena;
             LocalTensor<float> gFp32 = arena[elems];
             LocalTensor<float> expFp32 = arena[2 * elems];
             LocalTensor<float> outFp32 = arena[3 * elems];
+            LocalTensor<SCORE_T> kgScore = arena[KDA_FACTOR_ARENA_OFFSET];
 
             WaitGateInputReady();
+            // 同上：kg 因子缓冲固定复用，写前等上一块的 MTE3 写出完成。
+            SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+            WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
             Cast(kFp32, kTyped, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
             if constexpr (IsSameType<GK_T, float>::value) {
                 gFp32 = gateTyped;
@@ -840,7 +877,7 @@ private:
             Mul(outFp32, kFp32, expFp32, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
             ClampFp32ForCast<SCORE_T>(outFp32, static_cast<uint32_t>(elems));
-            Cast(kgScore, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
+            CopyLocalFloat(kgScore, outFp32, static_cast<uint32_t>(elems));
             PipeBarrier<PIPE_V>();
 
             if (kgOutputPending) {
@@ -858,6 +895,9 @@ private:
             WaitGateOutputForMte2();
             WaitGateOutputForVector();
         }
+        // 同上：kg 因子段尾排空 MTE3，避免后续 solve 复用该缓冲造成 WAR。
+        SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+        WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
     }
 
     __aicore__ inline void PrepareGateProductsBulk(uint64_t b, uint64_t h, uint64_t hv, uint64_t start,
@@ -902,9 +942,6 @@ private:
             LocalTensor<T> qTyped = GateQTyped(gateSlot);
             LocalTensor<T> kTyped = GateKTyped(gateSlot);
             LocalTensor<T> kgTyped = GateKgTyped(gateSlot);
-            LocalTensor<SCORE_T> qScore = qTyped.template ReinterpretCast<SCORE_T>();
-            LocalTensor<SCORE_T> wScore = kTyped.template ReinterpretCast<SCORE_T>();
-            LocalTensor<SCORE_T> kgScore = kgTyped.template ReinterpretCast<SCORE_T>();
             LocalTensor<GK_T> gateTyped = GateGTyped(gateSlot);
             LocalTensor<float> arena = vecBuf_.Get<float>();
             LocalTensor<float> qFp32 = arena;
@@ -912,9 +949,17 @@ private:
             LocalTensor<float> gFp32 = arena[2 * elems];
             LocalTensor<float> expFp32 = arena[3 * elems];
             LocalTensor<float> outFp32 = arena[4 * elems];
+            // score-scratch 分支把 FP32 计分因子写到独立缓冲；
+            // 非 scratch 分支仍把输出（qg/w/kg）写回输入 dtype 的 gate 暂存区。
+            LocalTensor<SCORE_T> qScore = arena[KDA_FACTOR_ARENA_OFFSET];
+            LocalTensor<SCORE_T> wScore = arena[KDA_FACTOR_ARENA_OFFSET + elems];
+            LocalTensor<SCORE_T> kgScore = arena[KDA_FACTOR_ARENA_OFFSET + 2 * elems];
 
             uint64_t token = start + tileRow;
             WaitGateInputReady();
+            // 同上：qg/w/kg 因子缓冲固定复用，写前等上一块的 MTE3 写出完成。
+            SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+            WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
             Cast(qFp32, qTyped, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
             Cast(kFp32, kTyped, RoundMode::CAST_NONE, static_cast<uint32_t>(elems));
             if constexpr (IsSameType<GK_T, float>::value) {
@@ -957,7 +1002,7 @@ private:
             PipeBarrier<PIPE_V>();
             if (writeScoreScratch) {
                 ClampFp32ForCast<SCORE_T>(outFp32, static_cast<uint32_t>(elems));
-                Cast(qScore, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
+                CopyLocalFloat(qScore, outFp32, static_cast<uint32_t>(elems));
             } else {
                 ClampFp32ToOutputType(outFp32, static_cast<uint32_t>(elems));
                 Cast(qTyped, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
@@ -968,7 +1013,7 @@ private:
             PipeBarrier<PIPE_V>();
             if (writeScoreScratch) {
                 ClampFp32ForCast<SCORE_T>(outFp32, static_cast<uint32_t>(elems));
-                Cast(wScore, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
+                CopyLocalFloat(wScore, outFp32, static_cast<uint32_t>(elems));
             } else {
                 ClampFp32ToOutputType(outFp32, static_cast<uint32_t>(elems));
                 Cast(kTyped, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
@@ -1011,7 +1056,7 @@ private:
                 WaitGateOutputForVector();
             }
             if (writeScoreScratch) {
-                Cast(kgScore, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
+                CopyLocalFloat(kgScore, outFp32, static_cast<uint32_t>(elems));
             } else {
                 Cast(kgTyped, outFp32, RoundMode::CAST_RINT, static_cast<uint32_t>(elems));
             }
@@ -1039,6 +1084,9 @@ private:
             WaitGateOutputForMte2();
             WaitGateOutputForVector();
         }
+        // qg/w/kg 因子段尾同样排空 MTE3（缓冲随后被 solve 路径复用）。
+        SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+        WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
         return;
     }
 

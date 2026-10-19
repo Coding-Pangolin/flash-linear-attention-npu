@@ -151,7 +151,7 @@ constexpr uint32_t kArch22CubeRelay = 0x1A400;
 constexpr uint32_t kArch22RawScoreBytes = 0x5000;
 constexpr uint32_t kArch22TRelay = kArch22CubeRelay;
 // Arch22：V6→C7 的 RHS（K_beta_g/V_beta）使用 slot 尾部独立 32 KiB，
-// 不再与 V1 payload 复用地址；这样 V6 可以前移到 C2 之前。
+// 不再与 V1 payload 复用地址，避免 RHS 与 score payload 的地址重叠写。
 constexpr uint32_t kArch22RhsBase =
     kArch22CubeRelay + kArch22RawScoreBytes;
 constexpr uint32_t kArch22RhsMatrixBytes = 0x4000; // [64,128] * BF16

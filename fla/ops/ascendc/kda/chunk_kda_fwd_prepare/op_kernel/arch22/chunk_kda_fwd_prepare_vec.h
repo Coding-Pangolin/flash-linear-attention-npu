@@ -387,11 +387,12 @@ private:
         auto kMinus = ub[base + Arch22Ub::kGateOrKMinus].template ReinterpretCast<bfloat16_t>();
         auto g = ub[Arch22Ub::kSharedG].template ReinterpretCast<float>();
         auto scratch = ub[Arch22Ub::kSharedScratch].template ReinterpretCast<float>();
+        auto scratchTail = ub[Arch22Ub::kScratchTail].template ReinterpretCast<float>();
         // 唯一一次 VF：按四个 16 行中点广播 Gref，生成 Qplus/Kplus 和
         // 16/32/48/64 行 Kminus；Gref 不物化为矩阵。
         // SIMD 路径按 USE_EXP2 选择等价截断域；仅 log2 分支乘 ln(2)，
         // 两个分支最终都调用自然底 Exp。
-        V1Vf(qHat, kHat, qPlus, kPlus, kMinus, g, scratch,
+        V1Vf(qHat, kHat, qPlus, kPlus, kMinus, g, scratch, scratchTail,
              chunk.validRows);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(sharedFree_);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
@@ -519,6 +520,7 @@ private:
         auto kBetaG = ub[base + Arch22Ub::kV6KBetaG].template ReinterpretCast<bfloat16_t>();
         auto g = ub[Arch22Ub::kSharedG].template ReinterpretCast<float>();
         auto scratch = ub[Arch22Ub::kSharedScratch].template ReinterpretCast<float>();
+        auto scratchTail = ub[Arch22Ub::kScratchTail].template ReinterpretCast<float>();
         auto betaEff = ub[base + Arch22Ub::kBetaEff].template ReinterpretCast<float>();
         const uint64_t slot = WorkspaceSlotBase(
             workgroup_, localHead, Workspace::kArch22WorkgroupStride,
@@ -558,7 +560,7 @@ private:
         // 本 Stage 一次生成 qg、qgScaled、kg、两次舍入的 K_beta_g 和
         // V_beta；两条编译路径先在对应域截断，再统一调用自然底 Exp。
         V6Vf(qg, qgScaled, kg, vBeta, kBetaG, g, betaEff, scratch,
-             chunk.validRows, args_.tiling.scale);
+             scratchTail, chunk.validRows, args_.tiling.scale);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
         AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
         const uint64_t out =
@@ -1082,7 +1084,8 @@ private:
         AscendC::LocalTensor<bfloat16_t> kPlus,
         AscendC::LocalTensor<bfloat16_t> kMinus,
         AscendC::LocalTensor<float> g,
-        AscendC::LocalTensor<float> scratch, uint32_t validRows)
+        AscendC::LocalTensor<float> scratch,
+        AscendC::LocalTensor<float> stageBuf, uint32_t validRows)
     {
         constexpr float base2Min = ExpDomain::kV1Bf16LowerBase2;
         constexpr float base2Max = ExpDomain::kV1Bf16UpperBase2;
@@ -1092,10 +1095,10 @@ private:
         // 指数因子，stage 存 BF16 输入展开的 FP32 落位。
         // beta gather 偏移表已移到 private 槽尾部，scratch 可整块使用；
         // 每块 8 行 FP32（factor + stage 各 4 KiB）。
-        constexpr uint32_t kTileRows = 8;
+        constexpr uint32_t kTileRows = 16;
         constexpr uint32_t kTileElems = kTileRows * Shape::kHeadDim;
         auto factor = scratch;
-        auto stage = scratch[kTileElems];
+        auto stage = stageBuf;
         const uint32_t active = CeilDiv(validRows, Shape::kSubChunkRows);
         const uint32_t blockEnds[Shape::kSubChunkCount] = {
             validRows < 16 ? validRows : 16,
@@ -1413,7 +1416,8 @@ private:
         AscendC::LocalTensor<bfloat16_t> kBetaG,
         AscendC::LocalTensor<float> g,
         AscendC::LocalTensor<float> betaEff,
-        AscendC::LocalTensor<float> scratch, uint32_t validRows, float scale)
+        AscendC::LocalTensor<float> scratch,
+        AscendC::LocalTensor<float> stageBuf, uint32_t validRows, float scale)
     {
         const uint32_t rhsRows = validRows > 32 ? 64 : 32;
         if (validRows == 0) {
@@ -1435,10 +1439,10 @@ private:
         // 同样的公式按整块（8 行）下发，逐行只影响行列步长参数，
         // 数学与舍入顺序与逐行版本完全一致。
         // 与 V1 相同：beta gather 偏移表已移出 scratch，每块 8 行 FP32。
-        constexpr uint32_t kTileRows = 8;
+        constexpr uint32_t kTileRows = 16;
         constexpr uint32_t kTileElems = kTileRows * Shape::kHeadDim;
         auto factor = scratch;
-        auto stage = scratch[kTileElems];
+        auto stage = stageBuf;
         for (uint32_t rowBegin = 0; rowBegin < validRows;
              rowBegin += kTileRows) {
             const uint32_t rows = validRows - rowBegin < kTileRows

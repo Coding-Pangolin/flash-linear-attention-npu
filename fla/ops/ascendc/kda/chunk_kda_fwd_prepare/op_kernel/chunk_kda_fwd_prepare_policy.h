@@ -248,12 +248,17 @@ constexpr uint32_t kVfScratch = 0x1600;
 
 namespace Arch22Ub {
 constexpr uint32_t kHardwareBytes = 0x30000; // 192 KiB
-constexpr uint32_t kUsableBytes = 0x2E000;   // 末尾 8 KiB 保留
+// 实验 B：把原先保留的末尾 8 KiB 也纳入分配，供 V1/V6 的第二个 FP32
+// staging 使用（16 行 tile）。若 InitBuffer 拒绝或结果异常即回退。
+constexpr uint32_t kUsableBytes = 0x30000;
 constexpr uint32_t kPrivateBytes = 0x12000;
 constexpr uint32_t kPrivateBase[2] = {0x00000, 0x1C000};
 constexpr uint32_t kSharedBase = 0x12000;
 constexpr uint32_t kSharedG = kSharedBase;
 constexpr uint32_t kSharedScratch = kSharedBase + 0x8000;
+// 硬件预留尾区（0x2E000..0x30000）。实测未被运行时占用，V1/V6 用它做
+// 第二个 FP32 staging，从而把 tile 从 8 行提升到 16 行。
+constexpr uint32_t kScratchTail = 0x2E000;
 
 constexpr uint32_t kQ = 0x0000;
 constexpr uint32_t kK = 0x4000;

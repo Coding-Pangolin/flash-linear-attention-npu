@@ -850,26 +850,23 @@ private:
         constexpr uint8_t kLeafRepStride =
             static_cast<uint8_t>(kLeaf * sizeof(float) / 32);
         const uint32_t maxRows = topRows > bottomRows ? topRows : bottomRows;
+        // k=0 的系数先取好；之后每轮把「下一轮 Gather」与「本轮 Sub」放进
+        // 同一屏障区间（两者互不依赖），屏障数从 3/步降到 2/步。
+        if (topRows > 1) {
+            AscendC::Gather(coeffA, lkk, coeffOffset,
+                            static_cast<uint32_t>(baseA * sizeof(float)),
+                            (topRows - 1) * kLeaf);
+        }
+        if (bottomRows > 1) {
+            AscendC::Gather(coeffB, lkk, coeffOffset,
+                            static_cast<uint32_t>(baseB * sizeof(float)),
+                            (bottomRows - 1) * kLeaf);
+        }
+        AscendC::PipeBarrier<PIPE_V>();
         for (uint32_t k = 0; k + 1 < maxRows; ++k) {
             const uint32_t rowsA = k + 1 < topRows ? topRows - k - 1 : 0;
             const uint32_t rowsB =
                 k + 1 < bottomRows ? bottomRows - k - 1 : 0;
-            // 系数区：偏移表与 k 无关，只有基址随 k 前进（与单叶版本一致）。
-            if (rowsA > 0) {
-                AscendC::Gather(
-                    coeffA, lkk, coeffOffset,
-                    static_cast<uint32_t>(
-                        (baseA + (rowStride + 1) * k) * sizeof(float)),
-                    rowsA * kLeaf);
-            }
-            if (rowsB > 0) {
-                AscendC::Gather(
-                    coeffB, lkk, coeffOffset,
-                    static_cast<uint32_t>(
-                        (baseB + (rowStride + 1) * k) * sizeof(float)),
-                    rowsB * kLeaf);
-            }
-            AscendC::PipeBarrier<PIPE_V>();
             // src0 用 repStride=0 反复读本叶的 X[k,:]，src1 是逐行系数。
             if (rowsA > 0) {
                 AscendC::Mul(prodA, x0[k * kLeaf], coeffA, kLeaf,
@@ -889,6 +886,23 @@ private:
             if (rowsB > 0) {
                 AscendC::Sub(x1[(k + 1) * kLeaf], x1[(k + 1) * kLeaf], prodB,
                              static_cast<int32_t>(rowsB * kLeaf));
+            }
+            // 下一轮系数只依赖 lkk 与偏移表，与本次 Sub 无依赖。
+            const uint32_t nextA = k + 2 < topRows ? topRows - k - 2 : 0;
+            const uint32_t nextB = k + 2 < bottomRows ? bottomRows - k - 2 : 0;
+            if (nextA > 0) {
+                AscendC::Gather(
+                    coeffA, lkk, coeffOffset,
+                    static_cast<uint32_t>(
+                        (baseA + (rowStride + 1) * (k + 1)) * sizeof(float)),
+                    nextA * kLeaf);
+            }
+            if (nextB > 0) {
+                AscendC::Gather(
+                    coeffB, lkk, coeffOffset,
+                    static_cast<uint32_t>(
+                        (baseB + (rowStride + 1) * (k + 1)) * sizeof(float)),
+                    nextB * kLeaf);
             }
             AscendC::PipeBarrier<PIPE_V>();
         }
@@ -1111,13 +1125,17 @@ private:
 
         // Kplus 与 Khat 原位复用，所以必须先生成完四个 Kminus 前缀。
         // 否则后一个参考块会错误读取已经舍入成 Kplus 的数据。
-        for (uint32_t s = 0; s < Shape::kSubChunkCount; ++s) {
-            auto kMinusBlock = kMinus[
-                (Arch22Ub::kKMinus[s] - Arch22Ub::kGateOrKMinus) /
-                sizeof(bfloat16_t)];
-            AscendC::Duplicate(kMinusBlock, static_cast<bfloat16_t>(0),
-                               Shape::kPrefixRows[s] * Shape::kHeadDim);
-            AscendC::PipeBarrier<PIPE_V>();
+        // 整块 chunk 时每个 band 的 [0,prefix) 行都会被下面的 tile 循环写满，
+        // 只有尾 chunk 才需要预清零。
+        if (validRows < Shape::kChunkRows) {
+            for (uint32_t s = 0; s < Shape::kSubChunkCount; ++s) {
+                auto kMinusBlock = kMinus[
+                    (Arch22Ub::kKMinus[s] - Arch22Ub::kGateOrKMinus) /
+                    sizeof(bfloat16_t)];
+                AscendC::Duplicate(kMinusBlock, static_cast<bfloat16_t>(0),
+                                   Shape::kPrefixRows[s] * Shape::kHeadDim);
+                AscendC::PipeBarrier<PIPE_V>();
+            }
         }
         // Kminus 前缀：band s 的列范围 [0,prefix(s)) 与 band s-1 高度重叠
         // （160 行 vs 64 行唯一数据）。把「列 tile」放外层、「band」放内层：

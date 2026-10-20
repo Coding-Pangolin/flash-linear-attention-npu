@@ -255,6 +255,7 @@ private:
         AscendC::DataCopyPad(q, qGm_[qkOffset], qkCopy, qkPad);
         AscendC::DataCopyPad(k, kGm_[qkOffset], qkCopy, qkPad);
         AscendC::DataCopyExtParams gateCopy{static_cast<uint16_t>(chunk.validRows),
+#if 0  // DB-PROBE: drop gate/beta/dtbias/alog copies (timing-only spike)
             static_cast<uint32_t>(Shape::kHeadDim * sizeof(GateT)),
             gateStride, 0, 0};
         AscendC::DataCopyPadExtParams<GateT> gatePad{false, 0, 0, 0};
@@ -292,6 +293,7 @@ private:
                     fp32Pad);
             }
         }
+#endif  // DB-PROBE
         // AIC 预算的 q/k 行平方和：落在 V0 的 32 KiB FP32 staging 前 16 KiB，
         // 缩放阶段才会复用它，所以不需要额外 buffer。条件必须与 AIC 的
         // StageNormSums 完全一致，否则读到的是上一组残留。

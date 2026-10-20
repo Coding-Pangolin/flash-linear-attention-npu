@@ -35,7 +35,7 @@
 namespace KdaPrepare {
 
 // 诊断开关：AIV 是否消费 AIC 预算的 q/k 行平方和（0 时退回原向量 norm）。
-constexpr int kCubeNormBisect = 0;
+constexpr int kCubeNormBisect = 1;
 
 enum class QkNormMode : uint8_t {
     Identity = CHUNK_KDA_FWD_PREPARE_NORM_IDENTITY,

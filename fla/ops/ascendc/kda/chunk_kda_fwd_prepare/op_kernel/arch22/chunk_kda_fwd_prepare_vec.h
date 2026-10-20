@@ -895,24 +895,30 @@ private:
         }
     }
 
-    // AIC 预算的 2 个 32x32 Gram 块：取对角线（每块内步长 33 个 FP32）即
-    // 该 32 行的 |x|^2，再做 eps -> Sqrt -> 倒数得到 rstd。
+    // AIC 预算的 2 个 32x32 Gram 块：用对角掩码 + 行归约取出该 32 行的
+    // |x|^2（不使用 Gather：对角线步长 33 个 FP32 不是 32B 对齐），
+    // 再做 eps -> Sqrt -> 倒数得到 rstd。
     __aicore__ inline void FillRstdFromSumBlocks(
         AscendC::LocalTensor<float> rstdOut,
         AscendC::LocalTensor<float> sumBlocks,
-        AscendC::LocalTensor<int32_t> diagOffsets,
-        AscendC::LocalTensor<float> oneVec, uint32_t validRows)
+        AscendC::LocalTensor<float> diagMask,
+        AscendC::LocalTensor<float> prod, AscendC::LocalTensor<float> oneVec,
+        uint32_t validRows)
     {
         constexpr uint32_t kBlockRows = 32;
         constexpr uint32_t kBlockElems = kBlockRows * kBlockRows;
-        auto offsets = diagOffsets.template ReinterpretCast<uint32_t>();
+        constexpr uint8_t kRowStrideBlocks =
+            static_cast<uint8_t>(kBlockRows * sizeof(float) / 32);
         for (uint32_t block = 0; block < Shape::kChunkRows / kBlockRows;
              ++block) {
-            AscendC::Gather(rstdOut[block * kBlockRows],
-                            sumBlocks[block * kBlockElems], offsets, 0,
-                            kBlockRows);
+            AscendC::Mul(prod, sumBlocks[block * kBlockElems], diagMask,
+                         kBlockElems);
+            AscendC::PipeBarrier<PIPE_V>();
+            AscendC::WholeReduceSum(rstdOut[block * kBlockRows], prod,
+                                    kBlockRows, kBlockRows, 1, 1,
+                                    kRowStrideBlocks);
+            AscendC::PipeBarrier<PIPE_V>();
         }
-        AscendC::PipeBarrier<PIPE_V>();
         AscendC::Adds(rstdOut, rstdOut, args_.tiling.epsilon, validRows);
         AscendC::PipeBarrier<PIPE_V>();
         AscendC::Sqrt(rstdOut, rstdOut, validRows);
@@ -1023,16 +1029,26 @@ private:
                 // 缩放用的展开表放在 UB 尾部 8 KiB（V1/V6 之后才用）。
                 auto repeatBuf = scaleBuf;              // 1024 fp32
                 auto brcbBuf = scaleBuf[1024];          // 512 fp32
-                auto diagIdx =
-                    scaleBuf[1536].template ReinterpretCast<int32_t>();
                 auto oneVec = scaleBuf[1600];
-                AscendC::CreateVecIndex(diagIdx, 0, 32);
+                // 对角掩码（32x32，1 KiB）与乘积临时区都放在共享 scratch：
+                // 这条路径不再需要 L2NormRowsBlock 的归约缓冲。
+                auto diagMask = scratch;
+                auto prod = scratch[1024];
+                AscendC::Duplicate(diagMask, 0.0F, 1024);
                 AscendC::PipeBarrier<PIPE_V>();
-                // (j*33) 个元素 = 132 字节，即 32x32 Gram 块内的对角线步长。
-                AscendC::Muls(diagIdx, diagIdx, 132, 32);
+                // 清零是 V 指令，随后用标量写对角线，必须先做 V->S 同步。
+                AscendC::SetFlag<AscendC::HardEvent::V_S>(scalarRead_);
+                AscendC::WaitFlag<AscendC::HardEvent::V_S>(scalarRead_);
+                for (uint32_t i = 0; i < 32; ++i) {
+                    diagMask.SetValue(i * 33, 1.0F);
+                }
+                AscendC::SetFlag<AscendC::HardEvent::S_V>(scalarWrite_);
+                AscendC::WaitFlag<AscendC::HardEvent::S_V>(scalarWrite_);
                 AscendC::PipeBarrier<PIPE_V>();
-                FillRstdFromSumBlocks(qRstd, sumQ, diagIdx, oneVec, validRows);
-                FillRstdFromSumBlocks(kRstd, sumK, diagIdx, oneVec, validRows);
+                FillRstdFromSumBlocks(qRstd, sumQ, diagMask, prod, oneVec,
+                                      validRows);
+                FillRstdFromSumBlocks(kRstd, sumK, diagMask, prod, oneVec,
+                                      validRows);
                 ScaleRowsByRstd(q, qRstd, normStaging, brcbBuf, repeatBuf,
                                 validRows);
                 ScaleRowsByRstd(k, kRstd, normStaging, brcbBuf, repeatBuf,

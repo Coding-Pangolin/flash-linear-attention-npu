@@ -1458,17 +1458,19 @@ private:
         // q00=X0、q01=0、q11=X1；q10 留给 C5 的 negX1@T。
         AscendC::Duplicate(akkPack, static_cast<bfloat16_t>(0), 4096);
         AscendC::PipeBarrier<PIPE_V>();
+        // 两段对角块的 Cast 目标互不重叠（列区间 0..31 与 32..63），源也
+        // 互不重叠，逐行屏障没有保护任何依赖，只会把 64 条独立 Cast 串行化。
+        // 每 head-chunk 的 32+32 个屏障全部去掉，最后统一等到 MTE3 发布。
         for (uint32_t row = 0; row < topRows; ++row) {
             AscendC::Cast(akkPack[row * Shape::kChunkRows],
                           x0[row * 32], AscendC::RoundMode::CAST_RINT, 32);
-            AscendC::PipeBarrier<PIPE_V>();
         }
         for (uint32_t row = 0; row < bottomRows; ++row) {
             AscendC::Cast(
                 akkPack[(row + 32) * Shape::kChunkRows + 32],
                 x1[row * 32], AscendC::RoundMode::CAST_RINT, 32);
-            AscendC::PipeBarrier<PIPE_V>();
         }
+        AscendC::PipeBarrier<PIPE_V>();
     }
 
     __aicore__ inline void V6Vf(

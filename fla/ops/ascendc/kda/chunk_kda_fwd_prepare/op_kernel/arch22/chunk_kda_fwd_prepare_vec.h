@@ -1036,14 +1036,16 @@ private:
                 auto prod = scratch[1024];
                 AscendC::Duplicate(diagMask, 0.0F, 1024);
                 AscendC::PipeBarrier<PIPE_V>();
-                // 清零是 V 指令，随后用标量写对角线，必须先做 V->S 同步。
-                AscendC::SetFlag<AscendC::HardEvent::V_S>(scalarRead_);
-                AscendC::WaitFlag<AscendC::HardEvent::V_S>(scalarRead_);
-                for (uint32_t i = 0; i < 32; ++i) {
-                    diagMask.SetValue(i * 33, 1.0F);
+                // 对角线用纯向量写法（与 V3Vf 的对角初始化同款）：同一 lane 的
+                // 相邻对角元素跨 32+1 个 FP32，repeat stride 取 33。省掉 32 次
+                // 标量 SetValue 与两次 V/S 同步。
+                constexpr uint8_t kDiagonalRepeatStride = 33;
+                for (uint32_t lane = 0; lane < 8; ++lane) {
+                    uint64_t diagonalOne[2] = {1ULL << lane, 0};
+                    AscendC::Duplicate(diagMask[lane * 32], 1.0F, diagonalOne,
+                                       static_cast<uint8_t>((32 - lane + 7) / 8),
+                                       1, kDiagonalRepeatStride);
                 }
-                AscendC::SetFlag<AscendC::HardEvent::S_V>(scalarWrite_);
-                AscendC::WaitFlag<AscendC::HardEvent::S_V>(scalarWrite_);
                 AscendC::PipeBarrier<PIPE_V>();
                 FillRstdFromSumBlocks(qRstd, sumQ, diagMask, prod, oneVec,
                                       validRows);

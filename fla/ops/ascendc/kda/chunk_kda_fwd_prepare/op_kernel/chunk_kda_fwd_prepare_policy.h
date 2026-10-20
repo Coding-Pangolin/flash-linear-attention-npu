@@ -34,6 +34,9 @@
 
 namespace KdaPrepare {
 
+// 诊断开关：AIV 是否消费 AIC 预算的 q/k 行平方和（0 时退回原向量 norm）。
+constexpr int kCubeNormBisect = 0;
+
 enum class QkNormMode : uint8_t {
     Identity = CHUNK_KDA_FWD_PREPARE_NORM_IDENTITY,
     L2 = CHUNK_KDA_FWD_PREPARE_NORM_L2,
@@ -158,7 +161,15 @@ constexpr uint32_t kArch22RhsMatrixBytes = 0x4000; // [64,128] * BF16
 constexpr uint32_t kArch22RhsKBetaG = kArch22RhsBase;
 constexpr uint32_t kArch22RhsVBeta = kArch22RhsBase + kArch22RhsMatrixBytes;
 constexpr uint32_t kArch22RhsBytes = 2 * kArch22RhsMatrixBytes;
-constexpr uint32_t kArch22SlotStride = kArch22RhsBase + kArch22RhsBytes;
+// Arch22：AIC 为“下一个 group”预算的 q/k 行平方和。每 head 8 KiB：
+// [q 的 4 个 16x16 Gram 块][k 的 4 个]，行主序 FP32，块内元素 (i,j) 在
+// i*16+j；对角线 i*17 就是第 i 行的 |x|^2。AIV 的 V0 只读对角线。
+constexpr uint32_t kArch22NormSum = kArch22RhsBase + kArch22RhsBytes;
+// 每 head 16 KiB：[q 的 2 个 32x32 Gram 块][k 的 2 个]，行主序 FP32，
+// 块内元素 (i,j) 在 i*32+j；对角线 i*33 就是第 i 行的 |x|^2。
+constexpr uint32_t kArch22NormSumBytes = 0x4000;
+constexpr uint32_t kArch22SlotStride =
+    kArch22NormSum + kArch22NormSumBytes;
 
 // payload 在不同 Stage 原址换义，不在 UB/L1 内搬位。
 constexpr uint32_t kX0 = 0x0000;

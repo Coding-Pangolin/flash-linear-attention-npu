@@ -292,6 +292,36 @@ private:
                     fp32Pad);
             }
         }
+        // AIC 预算的 q/k 行平方和：落在 V0 的 32 KiB FP32 staging 前 16 KiB，
+        // 缩放阶段才会复用它，所以不需要额外 buffer。条件必须与 AIC 的
+        // StageNormSums 完全一致，否则读到的是上一组残留。
+        auto sumBufQ = ub[base + Arch22Ub::kGateOrKMinus]
+                           .template ReinterpretCast<float>();
+        auto sumBufK = sumBufQ[2048];
+        bool cubeSums = false;
+        if constexpr (CompilePolicy::normMode == QkNormMode::L2) {
+            cubeSums = (kCubeNormBisect != 0) &&
+                       chunk.validRows == Shape::kChunkRows &&
+                       !args_.tiling.inputSequenceMajor;
+            if (cubeSums) {
+                const uint64_t v0Slot = WorkspaceSlotBase(
+                    workgroup_, localHead, Workspace::kArch22WorkgroupStride,
+                    Workspace::kArch22SlotStride);
+                AscendC::GlobalTensor<float> normRelayQ;
+                normRelayQ.SetGlobalBuffer(
+                    reinterpret_cast<__gm__ float *>(args_.workspace + v0Slot +
+                                                     Workspace::kArch22NormSum),
+                    2048);
+                AscendC::GlobalTensor<float> normRelayK;
+                normRelayK.SetGlobalBuffer(
+                    reinterpret_cast<__gm__ float *>(args_.workspace + v0Slot +
+                                                     Workspace::kArch22NormSum +
+                                                     0x2000),
+                    2048);
+                AscendC::DataCopy(sumBufQ, normRelayQ, 2048);
+                AscendC::DataCopy(sumBufK, normRelayK, 2048);
+            }
+        }
         AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
         if (args_.tiling.inputSequenceMajor) {
@@ -317,7 +347,7 @@ private:
              ub[Arch22Ub::kScratchTail].template ReinterpretCast<float>(),
              ub[base + Arch22Ub::kGateOrKMinus]
                           .template ReinterpretCast<float>(),
-             chunk.validRows);
+             chunk.validRows, sumBufQ, sumBufK, cubeSums);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
         AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
         const uint64_t slot = WorkspaceSlotBase(
@@ -820,17 +850,25 @@ private:
         AscendC::Duplicate(oneVec, 1.0F, validRows);
         AscendC::PipeBarrier<PIPE_V>();
         AscendC::Div(rstdOut, oneVec, sumBlocks, validRows);
-        // 折半 Add 覆盖了 staging 的后半列，这里重新下发一次原始 BF16 值。
-        AscendC::Cast(staging, src, AscendC::RoundMode::CAST_NONE, count);
+        // 折半 Add 覆盖了 staging 的后半列，ScaleRowsByRstd 会重新下发原始值。
+        ScaleRowsByRstd(src, rstdOut, staging, workspace[640], scaleBuf,
+                        validRows);
+    }
+
+    // 只有 rstd 已知时的逐行缩放：staging 必须是空闲的 64x128 FP32 区。
+    // P4：逐行缩放用 "Brcb + 行列重复展开 + 整块 Mul"（与 V6 beta 路径同款），
+    // 避免 64 次标量 GetValue 与 64 条逐行 Muls/Cast。
+    __aicore__ inline void ScaleRowsByRstd(
+        AscendC::LocalTensor<bfloat16_t> src,
+        AscendC::LocalTensor<float> rstd,
+        AscendC::LocalTensor<float> staging,
+        AscendC::LocalTensor<float> brcbScalars,
+        AscendC::LocalTensor<float> repeatScalars, uint32_t validRows)
+    {
+        AscendC::Cast(staging, src, AscendC::RoundMode::CAST_NONE,
+                      validRows * Shape::kHeadDim);
         AscendC::PipeBarrier<PIPE_V>();
-        // P4：逐行缩放改成 "Brcb + 行列重复展开 + 整块 Mul"（与 V6 beta 路径同款），
-        // 去掉 64 次标量 GetValue 与 64 条逐行 Muls/Cast；数学不变（结果应逐位一致）。
-        // 缓冲区：workspace 共 2048 fp32，这里用 [640,1152) 与 [1152,1600)。
-        auto brcbScalars = workspace[640];       // 64 blocks = 512 fp32
-        // 展开表放在 UB 尾部 8 KiB（V0 阶段 V1/V6 尚未使用），每 tile 16 行，
-        // 把 8-block 展开的 DataCopy 调用数从 80 降到 32。
-        auto repeatScalars = scaleBuf;           // 16 行 x 8 block = 1024 fp32
-        AscendC::Brcb(brcbScalars, rstdOut,
+        AscendC::Brcb(brcbScalars, rstd,
                       static_cast<uint8_t>(Shape::kChunkRows / 8), {1, 8});
         AscendC::PipeBarrier<PIPE_V>();
         // 单/双 chunk 是纯延迟场景，16 行 tile 在这里反而更慢（实测 T64 +33%）；
@@ -855,6 +893,33 @@ private:
                           rows * Shape::kHeadDim);
             AscendC::PipeBarrier<PIPE_V>();
         }
+    }
+
+    // AIC 预算的 2 个 32x32 Gram 块：取对角线（每块内步长 33 个 FP32）即
+    // 该 32 行的 |x|^2，再做 eps -> Sqrt -> 倒数得到 rstd。
+    __aicore__ inline void FillRstdFromSumBlocks(
+        AscendC::LocalTensor<float> rstdOut,
+        AscendC::LocalTensor<float> sumBlocks,
+        AscendC::LocalTensor<int32_t> diagOffsets,
+        AscendC::LocalTensor<float> oneVec, uint32_t validRows)
+    {
+        constexpr uint32_t kBlockRows = 32;
+        constexpr uint32_t kBlockElems = kBlockRows * kBlockRows;
+        auto offsets = diagOffsets.template ReinterpretCast<uint32_t>();
+        for (uint32_t block = 0; block < Shape::kChunkRows / kBlockRows;
+             ++block) {
+            AscendC::Gather(rstdOut[block * kBlockRows],
+                            sumBlocks[block * kBlockElems], offsets, 0,
+                            kBlockRows);
+        }
+        AscendC::PipeBarrier<PIPE_V>();
+        AscendC::Adds(rstdOut, rstdOut, args_.tiling.epsilon, validRows);
+        AscendC::PipeBarrier<PIPE_V>();
+        AscendC::Sqrt(rstdOut, rstdOut, validRows);
+        AscendC::Duplicate(oneVec, 1.0F, validRows);
+        AscendC::PipeBarrier<PIPE_V>();
+        AscendC::Div(rstdOut, oneVec, rstdOut, validRows);
+        AscendC::PipeBarrier<PIPE_V>();
     }
     // 两个叶子的 right-looking 三角逆合并进同一个循环：X0 与 X1 互不依赖，
     // 原来两次调用各 31 步 × 3 屏障 = 186 个屏障，合并后 31 步 × 3 屏障 = 93，
@@ -941,7 +1006,9 @@ private:
         AscendC::LocalTensor<float> aLog, AscendC::LocalTensor<float> g,
         AscendC::LocalTensor<float> scratch,
         AscendC::LocalTensor<float> scaleBuf,
-        AscendC::LocalTensor<float> tileBuf, uint32_t validRows)
+        AscendC::LocalTensor<float> tileBuf, uint32_t validRows,
+        AscendC::LocalTensor<float> sumQ, AscendC::LocalTensor<float> sumK,
+        bool cubeSums)
     {
         const uint32_t count = validRows * Shape::kHeadDim;
         if constexpr (CompilePolicy::normMode == QkNormMode::L2) {
@@ -949,10 +1016,33 @@ private:
             // 用 V1 之前空闲的 kGateOrKMinus 私有区；GDN（BF16 gate）的 gate
             // 本身就落在该私有区，改用尚未写入的共享 G 区。
             auto normStaging = (sizeof(GateT) == 4) ? tileBuf : g;
-            L2NormRowsBlock(q, qRstd, normStaging, scratch, scaleBuf,
-                            validRows);
-            L2NormRowsBlock(k, kRstd, normStaging, scratch, scaleBuf,
-                            validRows);
+            if (cubeSums) {
+                // AIC 已在 C2 的等待窗口里算好 q/k 的 16x16 Gram 块，
+                // 这里只取对角线做 eps -> Sqrt -> 倒数，再走同一个缩放。
+                // scratch[0,1024) 与 [1024,2048) 分别是 q/k 的 Gram 块；
+                // 缩放用的展开表放在 UB 尾部 8 KiB（V1/V6 之后才用）。
+                auto repeatBuf = scaleBuf;              // 1024 fp32
+                auto brcbBuf = scaleBuf[1024];          // 512 fp32
+                auto diagIdx =
+                    scaleBuf[1536].template ReinterpretCast<int32_t>();
+                auto oneVec = scaleBuf[1600];
+                AscendC::CreateVecIndex(diagIdx, 0, 32);
+                AscendC::PipeBarrier<PIPE_V>();
+                // (j*33) 个元素 = 132 字节，即 32x32 Gram 块内的对角线步长。
+                AscendC::Muls(diagIdx, diagIdx, 132, 32);
+                AscendC::PipeBarrier<PIPE_V>();
+                FillRstdFromSumBlocks(qRstd, sumQ, diagIdx, oneVec, validRows);
+                FillRstdFromSumBlocks(kRstd, sumK, diagIdx, oneVec, validRows);
+                ScaleRowsByRstd(q, qRstd, normStaging, brcbBuf, repeatBuf,
+                                validRows);
+                ScaleRowsByRstd(k, kRstd, normStaging, brcbBuf, repeatBuf,
+                                validRows);
+            } else {
+                L2NormRowsBlock(q, qRstd, normStaging, scratch, scaleBuf,
+                                validRows);
+                L2NormRowsBlock(k, kRstd, normStaging, scratch, scaleBuf,
+                                validRows);
+            }
         } else {
             // 固定输出合同下 Identity 仍写确定值；反向关闭 L2Norm 时不会
             // 使用 rstd，但不能留下未初始化输出。

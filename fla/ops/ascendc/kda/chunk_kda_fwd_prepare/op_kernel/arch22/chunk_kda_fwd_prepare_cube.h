@@ -80,6 +80,20 @@ public:
             return;
         }
 
+        // V0 的 L2 norm 行平方和由 AIC 预算：进入循环前先算第一个 group，
+        // 之后每个 group 在 C2 的等待窗口里算下一个 group，AIV 侧不再做
+        // 平方/折半/归约三遍。必须放在初始 free 旗标之前发布，否则 AIV 的
+        // 第一个 V0 会读到未写入的 relay。
+        if constexpr (CompilePolicy::normMode == QkNormMode::L2) {
+            ChunkRange firstChunk{};
+            uint32_t firstGroup = 0;
+            uint32_t firstActive = 0;
+            if (FirstGroup(workBegin, workEnd, firstChunk, firstGroup,
+                           firstActive)) {
+                StageNormSums(firstChunk, firstGroup, firstActive);
+            }
+        }
+
         // 两个 pair 的初始许可由 AIC 发布；后续许可由 C7 写回完成后发布。
         for (uint32_t pair = 0; pair < 2; ++pair) {
             AscendC::CrossCoreSetFlag<0x2, PIPE_FIX>(
@@ -119,6 +133,19 @@ public:
                 // C4 会把同一 L1 head lane 从 score 输入换义为 B；先确认
                 // C2 的 MTE2 搬运全部结束，避免两批异步写访问重叠。
                 AscendC::PipeBarrier<PIPE_MTE2>();
+
+                if constexpr (CompilePolicy::normMode == QkNormMode::L2) {
+                    // 时序：本组的 relay 已在 V0 读完（C2 等到了 V0+V1 的
+                    // ready），下一组的 relay 必须在 V0(下一组) 之前写完。
+                    // 放在这里正好用 C2 之后、AIV 跑 V3 的空转窗口。
+                    ChunkRange nextChunk{};
+                    uint32_t nextGroup = 0;
+                    uint32_t nextActive = 0;
+                    if (NextGroup(work, groupBegin, activeHeads, headEnd,
+                                  workEnd, nextChunk, nextGroup, nextActive)) {
+                        StageNormSums(nextChunk, nextGroup, nextActive);
+                    }
+                }
 
                 // C4：读取 V3 的 B/X0/negX1，计算 T=B@X0 并常驻 L1。
                 for (uint32_t pair = 0; pair < 2; ++pair) {
@@ -164,6 +191,209 @@ private:
     {
         const uint32_t count = CeilDiv(validRows, Shape::kSubChunkRows);
         return count > Shape::kSubChunkCount ? Shape::kSubChunkCount : count;
+    }
+
+    // 本核第一个 group（与主循环同样的解码规则：跳过无效 chunk 与空 head 段）。
+    __aicore__ inline bool FirstGroup(uint32_t workBegin, uint32_t workEnd,
+                                      ChunkRange &chunk, uint32_t &groupBegin,
+                                      uint32_t &activeHeads)
+    {
+        for (uint32_t work = workBegin; work < workEnd; ++work) {
+            uint32_t globalChunk = 0;
+            uint32_t headPartition = 0;
+            DecodeWorkItem(args_.tiling, work, globalChunk, headPartition);
+            ChunkRange candidate{};
+            if (!ResolveChunk(args_, globalChunk, candidate)) {
+                continue;
+            }
+            uint32_t headBegin = 0;
+            uint32_t headEnd = 0;
+            HeadRange(args_.tiling, headPartition, headBegin, headEnd);
+            if (headEnd <= headBegin) {
+                continue;
+            }
+            chunk = candidate;
+            groupBegin = headBegin;
+            const uint32_t count = headEnd - headBegin;
+            activeHeads = count > Shape::kHeadsPerGroup
+                              ? Shape::kHeadsPerGroup
+                              : count;
+            return true;
+        }
+        return false;
+    }
+
+    // 当前 group 之后的下一个 group；跨 work item 时按主循环规则重新解码。
+    __aicore__ inline bool NextGroup(uint32_t work, uint32_t groupBegin,
+                                     uint32_t activeHeads, uint32_t headEnd,
+                                     uint32_t workEnd, ChunkRange &chunk,
+                                     uint32_t &nextGroup,
+                                     uint32_t &nextActive)
+    {
+        uint32_t cursor = groupBegin + activeHeads;
+        uint32_t cursorWork = work;
+        ChunkRange cursorChunk = chunk;
+        uint32_t cursorEnd = headEnd;
+        while (true) {
+            if (cursor < cursorEnd) {
+                chunk = cursorChunk;
+                nextGroup = cursor;
+                const uint32_t count = cursorEnd - cursor;
+                nextActive = count > Shape::kHeadsPerGroup
+                                 ? Shape::kHeadsPerGroup
+                                 : count;
+                return true;
+            }
+            ++cursorWork;
+            if (cursorWork >= workEnd) {
+                return false;
+            }
+            uint32_t globalChunk = 0;
+            uint32_t headPartition = 0;
+            DecodeWorkItem(args_.tiling, cursorWork, globalChunk,
+                           headPartition);
+            ChunkRange candidate{};
+            if (!ResolveChunk(args_, globalChunk, candidate)) {
+                cursor = 0;
+                cursorEnd = 0;
+                continue;
+            }
+            uint32_t headBegin = 0;
+            uint32_t headEndNext = 0;
+            HeadRange(args_.tiling, headPartition, headBegin, headEndNext);
+            cursorChunk = candidate;
+            cursor = headBegin;
+            cursorEnd = headEndNext;
+        }
+    }
+
+    // q/k 的行平方和：对每个 16 行块做一次 x·x^T（L0A 取这 16 行、L0B 取同一
+    // 批行作为 [128,16]），L0C 的对角元就是这 16 行的 |x|^2，行主序落 relay。
+    // AIV 只读对角线，因此这里不做任何归约。
+    __aicore__ inline void StageNormSums(const ChunkRange &chunk,
+                                         uint32_t groupBegin,
+                                         uint32_t activeHeads)
+    {
+        // 尾 chunk（validRows < 64）与 sequence-major 布局走 AIV 原路径：
+        // 前者避免越界读，后者 Nd2Nz 表达不了行间跨 stride。
+        if (chunk.validRows != Shape::kChunkRows ||
+            args_.tiling.inputSequenceMajor) {
+            return;
+        }
+        auto l1Bytes = l1Buf_.Get<uint8_t>();
+        auto l0A = l0ABuf_.Get<bfloat16_t>();
+        auto l0B = l0BBuf_.Get<bfloat16_t>();
+        auto l0C = l0CBuf_.Get<float>();
+        AscendC::GlobalTensor<bfloat16_t> qGm;
+        qGm.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(args_.q));
+        AscendC::GlobalTensor<bfloat16_t> kGm;
+        kGm.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(args_.k));
+        constexpr uint32_t kFractalElements = 16 * 16;
+        constexpr uint32_t kBlocks = Shape::kChunkRows / 32;      // 2
+        constexpr uint32_t kBlockElems = 32 * Shape::kHeadDim;    // 4096 BF16
+        // 每个张量 2 个 32x32 块 = 2048 个 FP32 = 8 KiB。
+        constexpr uint32_t kSumBlockElems = 32 * 32;
+        constexpr uint32_t kSumTensorElems = kBlocks * kSumBlockElems;
+        for (uint32_t h = 0; h < activeHeads; ++h) {
+            const uint32_t valueHead = groupBegin + h;
+            const uint64_t slot = WorkspaceSlotBase(
+                workgroup_, h, Workspace::kArch22WorkgroupStride,
+                Workspace::kArch22SlotStride);
+            const uint64_t qkOffset = QkInputOffset(
+                args_.tiling, chunk, QkHeadForValueHead(args_.tiling, valueHead));
+            AscendC::GlobalTensor<float> normRelay;
+            normRelay.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(
+                args_.workspace + slot + Workspace::kArch22NormSum),
+                Workspace::kArch22NormSumBytes / sizeof(float));
+            auto lane = l1Bytes[L1::kHeadLane[h]]
+                            .template ReinterpretCast<bfloat16_t>();
+            AscendC::Nd2NzParams copy{};
+            copy.ndNum = 1;
+            copy.dValue = Shape::kHeadDim;
+            copy.srcDValue = Shape::kHeadDim;
+            copy.srcNdMatrixStride = 0;
+            copy.dstNzNStride = 1;
+            copy.dstNzMatrixStride = 0;
+            copy.nValue = Shape::kChunkRows;
+            copy.dstNzC0Stride = Shape::kChunkRows;
+            AscendC::DataCopy(lane, qGm[qkOffset], copy);
+            AscendC::DataCopy(
+                lane[Shape::kBf16MatrixBytes / sizeof(bfloat16_t)],
+                kGm[qkOffset], copy);
+            // B 侧必须与“Kminus 的 n=32 独立矩阵”同构，直接从 64 行矩阵里
+            // 跨分形取会和 L0B 的 Zn 序不一致。这里按 32 行块单独搬一份 NZ，
+            // A 侧仍走 C2 已验证的 64 行 stride=4 路径。
+            auto laneB = lane[0x8000 / sizeof(bfloat16_t)];
+            AscendC::Nd2NzParams copyBlk = copy;
+            copyBlk.nValue = 32;
+            copyBlk.dstNzC0Stride = 32;
+            for (uint32_t tensor = 0; tensor < 2; ++tensor) {
+                AscendC::GlobalTensor<bfloat16_t> src = tensor == 0 ? qGm : kGm;
+                for (uint32_t block = 0; block < kBlocks; ++block) {
+                    AscendC::DataCopy(
+                        laneB[(tensor * kBlocks + block) * kBlockElems],
+                        src[qkOffset + block * 32 * Shape::kHeadDim], copyBlk);
+                }
+            }
+            AscendC::SetFlag<AscendC::HardEvent::MTE2_MTE1>(mte2ToMte1_);
+            AscendC::WaitFlag<AscendC::HardEvent::MTE2_MTE1>(mte2ToMte1_);
+            for (uint32_t tensor = 0; tensor < 2; ++tensor) {
+                auto srcL1 = lane[tensor == 0
+                                      ? 0
+                                      : (Shape::kBf16MatrixBytes /
+                                         sizeof(bfloat16_t))];
+                for (uint32_t block = 0; block < kBlocks; ++block) {
+                    AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
+                    AscendC::LoadData2DParams loadA{};
+                    loadA.startIndex = 0;
+                    loadA.repeatTimes = Shape::kHeadDim / 16;
+                    loadA.srcStride = Shape::kChunkRows / 16;
+                    loadA.dstGap = 0;
+                    loadA.ifTranspose = false;
+                    loadA.sid = 0;
+                    loadA.addrMode = 0;
+                    // m=32：两个 16 行块分别落在 l0A 的 [0] 与 [8 分形]。
+                    AscendC::LoadData(l0A,
+                                      srcL1[block * 2 * kFractalElements], loadA);
+                    AscendC::LoadData(l0A[Shape::kHeadDim / 16 * kFractalElements],
+                                      srcL1[(block * 2 + 1) * kFractalElements],
+                                      loadA);
+                    AscendC::LoadData2DParams loadB{};
+                    loadB.startIndex = 0;
+                    loadB.repeatTimes = (Shape::kHeadDim / 16) * 2;
+                    loadB.srcStride = 1;
+                    loadB.dstGap = 0;
+                    loadB.ifTranspose = false;
+                    loadB.sid = 0;
+                    loadB.addrMode = 0;
+                    AscendC::LoadData(
+                        l0B,
+                        laneB[(tensor * kBlocks + block) * kBlockElems],
+                        loadB);
+                    AscendC::SetFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
+                    AscendC::WaitFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
+                    AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+                    AscendC::MmadParams mmad{};
+                    mmad.m = 32;
+                    mmad.n = 32;
+                    mmad.k = Shape::kHeadDim;
+                    mmad.cmatrixInitVal = true;
+                    mmad.cmatrixSource = false;
+                    mmad.unitFlag = 0;
+                    AscendC::Mmad(l0C, l0A, l0B, mmad);
+                    AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
+                    AscendC::SetFlag<AscendC::HardEvent::M_FIX>(mToFix_);
+                    AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(mToFix_);
+                    auto fix = AscendC::FixpipeParamsV220(32, 32, 32, 32, false);
+                    fix.quantPre = QuantMode_t::NoQuant;
+                    AscendC::Fixpipe<float, float, AscendC::CFG_ROW_MAJOR>(
+                        normRelay[tensor * kSumTensorElems +
+                                  block * kSumBlockElems],
+                        l0C, fix);
+                    AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+                }
+            }
+        }
     }
 
     __aicore__ inline void StageC2(const ChunkRange &chunk,

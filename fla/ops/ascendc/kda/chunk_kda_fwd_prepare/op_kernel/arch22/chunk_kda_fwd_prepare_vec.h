@@ -1179,10 +1179,6 @@ private:
             SubRowMinusTile(delta, g[mid * Shape::kHeadDim],
                             g[prevMid * Shape::kHeadDim], 1);
             AscendC::PipeBarrier<PIPE_V>();
-            AscendC::Maxs(delta, delta, clampMin, Shape::kHeadDim);
-            AscendC::PipeBarrier<PIPE_V>();
-            AscendC::Mins(delta, delta, clampMax, Shape::kHeadDim);
-            AscendC::PipeBarrier<PIPE_V>();
             // g 已是自然单位，直接 exp。
             AscendC::Exp(delta, delta, Shape::kHeadDim);
             AscendC::PipeBarrier<PIPE_V>();
@@ -1206,10 +1202,6 @@ private:
                 if (s == tile) {
                     SubRowMinusTile(factor, g[midpoint * Shape::kHeadDim],
                                     g[rowBegin * Shape::kHeadDim], rows);
-                    AscendC::PipeBarrier<PIPE_V>();
-                    AscendC::Maxs(factor, factor, clampMin, elems);
-                    AscendC::PipeBarrier<PIPE_V>();
-                    AscendC::Mins(factor, factor, clampMax, elems);
                     AscendC::PipeBarrier<PIPE_V>();
                     // g 已是自然单位。
                     AscendC::Exp(factor, factor, elems);
@@ -1253,10 +1245,6 @@ private:
                 const uint32_t elems = rows * Shape::kHeadDim;
                 SubTileMinusRow(factor, g[rowBegin * Shape::kHeadDim],
                                 g[midpoint * Shape::kHeadDim], rows);
-                AscendC::PipeBarrier<PIPE_V>();
-                AscendC::Maxs(factor, factor, clampMin, elems);
-                AscendC::PipeBarrier<PIPE_V>();
-                AscendC::Mins(factor, factor, clampMax, elems);
                 AscendC::PipeBarrier<PIPE_V>();
                 // g 已是自然单位，直接 Exp。
                 AscendC::Exp(factor, factor, elems);
@@ -1525,12 +1513,10 @@ private:
                                       : kTileRows;
             const uint32_t elems = rows * Shape::kHeadDim;
             const uint32_t offset = rowBegin * Shape::kHeadDim;
+            AscendC::Adds(factor, g[offset], 0.0F, elems);
+            AscendC::PipeBarrier<PIPE_V>();
             // E(G)=exp(clamp(g[row]))：这里刻意不减 g[last]，与 arch35 的
             // V6 语义（qg/qBeta 用行内累计量，kg 才用 g[last]-g[row]）一致。
-            AscendC::Maxs(factor, g[offset], directMin, elems);
-            AscendC::PipeBarrier<PIPE_V>();
-            AscendC::Mins(factor, factor, directMax, elems);
-            AscendC::PipeBarrier<PIPE_V>();
             AscendC::Exp(factor, factor, elems);
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Cast(stage, qg[offset], AscendC::RoundMode::CAST_NONE,
@@ -1552,10 +1538,6 @@ private:
             AscendC::PipeBarrier<PIPE_V>();
             // E'(G)=exp(clamp(g[last]-g[row]))
             SubRowMinusTile(factor, g[last], g[offset], rows);
-            AscendC::PipeBarrier<PIPE_V>();
-            AscendC::Maxs(factor, factor, directMin, elems);
-            AscendC::PipeBarrier<PIPE_V>();
-            AscendC::Mins(factor, factor, directMax, elems);
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Exp(factor, factor, elems);
             AscendC::PipeBarrier<PIPE_V>();

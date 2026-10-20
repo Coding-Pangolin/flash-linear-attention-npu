@@ -85,6 +85,8 @@ public:
         ioFree_[1] = pipe_->AllocEventID<AscendC::HardEvent::MTE3_MTE2>(); // ID 1
         inputReady_[0] = pipe_->AllocEventID<AscendC::HardEvent::MTE2_V>(); // ID 0
         inputReady_[1] = pipe_->AllocEventID<AscendC::HardEvent::MTE2_V>(); // ID 1
+        restReady_[0] = pipe_->AllocEventID<AscendC::HardEvent::MTE2_V>(); // ID 2
+        restReady_[1] = pipe_->AllocEventID<AscendC::HardEvent::MTE2_V>(); // ID 3
         outputReady_[0] = pipe_->AllocEventID<AscendC::HardEvent::V_MTE3>(); // ID 0
         outputReady_[1] = pipe_->AllocEventID<AscendC::HardEvent::V_MTE3>(); // ID 1
         mte3ToV_[0] = pipe_->AllocEventID<AscendC::HardEvent::MTE3_V>(); // ID 0
@@ -201,6 +203,7 @@ private:
     {
         pipe_->ReleaseEventID<AscendC::HardEvent::MTE3_MTE2>(ioFree_[pair]);
         pipe_->ReleaseEventID<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
+        pipe_->ReleaseEventID<AscendC::HardEvent::MTE2_V>(restReady_[pair]);
         pipe_->ReleaseEventID<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
         pipe_->ReleaseEventID<AscendC::HardEvent::MTE3_V>(mte3ToV_[pair]);
     }
@@ -575,17 +578,32 @@ private:
         khat.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(args_.workspace + slot + Workspace::kKHat));
         betaContext.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(args_.workspace + slot + Workspace::kBetaEff));
         AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(sharedFree_);
-        AscendC::DataCopy(qg, qhat, chunk.validRows * Shape::kHeadDim);
-        AscendC::DataCopy(kg, khat, chunk.validRows * Shape::kHeadDim);
+        // S1：tile 级 ping-pong。先搬前 32 行（外加 g 的最后一行，供
+        // exp(g_last-g[row]) 使用），向量侧先开跑，后半搬运躲在计算里。
+        const uint64_t gBase = HeadTensorOffset(args_.tiling, chunk, valueHead,
+                                               Shape::kHeadDim);
+        const uint32_t firstRows =
+            chunk.validRows > 32 ? 32 : chunk.validRows;
+        AscendC::DataCopy(qg, qhat, firstRows * Shape::kHeadDim);
+        AscendC::DataCopy(kg, khat, firstRows * Shape::kHeadDim);
+        // g 整块留在第一批：它只有 32 KiB，而且是所有 tile 共用的参考量
+        // （exp(g[last]-g[row])），拆开反而要在 tile 里补缩放。
+        AscendC::DataCopy(g, gkGm_[gBase], chunk.validRows * Shape::kHeadDim);
+        AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
         AscendC::DataCopyPadExtParams<float> pad{false, 0, 0, 0};
         AscendC::DataCopyPad(betaEff, betaContext,
             AscendC::DataCopyExtParams{
                 1, static_cast<uint32_t>(chunk.validRows * sizeof(float)),
                 0, 0, 0}, pad);
-        AscendC::DataCopy(g,
-                          gkGm_[HeadTensorOffset(args_.tiling, chunk, valueHead,
-                                                Shape::kHeadDim)],
-                          chunk.validRows * Shape::kHeadDim);
+        if (chunk.validRows > 32) {
+            const uint32_t restRows = chunk.validRows - 32;
+            AscendC::DataCopy(qg[32 * Shape::kHeadDim],
+                              qhat[32 * Shape::kHeadDim],
+                              restRows * Shape::kHeadDim);
+            AscendC::DataCopy(kg[32 * Shape::kHeadDim],
+                              khat[32 * Shape::kHeadDim],
+                              restRows * Shape::kHeadDim);
+        }
         const uint32_t vStride = args_.tiling.inputSequenceMajor
                                      ? static_cast<uint32_t>(
                                            static_cast<uint64_t>(
@@ -598,7 +616,7 @@ private:
                 static_cast<uint32_t>(Shape::kValueDim * sizeof(bfloat16_t)),
                 vStride, 0, 0},
             AscendC::DataCopyPadExtParams<bfloat16_t>{false, 0, 0, 0});
-        AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
+        AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(restReady_[pair]);
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
         if constexpr (Domain::useExp2) {
             // gk 从 GM 取回的是 log2 域（公开契约），内部统一转成自然对数，
@@ -610,7 +628,7 @@ private:
         // 本 Stage 一次生成 qg、qgScaled、kg、两次舍入的 K_beta_g 和
         // V_beta；两条编译路径先在对应域截断，再统一调用自然底 Exp。
         V6Vf(qg, qgScaled, kg, vBeta, kBetaG, g, betaEff, scratch,
-             scratchTail, chunk.validRows, args_.tiling.scale);
+             scratchTail, chunk.validRows, args_.tiling.scale, restReady_[pair]);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
         AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
         const uint64_t out =
@@ -1590,10 +1608,12 @@ private:
         AscendC::LocalTensor<float> g,
         AscendC::LocalTensor<float> betaEff,
         AscendC::LocalTensor<float> scratch,
-        AscendC::LocalTensor<float> stageBuf, uint32_t validRows, float scale)
+        AscendC::LocalTensor<float> stageBuf, uint32_t validRows, float scale,
+        AscendC::TEventID restReady)
     {
         const uint32_t rhsRows = validRows > 32 ? 64 : 32;
         if (validRows == 0) {
+            AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(restReady);
             AscendC::Duplicate(qg, static_cast<bfloat16_t>(0),
                                rhsRows * Shape::kHeadDim);
             AscendC::Duplicate(kg, static_cast<bfloat16_t>(0),
@@ -1616,8 +1636,14 @@ private:
         constexpr uint32_t kTileElems = kTileRows * Shape::kHeadDim;
         auto factor = scratch;
         auto stage = stageBuf;
+        bool restWaited = false;
         for (uint32_t rowBegin = 0; rowBegin < validRows;
              rowBegin += kTileRows) {
+            // S1：后 32 行的搬运与前 32 行的计算重叠，到这里才需要等。
+            if (!restWaited && rowBegin >= 32) {
+                AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(restReady);
+                restWaited = true;
+            }
             const uint32_t rows = validRows - rowBegin < kTileRows
                                       ? validRows - rowBegin
                                       : kTileRows;
@@ -1667,6 +1693,9 @@ private:
             AscendC::Cast(qgScaled[offset], stage,
                           AscendC::RoundMode::CAST_RINT, elems);
             AscendC::PipeBarrier<PIPE_V>();
+        }
+        if (!restWaited) {
+            AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(restReady);
         }
         // 逐行 beta 缩放：betaEff 先 Brcb 展开成“每行 1 个 32B block”，
         // 再用两条整块 Mul（低/高半行）完成 betaEff*round(Khat*E(G)) 与
@@ -1729,6 +1758,7 @@ private:
     AscendC::TBuf<AscendC::TPosition::VECCALC> ubBuf_{};
     AscendC::TEventID ioFree_[2]{};
     AscendC::TEventID inputReady_[2]{};
+    AscendC::TEventID restReady_[2]{};
     AscendC::TEventID outputReady_[2]{};
     AscendC::TEventID mte3ToV_[2]{};
     AscendC::TEventID scalarRead_{};

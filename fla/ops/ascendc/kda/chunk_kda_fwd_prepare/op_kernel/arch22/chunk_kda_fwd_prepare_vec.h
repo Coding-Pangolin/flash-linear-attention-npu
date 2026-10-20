@@ -1513,11 +1513,9 @@ private:
                                       : kTileRows;
             const uint32_t elems = rows * Shape::kHeadDim;
             const uint32_t offset = rowBegin * Shape::kHeadDim;
-            AscendC::Adds(factor, g[offset], 0.0F, elems);
-            AscendC::PipeBarrier<PIPE_V>();
             // E(G)=exp(clamp(g[row]))：这里刻意不减 g[last]，与 arch35 的
             // V6 语义（qg/qBeta 用行内累计量，kg 才用 g[last]-g[row]）一致。
-            AscendC::Exp(factor, factor, elems);
+            AscendC::Exp(factor, g[offset], elems);
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Cast(stage, qg[offset], AscendC::RoundMode::CAST_NONE,
                           elems);

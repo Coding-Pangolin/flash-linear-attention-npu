@@ -61,10 +61,16 @@ public:
         c3MToFix_[1] = pipe_->AllocEventID<AscendC::HardEvent::M_FIX>();
         c3FixToM_[0] = pipe_->AllocEventID<AscendC::HardEvent::FIX_M>();
         c3FixToM_[1] = pipe_->AllocEventID<AscendC::HardEvent::FIX_M>();
+        c3MToMte1_[0] = pipe_->AllocEventID<AscendC::HardEvent::M_MTE1>();
+        c3MToMte1_[1] = pipe_->AllocEventID<AscendC::HardEvent::M_MTE1>();
+        c3Mte1ToM_[0] = pipe_->AllocEventID<AscendC::HardEvent::MTE1_M>();
+        c3Mte1ToM_[1] = pipe_->AllocEventID<AscendC::HardEvent::MTE1_M>();
         AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
         AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
         AscendC::SetFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[0]);
         AscendC::SetFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[1]);
+        AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(c3MToMte1_[0]);
+        AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(c3MToMte1_[1]);
     }
 
     __aicore__ inline void Process()
@@ -81,6 +87,8 @@ public:
         const uint32_t workEnd = WorkEnd(total, workgroup_, coreCount_);
         if (workgroup_ >= coreCount_ || workBegin >= workEnd) {
             AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
+            AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(c3MToMte1_[0]);
+            AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(c3MToMte1_[1]);
             AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(fixToM_);
             AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[0]);
             AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[1]);
@@ -204,6 +212,8 @@ public:
             }
         }
         AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
+        AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(c3MToMte1_[0]);
+        AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(c3MToMte1_[1]);
         AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(fixToM_);
         AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[0]);
         AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[1]);
@@ -495,11 +505,16 @@ private:
         bool last)
     {
         auto result = l0C[slot * 1024];
-        AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
-        LoadL0A32(l0A, srcA);
-        LoadL0B32(l0B, srcB);
-        AscendC::SetFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
-        AscendC::WaitFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
+        auto aBuf = l0A[slot * 1024];
+        auto bBuf = l0B[slot * 1024];
+        AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(
+            c3MToMte1_[slot]);
+        LoadL0A32(aBuf, srcA);
+        LoadL0B32(bBuf, srcB);
+        AscendC::SetFlag<AscendC::HardEvent::MTE1_M>(
+            c3Mte1ToM_[slot]);
+        AscendC::WaitFlag<AscendC::HardEvent::MTE1_M>(
+            c3Mte1ToM_[slot]);
         if (!accumulate) {
             AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(
                 c3FixToM_[slot]);
@@ -512,8 +527,9 @@ private:
         mmad.cmatrixInitVal = !accumulate;
         mmad.cmatrixSource = false;
         mmad.unitFlag = 0;
-        AscendC::Mmad(result, l0A, l0B, mmad);
-        AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
+        AscendC::Mmad(result, aBuf, bBuf, mmad);
+        AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(
+            c3MToMte1_[slot]);
         if (last) {
             AscendC::SetFlag<AscendC::HardEvent::M_FIX>(
                 c3MToFix_[slot]);
@@ -667,10 +683,11 @@ private:
                         leaf == 0 ? kArch22InvY00 : kArch22InvY11;
                     if (round + 1 < kRounds) {
                         // Independent A^2 work fills the second L0C slot while
-                        // the Y result is ready for Fixpipe.
+                        // the Y result is ready for Fixpipe. Its L0A/L0B load
+                        // fills the bubble before Y's accumulate MMAD.
                         Mmad32(l0A, l0B, l0C, y, idL1[h], 0, false, false);
-                        Mmad32(l0A, l0B, l0C, y, a, 0, true, true);
                         Mmad32(l0A, l0B, l0C, a, a, 1, false, true);
+                        Mmad32(l0A, l0B, l0C, y, a, 0, true, true);
                     } else {
                         Mmad32(l0A, l0B, l0C, y, idL1[h], 0, false, false);
                         Mmad32(l0A, l0B, l0C, y, a, 0, true, true);
@@ -1345,6 +1362,10 @@ private:
         pipe_->ReleaseEventID<AscendC::HardEvent::M_FIX>(c3MToFix_[1]);
         pipe_->ReleaseEventID<AscendC::HardEvent::FIX_M>(c3FixToM_[0]);
         pipe_->ReleaseEventID<AscendC::HardEvent::FIX_M>(c3FixToM_[1]);
+        pipe_->ReleaseEventID<AscendC::HardEvent::M_MTE1>(c3MToMte1_[0]);
+        pipe_->ReleaseEventID<AscendC::HardEvent::M_MTE1>(c3MToMte1_[1]);
+        pipe_->ReleaseEventID<AscendC::HardEvent::MTE1_M>(c3Mte1ToM_[0]);
+        pipe_->ReleaseEventID<AscendC::HardEvent::MTE1_M>(c3Mte1ToM_[1]);
         for (uint32_t head = 0; head < Shape::kHeadsPerGroup; ++head) {
             pipe_->ReleaseEventID<AscendC::HardEvent::FIX_MTE2>(fixToMte2_[head]);
             pipe_->ReleaseEventID<AscendC::HardEvent::MTE2_MTE1>(tReady_[head]);
@@ -1367,6 +1388,8 @@ private:
     AscendC::TEventID fixToM_{};
     AscendC::TEventID c3MToFix_[2]{};
     AscendC::TEventID c3FixToM_[2]{};
+    AscendC::TEventID c3MToMte1_[2]{};
+    AscendC::TEventID c3Mte1ToM_[2]{};
     AscendC::TEventID fixToMte2_[Shape::kHeadsPerGroup]{};
     AscendC::TEventID tReady_[Shape::kHeadsPerGroup]{};
     AscendC::TEventID fixToMte1_[Shape::kHeadsPerGroup]{};

@@ -473,6 +473,10 @@ private:
             Workspace::kArch22SlotStride);
         AscendC::GlobalTensor<float> betaContext;
         betaContext.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(args_.workspace + slot + Workspace::kBetaEff));
+        AscendC::GlobalTensor<float> invAux;
+        invAux.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(
+            args_.workspace + slot + Workspace::kArch22InvAux),
+            Workspace::kArch22InvAuxBytes / sizeof(float));
         const uint32_t active = CeilDiv(chunk.validRows, Shape::kSubChunkRows);
         uint32_t compactElements = 0;
         for (uint32_t s = 0; s < active; ++s) {
@@ -506,6 +510,49 @@ private:
             ub[base + Arch22Ub::kV3Leaf0].template ReinterpretCast<int32_t>();
         V3Vf(raw, betaEff, aqk, lkk, b, x0, x1, negX1, akkPack,
              coeffOffsetInt, chunk.validRows, args_.tiling.scale);
+        auto zeroAkk = akkPack;
+        auto packedDiag = coeffOffsetInt.template ReinterpretCast<float>();
+        if constexpr (kCubeLeafInverse != 0) {
+            AscendC::Duplicate(zeroAkk,
+                               static_cast<bfloat16_t>(0), 4096);
+            AscendC::PipeBarrier<PIPE_V>();
+            const uint32_t topRows =
+                chunk.validRows < 32 ? chunk.validRows : 32;
+            const uint32_t bottomRows =
+                chunk.validRows > 32 ? chunk.validRows - 32 : 0;
+            // Preserve one identity tile for the AIC recurrence, then form
+            // Y00=I-L00 and Y11=I-L11 in-place.
+            // x0 is already a complete 32x32 identity here. Copy it as the
+            // recurrence's constant factor instead of forming I+I = 2I.
+            AscendC::Adds(negX1, x0, 0.0F, 1024);
+            constexpr uint8_t kFp32TileStride = 4;  // 32 FP32 = 4 blocks
+            constexpr uint8_t kFp32LkkStride = 8;   // 64 FP32 = 8 blocks
+            if (topRows != 0) {
+                AscendC::Sub(
+                    x0, x0, lkk, 32, static_cast<uint8_t>(topRows),
+                    {1, 1, 1, kFp32TileStride, kFp32TileStride,
+                     kFp32LkkStride});
+            }
+            if (bottomRows != 0) {
+                AscendC::Sub(
+                    x1, x1, lkk[32 * Shape::kChunkRows + 32], 32,
+                    static_cast<uint8_t>(bottomRows),
+                    {1, 1, 1, kFp32TileStride, kFp32TileStride,
+                     kFp32LkkStride});
+            }
+            AscendC::PipeBarrier<PIPE_V>();
+            if constexpr (kCubeInvProbe == 2) {
+                AscendC::Duplicate(akkPack, static_cast<bfloat16_t>(0), 4096);
+                AscendC::PipeBarrier<PIPE_V>();
+                for (uint32_t row = 0; row < topRows; ++row) {
+                    AscendC::Cast(
+                        akkPack[row * Shape::kChunkRows],
+                        packedDiag[row * 32],
+                        AscendC::RoundMode::CAST_RINT, 32);
+                }
+                AscendC::PipeBarrier<PIPE_V>();
+            }
+        }
         AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(sharedFree_);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
         AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
@@ -516,38 +563,148 @@ private:
         AscendC::GlobalTensor<bfloat16_t> akkRelay;
         akkRelay.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(
             args_.workspace + slot + Workspace::kPayload + Workspace::kAkk));
-        AscendC::DataCopy(akkRelay, akkPack,
-                          Shape::kChunkRows * Shape::kChunkRows);
+        if constexpr (kCubeLeafInverse != 0) {
+            AscendC::DataCopy(akkRelay, zeroAkk,
+                              Shape::kChunkRows * Shape::kChunkRows);
+        } else {
+            AscendC::DataCopy(akkRelay, akkPack,
+                              Shape::kChunkRows * Shape::kChunkRows);
+        }
         if constexpr (CompilePolicy::outputAkk) {
             const uint64_t outputOffset =
                 AOutputOffset(args_.tiling, chunk, valueHead);
             const uint32_t topRows = chunk.validRows < 32
                                          ? chunk.validRows
                                          : 32;
-            AscendC::DataCopyPad(
-                akkGm_[outputOffset], akkPack,
-                AscendC::DataCopyExtParams{
-                    1, static_cast<uint32_t>(
-                           topRows * Shape::kChunkRows * sizeof(bfloat16_t)),
-                    0, 0, 0});
+            if constexpr (kCubeLeafInverse != 0) {
+                AscendC::DataCopyPad(
+                    akkGm_[outputOffset], zeroAkk,
+                    AscendC::DataCopyExtParams{
+                        1, static_cast<uint32_t>(
+                               topRows * Shape::kChunkRows *
+                               sizeof(bfloat16_t)),
+                        0, 0, 0});
+            } else {
+                AscendC::DataCopyPad(
+                    akkGm_[outputOffset], akkPack,
+                    AscendC::DataCopyExtParams{
+                        1, static_cast<uint32_t>(
+                               topRows * Shape::kChunkRows *
+                               sizeof(bfloat16_t)),
+                        0, 0, 0});
+            }
             if (chunk.validRows > 32) {
                 const uint32_t bottomRows = chunk.validRows - 32;
                 constexpr uint32_t kBottomRightOffset =
                     32 * Shape::kChunkRows + 32;
+                if constexpr (kCubeLeafInverse != 0) {
+                    AscendC::DataCopyPad(
+                        akkGm_[outputOffset + kBottomRightOffset],
+                        zeroAkk[kBottomRightOffset],
+                        AscendC::DataCopyExtParams{
+                            static_cast<uint16_t>(bottomRows),
+                            32 * sizeof(bfloat16_t), 2, 64, 0});
+                } else {
+                    AscendC::DataCopyPad(
+                        akkGm_[outputOffset + kBottomRightOffset],
+                        akkPack[kBottomRightOffset],
+                        AscendC::DataCopyExtParams{
+                            static_cast<uint16_t>(bottomRows),
+                            32 * sizeof(bfloat16_t), 2, 64, 0});
+                }
+            }
+        }
+        if constexpr (kCubeLeafInverse != 0) {
+            const uint32_t topRows =
+                chunk.validRows < 32 ? chunk.validRows : 32;
+            const uint32_t bottomRows =
+                chunk.validRows > 32 ? chunk.validRows - 32 : 0;
+            AscendC::DataCopy(
+                invAux[Workspace::kArch22InvL00 / sizeof(float)],
+                lkk, 2048);
+            AscendC::DataCopy(
+                invAux[Workspace::kArch22InvY00 / sizeof(float)], x0,
+                static_cast<uint32_t>(topRows * 32));
+            if (topRows < 32) {
+                const uint32_t tail = (32 - topRows) * 32;
+                AscendC::DataCopy(
+                    invAux[Workspace::kArch22InvY00 / sizeof(float) +
+                           topRows * 32],
+                    x0[topRows * 32], tail);
+            }
+            AscendC::DataCopy(
+                invAux[Workspace::kArch22InvL11 / sizeof(float)],
+                lkk[32 * Shape::kChunkRows], 2048);
+            AscendC::DataCopy(
+                invAux[Workspace::kArch22InvY11 / sizeof(float)], x1,
+                static_cast<uint32_t>(bottomRows * 32));
+            if (bottomRows < 32) {
+                const uint32_t tail = (32 - bottomRows) * 32;
+                AscendC::DataCopy(
+                    invAux[Workspace::kArch22InvY11 / sizeof(float) +
+                           bottomRows * 32],
+                    x1[bottomRows * 32], tail);
+            }
+            AscendC::DataCopy(
+                invAux[Workspace::kArch22InvIdentity / sizeof(float)], negX1,
+                1024);
+            AscendC::DataCacheCleanAndInvalid<
+                float, AscendC::CacheLine::ENTIRE_DATA_CACHE,
+                AscendC::DcciDst::CACHELINE_OUT>(invAux);
+            AscendC::DataSyncBarrier<AscendC::MemDsbT::DDR>();
+            if constexpr (kCubeInvProbe == 3) {
+                AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(
+                    ioFree_[pair]);
+                AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(
+                    ioFree_[pair]);
+                AscendC::DataCopy(
+                    lkk,
+                    invAux[Workspace::kArch22InvL00 / sizeof(float)], 1024);
+                AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(
+                    inputReady_[pair]);
+                AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(
+                    inputReady_[pair]);
+                for (uint32_t row = 0; row < topRows; ++row) {
+                    AscendC::Cast(
+                        akkPack[row * Shape::kChunkRows],
+                        lkk[row * Shape::kChunkRows],
+                        AscendC::RoundMode::CAST_RINT, 32);
+                }
+                AscendC::PipeBarrier<PIPE_V>();
+                AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(
+                    outputReady_[pair]);
+                AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(
+                    outputReady_[pair]);
                 AscendC::DataCopyPad(
-                    akkGm_[outputOffset + kBottomRightOffset],
-                    akkPack[kBottomRightOffset],
+                    akkGm_[AOutputOffset(args_.tiling, chunk, valueHead)],
+                    akkPack,
                     AscendC::DataCopyExtParams{
-                        static_cast<uint16_t>(bottomRows),
-                        32 * sizeof(bfloat16_t), 2, 64, 0});
+                        1, static_cast<uint32_t>(
+                               topRows * Shape::kChunkRows *
+                               sizeof(bfloat16_t)),
+                        0, 0, 0});
             }
         }
         if (chunk.validRows > 32) {
             AscendC::GlobalTensor<float> payload;
             payload.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(
                 args_.workspace + slot + Workspace::kPayload));
-            AscendC::DataCopy(payload[Workspace::kX0 / sizeof(float)], x0, 1024);
-            AscendC::DataCopy(payload[Workspace::kNegX1 / sizeof(float)], negX1, 1024);
+            if constexpr (kCubeLeafInverse == 0) {
+                AscendC::DataCopy(payload[Workspace::kX0 / sizeof(float)], x0,
+                                  1024);
+                AscendC::DataCopy(payload[Workspace::kNegX1 / sizeof(float)],
+                                  negX1, 1024);
+            }
+            if constexpr (kCubeLeafInverse != 0) {
+                // C5 consumes negX1 @ T. Publish X1 positively for Akk, and
+                // negate B before C4 so its T becomes -T for that final MMAD.
+                AscendC::Muls(b, b, -1.0F, 1024);
+                AscendC::PipeBarrier<PIPE_V>();
+                AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(
+                    outputReady_[pair]);
+                AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(
+                    outputReady_[pair]);
+            }
             AscendC::DataCopy(payload[Workspace::kB / sizeof(float)], b, 1024);
         }
         AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(ioFree_[pair]);
@@ -1408,6 +1565,14 @@ private:
         AscendC::Duplicate(aqk, static_cast<bfloat16_t>(0),
                            Shape::kChunkRows * Shape::kChunkRows);
         AscendC::Duplicate(b, 0.0F, 1024);
+        if constexpr (kCubeLeafInverse != 0) {
+            // Tail chunks do not touch every element of L. AIC consumes a
+            // full 32x32 tile, so make its padding explicit. Do not clear
+            // akkPack here: it aliases the tail of the compact raw buffer and
+            // must remain untouched until unpacking has consumed rawAkk.
+            AscendC::Duplicate(lkk, 0.0F, 4096);
+            AscendC::PipeBarrier<PIPE_V>();
+        }
         // C2 按 s 堆叠 [rawAqk, rawAkk]，s 之前的 FP32 元素数为
         // subChunkRows^2*s*(s+1)。按全局行解包后，
         // 每个循环不再需要根据行号分支。
@@ -1545,58 +1710,61 @@ private:
                                kDiagonalBlockStride, kDiagonalRepeatStride);
         }
         AscendC::PipeBarrier<PIPE_V>();
-        // 单位下三角逆：X[i,:]=-sum(k<i,L[i,k]*X[k,:])，X[i,i]=1。
-        // 系数靠 Gather 每次只取一列，偏移张量与 k 无关，只随行号变化：
-        // offsets[i] = 256 * (i / 32 + 1) 字节，用 4 条矢量指令生成本次调用的
-        // 偏移表（Leaf0 区在 V3 内空闲）；系数区与乘积区放在已消费的
-        // compact raw 低地址。
-        // 每个 dst 行 32 个 lane 共用一个偏移，行数取两个叶里更大的那个。
-        constexpr uint32_t kLeafLanes = 32;
-        const uint32_t coeffCount =
-            (topRows > bottomRows ? topRows : bottomRows) * kLeafLanes;
-        AscendC::CreateVecIndex(coeffOffsetInt, 0, coeffCount);
-        AscendC::PipeBarrier<PIPE_V>();
-        AscendC::ShiftRight(coeffOffsetInt, coeffOffsetInt, 5, coeffCount);
-        AscendC::PipeBarrier<PIPE_V>();
-        AscendC::Adds(coeffOffsetInt, coeffOffsetInt, 1, coeffCount);
-        AscendC::PipeBarrier<PIPE_V>();
-        AscendC::Muls(coeffOffsetInt, coeffOffsetInt,
-                      static_cast<int32_t>(Shape::kChunkRows * sizeof(float)),
-                      coeffCount);
-        AscendC::PipeBarrier<PIPE_V>();
-        auto coeffOffset = coeffOffsetInt.template ReinterpretCast<uint32_t>();
-        auto coeffTile = raw;
-        auto prodTile = raw[2048];
-        // 合并两个叶子的逆：4 块 scratch 各 1024 FP32，仍在 compact raw 区间内
-        // （raw 可用到 5120 FP32，解包已经消费完，之后不再读 raw）。
-        auto coeffTileB = raw[3072];
-        auto prodTileB = raw[4096];
-        SolveTwoLeavesRightLooking(
-            x0, x1, lkk, coeffOffset, coeffTile, prodTile, coeffTileB,
-            prodTileB, topRows, bottomRows, 0,
-            32 * Shape::kChunkRows + 32, Shape::kChunkRows);
-        // B 已在解包 rawAkk 时直接写入；其余行保持零。
-        AscendC::PipeBarrier<PIPE_V>();
-        // C5 直接执行普通 MMAD：negX1@T，不依赖不存在的 negate 参数。
-        AscendC::Muls(negX1, x1, -1.0F, 1024);
-        AscendC::PipeBarrier<PIPE_V>();
+        if constexpr (kCubeLeafInverse == 0) {
+            // 单位下三角逆：X[i,:]=-sum(k<i,L[i,k]*X[k,:])，X[i,i]=1。
+            // 系数靠 Gather 每次只取一列，偏移张量与 k 无关，只随行号变化：
+            // offsets[i] = 256 * (i / 32 + 1) 字节，用 4 条矢量指令生成本次调用的
+            // 偏移表（Leaf0 区在 V3 内空闲）；系数区与乘积区放在已消费的
+            // compact raw 低地址。
+            // 每个 dst 行 32 个 lane 共用一个偏移，行数取两个叶里更大的那个。
+            constexpr uint32_t kLeafLanes = 32;
+            const uint32_t coeffCount =
+                (topRows > bottomRows ? topRows : bottomRows) * kLeafLanes;
+            AscendC::CreateVecIndex(coeffOffsetInt, 0, coeffCount);
+            AscendC::PipeBarrier<PIPE_V>();
+            AscendC::ShiftRight(coeffOffsetInt, coeffOffsetInt, 5, coeffCount);
+            AscendC::PipeBarrier<PIPE_V>();
+            AscendC::Adds(coeffOffsetInt, coeffOffsetInt, 1, coeffCount);
+            AscendC::PipeBarrier<PIPE_V>();
+            AscendC::Muls(coeffOffsetInt, coeffOffsetInt,
+                          static_cast<int32_t>(
+                              Shape::kChunkRows * sizeof(float)),
+                          coeffCount);
+            AscendC::PipeBarrier<PIPE_V>();
+            auto coeffOffset =
+                coeffOffsetInt.template ReinterpretCast<uint32_t>();
+            auto coeffTile = raw;
+            auto prodTile = raw[2048];
+            // 合并两个叶子的逆：4 块 scratch 各 1024 FP32，仍在 compact raw
+            // 区间内（raw 可用到 5120 FP32，解包已经消费完）。
+            auto coeffTileB = raw[3072];
+            auto prodTileB = raw[4096];
+            SolveTwoLeavesRightLooking(
+                x0, x1, lkk, coeffOffset, coeffTile, prodTile, coeffTileB,
+                prodTileB, topRows, bottomRows, 0,
+                32 * Shape::kChunkRows + 32, Shape::kChunkRows);
+            // B 已在解包 rawAkk 时直接写入；其余行保持零。
+            AscendC::PipeBarrier<PIPE_V>();
+            // C5 直接执行普通 MMAD：negX1@T，不依赖不存在的 negate 参数。
+            AscendC::Muls(negX1, x1, -1.0F, 1024);
+            AscendC::PipeBarrier<PIPE_V>();
 
-        // q00=X0、q01=0、q11=X1；q10 留给 C5 的 negX1@T。
-        AscendC::Duplicate(akkPack, static_cast<bfloat16_t>(0), 4096);
-        AscendC::PipeBarrier<PIPE_V>();
-        // 两段对角块的 Cast 目标互不重叠（列区间 0..31 与 32..63），源也
-        // 互不重叠，逐行屏障没有保护任何依赖，只会把 64 条独立 Cast 串行化。
-        // 每 head-chunk 的 32+32 个屏障全部去掉，最后统一等到 MTE3 发布。
-        for (uint32_t row = 0; row < topRows; ++row) {
-            AscendC::Cast(akkPack[row * Shape::kChunkRows],
-                          x0[row * 32], AscendC::RoundMode::CAST_RINT, 32);
+            // q00=X0、q01=0、q11=X1；q10 留给 C5 的 negX1@T。
+            AscendC::Duplicate(akkPack, static_cast<bfloat16_t>(0), 4096);
+            AscendC::PipeBarrier<PIPE_V>();
+            // 两段对角块的目标互不重叠，逐行屏障没有保护任何依赖。
+            for (uint32_t row = 0; row < topRows; ++row) {
+                AscendC::Cast(akkPack[row * Shape::kChunkRows],
+                              x0[row * 32], AscendC::RoundMode::CAST_RINT,
+                              32);
+            }
+            for (uint32_t row = 0; row < bottomRows; ++row) {
+                AscendC::Cast(
+                    akkPack[(row + 32) * Shape::kChunkRows + 32],
+                    x1[row * 32], AscendC::RoundMode::CAST_RINT, 32);
+            }
+            AscendC::PipeBarrier<PIPE_V>();
         }
-        for (uint32_t row = 0; row < bottomRows; ++row) {
-            AscendC::Cast(
-                akkPack[(row + 32) * Shape::kChunkRows + 32],
-                x1[row * 32], AscendC::RoundMode::CAST_RINT, 32);
-        }
-        AscendC::PipeBarrier<PIPE_V>();
     }
 
     __aicore__ inline void V6Vf(

@@ -19,8 +19,8 @@ constexpr uint64_t CHUNK_KDA_FWD_PREPARE_ARCH35_SLOT_BYTES = 0x1A400;
 // Arch22 的 slot 在 "105 KiB 公共区 + 20 KiB AIC relay" 之后追加 32 KiB RHS
 // 独立区（K_beta_g/V_beta），使 V6→C7 的交接不再与 V1 payload 复用地址。
 // 该值必须与 kernel 侧 Workspace::kArch22SlotStride 保持一致。
-// 0x27400 + 16 KiB「q/k 行平方和」relay（AIC 预算、AIV 的 V0 读取）。
-constexpr uint64_t CHUNK_KDA_FWD_PREPARE_ARCH22_SLOT_BYTES = 0x2B400;
+// 0x27400 + 16 KiB「q/k 行平方和」+ 28 KiB「AIC 叶逆暂存」。
+constexpr uint64_t CHUNK_KDA_FWD_PREPARE_ARCH22_SLOT_BYTES = 0x32400;
 constexpr uint64_t CHUNK_KDA_FWD_PREPARE_SLOTS_PER_WORKGROUP = 4;
 constexpr uint64_t CHUNK_KDA_FWD_PREPARE_ARCH35_WORKGROUP_BYTES =
     CHUNK_KDA_FWD_PREPARE_ARCH35_SLOT_BYTES *

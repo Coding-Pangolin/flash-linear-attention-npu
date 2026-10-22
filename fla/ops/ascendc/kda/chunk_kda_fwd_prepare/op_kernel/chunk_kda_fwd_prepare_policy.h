@@ -36,6 +36,11 @@ namespace KdaPrepare {
 
 // 诊断开关：AIV 是否消费 AIC 预算的 q/k 行平方和（0 时退回原向量 norm）。
 constexpr int kCubeNormBisect = 1;
+// A2 的 32x32 叶逆改由 AIC 批量计算。AIV 只准备 [L, I-L]（第二个叶为
+// [L, L-I]），避免 31 步串行 Gather/Mul/Sub 链占满向量核。
+constexpr int kCubeLeafInverse = 1;
+// Bring-up probe: when enabled, C3 publishes L00 instead of the inverse.
+constexpr int kCubeInvProbe = 0;
 
 enum class QkNormMode : uint8_t {
     Identity = CHUNK_KDA_FWD_PREPARE_NORM_IDENTITY,
@@ -168,8 +173,18 @@ constexpr uint32_t kArch22NormSum = kArch22RhsBase + kArch22RhsBytes;
 // 每 head 16 KiB：[q 的 2 个 32x32 Gram 块][k 的 2 个]，行主序 FP32，
 // 块内元素 (i,j) 在 i*32+j；对角线 i*33 就是第 i 行的 |x|^2。
 constexpr uint32_t kArch22NormSumBytes = 0x4000;
+// AIC 叶逆暂存：L00/L11 保留原 64 列 pitch，避免 UB 侧搬位；
+// Y 和 I 使用紧凑 32x32 FP32。
+constexpr uint32_t kArch22InvMatrixBytes = 0x1000;
+constexpr uint32_t kArch22InvAux = kArch22NormSum + kArch22NormSumBytes;
+constexpr uint32_t kArch22InvL00 = 0x0000; // [32,64] FP32
+constexpr uint32_t kArch22InvL11 = 0x2000; // [32,64] FP32, 使用列 32..63
+constexpr uint32_t kArch22InvY00 = 0x4000;
+constexpr uint32_t kArch22InvY11 = 0x5000;
+constexpr uint32_t kArch22InvIdentity = 0x6000;
+constexpr uint32_t kArch22InvAuxBytes = 0x7000;
 constexpr uint32_t kArch22SlotStride =
-    kArch22NormSum + kArch22NormSumBytes;
+    kArch22InvAux + kArch22InvAuxBytes;
 
 // payload 在不同 Stage 原址换义，不在 UB/L1 内搬位。
 constexpr uint32_t kX0 = 0x0000;

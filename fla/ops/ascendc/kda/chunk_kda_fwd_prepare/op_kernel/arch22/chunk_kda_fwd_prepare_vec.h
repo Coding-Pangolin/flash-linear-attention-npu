@@ -563,9 +563,16 @@ private:
         AscendC::GlobalTensor<bfloat16_t> akkRelay;
         akkRelay.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(
             args_.workspace + slot + Workspace::kPayload + Workspace::kAkk));
+        constexpr bool readFullAkkFromOutput =
+            kCubeLeafInverse != 0 && CompilePolicy::outputAkk;
         if constexpr (kCubeLeafInverse != 0) {
-            AscendC::DataCopy(akkRelay, zeroAkk,
-                              Shape::kChunkRows * Shape::kChunkRows);
+            if (readFullAkkFromOutput &&
+                chunk.validRows == Shape::kChunkRows) {
+                // C4 reads the final public Akk for full model chunks.
+            } else {
+                AscendC::DataCopy(akkRelay, zeroAkk,
+                                  Shape::kChunkRows * Shape::kChunkRows);
+            }
         } else {
             AscendC::DataCopy(akkRelay, akkPack,
                               Shape::kChunkRows * Shape::kChunkRows);

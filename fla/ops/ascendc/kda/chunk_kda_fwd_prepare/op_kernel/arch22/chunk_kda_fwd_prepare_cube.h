@@ -57,8 +57,14 @@ public:
         fixToMte1_[1] = pipe_->AllocEventID<AscendC::HardEvent::FIX_MTE1>(); // ID 1
         fixToMte1_[2] = pipe_->AllocEventID<AscendC::HardEvent::FIX_MTE1>(); // ID 2
         fixToMte1_[3] = pipe_->AllocEventID<AscendC::HardEvent::FIX_MTE1>(); // ID 3
+        c3MToFix_[0] = pipe_->AllocEventID<AscendC::HardEvent::M_FIX>();
+        c3MToFix_[1] = pipe_->AllocEventID<AscendC::HardEvent::M_FIX>();
+        c3FixToM_[0] = pipe_->AllocEventID<AscendC::HardEvent::FIX_M>();
+        c3FixToM_[1] = pipe_->AllocEventID<AscendC::HardEvent::FIX_M>();
         AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
         AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+        AscendC::SetFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[0]);
+        AscendC::SetFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[1]);
     }
 
     __aicore__ inline void Process()
@@ -76,6 +82,8 @@ public:
         if (workgroup_ >= coreCount_ || workBegin >= workEnd) {
             AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
             AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+            AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[0]);
+            AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[1]);
             ReleaseEvents();
             return;
         }
@@ -153,6 +161,13 @@ public:
                     AscendC::CrossCoreWaitFlag<0x2, PIPE_MTE2>(
                         kReadyFlagId[pair]);
                 }
+                // V6 depends only on V0/V1. Release both pairs immediately so
+                // the two AIVs can prepare qg/kg/RHS while this AIC executes
+                // C3/C4/C5. C7 below still waits for the V6 ready flag.
+                for (uint32_t pair = 0; pair < 2; ++pair) {
+                    AscendC::CrossCoreSetFlag<0x2, PIPE_MTE2>(
+                        kFreeFlagId[pair]);
+                }
                 if constexpr (kCubeLeafInverse != 0 &&
                               kCubeInvProbe != 4) {
                     StageC3(chunk, groupBegin, activeHeads);
@@ -163,11 +178,9 @@ public:
                     for (uint32_t headInPair = 0; headInPair < 2; ++headInPair) {
                         const uint32_t localHead = pair * 2 + headInPair;
                         if (localHead < activeHeads) {
-                            StageC4(chunk, localHead);
+                            StageC4(chunk, groupBegin, localHead);
                         }
                     }
-                    AscendC::CrossCoreSetFlag<0x2, PIPE_MTE2>(
-                        kFreeFlagId[pair]);
                 }
 
                 // C5：只在下半块存在时计算 Akk[32:M,0:32]=negX1@T。
@@ -192,6 +205,8 @@ public:
         }
         AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
         AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+        AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[0]);
+        AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[1]);
         ReleaseEvents();
     }
 
@@ -475,16 +490,19 @@ private:
         AscendC::LocalTensor<float> l0C,
         AscendC::LocalTensor<float> srcA,
         AscendC::LocalTensor<float> srcB,
+        uint32_t slot,
         bool accumulate,
         bool last)
     {
+        auto result = l0C[slot * 1024];
         AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
         LoadL0A32(l0A, srcA);
         LoadL0B32(l0B, srcB);
         AscendC::SetFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
         AscendC::WaitFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
         if (!accumulate) {
-            AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+            AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(
+                c3FixToM_[slot]);
         }
         AscendC::SetHF32Mode(false);
         AscendC::MmadParams mmad{};
@@ -494,40 +512,54 @@ private:
         mmad.cmatrixInitVal = !accumulate;
         mmad.cmatrixSource = false;
         mmad.unitFlag = 0;
-        AscendC::Mmad(l0C, l0A, l0B, mmad);
+        AscendC::Mmad(result, l0A, l0B, mmad);
         AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
         if (last) {
-            AscendC::SetFlag<AscendC::HardEvent::M_FIX>(mToFix_);
+            AscendC::SetFlag<AscendC::HardEvent::M_FIX>(
+                c3MToFix_[slot]);
         }
     }
 
-    __aicore__ inline void FixpipeFp32Nz(
+    __aicore__ inline void FixpipeFp32NzRaw(
         AscendC::GlobalTensor<float> dst,
-        AscendC::LocalTensor<float> l0C)
+        AscendC::LocalTensor<float> l0C,
+        uint32_t slot)
     {
         auto fix = AscendC::FixpipeParamsV220(32, 32, 32, 32, false);
         fix.quantPre = QuantMode_t::NoQuant;
         fix.isChannelSplit = true;
-        AscendC::Fixpipe<float, float, kFixpipeNz>(dst, l0C, fix);
+        AscendC::Fixpipe<float, float, kFixpipeNz>(
+            dst, l0C[slot * 1024], fix);
     }
 
-    __aicore__ inline void FixpipeAkkRowMajor(
+    __aicore__ inline void FixpipeFp32Nz(
+        AscendC::GlobalTensor<float> dst,
+        AscendC::LocalTensor<float> l0C,
+        uint32_t slot)
+    {
+        AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(c3MToFix_[slot]);
+        FixpipeFp32NzRaw(dst, l0C, slot);
+        AscendC::SetFlag<AscendC::HardEvent::FIX_M>(c3FixToM_[slot]);
+    }
+
+    __aicore__ inline void FixpipeAkkRowMajorRaw(
         AscendC::GlobalTensor<bfloat16_t> dst,
         AscendC::LocalTensor<float> l0C,
-        uint32_t rows)
+        uint32_t rows,
+        uint32_t slot)
     {
         auto fix = AscendC::FixpipeParamsV220(
             32, rows, 32, Shape::kChunkRows, false);
         fix.quantPre = QuantMode_t::F322BF16;
         AscendC::Fixpipe<bfloat16_t, float, AscendC::CFG_ROW_MAJOR>(
-            dst, l0C, fix);
+            dst, l0C[slot * 1024], fix);
     }
 
     __aicore__ inline void StageC3(
         const ChunkRange &chunk, uint32_t groupBegin, uint32_t activeHeads)
     {
         using namespace Workspace;
-        constexpr uint32_t kRounds = 4;
+        constexpr uint32_t kRounds = 2;
         auto l1Bytes = l1Buf_.Get<uint8_t>();
         auto l0A = l0ABuf_.Get<float>();
         auto l0B = l0BBuf_.Get<float>();
@@ -578,16 +610,12 @@ private:
         // Convert A=-L into A=L^2 once. The remaining four rounds then consume
         // the product factors (I+L^2), (I+L^4), (I+L^8), (I+L^16).
         for (uint32_t h = 0; h < activeHeads; ++h) {
-            Mmad32(l0A, l0B, l0C, a0L1[h], a0L1[h], false, true);
-            AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(mToFix_);
+            Mmad32(l0A, l0B, l0C, a0L1[h], a0L1[h], 0, false, true);
+            Mmad32(l0A, l0B, l0C, a1L1[h], a1L1[h], 1, false, true);
             FixpipeFp32Nz(
-                aux[h][kArch22InvL00 / sizeof(float)], l0C);
-            AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
-            Mmad32(l0A, l0B, l0C, a1L1[h], a1L1[h], false, true);
-            AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(mToFix_);
+                aux[h][kArch22InvL00 / sizeof(float)], l0C, 0);
             FixpipeFp32Nz(
-                aux[h][kArch22InvL11 / sizeof(float)], l0C);
-            AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+                aux[h][kArch22InvL11 / sizeof(float)], l0C, 1);
             AscendC::SetFlag<AscendC::HardEvent::FIX_MTE2>(fixToMte2_[h]);
         }
         for (uint32_t h = 0; h < activeHeads; ++h) {
@@ -607,8 +635,9 @@ private:
 
         if constexpr (kCubeInvProbe == 1) {
             for (uint32_t h = 0; h < activeHeads; ++h) {
-                Mmad32(l0A, l0B, l0C, a0L1[h], idL1[h], false, true);
-                AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(mToFix_);
+                Mmad32(l0A, l0B, l0C, a0L1[h], idL1[h], 0, false, true);
+                AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(
+                    c3MToFix_[0]);
                 const uint32_t valueHead = groupBegin + h;
                 const uint32_t rows =
                     chunk.validRows < 32 ? chunk.validRows : 32;
@@ -617,8 +646,9 @@ private:
                     reinterpret_cast<__gm__ bfloat16_t *>(args_.akk) +
                         AOutputOffset(args_.tiling, chunk, valueHead),
                     rows * Shape::kChunkRows);
-                FixpipeAkkRowMajor(out, l0C, rows);
-                AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+                FixpipeAkkRowMajorRaw(out, l0C, rows, 0);
+                AscendC::SetFlag<AscendC::HardEvent::FIX_M>(
+                    c3FixToM_[0]);
             }
             return;
         }
@@ -635,14 +665,22 @@ private:
                         leaf == 0 ? kArch22InvL00 : kArch22InvL11;
                     const uint32_t yOffset =
                         leaf == 0 ? kArch22InvY00 : kArch22InvY11;
-                    // Y_new = Y*I + Y*A = Y*(I+A).
-                    Mmad32(l0A, l0B, l0C, y, idL1[h], false, true);
-                    AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(mToFix_);
-                    Mmad32(l0A, l0B, l0C, y, a, true, true);
-                    AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(mToFix_);
-                    FixpipeFp32Nz(
-                        aux[h][yOffset / sizeof(float)], l0C);
+                    if (round + 1 < kRounds) {
+                        // Independent A^2 work fills the second L0C slot while
+                        // the Y result is ready for Fixpipe.
+                        Mmad32(l0A, l0B, l0C, y, idL1[h], 0, false, false);
+                        Mmad32(l0A, l0B, l0C, y, a, 0, true, true);
+                        Mmad32(l0A, l0B, l0C, a, a, 1, false, true);
+                    } else {
+                        Mmad32(l0A, l0B, l0C, y, idL1[h], 0, false, false);
+                        Mmad32(l0A, l0B, l0C, y, a, 0, true, true);
+                    }
+
                     if (round + 1 == kRounds) {
+                        AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(
+                            c3MToFix_[0]);
+                        FixpipeFp32NzRaw(
+                            aux[h][yOffset / sizeof(float)], l0C, 0);
                         AscendC::GlobalTensor<bfloat16_t> payloadAkk;
                         payloadAkk.SetGlobalBuffer(
                             reinterpret_cast<__gm__ bfloat16_t *>(
@@ -653,8 +691,13 @@ private:
                             Shape::kChunkRows * Shape::kChunkRows);
                         const uint32_t blockOffset =
                             leaf == 0 ? 0 : 32 * Shape::kChunkRows + 32;
-                        FixpipeAkkRowMajor(
-                            payloadAkk[blockOffset], l0C, 32);
+                        constexpr bool readFullAkkFromOutput =
+                            CompilePolicy::outputAkk;
+                        if (!readFullAkkFromOutput ||
+                            chunk.validRows != Shape::kChunkRows) {
+                            FixpipeAkkRowMajorRaw(
+                                payloadAkk[blockOffset], l0C, 32, 0);
+                        }
                         if constexpr (CompilePolicy::outputAkk) {
                             const uint32_t valueHead = groupBegin + h;
                             const uint32_t rows =
@@ -676,18 +719,17 @@ private:
                                         args_.akk) +
                                         outOffset,
                                     rows * Shape::kChunkRows);
-                                FixpipeAkkRowMajor(out, l0C, rows);
+                                FixpipeAkkRowMajorRaw(
+                                    out, l0C, rows, 0);
                             }
                         }
-                    }
-                    AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
-
-                    if (round + 1 < kRounds) {
-                        Mmad32(l0A, l0B, l0C, a, a, false, true);
-                        AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(mToFix_);
+                        AscendC::SetFlag<AscendC::HardEvent::FIX_M>(
+                            c3FixToM_[0]);
+                    } else {
                         FixpipeFp32Nz(
-                            aux[h][aOffset / sizeof(float)], l0C);
-                        AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+                            aux[h][yOffset / sizeof(float)], l0C, 0);
+                        FixpipeFp32Nz(
+                            aux[h][aOffset / sizeof(float)], l0C, 1);
                     }
                 }
                 AscendC::SetFlag<AscendC::HardEvent::FIX_MTE2>(fixToMte2_[h]);
@@ -854,6 +896,7 @@ private:
     }
 
     __aicore__ inline void StageC4(const ChunkRange &chunk,
+                                   uint32_t groupBegin,
                                    uint32_t localHead)
     {
         const uint64_t slot = WorkspaceSlotBase(
@@ -863,8 +906,24 @@ private:
         auto akkL1 = l1Bytes[L1::kAkk + localHead * L1::kAkkStride]
                          .template ReinterpretCast<bfloat16_t>();
         AscendC::GlobalTensor<bfloat16_t> akkSource;
-        akkSource.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(
-            args_.workspace + slot + Workspace::kPayload + Workspace::kAkk));
+        if constexpr (CompilePolicy::outputAkk) {
+            if (chunk.validRows == Shape::kChunkRows) {
+                const uint32_t valueHead = groupBegin + localHead;
+                akkSource.SetGlobalBuffer(
+                    reinterpret_cast<__gm__ bfloat16_t *>(args_.akk) +
+                        AOutputOffset(args_.tiling, chunk, valueHead),
+                    Shape::kChunkRows * Shape::kChunkRows);
+            } else {
+                akkSource.SetGlobalBuffer(
+                    reinterpret_cast<__gm__ bfloat16_t *>(
+                        args_.workspace + slot + Workspace::kPayload +
+                        Workspace::kAkk));
+            }
+        } else {
+            akkSource.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(
+                args_.workspace + slot + Workspace::kPayload +
+                Workspace::kAkk));
+        }
         AscendC::Nd2NzParams akkCopy{};
         akkCopy.ndNum = 1;
         akkCopy.nValue = Shape::kChunkRows;
@@ -1282,6 +1341,10 @@ private:
         pipe_->ReleaseEventID<AscendC::HardEvent::M_MTE1>(mToMte1_);
         pipe_->ReleaseEventID<AscendC::HardEvent::M_FIX>(mToFix_);
         pipe_->ReleaseEventID<AscendC::HardEvent::FIX_M>(fixToM_);
+        pipe_->ReleaseEventID<AscendC::HardEvent::M_FIX>(c3MToFix_[0]);
+        pipe_->ReleaseEventID<AscendC::HardEvent::M_FIX>(c3MToFix_[1]);
+        pipe_->ReleaseEventID<AscendC::HardEvent::FIX_M>(c3FixToM_[0]);
+        pipe_->ReleaseEventID<AscendC::HardEvent::FIX_M>(c3FixToM_[1]);
         for (uint32_t head = 0; head < Shape::kHeadsPerGroup; ++head) {
             pipe_->ReleaseEventID<AscendC::HardEvent::FIX_MTE2>(fixToMte2_[head]);
             pipe_->ReleaseEventID<AscendC::HardEvent::MTE2_MTE1>(tReady_[head]);
@@ -1302,6 +1365,8 @@ private:
     AscendC::TEventID mToMte1_{};
     AscendC::TEventID mToFix_{};
     AscendC::TEventID fixToM_{};
+    AscendC::TEventID c3MToFix_[2]{};
+    AscendC::TEventID c3FixToM_[2]{};
     AscendC::TEventID fixToMte2_[Shape::kHeadsPerGroup]{};
     AscendC::TEventID tReady_[Shape::kHeadsPerGroup]{};
     AscendC::TEventID fixToMte1_[Shape::kHeadsPerGroup]{};

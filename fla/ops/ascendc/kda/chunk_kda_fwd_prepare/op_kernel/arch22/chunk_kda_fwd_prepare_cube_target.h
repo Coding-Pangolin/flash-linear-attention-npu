@@ -169,7 +169,8 @@ __aicore__ inline bool FirstGroup(TargetCubeContext<CompilePolicy> &ctx, uint32_
                                   ChunkRange &chunk, uint32_t &groupBegin, uint32_t &activeHeads);
 
 template <typename CompilePolicy>
-__aicore__ inline bool NextGroup(TargetCubeContext<CompilePolicy> &ctx, uint32_t work, uint32_t groupBegin,
+__aicore__ inline bool NextGroup(TargetCubeContext<CompilePolicy> &ctx, const ChunkRange &currentChunk,
+                                 uint32_t work, uint32_t groupBegin,
                                  uint32_t activeHeads, uint32_t headEnd, uint32_t workEnd, ChunkRange &chunk,
                                  uint32_t &nextGroup, uint32_t &nextActive);
 
@@ -348,7 +349,7 @@ __aicore__ inline void ProcessTargetCube(TargetCubeContext<CompilePolicy> &ctx)
                 ChunkRange nextChunk{};
                 uint32_t nextGroup = 0;
                 uint32_t nextActive = 0;
-                if (NextGroup<CompilePolicy>(ctx, work, groupBegin, activeHeads, headEnd, workEnd, nextChunk, nextGroup,
+                if (NextGroup<CompilePolicy>(ctx, chunk, work, groupBegin, activeHeads, headEnd, workEnd, nextChunk, nextGroup,
                                              nextActive)) {
                     StageNormSums<CompilePolicy>(ctx, nextChunk, nextGroup, nextActive);
                 }
@@ -445,13 +446,16 @@ __aicore__ inline bool FirstGroup(TargetCubeContext<CompilePolicy> &ctx, uint32_
 
 // 当前 group 之后的下一个 group；跨 work item 时按主循环规则重新解码。
 template <typename CompilePolicy>
-__aicore__ inline bool NextGroup(TargetCubeContext<CompilePolicy> &ctx, uint32_t work, uint32_t groupBegin,
+__aicore__ inline bool NextGroup(TargetCubeContext<CompilePolicy> &ctx, const ChunkRange &currentChunk,
+                                 uint32_t work, uint32_t groupBegin,
                                  uint32_t activeHeads, uint32_t headEnd, uint32_t workEnd, ChunkRange &chunk,
                                  uint32_t &nextGroup, uint32_t &nextActive)
 {
     uint32_t cursor = groupBegin + activeHeads;
     uint32_t cursorWork = work;
-    ChunkRange cursorChunk = chunk;
+    // The output chunk starts empty. A head-group lookahead within the same
+    // work item must retain the current chunk, including its valid row count.
+    ChunkRange cursorChunk = currentChunk;
     uint32_t cursorEnd = headEnd;
     while (true) {
         if (cursor < cursorEnd) {

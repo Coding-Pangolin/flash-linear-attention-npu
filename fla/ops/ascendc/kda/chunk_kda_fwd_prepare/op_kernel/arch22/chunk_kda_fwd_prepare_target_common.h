@@ -13,8 +13,6 @@ namespace KdaPrepare::Arch22Target {
 
 // These resources belong only to the target variant. The upstream fallback
 // keeps its FP32 RHS/Akk layout and its existing event ownership.
-constexpr int kCubeNormBisect = 1;
-constexpr int kCubeInvProbe = 0;
 
 namespace Workspace {
 // 两套架构共用前 105 KiB：33 KiB context + 72 KiB stage payload。
@@ -32,15 +30,12 @@ constexpr uint32_t kArch22RawScoreBytes = 0x5000;
 constexpr uint32_t kArch22TRelay = kArch22CubeRelay;
 // Arch22：V6→C7 的 RHS（K_beta_g/V_beta）使用 slot 尾部独立 32 KiB，
 // 不再与 V1 payload 复用地址，避免 RHS 与 score payload 的地址重叠写。
-constexpr uint32_t kArch22RhsBase =
-    kArch22CubeRelay + kArch22RawScoreBytes;
+constexpr uint32_t kArch22RhsBase = kArch22CubeRelay + kArch22RawScoreBytes;
 constexpr uint32_t kArch22RhsMatrixBytes = 0x4000; // [64,128] * BF16
 constexpr uint32_t kArch22RhsKBetaG = kArch22RhsBase;
 constexpr uint32_t kArch22RhsVBeta = kArch22RhsBase + kArch22RhsMatrixBytes;
 constexpr uint32_t kArch22RhsBytes = 2 * kArch22RhsMatrixBytes;
-// Arch22：AIC 为“下一个 group”预算的 q/k 行平方和。每 head 8 KiB：
-// [q 的 4 个 16x16 Gram 块][k 的 4 个]，行主序 FP32，块内元素 (i,j) 在
-// i*16+j；对角线 i*17 就是第 i 行的 |x|^2。AIV 的 V0 只读对角线。
+// AIC 为下一 group 预算 q/k 行平方和，V0 只消费 Gram 矩阵的对角线。
 constexpr uint32_t kArch22NormSum = kArch22RhsBase + kArch22RhsBytes;
 // 每 head 16 KiB：[q 的 2 个 32x32 Gram 块][k 的 2 个]，行主序 FP32，
 // 块内元素 (i,j) 在 i*32+j；对角线 i*33 就是第 i 行的 |x|^2。
@@ -56,8 +51,7 @@ constexpr uint32_t kArch22InvY11 = 0x5000;
 constexpr uint32_t kArch22InvIdentity = 0x6000;
 constexpr uint32_t kArch22InvAuxBytes = 0x7000;
 constexpr uint32_t kArch22BaseSlotStride = kArch22InvAux;
-constexpr uint32_t kArch22TargetSlotStride =
-    kArch22InvAux + kArch22InvAuxBytes;
+constexpr uint32_t kArch22TargetSlotStride = kArch22InvAux + kArch22InvAuxBytes;
 // Compatibility name used by the original arch22 implementation.
 constexpr uint32_t kArch22SlotStride = kArch22BaseSlotStride;
 
@@ -70,18 +64,15 @@ constexpr uint32_t kKBetaG = 0x7800;
 constexpr uint32_t kVBeta = 0xB800;
 
 constexpr uint32_t kArch22SlotCount = 4;
-constexpr uint32_t kArch22WorkgroupStride =
-    kArch22SlotCount * kArch22SlotStride;
+constexpr uint32_t kArch22WorkgroupStride = kArch22SlotCount * kArch22SlotStride;
 constexpr uint32_t kArch35SlotCount = 4;
-constexpr uint32_t kArch35WorkgroupStride =
-    kArch35SlotCount * kSlotStride;
+constexpr uint32_t kArch35WorkgroupStride = kArch35SlotCount * kSlotStride;
 } // namespace Workspace
 
 namespace L1 {
 constexpr uint32_t kCapacity = 0x80000;
 constexpr uint32_t kHeadLaneBytes = 0x12000;
-constexpr uint32_t kHeadLane[Shape::kHeadsPerGroup] = {
-    0x00000, 0x12000, 0x24000, 0x36000};
+constexpr uint32_t kHeadLane[Shape::kHeadsPerGroup] = {0x00000, 0x12000, 0x24000, 0x36000};
 constexpr uint32_t kX0 = 0x48000;
 constexpr uint32_t kNegX1 = 0x4C000;
 constexpr uint32_t kT = 0x50000;
@@ -95,16 +86,14 @@ constexpr uint32_t kPeak = 0x5C000;
 
 namespace Arch22Ub {
 constexpr uint32_t kHardwareBytes = 0x30000; // 192 KiB
-// 实验 B：把原先保留的末尾 8 KiB 也纳入分配，供 V1/V6 的第二个 FP32
-// staging 使用（16 行 tile）。若 InitBuffer 拒绝或结果异常即回退。
+// V1/V6 的 16 行 tile 需要两个独立 FP32 staging，覆盖全部 192 KiB UB。
 constexpr uint32_t kUsableBytes = 0x30000;
 constexpr uint32_t kPrivateBytes = 0x12000;
 constexpr uint32_t kPrivateBase[2] = {0x00000, 0x1C000};
 constexpr uint32_t kSharedBase = 0x12000;
 constexpr uint32_t kSharedG = kSharedBase;
 constexpr uint32_t kSharedScratch = kSharedBase + 0x8000;
-// 硬件预留尾区（0x2E000..0x30000）。实测未被运行时占用，V1/V6 用它做
-// 第二个 FP32 staging，从而把 tile 从 8 行提升到 16 行。
+// 第二个 FP32 staging 使用尾部 8 KiB，与 private/shared 活跃区互不重叠。
 constexpr uint32_t kScratchTail = 0x2E000;
 
 constexpr uint32_t kQ = 0x0000;
@@ -152,37 +141,31 @@ constexpr uint32_t kV6KBetaG = 0xC000;
 constexpr uint32_t kV6QgScaled = kSharedG;
 } // namespace Arch22Ub
 
-static_assert(Workspace::kArch22TargetSlotStride ==
-              Arch22TargetConfig::kSlotBytes);
-static_assert(Workspace::kArch22SlotCount ==
-              Arch22TargetConfig::kSlotCount);
+static_assert(Workspace::kArch22TargetSlotStride == Arch22TargetConfig::kSlotBytes);
+static_assert(Workspace::kArch22SlotCount == Arch22TargetConfig::kSlotCount);
 static_assert(L1::kPeak <= L1::kCapacity);
 static_assert(Arch22Ub::kUsableBytes <= Arch22Ub::kHardwareBytes);
 
-__aicore__ inline uint32_t TargetPartitionCount(
-    const PrepareRuntimeTiling &tiling)
+__aicore__ inline uint32_t TargetPartitionCount(const PrepareRuntimeTiling &tiling)
 {
     return CeilDiv(tiling.valueHeadNum, tiling.headsPerPartition);
 }
 
-__aicore__ inline uint32_t TargetTotalWorkItems(
-    const PrepareRuntimeTiling &tiling)
+__aicore__ inline uint32_t TargetTotalWorkItems(const PrepareRuntimeTiling &tiling)
 {
     return tiling.batch * tiling.totalChunks * TargetPartitionCount(tiling);
 }
 
-__aicore__ inline void TargetDecodeWorkItem(
-    const PrepareRuntimeTiling &tiling, uint32_t workItem,
-    uint32_t &chunk, uint32_t &headPartition)
+__aicore__ inline void TargetDecodeWorkItem(const PrepareRuntimeTiling &tiling, uint32_t workItem, uint32_t &chunk,
+                                            uint32_t &headPartition)
 {
     const uint32_t partitions = TargetPartitionCount(tiling);
     chunk = workItem / partitions;
     headPartition = workItem % partitions;
 }
 
-__aicore__ inline void TargetHeadRange(
-    const PrepareRuntimeTiling &tiling, uint32_t headPartition,
-    uint32_t &headBegin, uint32_t &headEnd)
+__aicore__ inline void TargetHeadRange(const PrepareRuntimeTiling &tiling, uint32_t headPartition, uint32_t &headBegin,
+                                       uint32_t &headEnd)
 {
     headBegin = headPartition * tiling.headsPerPartition;
     headEnd = headBegin + tiling.headsPerPartition;

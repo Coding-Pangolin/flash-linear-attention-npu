@@ -49,9 +49,9 @@ __aicore__ inline void RunPrepare(const PrepareKernelArgs &args)
 #else
         AscendC::TPipe pipe;
         if constexpr (CompilePolicy::arch22FastLeaf) {
-            Arch22Target::ChunkKdaFwdPrepareVec<GateT, BetaT, CompilePolicy> vec;
-            vec.Init(args, &pipe);
-            vec.Process();
+            Arch22Target::TargetVectorContext<GateT, BetaT, CompilePolicy> vec;
+            Arch22Target::InitTargetVec(vec, args, &pipe);
+            Arch22Target::ProcessTargetVec(vec);
         } else {
             Arch22::ChunkKdaFwdPrepareVec<GateT, BetaT, CompilePolicy> vec;
             vec.Init(args, &pipe);
@@ -68,9 +68,9 @@ __aicore__ inline void RunPrepare(const PrepareKernelArgs &args)
 #else
         AscendC::TPipe pipe;
         if constexpr (CompilePolicy::arch22FastLeaf) {
-            Arch22Target::ChunkKdaFwdPrepareCube<CompilePolicy> cube;
-            cube.Init(args, &pipe);
-            cube.Process();
+            Arch22Target::TargetCubeContext<CompilePolicy> cube;
+            Arch22Target::InitTargetCube(cube, args, &pipe);
+            Arch22Target::ProcessTargetCube(cube);
         } else {
             Arch22::ChunkKdaFwdPrepareCube<CompilePolicy> cube;
             cube.Init(args, &pipe);

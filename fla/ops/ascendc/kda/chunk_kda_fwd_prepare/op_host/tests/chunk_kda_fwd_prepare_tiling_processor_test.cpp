@@ -51,8 +51,8 @@ bool CheckChunkOnlySchedule()
         2, 4, 8, 16, 0, 24, 1024, false};
     optiling::ChunkKdaFwdPrepareSchedule schedule;
     return optiling::ChunkKdaFwdPrepareTilingProcessor(context).Process(schedule) &&
-        schedule.chunkWorkItems == 32 && schedule.totalWorkItems == 32 &&
-        schedule.usedCoreNum == 24 && schedule.headsPerPartition == 8 &&
+        schedule.chunkWorkItems == 32 && schedule.totalWorkItems == 64 &&
+        schedule.usedCoreNum == 24 && schedule.headsPerPartition == 4 &&
         schedule.workspaceBytes ==
             1024 + 24 *
                 optiling::CHUNK_KDA_FWD_PREPARE_ARCH22_WORKGROUP_BYTES;
@@ -62,18 +62,28 @@ bool CheckArchSpecificWorkspace()
 {
     optiling::ChunkKdaFwdPrepareScheduleContext arch22Context{
         2, 4, 8, 16, 0, 24, 1024, false};
+    auto arch22BaseContext = arch22Context;
+    arch22BaseContext.workspaceSlotBytes =
+        optiling::CHUNK_KDA_FWD_PREPARE_ARCH22_BASE_SLOT_BYTES;
     auto arch35Context = arch22Context;
     arch35Context.workspaceSlotBytes =
         optiling::CHUNK_KDA_FWD_PREPARE_ARCH35_SLOT_BYTES;
     optiling::ChunkKdaFwdPrepareSchedule arch22Schedule;
+    optiling::ChunkKdaFwdPrepareSchedule arch22BaseSchedule;
     optiling::ChunkKdaFwdPrepareSchedule arch35Schedule;
     return optiling::ChunkKdaFwdPrepareTilingProcessor(arch22Context)
                .Process(arch22Schedule) &&
+        optiling::ChunkKdaFwdPrepareTilingProcessor(arch22BaseContext)
+            .Process(arch22BaseSchedule) &&
         optiling::ChunkKdaFwdPrepareTilingProcessor(arch35Context)
             .Process(arch35Schedule) &&
         arch22Schedule.workspaceBytes ==
             1024 + 24 *
                 optiling::CHUNK_KDA_FWD_PREPARE_ARCH22_WORKGROUP_BYTES &&
+        arch22BaseSchedule.workspaceBytes ==
+            1024 + 24 *
+                optiling::CHUNK_KDA_FWD_PREPARE_ARCH22_BASE_SLOT_BYTES *
+                optiling::CHUNK_KDA_FWD_PREPARE_SLOTS_PER_WORKGROUP &&
         arch35Schedule.workspaceBytes ==
             1024 + 24 *
                 optiling::CHUNK_KDA_FWD_PREPARE_ARCH35_WORKGROUP_BYTES;
@@ -95,8 +105,8 @@ bool CheckVarLenSchedule()
         1, 3, 12, 0, 7, 6, 4096, true};
     optiling::ChunkKdaFwdPrepareSchedule schedule;
     return optiling::ChunkKdaFwdPrepareTilingProcessor(context).Process(schedule) &&
-        schedule.chunkWorkItems == 7 && schedule.totalWorkItems == 7 &&
-        schedule.usedCoreNum == 6 && schedule.headsPerPartition == 12;
+        schedule.chunkWorkItems == 7 && schedule.totalWorkItems == 21 &&
+        schedule.usedCoreNum == 6 && schedule.headsPerPartition == 4;
 }
 
 bool CheckInvalidGva()

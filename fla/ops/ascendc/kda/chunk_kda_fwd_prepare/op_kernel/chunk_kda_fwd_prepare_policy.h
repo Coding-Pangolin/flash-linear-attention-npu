@@ -36,9 +36,6 @@ namespace KdaPrepare {
 
 // 诊断开关：AIV 是否消费 AIC 预算的 q/k 行平方和（0 时退回原向量 norm）。
 constexpr int kCubeNormBisect = 1;
-// A2 的 32x32 叶逆改由 AIC 批量计算。AIV 只准备 [L, I-L]（第二个叶为
-// [L, L-I]），避免 31 步串行 Gather/Mul/Sub 链占满向量核。
-constexpr int kCubeLeafInverse = 1;
 // Bring-up probe: when enabled, C3 publishes L00 instead of the inverse.
 constexpr int kCubeInvProbe = 0;
 
@@ -114,6 +111,12 @@ struct PrepareCompilePolicy {
     static constexpr bool useExp2 = USE_EXP2;
     static constexpr bool safeGate = SAFE_GATE;
     static constexpr OutputMode outputMode = OUTPUT_MODE;
+    // Precomputed gate does not consume SAFE_GATE, so its otherwise
+    // ungenerated value 1 selects the target-only AIC single-round inverse.
+    // Other arch22 keys compile the original AIV implementation.
+    static constexpr bool arch22FastLeaf =
+        SAFE_GATE && GATE_MODE == GateMode::PrecomputedStep;
+    static constexpr bool arch22CubeLeaf = arch22FastLeaf;
     // None/Forward/Recompute/Save 四档的搬出集合：
     //   outputAkk          : Akk（None 之外都写）
     //   outputRecomputeAux : qHat/kHat/qRstd/kRstd/betaEff
@@ -183,8 +186,11 @@ constexpr uint32_t kArch22InvY00 = 0x4000;
 constexpr uint32_t kArch22InvY11 = 0x5000;
 constexpr uint32_t kArch22InvIdentity = 0x6000;
 constexpr uint32_t kArch22InvAuxBytes = 0x7000;
-constexpr uint32_t kArch22SlotStride =
+constexpr uint32_t kArch22BaseSlotStride = kArch22InvAux;
+constexpr uint32_t kArch22TargetSlotStride =
     kArch22InvAux + kArch22InvAuxBytes;
+// Compatibility name used by the original arch22 implementation.
+constexpr uint32_t kArch22SlotStride = kArch22BaseSlotStride;
 
 // payload 在不同 Stage 原址换义，不在 UB/L1 内搬位。
 constexpr uint32_t kX0 = 0x0000;

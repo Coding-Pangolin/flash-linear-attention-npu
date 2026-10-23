@@ -21,8 +21,10 @@ live in `Arch22Target`, so the upstream FP32 RHS/Akk fallback layout and A5
 resources remain independent. The target uses 192 KiB UB and 368 KiB L1;
 compile-time assertions bound both resources and match the host slot size.
 
-For B=1, T=8192, HK=HV=96 and 24 AIC cores, the target selects four head
-partitions, each with 24 heads: 128 chunks become 512 work items. Both engines
+For B=1, T=8192, HK=HV=96 and 24 AIC cores, the target selects three head
+partitions, each with 32 heads: 128 chunks become 384 work items. With 20 cores,
+two partitions of 48 heads produce 256 work items; the equal-cost four-way
+split is skipped because ties retain the smaller partition count. Both engines
 use the same target-local mapping. Other contracts retain the existing host
 schedule, kernel implementation, cache policy and workspace layout.
 

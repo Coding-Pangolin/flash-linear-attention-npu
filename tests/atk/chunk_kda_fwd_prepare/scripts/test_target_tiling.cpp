@@ -56,9 +56,16 @@ int main()
     context.workspaceSlotBytes = kSlotBytes;
     optiling::ChunkKdaFwdPrepareSchedule optimized;
     if (!optiling::ChunkKdaFwdPrepareTilingProcessor(context).Process(optimized) ||
-        optimized.usedCoreNum != 24 || optimized.headsPerPartition != 24 ||
-        optimized.totalWorkItems != 512 ||
+        optimized.usedCoreNum != 24 || optimized.headsPerPartition != 32 ||
+        optimized.totalWorkItems != 384 ||
         optimized.workspaceBytes != 1024 + 24 * kSlotCount * kSlotBytes) {
+        return EXIT_FAILURE;
+    }
+    context.aicCoreNum = 20;
+    if (!optiling::ChunkKdaFwdPrepareTilingProcessor(context).Process(optimized) ||
+        optimized.usedCoreNum != 20 || optimized.headsPerPartition != 48 ||
+        optimized.totalWorkItems != 256 ||
+        optimized.workspaceBytes != 1024 + 20 * kSlotCount * kSlotBytes) {
         return EXIT_FAILURE;
     }
     // A target key and a fallback-sized slot must never be mixed.

@@ -816,10 +816,13 @@ __aicore__ inline void StageV0(TargetVectorContext<GateT, BetaT, CompilePolicy> 
                                  AscendC::DataCopyExtParams{1, static_cast<uint32_t>(sizeof(float)), 0, 0, 0}, fp32Pad);
         }
     }
-    // AIC 预算的 q/k 行平方和：落在 V0 的 32 KiB FP32 staging 前 16 KiB，
-    // 缩放阶段才会复用它，所以不需要额外 buffer。条件必须与 AIC 的
-    // StageNormSums 完全一致，否则读到的是上一组残留。
-    auto sumBufQ = ub[base + Arch22Ub::kGateOrKMinus].template ReinterpretCast<float>();
+    // Gram relay 占 16 KiB，必须避开尚未消费的 gate。FP32 gate 在共享 G，
+    // BF16 gate 在私有 kGateOrKMinus，因此按 dtype 选择另一侧的 norm staging。
+    // V0 先提取 q/k 两组 rstd，再复用该区进行行缩放；无需增加 UB。
+    // 条件必须与 AIC StageNormSums 一致，否则读到的是上一组残留。
+    const uint32_t normSumBase = sizeof(GateT) == sizeof(float) ?
+                                     base + Arch22Ub::kGateOrKMinus : Arch22Ub::kSharedG;
+    auto sumBufQ = ub[normSumBase].template ReinterpretCast<float>();
     auto sumBufK = sumBufQ[2048];
     bool cubeSums = false;
     if constexpr (CompilePolicy::normMode == QkNormMode::L2) {

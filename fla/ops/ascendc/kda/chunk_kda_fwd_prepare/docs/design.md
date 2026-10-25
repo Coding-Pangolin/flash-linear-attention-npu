@@ -31,16 +31,23 @@ Mul 的 block stride0复用系数，减少系数搬运而不改变逐元素浮�
 beta band、norm 和 V6 同样使用紧凑行标量广播。叶子最后以批量 CAST_RINT 和
 二维 UB copy 恢复既有 Akk payload；中间 scratch 均在末次消费后才复用。
 
-FP32 gate 的 V0 norm 按16行计算平方、归约、epsilon、Sqrt、Div、Mul和BF16舍入，
-Q/K顺序复用私有区。该阶段临时区相对 private base 为
-values `[0x8000,0xA000)`、squares `[0xA000,0xC000)`、reduce
-`[0xC000,0xE000)`、repeat `[0xE000,0xF000)`、Brcb
-`[0xF000,0xF200)`、ones `[0xF200,0xF300)`；不覆盖beta或共享FP32 gate。
+FP32 gate 的 V0 norm 按32行计算平方、归约、epsilon、Sqrt、Div、Mul和BF16舍入，
+Q/K顺序复用私有区。相对 private base，values占 `[0x8000,0xC000)`、
+squares占 `[0xC000,0x10000)`。相对共享scratch起点 `0x1A000`，repeat占
+`[0,0x400)`、Brcb占 `[0x400,0x800)`、ones占 `[0x800,0x880)`，
+reduceTmp提供对齐地址 `0x1000`；均低于beta偏移表 `0x1F00`。
+当前验证的CANN9.2 ReduceSum AR/isReuseSource使用squares原位归约，
+不访问external temporary。该SDK行为是资源规划的依赖，不能外推为其他版本通过。
+norm期间共享scratch已归当前pair所有，FP32 gate位于独立共享G区，beta保持原地址。
 BF16 gate 保留既有逐行 norm。
 
-head-major V1/V6使用16行tile；sequence-major使用7行，保留beta Gather偏移区。
-head-major factor使用共享UB `[0x1A000,0x1C000)`，stage使用尾部
-`[0x2E000,0x30000)`。两份private `[0,0x12000)`、`[0x1C000,0x2E000)`
+head-major V1及FP32 relay V6使用16行tile；sequence-major使用7行，保留beta Gather偏移区。
+这些路径的factor使用共享UB `[0x1A000,0x1C000)`，stage使用尾部
+`[0x2E000,0x30000)`。BF16 relay的head-major V6使用32行tile，借用另一pair
+已退休的Q/K区：factor为other private `[0,0x4000)`，stage为 `[0x4000,0x8000)`。
+借用前消费other ioFree的MTE3_MTE2许可，再以MTE2_V传递给Vector；随后归还
+同一ioFree许可。下一代输入还需等待当前VF末次使用后发布的sharedFree，故不能提前覆盖。
+两份private `[0,0x12000)`、`[0x1C000,0x2E000)`
 由各自ioFree保护；共享G/scratch由sharedFree保护，V1和V6不同时使用临时区。
 V3 beta band临时区为共享 `[0x1A000,0x1B300)`，与betaEff、偏移表不重叠。
 

@@ -812,7 +812,8 @@ private:
     }
 
     // FP32 gate lives in shared G, so the private Kminus region is free
-    // throughout norm. Sixteen-row tiles need 29 KiB, below its 32 KiB bound.
+    // throughout norm. Two32-row FP32 tensors fill the private32 KiB region;
+    // small scalar/broadcast buffers use the already-owned shared scratch.
     // Keep the original FP32 square/reduce/epsilon/sqrt/div sequence; scales
     // remain on Vector rather than crossing V_S/S_V for every token.
     __aicore__ inline void L2NormRowsBatched(
@@ -820,18 +821,21 @@ private:
         AscendC::LocalTensor<float> rstd,
         AscendC::LocalTensor<float> workspace, uint32_t validRows)
     {
-        constexpr uint32_t kRows = 16;
+        constexpr uint32_t kRows = 32;
         constexpr uint32_t kElems = kRows * Shape::kHeadDim;
-        constexpr uint32_t kRepeats = kRows * 64;
-        constexpr uint32_t kBlocks = kRows * 8;
-        static_assert(4 * (3 * kElems + kRepeats + kBlocks + 64) <=
+        static_assert(2 * kElems * sizeof(float) <=
                       Arch22Ub::kBetaRawStrided - Arch22Ub::kGateOrKMinus);
         auto values = workspace;
         auto squares = workspace[kElems];
-        auto reduceTmp = workspace[2 * kElems].template ReinterpretCast<uint8_t>();
-        auto repeatScalars = workspace[3 * kElems];
-        auto blockScalars = workspace[3 * kElems + kRepeats];
-        auto ones = workspace[3 * kElems + kRepeats + kBlocks];
+        // Installed CANN9.2 ReduceSum AR/isReuseSource computes in squares;
+        // its external temporary is unused. Keep a valid aligned scratch base.
+        auto shared = ubBuf_.Get<uint8_t>()[Arch22Ub::kSharedScratch]
+                          .template ReinterpretCast<float>();
+        auto reduceTmp = shared[1024].template ReinterpretCast<uint8_t>();
+        auto repeatScalars = shared;
+        auto blockScalars = shared[256];
+        auto ones = shared[512];
+        static_assert((1024 + 64) * sizeof(float) <= 0x1F00);
         // Brcb reads sixteen scalars even for a final partial tile.
         AscendC::Duplicate(rstd, 0.0F, Shape::kChunkRows);
         AscendC::Duplicate(ones, 1.0F, kRows);
@@ -1525,18 +1529,32 @@ private:
             domain_.StoredBound(ExpDomain::kV6LowerBase2);
         const float directMax =
             domain_.StoredBound(ExpDomain::kV6UpperBase2);
-        // Head-major only:16-row FP32 arithmetic tiles, then final BF16 RHS
-        // rounding. Shared factor and tail stage are separate; both private
-        // packed RHS buffers stay live. Sequence-major selects V6Vf instead.
-        constexpr uint32_t kTileRows = 16;
-        constexpr uint32_t kTileElems = kTileRows * Shape::kHeadDim;
+        // Borrow only after the other pair's last MTE3 read has retired.
+        // Reissue its existing token; the next input load also waits sharedFree,
+        // published after this VF's final Vector use of the borrowed Q/K region.
+        const bool wide = !args_.tiling.inputSequenceMajor;
+        const uint32_t otherPair = pair ^ 1U;
+        if (wide) {
+            AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(ioFree_[otherPair]);
+            // The borrower writes with Vector, so bridge MTE2 completion to V;
+            // the MTE3->MTE2 wait alone cannot order a Vector overwrite.
+            AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
+            AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
+            AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(ioFree_[otherPair]);
+        }
+        const uint32_t kTileRows = wide ? 32U : 16U;
         static_assert(Arch22Ub::kHardwareBytes - Arch22Ub::kUsableBytes >= 8192);
         static_assert(Arch22Ub::kV6KBetaG + 16384 <= 0x10000);
         static_assert(kV6BatchBetaRepeat + 512 <= Arch22Ub::kBetaEff);
         static_assert(kV6BatchBetaBrcb + 2048 <= kV6BatchBetaRepeat);
         auto ub = ubBuf_.Get<uint8_t>();
-        auto factor = scratch;
-        auto stage = ub[kV6BatchStage].template ReinterpretCast<float>();
+        auto factor = wide
+            ? ub[Arch22Ub::kPrivateBase[otherPair]].template ReinterpretCast<float>()
+            : scratch;
+        auto stage = wide
+            ? ub[Arch22Ub::kPrivateBase[otherPair] + 0x4000].template ReinterpretCast<float>()
+            : ub[kV6BatchStage].template ReinterpretCast<float>();
+        static_assert(2 * 32 * Shape::kHeadDim * sizeof(float) <= Arch22Ub::kGateOrKMinus);
         auto betaBrcb = ub[Arch22Ub::kPrivateBase[pair] + kV6BatchBetaBrcb]
                             .template ReinterpretCast<float>();
         auto betaRepeat = ub[Arch22Ub::kPrivateBase[pair] + kV6BatchBetaRepeat]

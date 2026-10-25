@@ -17,12 +17,13 @@ int main()
     using namespace KdaPrepare;
     for (uint32_t norm : {0U,1U}) for (uint32_t gate : {0U,1U,2U})
     for (uint32_t output : {0U,1U,2U,3U}) for (bool seq : {false,true})
-    for (uint32_t heads : {3U,4U,8U}) for (float bound : {-6.F,-5.F,-1.F,0.F}) {
+    for (uint32_t hk : {0U,1U,3U,4U,8U})
+    for (uint32_t heads : {3U,4U,8U,9U}) for (float bound : {-6.F,-5.F,-1.F,0.F}) {
         Args args;
         auto &t=args.tiling;
         t.normMode=norm; t.gateMode=gate; t.outputMode=output;
-        t.inputSequenceMajor=seq; t.valueHeadNum=heads; t.lowerBound=bound;
-        const bool expected=!seq && heads==4 && norm==1 && gate==2 &&
+        t.inputSequenceMajor=seq; t.qkHeadNum=hk; t.valueHeadNum=heads; t.lowerBound=bound;
+        const bool expected=!seq && hk!=0 && heads>=hk && heads%hk==0 && norm==1 && gate==2 &&
             (output==1 || output==2) && bound>=-5.F && bound<0.F;
         assert(Arch22::CoarseScore::Eligible<PrepareRuntimePolicy>(args)==expected);
         // CommonMath is only selected for the public L2/Save contract. Gate

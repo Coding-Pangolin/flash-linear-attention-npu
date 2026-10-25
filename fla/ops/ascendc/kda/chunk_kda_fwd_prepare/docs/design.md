@@ -52,10 +52,17 @@ head-major V1及FP32 relay V6使用16行tile；sequence-major使用7行，保留
 V3 beta band临时区为共享 `[0x1A000,0x1B300)`，与betaEff、偏移表不重叠。
 
 BF16 relay限定为 FP32 gate、BF16 beta、L2、Sigmoid beta、SafeSigmoid、exp2、
-Save、head-major、HK=HV、epsilon=1e-6、lower_bound=-5和scale=1/√128。
+Save、head-major、合法整数GVA映射（HK>0、HV>=HK、HV%HK=0）、
+epsilon=1e-6和lower_bound=-5。scale沿用host检查后的动态有限值，
+不再以精确等于1/√128作为能力条件。scale仍在原位置缩放Aqk/qg_scaled，
+不改变求逆或FP32 T relay。
 能力判断不绑定模型编号、精确T/H或cu_seqlens分布；其余配置走FP32 fallback。
 此范围使用两个32行锚点构造四个细粒度score band，减少Kminus重复处理；
 改变内部因子舍入的范围须由原生双参考独立验收。
+
+GVA的value head映射为hk=floor(hv/(HV/HK))。各hv仍独立保存gate、beta、
+score、求逆、Akk和RHS；仅IsQkOutputOwner写入共享HK的公开Q/K检查点。
+此扩展不新增跨value-head的Q/K复用，不改变slot、事件或workspace。
 
 C4/C5 的 B、X0、T和跨叶子乘法保留FP32。C5完成求逆后，BF16 relay将完整Akk
 转BF16 NZ直写L1，由FIX_MTE1保护C7读取；fallback保留FP32 GM中转。

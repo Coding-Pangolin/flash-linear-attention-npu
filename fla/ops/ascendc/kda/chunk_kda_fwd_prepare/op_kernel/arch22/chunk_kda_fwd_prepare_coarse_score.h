@@ -28,7 +28,9 @@ __aicore__
 inline bool Eligible(const Args &args)
 {
     return !args.tiling.inputSequenceMajor &&
-        args.tiling.qkHeadNum == args.tiling.valueHeadNum &&
+        args.tiling.qkHeadNum != 0 &&
+        args.tiling.valueHeadNum >= args.tiling.qkHeadNum &&
+        args.tiling.valueHeadNum % args.tiling.qkHeadNum == 0 &&
         RuntimeMath<Policy>::Norm(args.tiling) == QkNormMode::L2 &&
         args.tiling.gateMode == static_cast<uint32_t>(GateMode::SafeSigmoid) &&
         (RuntimeMath<Policy>::Output(args.tiling) == OutputMode::Recompute ||

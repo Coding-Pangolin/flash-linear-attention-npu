@@ -42,9 +42,24 @@ int main()
     if (Matches(sequenceMajor)) {
         return EXIT_FAILURE;
     }
-    // Parameters outside the accepted numerical contract must use fallback.
+    for (uint32_t ratio : {1U, 2U, 3U, 8U}) {
+        auto candidate = supported;
+        candidate.qkHeads = 3;
+        candidate.valueHeads = 3 * ratio;
+        if (!Matches(candidate)) return EXIT_FAILURE;
+    }
+    auto invalidRatio = supported;
+    invalidRatio.qkHeads = 3;
+    if (Matches(invalidRatio)) return EXIT_FAILURE;
+    // Scale is a dynamic operand; host validation rejects NaN/Inf before entry.
+    for (float scale : {0.0F, -0.1F, 0.1F, 0.5F, 1.0F}) {
+        auto candidate = supported;
+        candidate.scale = scale;
+        if (!Matches(candidate)) return EXIT_FAILURE;
+    }
+    // The other numerical guards remain unchanged in this experiment.
     float Contract::*const parameters[] = {
-        &Contract::epsilon, &Contract::lowerBound, &Contract::scale};
+        &Contract::epsilon, &Contract::lowerBound};
     for (auto field : parameters) {
         for (float value : {0.0F, 1.0F,
                             std::numeric_limits<float>::infinity(),

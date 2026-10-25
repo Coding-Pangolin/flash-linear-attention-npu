@@ -1,0 +1,20 @@
+{
+  "model_parameters_confirmed": false,
+  "calibration_status": "pending_device_and_reference_validation",
+  "seeds": [3],
+  "common": {
+    "beta_dtype": "bf16",
+    "scale": 0.08838834764831845,
+    "epsilon": 0.000001,
+    "use_beta_sigmoid_in_kernel": true,
+    "allow_neg_eigval": false,
+    "use_exp2": true,
+    "backward_mode": "save"
+  },
+  "profiles": [
+    {"name": "softplus_fp32", "gate_dtype": "fp32", "safe_gate": false, "lower_bound": -5.0, "template_id": 179},
+    {"name": "softplus_bf16", "gate_dtype": "bf16", "safe_gate": false, "lower_bound": -5.0, "template_id": 179},
+    {"name": "safe_fp32", "gate_dtype": "fp32", "safe_gate": true, "lower_bound": -5.0, "template_id": 115},
+    {"name": "safe_bf16", "gate_dtype": "bf16", "safe_gate": true, "lower_bound": -5.0, "template_id": 115}
+  ]
+}

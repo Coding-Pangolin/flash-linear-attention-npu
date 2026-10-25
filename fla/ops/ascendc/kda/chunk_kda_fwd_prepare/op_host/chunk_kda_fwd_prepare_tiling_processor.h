@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <limits>
 #include "../op_kernel/arch22/chunk_kda_fwd_prepare_target_config.h"
+#include "../op_kernel/arch22/chunk_kda_fwd_prepare_relay_config.h"
 
 namespace optiling {
 
@@ -19,8 +20,10 @@ constexpr uint64_t CHUNK_KDA_FWD_PREPARE_CHUNK_ROWS = 64;
 constexpr uint64_t CHUNK_KDA_FWD_PREPARE_ARCH35_SLOT_BYTES = 0x1A400;
 // Arch22：105 KiB 公共区 + 20 KiB Cube relay + 64 KiB FP32 RHS + 16 KiB FP32 Akk。
 // 该值必须与 kernel 侧 Workspace::kArch22SlotStride 保持一致。
-constexpr uint64_t CHUNK_KDA_FWD_PREPARE_ARCH22_SLOT_BYTES = 0x33400;
-constexpr uint64_t CHUNK_KDA_FWD_PREPARE_SLOTS_PER_WORKGROUP = 4;
+constexpr uint64_t CHUNK_KDA_FWD_PREPARE_ARCH22_SLOT_BYTES =
+    KdaPrepare::Arch22RelayConfig::kSlotBytes;
+constexpr uint64_t CHUNK_KDA_FWD_PREPARE_SLOTS_PER_WORKGROUP =
+    KdaPrepare::Arch22RelayConfig::kSlotsPerWorkgroup;
 constexpr uint64_t CHUNK_KDA_FWD_PREPARE_ARCH35_WORKGROUP_BYTES =
     CHUNK_KDA_FWD_PREPARE_ARCH35_SLOT_BYTES *
     CHUNK_KDA_FWD_PREPARE_SLOTS_PER_WORKGROUP;

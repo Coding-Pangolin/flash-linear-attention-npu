@@ -86,6 +86,55 @@ class FakeCallContext:
         return ctypes.c_void_p(0x2000)
 
 
+class PrepareOutputLayoutTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "fla_npu_test_prepare_stable", ASCENDC_DIR / "_stable.py"
+        )
+        cls.stable = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.stable)
+
+    def test_four_layouts_keep_all_thirteen_output_slots_head_major(self):
+        fake_torch = types.ModuleType("torch")
+        fake_torch.float32, fake_torch.bfloat16 = object(), object()
+        fake_torch.empty = lambda shape, dtype, device: FakeTensor(shape, dtype)
+        layouts = {
+            "BNSD": ((2, 2, 65, 128), (2, 4, 65, 128)),
+            "BSND": ((2, 65, 2, 128), (2, 65, 4, 128)),
+            "TND": ((65, 2, 128), (65, 4, 128)),
+            "NTD": ((2, 65, 128), (4, 65, 128)),
+        }
+        enabled = {
+            "none": {0, 1, 3, 4, 6, 7},
+            "forward": {0, 1, 2, 3, 4, 6, 7},
+            "recompute": set(range(13)) - {5},
+            "save": set(range(13)),
+        }
+        for layout, (qshape, vshape) in layouts.items():
+            batch = () if layout in {"TND", "NTD"} else (2,)
+            vm, km = batch+(4,65,128), batch+(2,65,128)
+            block, ks, vs = batch+(4,65,64), batch+(2,65), batch+(4,65)
+            expected = (vm,block,block,vm,vm,vm,vm,vm,km,km,ks,ks,vs)
+            q, v = FakeTensor(qshape, fake_torch.bfloat16), FakeTensor(vshape, fake_torch.bfloat16)
+            for mode, mask in enabled.items():
+                with self.subTest(layout=layout, mode=mode), \
+                        mock.patch.dict(sys.modules, {"torch": fake_torch}), \
+                        mock.patch.object(self.stable, "_op", return_value=lambda *a: a[20:33]), \
+                        mock.patch.object(self.stable, "_host_ints", side_effect=lambda x:x), \
+                        mock.patch.object(self.stable, "_current_stream_ptr", return_value=0):
+                    out = self.stable.npu_chunk_kda_fwd_prepare(
+                        q, q, v, v, v, 128**-.5, layout=layout, backward_mode=mode)
+                    self.assertEqual(len(out), 13)
+                    for slot, value in enumerate(out):
+                        if slot in mask:
+                            self.assertEqual(value.shape, expected[slot])
+                            self.assertIs(value.dtype, fake_torch.float32 if slot in {0,10,11,12}
+                                          else fake_torch.bfloat16)
+                        else:
+                            self.assertIsNone(value)
+
+
 class GdnBackwardPlatformTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

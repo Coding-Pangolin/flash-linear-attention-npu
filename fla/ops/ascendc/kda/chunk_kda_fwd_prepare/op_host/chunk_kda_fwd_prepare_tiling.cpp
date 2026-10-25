@@ -14,6 +14,7 @@
 
 #include "chunk_kda_fwd_prepare_tiling_processor.h"
 #include "../op_kernel/chunk_kda_fwd_prepare_tiling_key.h"
+#include "../op_kernel/chunk_kda_fwd_prepare_runtime_key.h"
 #include "platform/soc_spec.h"
 #include "register/op_impl_registry.h"
 #include "tiling/platform/platform_ascendc.h"
@@ -605,12 +606,16 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
         : (*safeGatePtr ? CHUNK_KDA_FWD_PREPARE_GATE_SAFE_SIGMOID
                         : CHUNK_KDA_FWD_PREPARE_GATE_SOFTPLUS);
     using namespace KdaPrepare;
-    const uint64_t tilingKey = GET_TPL_TILING_KEY(
+    const uint64_t legacyTilingKey = GET_TPL_TILING_KEY(
         gateDtypeToken, betaDtypeToken, normMode, betaMode, gateMode,
         static_cast<uint64_t>(*useExp2Ptr),
         useArch22TargetVariant ? uint64_t{1}
                                : static_cast<uint64_t>(*safeGatePtr),
         outputMode);
+    const auto pipeline = useArch22TargetVariant
+        ? PreparePipeline::Target : PreparePipeline::Generic;
+    const uint64_t tilingKey = isAscend950 ? legacyTilingKey
+        : RuntimeKey::Encode(gateDtypeToken, betaDtypeToken, pipeline);
 
     ChunkKdaFwdPrepareTilingData tiling;
     tiling.set_batch(static_cast<uint32_t>(shape.batch));
@@ -627,6 +632,12 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
     tiling.set_isVarLen(isVarLen);
     tiling.set_inputSequenceMajor(shape.sequenceMajor);
     tiling.set_hasDtBias(hasDtBias);
+    tiling.set_normMode(normMode);
+    tiling.set_betaMode(betaMode);
+    tiling.set_gateMode(gateMode);
+    tiling.set_outputMode(outputMode);
+    tiling.set_pipelineVariant(static_cast<uint32_t>(pipeline));
+    tiling.set_useExp2(*useExp2Ptr);
 
     context->SetTilingKey(tilingKey);
     context->SetBlockDim(schedule.usedCoreNum);

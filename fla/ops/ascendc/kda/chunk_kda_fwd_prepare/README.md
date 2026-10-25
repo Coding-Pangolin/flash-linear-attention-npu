@@ -115,8 +115,8 @@ tiling 参数位置不会随策略变化。L2 接口允许未保留的七项传 
 
 默认值为 `"save"`，保持原来 13 项全部返回的兼容行为。各档都执行相同的前向数学计算、
 静态 UB/L1 布局和跨核同步，仅关闭未请求结果的公开 GM 写回；`Akk/qg` 等数据在本算子
-内部仍按 C4/C5/C7 或 BF16 舍入语义使用。四档由 TilingKey 的编译期 `OUTPUT_MODE`
-选择，Stage 内不读取运行时输出 mask。
+内部仍按 C4/C5/C7 或 BF16 舍入语义使用。A2通过调用内不可变的tiling `outputMode`
+选择四档；A5保持编译期输出策略。两者均不借用关闭的公开输出作为scratch。
 
 完整 forward 的 `output_final_state` 与 `return_intermediate_states` 是和
 `backward_mode` 正交的用户输出开关，只控制 `final_state/h`。这两个数据由 FwdH/完整

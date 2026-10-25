@@ -8,7 +8,9 @@
 #define ARCH22_CHUNK_KDA_FWD_PREPARE_CUBE_H
 
 #include <cstdint>
+#include <type_traits>
 #include "kernel_operator.h"
+#include "chunk_kda_fwd_prepare_coarse_score.h"
 #include "../chunk_kda_fwd_prepare_struct.h"
 #include "../chunk_kda_fwd_prepare_utils.h"
 
@@ -17,12 +19,16 @@ namespace KdaPrepare::Arch22 {
 constexpr AscendC::FixpipeConfig kFixpipeNz = {
     AscendC::CO2Layout::NZ, false};
 
-template <typename CompilePolicy>
+template <typename CompilePolicy, bool BF16_RELAY = false>
 class ChunkKdaFwdPrepareCube {
+    using RelayT = std::conditional_t<BF16_RELAY, bfloat16_t, float>;
+
 public:
     __aicore__ inline void Init(const PrepareKernelArgs &args, AscendC::TPipe *pipe)
     {
         args_ = args;
+        coarseEligible_ = BF16_RELAY && CoarseScore::Eligible<CompilePolicy>(args_);
+        // Runtime modes are uniform for every stage and both engines.
         pipe_ = pipe;
         workgroup_ = WorkgroupId();
         coreCount_ = args_.tiling.usedCoreNum;
@@ -59,9 +65,11 @@ public:
         fixToMte1_[3] = pipe_->AllocEventID<AscendC::HardEvent::FIX_MTE1>(); // ID 3
         // RHS 专用 L1 lane 的写后读事件（MTE1 → MTE2），独立 ID 池，ID 0。
         rhsLaneFree_ = pipe_->AllocEventID<AscendC::HardEvent::MTE1_MTE2>(); // ID 0
+        akkLaneFree_ = pipe_->AllocEventID<AscendC::HardEvent::MTE1_MTE2>(); // ID 1
         AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
         AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
         AscendC::SetFlag<AscendC::HardEvent::MTE1_MTE2>(rhsLaneFree_);
+        AscendC::SetFlag<AscendC::HardEvent::MTE1_MTE2>(akkLaneFree_);
     }
 
     __aicore__ inline void Process()
@@ -74,12 +82,15 @@ public:
         constexpr uint16_t kReadyFlagId[2] = {0, 1};
         constexpr uint16_t kFreeFlagId[2] = {2, 3};
         const uint32_t total = TotalWorkItems(args_.tiling);
-        const uint32_t workBegin = WorkBegin(total, workgroup_, coreCount_);
-        const uint32_t workEnd = WorkEnd(total, workgroup_, coreCount_);
+        const uint32_t workBegin = TokenBalancedWorkBoundary(
+            args_, total, workgroup_, coreCount_);
+        const uint32_t workEnd = TokenBalancedWorkBoundary(
+            args_, total, workgroup_ + 1, coreCount_);
         if (workgroup_ >= coreCount_ || workBegin >= workEnd) {
             AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
             AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(fixToM_);
             AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(rhsLaneFree_);
+            AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(akkLaneFree_);
             ReleaseEvents();
             return;
         }
@@ -108,6 +119,11 @@ public:
                 }
                 // C2：一次 pair wait 汇聚两个 AIV，再消费该 pair 的两个 local head。
                 for (uint32_t pair = 0; pair < 2; ++pair) {
+                    if (pair == 1) {
+                        // C7 pair1 can still read its Akk lanes while next pair0
+                        // prepares scores. Wait only before reusing pair1 lanes.
+                        AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(akkLaneFree_);
+                    }
                     AscendC::CrossCoreWaitFlag<0x2, PIPE_MTE2>(
                         kReadyFlagId[pair]);
                     for (uint32_t headInPair = 0; headInPair < 2; ++headInPair) {
@@ -161,6 +177,7 @@ public:
         AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
         AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(fixToM_);
         AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(rhsLaneFree_);
+        AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(akkLaneFree_);
         ReleaseEvents();
     }
 
@@ -204,11 +221,14 @@ private:
                           payload[ScorePayload::kQPlus / sizeof(bfloat16_t)], copy);
         AscendC::DataCopy(scoreL1[ScorePayload::kKPlus / sizeof(bfloat16_t)],
                           payload[ScorePayload::kKPlus / sizeof(bfloat16_t)], copy);
-        for (uint32_t s = 0; s < Shape::kSubChunkCount; ++s) {
-            copy.nValue = Shape::kPrefixRows[s];
-            copy.dstNzC0Stride = Shape::kPrefixRows[s];
-            AscendC::DataCopy(scoreL1[ScorePayload::kKMinus[s] / sizeof(bfloat16_t)],
-                              payload[ScorePayload::kKMinus[s] / sizeof(bfloat16_t)], copy);
+        const bool coarse = BF16_RELAY && coarseEligible_;
+        const uint32_t anchorCount = coarse ? CoarseScore::kAnchors : Shape::kSubChunkCount;
+        for (uint32_t s = 0; s < anchorCount; ++s) {
+            copy.nValue = coarse ? CoarseScore::kPrefixRows[s] : Shape::kPrefixRows[s];
+            copy.dstNzC0Stride = copy.nValue;
+            const uint32_t offset = coarse ? CoarseScore::kMinusOffset[s] : ScorePayload::kKMinus[s];
+            AscendC::DataCopy(scoreL1[offset / sizeof(bfloat16_t)],
+                              payload[offset / sizeof(bfloat16_t)], copy);
         }
         AscendC::SetFlag<AscendC::HardEvent::MTE2_MTE1>(mte2ToMte1_);
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_MTE1>(mte2ToMte1_);
@@ -259,8 +279,28 @@ private:
             loadKMinus.ifTranspose = false;
             loadKMinus.sid = 0;
             loadKMinus.addrMode = 0;
-            AscendC::LoadData(l0B,
-                scoreL1[ScorePayload::kKMinus[s] / sizeof(bfloat16_t)], loadKMinus);
+            if (coarse) {
+                const uint32_t group = s / 2;
+                const uint32_t offset = CoarseScore::kMinusOffset[group] / sizeof(bfloat16_t);
+                if (s == 2) {
+                    // Pack three N fractals from each four-fractal coarse row.
+                    loadKMinus.repeatTimes = Shape::kHeadDim / 16;
+                    loadKMinus.srcStride = 4;
+                    loadKMinus.dstGap = 2;
+                    for (uint32_t nb = 0; nb < 3; ++nb) {
+                        AscendC::LoadData(l0B[nb * kBf16FractalElements],
+                            scoreL1[offset + nb * kBf16FractalElements], loadKMinus);
+                    }
+                } else {
+                    if (s == 0) {
+                        loadKMinus.srcStride = 2;
+                    }
+                    AscendC::LoadData(l0B, scoreL1[offset], loadKMinus);
+                }
+            } else {
+                AscendC::LoadData(l0B,
+                    scoreL1[ScorePayload::kKMinus[s] / sizeof(bfloat16_t)], loadKMinus);
+            }
             AscendC::SetFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
             AscendC::WaitFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
             AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(fixToM_);
@@ -314,10 +354,12 @@ private:
             Workspace::kArch22SlotStride);
         auto l1Bytes = l1Buf_.Get<uint8_t>();
         auto akkL1 = l1Bytes[L1::kHeadLane[localHead] + Arch22L1::kAkkInHeadLane]
-                         .template ReinterpretCast<float>();
-        AscendC::GlobalTensor<float> akkSource;
-        akkSource.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(
-            args_.workspace + slot + Workspace::kArch22AkkFp32));
+                         .template ReinterpretCast<RelayT>();
+        AscendC::GlobalTensor<RelayT> akkSource;
+        constexpr uint32_t kAkkSource = BF16_RELAY
+            ? Workspace::kPayload + Workspace::kAkk : Workspace::kArch22AkkFp32;
+        akkSource.SetGlobalBuffer(reinterpret_cast<__gm__ RelayT *>(
+            args_.workspace + slot + kAkkSource));
         AscendC::Nd2NzParams akkCopy{};
         akkCopy.ndNum = 1;
         akkCopy.nValue = Shape::kChunkRows;
@@ -518,29 +560,41 @@ private:
         AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(mToFix_);
 
         const uint32_t bottomRows = chunk.validRows - 32;
-        // FP32 结果经 GM ND 转为 L1 NZ，保留 V3 已写入的两个对角块。
-        const uint64_t slot = WorkspaceSlotBase(
-            workgroup_, localHead, Workspace::kArch22WorkgroupStride,
-            Workspace::kArch22SlotStride);
-        AscendC::GlobalTensor<float> akkSource;
-        akkSource.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(
-            args_.workspace + slot + Workspace::kArch22AkkFp32));
-        auto l1Fix = AscendC::FixpipeParamsV220(32, 32, 32, 64, false);
-        auto akkL1 = l1Bytes[L1::kHeadLane[localHead] + Arch22L1::kAkkInHeadLane]
-                         .template ReinterpretCast<float>();
-        AscendC::Fixpipe<float, float, AscendC::CFG_ROW_MAJOR>(
-            akkSource[32 * 64], l0C, l1Fix);
-        AscendC::SetFlag<AscendC::HardEvent::FIX_MTE2>(fixToMte2_[localHead]);
-        AscendC::WaitFlag<AscendC::HardEvent::FIX_MTE2>(fixToMte2_[localHead]);
-        AscendC::Nd2NzParams akkCopy{};
-        akkCopy.ndNum = 1;
-        akkCopy.nValue = 64;
-        akkCopy.dValue = 64;
-        akkCopy.srcDValue = 64;
-        akkCopy.dstNzNStride = 1;
-        akkCopy.dstNzC0Stride = 64;
-        AscendC::DataCopy(akkL1, akkSource, akkCopy);
-        if constexpr (CompilePolicy::outputAkk) {
+        if constexpr (BF16_RELAY) {
+            // Only round after the exact FP32 inverse assembly is complete.
+            auto akkL1 = l1Bytes[L1::kHeadLane[localHead] + Arch22L1::kAkkInHeadLane]
+                             .template ReinterpretCast<bfloat16_t>();
+            // V220 NZ dstStride counts 32-byte blocks, not elements.
+            auto l1Fix = AscendC::FixpipeParamsV220(32, 32, 32, 64, false);
+            l1Fix.quantPre = QuantMode_t::F322BF16;
+            l1Fix.isChannelSplit = false;
+            AscendC::Fixpipe<bfloat16_t, float, kFixpipeNz>(
+                akkL1[32 * 16], l0C, l1Fix);
+        } else {
+            // FP32 result returns through GM ND, retaining the V3 diagonals.
+            const uint64_t slot = WorkspaceSlotBase(
+                workgroup_, localHead, Workspace::kArch22WorkgroupStride,
+                Workspace::kArch22SlotStride);
+            AscendC::GlobalTensor<float> akkSource;
+            akkSource.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(
+                args_.workspace + slot + Workspace::kArch22AkkFp32));
+            auto l1Fix = AscendC::FixpipeParamsV220(32, 32, 32, 64, false);
+            auto akkL1 = l1Bytes[L1::kHeadLane[localHead] + Arch22L1::kAkkInHeadLane]
+                             .template ReinterpretCast<float>();
+            AscendC::Fixpipe<float, float, AscendC::CFG_ROW_MAJOR>(
+                akkSource[32 * 64], l0C, l1Fix);
+            AscendC::SetFlag<AscendC::HardEvent::FIX_MTE2>(fixToMte2_[localHead]);
+            AscendC::WaitFlag<AscendC::HardEvent::FIX_MTE2>(fixToMte2_[localHead]);
+            AscendC::Nd2NzParams akkCopy{};
+            akkCopy.ndNum = 1;
+            akkCopy.nValue = 64;
+            akkCopy.dValue = 64;
+            akkCopy.srcDValue = 64;
+            akkCopy.dstNzNStride = 1;
+            akkCopy.dstNzC0Stride = 64;
+            AscendC::DataCopy(akkL1, akkSource, akkCopy);
+        }
+        if ((RuntimeMath<CompilePolicy>::Output(args_.tiling) != OutputMode::None)) {
             AscendC::GlobalTensor<bfloat16_t> akkOutput;
             akkOutput.SetGlobalBuffer(
                 reinterpret_cast<__gm__ bfloat16_t *>(args_.akk) +
@@ -553,7 +607,11 @@ private:
             AscendC::Fixpipe<bfloat16_t, float, AscendC::CFG_ROW_MAJOR>(
                 akkOutput, l0C, outputFix);
         }
-        AscendC::SetFlag<AscendC::HardEvent::MTE2_MTE1>(tReady_[localHead]);
+        if constexpr (BF16_RELAY) {
+            AscendC::SetFlag<AscendC::HardEvent::FIX_MTE1>(fixToMte1_[localHead]);
+        } else {
+            AscendC::SetFlag<AscendC::HardEvent::MTE2_MTE1>(tReady_[localHead]);
+        }
         AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
     }
 
@@ -583,17 +641,17 @@ private:
                 workgroup_, localHead, Workspace::kArch22WorkgroupStride,
                 Workspace::kArch22SlotStride);
             auto kBetaL1 = l1Bytes[Arch22L1::kRhsLane[headInPair]]
-                               .template ReinterpretCast<float>();
+                               .template ReinterpretCast<RelayT>();
             auto vBetaL1 = l1Bytes[Arch22L1::kRhsLane[headInPair] + Arch22L1::kRhsVBeta]
-                               .template ReinterpretCast<float>();
-            AscendC::GlobalTensor<float> kBetaRelay, vBetaRelay;
-            kBetaRelay.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(
+                               .template ReinterpretCast<RelayT>();
+            AscendC::GlobalTensor<RelayT> kBetaRelay, vBetaRelay;
+            kBetaRelay.SetGlobalBuffer(reinterpret_cast<__gm__ RelayT *>(
                 args_.workspace + slot + Workspace::kArch22RhsKBetaG));
-            vBetaRelay.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(
+            vBetaRelay.SetGlobalBuffer(reinterpret_cast<__gm__ RelayT *>(
                 args_.workspace + slot + Workspace::kArch22RhsVBeta));
-            AscendC::DataCacheCleanAndInvalid<float, AscendC::CacheLine::ENTIRE_DATA_CACHE,
+            AscendC::DataCacheCleanAndInvalid<RelayT, AscendC::CacheLine::ENTIRE_DATA_CACHE,
                                               AscendC::DcciDst::CACHELINE_OUT>(kBetaRelay);
-            AscendC::DataCacheCleanAndInvalid<float, AscendC::CacheLine::ENTIRE_DATA_CACHE,
+            AscendC::DataCacheCleanAndInvalid<RelayT, AscendC::CacheLine::ENTIRE_DATA_CACHE,
                                               AscendC::DcciDst::CACHELINE_OUT>(vBetaRelay);
             AscendC::DataSyncBarrier<AscendC::MemDsbT::DDR>();
             AscendC::DataCopy(kBetaL1, kBetaRelay, copy);
@@ -610,20 +668,26 @@ private:
                 continue;
             }
             if (chunk.validRows > 32) {
-                AscendC::WaitFlag<AscendC::HardEvent::MTE2_MTE1>(tReady_[localHead]);
+                if constexpr (BF16_RELAY) {
+                    AscendC::WaitFlag<AscendC::HardEvent::FIX_MTE1>(fixToMte1_[localHead]);
+                } else {
+                    AscendC::WaitFlag<AscendC::HardEvent::MTE2_MTE1>(tReady_[localHead]);
+                }
             }
             auto akkL1 = l1Bytes[L1::kHeadLane[localHead] + Arch22L1::kAkkInHeadLane]
-                             .template ReinterpretCast<float>();
-            auto l0A = l0ABuf_.Get<float>();
-            auto l0B = l0BBuf_.Get<float>();
+                             .template ReinterpretCast<RelayT>();
+            auto l0A = l0ABuf_.Get<RelayT>();
+            auto l0B = l0BBuf_.Get<RelayT>();
             auto l0C = l0CBuf_.Get<float>();
             const uint64_t out = HeadTensorOffset(
                 args_.tiling, chunk, groupBegin + localHead, Shape::kHeadDim);
-            // FP32 NZ 的基本块为 16x8；A 的 K 维为 32/64，M 维同样为 32/64。
+            // FP32 NZ is16x8; BF16 NZ is16x16. Preserve the respective layouts.
+            constexpr uint32_t kFractalColumns = 32 / sizeof(RelayT);
+            constexpr uint32_t kFractalElements = 16 * kFractalColumns;
             AscendC::LoadData2DParams loadA{};
-            loadA.repeatTimes = m / 8;
+            loadA.repeatTimes = m / kFractalColumns;
             loadA.srcStride = Shape::kChunkRows / 16;
-            AscendC::LoadData3DParamsV2<float> loadB{};
+            AscendC::LoadData3DParamsV2<RelayT> loadB{};
             loadB.l1H = 1;
             loadB.l1W = m;
             loadB.channelSize = Shape::kHeadDim;
@@ -641,11 +705,11 @@ private:
             for (uint32_t rhs = 0; rhs < 2; ++rhs) {
                 AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
                 for (uint32_t row = 0; row < m / 16; ++row) {
-                    AscendC::LoadData(l0A[row * (m / 8) * 128],
-                                      akkL1[row * 128], loadA);
+                    AscendC::LoadData(l0A[row * (m / kFractalColumns) * kFractalElements],
+                                      akkL1[row * kFractalElements], loadA);
                 }
                 auto rhsL1 = l1Bytes[Arch22L1::kRhsLane[headInPair] + rhs * Arch22L1::kRhsVBeta]
-                                 .template ReinterpretCast<float>();
+                                 .template ReinterpretCast<RelayT>();
                 AscendC::LoadData(l0B, rhsL1, loadB);
                 AscendC::SetFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
                 AscendC::WaitFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
@@ -671,6 +735,9 @@ private:
             }
         }
         AscendC::SetFlag<AscendC::HardEvent::MTE1_MTE2>(rhsLaneFree_);
+        if (pair == 1) {
+            AscendC::SetFlag<AscendC::HardEvent::MTE1_MTE2>(akkLaneFree_);
+        }
     }
 
     __aicore__ inline void ReleaseEvents()
@@ -681,6 +748,7 @@ private:
         pipe_->ReleaseEventID<AscendC::HardEvent::M_FIX>(mToFix_);
         pipe_->ReleaseEventID<AscendC::HardEvent::FIX_M>(fixToM_);
         pipe_->ReleaseEventID<AscendC::HardEvent::MTE1_MTE2>(rhsLaneFree_);
+        pipe_->ReleaseEventID<AscendC::HardEvent::MTE1_MTE2>(akkLaneFree_);
         for (uint32_t head = 0; head < Shape::kHeadsPerGroup; ++head) {
             pipe_->ReleaseEventID<AscendC::HardEvent::FIX_MTE2>(fixToMte2_[head]);
             pipe_->ReleaseEventID<AscendC::HardEvent::MTE2_MTE1>(tReady_[head]);
@@ -689,6 +757,7 @@ private:
     }
 
     PrepareKernelArgs args_{};
+    bool coarseEligible_ = false;
     AscendC::TPipe *pipe_ = nullptr;
     uint32_t workgroup_ = 0;
     uint32_t coreCount_ = 0;
@@ -705,6 +774,7 @@ private:
     AscendC::TEventID tReady_[Shape::kHeadsPerGroup]{};
     AscendC::TEventID fixToMte1_[Shape::kHeadsPerGroup]{};
     AscendC::TEventID rhsLaneFree_{};
+    AscendC::TEventID akkLaneFree_{};
     AscendC::GlobalTensor<bfloat16_t> wGm_{};
     AscendC::GlobalTensor<bfloat16_t> uGm_{};
 };

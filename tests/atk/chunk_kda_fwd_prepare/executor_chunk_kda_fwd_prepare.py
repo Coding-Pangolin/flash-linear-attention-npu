@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 import os
+import inspect
+import traceback
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -37,6 +39,10 @@ OUTPUT_NAMES = (
     "beta_eff",
 )
 OUTPUT_MASKS = {
+    "forward": (
+        True, True, True, True, True, False, True, True,
+        False, False, False, False, False,
+    ),
     "none": (
         True, True, False, True, True, False, True, True,
         False, False, False, False, False,
@@ -378,6 +384,7 @@ def _s4_scores_batched(
     beta: torch.Tensor,
     scale: float,
     use_exp2: bool,
+    quantize=_bf16_value,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     batch_size, rows, _ = q_hat.shape
     aqk = torch.zeros(
@@ -400,9 +407,9 @@ def _s4_scores_batched(
             -126,
             120,
         )
-        q_plus = _bf16_value(q_hat[:, band_begin:band_end] * left_factor, q_hat.dtype)
-        k_plus = _bf16_value(k_hat[:, band_begin:band_end] * left_factor, q_hat.dtype)
-        k_minus = _bf16_value(k_hat[:, :band_end] * right_factor, q_hat.dtype)
+        q_plus = quantize(q_hat[:, band_begin:band_end] * left_factor, q_hat.dtype)
+        k_plus = quantize(k_hat[:, band_begin:band_end] * left_factor, q_hat.dtype)
+        k_minus = quantize(k_hat[:, :band_end] * right_factor, q_hat.dtype)
         raw_qk = torch.bmm(q_plus, k_minus.transpose(1, 2))
         raw_kk = torch.bmm(k_plus, k_minus.transpose(1, 2))
 
@@ -421,10 +428,10 @@ def _s4_scores_batched(
         lkk[:, band_begin:band_end, :band_end] = torch.where(
             strict.unsqueeze(0), weighted_kk, 0.0
         )
-    return _bf16_value(aqk, q_hat.dtype), lkk
+    return quantize(aqk, q_hat.dtype), lkk
 
 
-def _block_inverse_batched(lkk: torch.Tensor) -> torch.Tensor:
+def _block_inverse_batched(lkk: torch.Tensor, quantize=_bf16_value) -> torch.Tensor:
     batch_size, rows, _ = lkk.shape
     padded_rows = 32 if rows <= 32 else 64
     padded = torch.zeros(
@@ -457,19 +464,26 @@ def _block_inverse_batched(lkk: torch.Tensor) -> torch.Tensor:
     output = torch.zeros(
         (batch_size, rows, CHUNK_SIZE), dtype=lkk.dtype, device=lkk.device
     )
-    output[:, :, :padded_rows] = _bf16_value(inverse[:, :rows], lkk.dtype)
+    output[:, :, :padded_rows] = quantize(inverse[:, :rows], lkk.dtype)
     return output
 
 
 def _reference(
     inputs: PreparedInputs,
     spec: dict[str, Any],
+    *,
+    role: str = "truth_fp64",
 ) -> tuple[Optional[torch.Tensor], ...]:
+    if role not in {"truth_fp64", "control_fp32_bf16"}:
+        raise ValueError(f"unknown reference role: {role}")
+    compute_dtype = torch.float64 if role == "truth_fp64" else torch.float32
+    # FP64 truth removes internal BF16 rounding, but starts from the SAME
+    # ATK-generated, already quantized public tensors. No input regeneration.
+    quantize = (lambda value, dtype: value.to(dtype)) if role == "truth_fp64" else _bf16_value
     layout = str(spec["layout"])
-    q = _layout_to_bsnd(inputs.q, layout).to(torch.float64)
-    k = _layout_to_bsnd(inputs.k, layout).to(torch.float64)
-    v = _layout_to_bsnd(inputs.v, layout).to(torch.float64)
-    compute_dtype = q.dtype
+    q = _layout_to_bsnd(inputs.q, layout).to(compute_dtype)
+    k = _layout_to_bsnd(inputs.k, layout).to(compute_dtype)
+    v = _layout_to_bsnd(inputs.v, layout).to(compute_dtype)
     batch, tokens, key_heads, _ = q.shape
     value_heads = v.shape[2]
     group_size = value_heads // key_heads
@@ -480,8 +494,8 @@ def _reference(
         float(spec["epsilon"]),
         _as_bool(spec["use_qk_l2norm_in_kernel"]),
     )
-    q_hat = _bf16_value(q_norm, compute_dtype)
-    k_hat = _bf16_value(k_norm, compute_dtype)
+    q_hat = quantize(q_norm, compute_dtype)
+    k_hat = quantize(k_norm, compute_dtype)
     gate_step, beta_eff = _gate_and_beta(inputs, spec, compute_dtype)
     gate = torch.zeros_like(gate_step)
     spans = _chunk_spans(batch, tokens, inputs.cu_seqlens)
@@ -496,7 +510,7 @@ def _reference(
         output_mask = OUTPUT_MASKS[backward_mode]
     except KeyError as exc:
         raise ValueError(
-            "backward_mode 必须是 none、recompute 或 save。"
+            "backward_mode must be none, recompute, save or forward"
         ) from exc
 
     vector_shape = (batch, value_heads, tokens, HEAD_DIM)
@@ -561,25 +575,26 @@ def _reference(
                 beta_block,
                 float(spec["scale"]),
                 use_exp2,
+                quantize,
             )
-            akk_block = _block_inverse_batched(lkk)
+            akk_block = _block_inverse_batched(lkk, quantize)
             exp_gate = _factor(gate_block, use_exp2, -80, 80)
-            qg_block = _bf16_value(q_block * exp_gate, compute_dtype)
-            qg_scaled_block = _bf16_value(
+            qg_block = quantize(q_block * exp_gate, compute_dtype)
+            qg_scaled_block = quantize(
                 qg_block * float(spec["scale"]), compute_dtype
             )
             last_gate = gate_block[:, -1:]
-            kg_block = _bf16_value(
+            kg_block = quantize(
                 k_block * _factor(last_gate - gate_block, use_exp2, -80, 80),
                 compute_dtype,
             )
 
-            # K_beta_g 与 qg_scaled 都必须消费已经 BF16 舍入的中间值。
-            k_positive = _bf16_value(k_block * exp_gate, compute_dtype)
-            k_beta_g = _bf16_value(
+            # Only the same-precision control rounds intermediate operands.
+            k_positive = quantize(k_block * exp_gate, compute_dtype)
+            k_beta_g = quantize(
                 k_positive * beta_block.unsqueeze(-1), compute_dtype
             )
-            v_beta = _bf16_value(
+            v_beta = quantize(
                 v_block * beta_block.unsqueeze(-1), compute_dtype
             )
             akk_operand = torch.zeros(
@@ -596,10 +611,10 @@ def _reference(
             v_operand = torch.zeros_like(k_operand)
             k_operand[:, :rows] = k_beta_g
             v_operand[:, :rows] = v_beta
-            w_block = _bf16_value(
+            w_block = quantize(
                 torch.bmm(akk_operand, k_operand), compute_dtype
             )[:, :rows]
-            u_block = _bf16_value(
+            u_block = quantize(
                 torch.bmm(akk_operand, v_operand), compute_dtype
             )[:, :rows]
 
@@ -647,16 +662,20 @@ def _reference(
             output.squeeze(0) if output is not None else None
             for output in outputs
         )
+    if role == "control_fp32_bf16":
+        outputs = tuple(None if value is None else value.to(dtype)
+                        for value, dtype in zip(outputs, OUTPUT_DTYPES))
     return outputs
 
 
-def run_cpu(spec: dict[str, Any], inputs: PreparedInputs):
-    return _reference(inputs, spec)
+def run_cpu(spec: dict[str, Any], inputs: PreparedInputs, role="truth_fp64"):
+    return _reference(inputs, spec, role=role)
 
 
 def run_npu(spec: dict[str, Any], inputs: PreparedInputs):
     from fla_npu.ops.ascendc import chunk_kda_fwd_prepare
 
+    gate_kwarg = "A_log" if "A_log" in inspect.signature(chunk_kda_fwd_prepare).parameters else "a_log"
     outputs = chunk_kda_fwd_prepare(
         inputs.q,
         inputs.k,
@@ -678,7 +697,7 @@ def run_npu(spec: dict[str, Any], inputs: PreparedInputs):
         safe_gate=_as_bool(spec["safe_gate"]),
         lower_bound=float(spec["lower_bound"]),
         use_exp2=_as_bool(spec["use_exp2"]),
-        a_log=inputs.a_log,
+        **{gate_kwarg: inputs.a_log},
         dt_bias=inputs.dt_bias,
         cu_seqlens=inputs.cu_seqlens,
         chunk_indices=inputs.chunk_indices,
@@ -767,6 +786,8 @@ class FunctionApi(BaseApi):
     def __init__(self, task_result: TaskResult):
         super().__init__(task_result)
         self.task_result = task_result
+        self.reference_role = ("truth_fp64" if bool(task_result.is_benchmark_task)
+                               else "control_fp32_bf16")
         self.spec: Optional[dict[str, Any]] = None
         self.inputs: Optional[PreparedInputs] = None
         case_config = getattr(task_result, "case_config", None)
@@ -781,8 +802,10 @@ class FunctionApi(BaseApi):
         values = input_data.kwargs
         self.spec = _derive_spec(values, self.runtime_case_id)
         self.inputs = _direct_inputs(
-            values, high_precision=self.device == "cpu"
+            values, high_precision=self.device == "cpu" and self.reference_role == "truth_fp64"
         )
+        print(f"KDA_PREPARE_ROLE case={self.runtime_case_id} backend={self.device} "
+              f"role={self.reference_role if self.device == 'cpu' else 'dut'}", flush=True)
 
     def __call__(self, input_data: InputDataset, with_output: bool = False):
         if self.spec is None or self.inputs is None:
@@ -790,9 +813,16 @@ class FunctionApi(BaseApi):
         if self.spec is None or self.inputs is None:
             raise RuntimeError(f"{OP_NAME}: ATK input initialization failed")
         if self.device == "cpu":
-            outputs = run_cpu(self.spec, self.inputs)
+            outputs = run_cpu(self.spec, self.inputs, self.reference_role)
         elif self.device in {"npu", "pyaclnn"}:
-            outputs = run_npu(self.spec, self.inputs)
+            try:
+                outputs = run_npu(self.spec, self.inputs)
+            except Exception:
+                # ATK may emit SUCCESS with an empty precision detail after an
+                # execution error. Keep the original DUT exception in evidence.
+                print(f"KDA_PREPARE_DUT_ERROR case={self.runtime_case_id}", flush=True)
+                traceback.print_exc()
+                raise
         else:
             raise RuntimeError(
                 f"{OP_NAME} only supports CPU golden and NPU DUT nodes, "
@@ -811,8 +841,11 @@ class FunctionApi(BaseApi):
         for output in outputs:
             if output is None or not isinstance(output, torch.Tensor):
                 continue
+            # Keep the complete finite check outside the instrumented device
+            # graph. Returned DUT tensors/dtypes and native comparisons stay
+            # unchanged; this avoids unrelated Cast/IsFinite/ReduceAll kernels.
             if output.is_floating_point() and not torch.isfinite(
-                output.float()
+                output.detach().cpu().float()
             ).all().item():
                 raise RuntimeError("output contains NaN or Inf")
             if self.device == "cpu" and output.dtype == torch.float64:
@@ -838,4 +871,7 @@ class FunctionApi(BaseApi):
             "HV": int(self.spec["HV"]),
             "T": int(self.spec["T"]),
             "backward_mode": str(self.spec["backward_mode"]),
+            "reference_role": self.reference_role if self.device == "cpu" else "dut",
+            "output_slots": [name for name, enabled in zip(
+                OUTPUT_NAMES, OUTPUT_MASKS[str(self.spec["backward_mode"])]) if enabled],
         }

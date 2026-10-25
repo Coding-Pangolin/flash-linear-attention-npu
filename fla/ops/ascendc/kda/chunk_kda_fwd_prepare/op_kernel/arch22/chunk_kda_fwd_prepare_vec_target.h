@@ -909,6 +909,8 @@ __aicore__ inline void StageV0(TargetVectorContext<GateT, BetaT, CompilePolicy> 
         const uint32_t gkCount = chunk.validRows * Shape::kHeadDim;
         AscendC::Muls(gkStage, g, Domain::stepScale, gkCount);
         AscendC::PipeBarrier<PIPE_V>();
+        AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(ctx.outputReady_[pair]);
+        AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(ctx.outputReady_[pair]);
         AscendC::DataCopy(ctx.gkGm_[headOutputOffset], gkStage, gkCount);
     } else {
         AscendC::DataCopy(ctx.gkGm_[headOutputOffset], g, chunk.validRows * Shape::kHeadDim);
@@ -1011,6 +1013,8 @@ __aicore__ inline void StageV3(TargetVectorContext<GateT, BetaT, CompilePolicy> 
         // x0 is already a complete 32x32 identity here. Copy it as the
         // recurrence's constant factor instead of forming I+I = 2I.
         AscendC::Adds(negX1, x0, 0.0F, 1024);
+        // The identity copy still reads X0; finish it before forming I-L00.
+        AscendC::PipeBarrier<PIPE_V>();
         constexpr uint8_t kFp32TileStride = 4; // 32 FP32 = 4 blocks
         constexpr uint8_t kFp32LkkStride = 8;  // 64 FP32 = 8 blocks
         if (topRows != 0) {

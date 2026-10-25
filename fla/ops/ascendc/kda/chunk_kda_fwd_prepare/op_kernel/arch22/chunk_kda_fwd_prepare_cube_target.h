@@ -142,6 +142,7 @@ struct TargetCubeContext {
     AscendC::TBuf<AscendC::TPosition::B2> l0BBuf_{};
     AscendC::TBuf<AscendC::TPosition::CO1> l0CBuf_{};
     AscendC::TEventID mte2ToMte1_{};
+    AscendC::TEventID l1ReadersDone_{};
     AscendC::TEventID mte1ToM_{};
     AscendC::TEventID mToMte1_{};
     AscendC::TEventID mToFix_{};
@@ -231,6 +232,7 @@ __aicore__ inline void InitTargetCube(TargetCubeContext<CompilePolicy> &ctx, con
     // 每种 HardEvent 有独立 ID 池。保留 Alloc/Release，并把 CANN 9.1
     // 分配器的预期返回值直接列在申请现场，便于逐项核对。
     ctx.mte2ToMte1_ = ctx.pipe_->template AllocEventID<AscendC::HardEvent::MTE2_MTE1>(); // ID 0
+    ctx.l1ReadersDone_ = ctx.pipe_->template AllocEventID<AscendC::HardEvent::MTE1_MTE2>();
     ctx.mte1ToM_ = ctx.pipe_->template AllocEventID<AscendC::HardEvent::MTE1_M>();       // ID 0
     // AIC 的 TPipe::Init 已在 M_MTE1 池占用 0、1、2。
     ctx.mToMte1_ = ctx.pipe_->template AllocEventID<AscendC::HardEvent::M_MTE1>();        // ID 3
@@ -499,6 +501,9 @@ __aicore__ inline void StageNormSums(TargetCubeContext<CompilePolicy> &ctx, cons
     if (chunk.validRows != Shape::kChunkRows || ctx.args_.tiling.inputSequenceMajor) {
         return;
     }
+    // The previous C2/C7 may still be reading these physical head lanes.
+    AscendC::SetFlag<AscendC::HardEvent::MTE1_MTE2>(ctx.l1ReadersDone_);
+    AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(ctx.l1ReadersDone_);
     auto l1Bytes = ctx.l1Buf_.template Get<uint8_t>();
     auto l0A = ctx.l0ABuf_.template Get<bfloat16_t>();
     auto l0B = ctx.l0BBuf_.template Get<bfloat16_t>();
@@ -646,6 +651,11 @@ __aicore__ inline void StageC3(TargetCubeContext<CompilePolicy> &ctx, const Chun
 {
     using namespace Workspace;
     constexpr uint32_t kRounds = CompilePolicy::arch22FastLeaf ? 1 : 2;
+    // Ordinary MMAD and C3's two slots share the same physical L0 buffers.
+    AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(ctx.mToMte1_);
+    AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(ctx.fixToM_);
+    AscendC::SetFlag<AscendC::HardEvent::MTE1_MTE2>(ctx.l1ReadersDone_);
+    AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(ctx.l1ReadersDone_);
     auto l1Bytes = ctx.l1Buf_.template Get<uint8_t>();
     auto l0A = ctx.l0ABuf_.template Get<float>();
     auto l0B = ctx.l0BBuf_.template Get<float>();
@@ -773,11 +783,16 @@ __aicore__ inline void StageC3(TargetCubeContext<CompilePolicy> &ctx, const Chun
             }
         }
     }
+    // Return physical L0 ownership only after C3's last MAC/Fixpipe use.
+    AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(ctx.mToMte1_);
+    AscendC::SetFlag<AscendC::HardEvent::FIX_M>(ctx.fixToM_);
 }
 
 template <typename CompilePolicy>
 __aicore__ inline void StageC2(TargetCubeContext<CompilePolicy> &ctx, const ChunkRange &chunk, uint32_t localHead)
 {
+    AscendC::SetFlag<AscendC::HardEvent::MTE1_MTE2>(ctx.l1ReadersDone_);
+    AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(ctx.l1ReadersDone_);
     const uint64_t slot = WorkspaceSlotBase(ctx.workgroup_, localHead, ctx.kWorkgroupStride, ctx.kSlotStride);
     AscendC::GlobalTensor<bfloat16_t> payload;
     payload.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(ctx.args_.workspace + slot + Workspace::kPayload));
@@ -1267,6 +1282,7 @@ template <typename CompilePolicy>
 __aicore__ inline void ReleaseEvents(TargetCubeContext<CompilePolicy> &ctx)
 {
     ctx.pipe_->template ReleaseEventID<AscendC::HardEvent::MTE2_MTE1>(ctx.mte2ToMte1_);
+    ctx.pipe_->template ReleaseEventID<AscendC::HardEvent::MTE1_MTE2>(ctx.l1ReadersDone_);
     ctx.pipe_->template ReleaseEventID<AscendC::HardEvent::MTE1_M>(ctx.mte1ToM_);
     ctx.pipe_->template ReleaseEventID<AscendC::HardEvent::M_MTE1>(ctx.mToMte1_);
     ctx.pipe_->template ReleaseEventID<AscendC::HardEvent::M_FIX>(ctx.mToFix_);

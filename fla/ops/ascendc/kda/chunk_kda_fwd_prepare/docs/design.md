@@ -67,6 +67,19 @@ C7 pair1的最后L1读取由MTE1_MTE2许可交给下一轮C2 pair1，初始化�
 
 ### Arch22 target variant
 
+Target local-buffer handoff repair: all existing addresses, mathematics and
+cross-core ready/free counts remain unchanged. A new on-demand MTE1_MTE2 event
+(one allocate/release, no initial permit and no outstanding exit token) orders
+all preceding L1 LoadData readers before C2, norm-lookahead or C3 overwrites
+their shared head lanes. C3 consumes the ordinary M_MTE1 and FIX_M permits
+before entering its independent two-slot L0 pool, then publishes those ordinary
+permits from M and FIX after its last use. Its own slot permits remain balanced.
+This transfers physical L0 ownership without claiming the two pools are disjoint.
+V0 publishes V_MTE3 after the final gk Muls, not only before earlier public
+stores. V3 completes the identity copy's source read before overwriting X0.
+These changes address pre-existing Target racecheck reports; they require a
+fresh instrumented/native run and do not inherit Generic validation.
+
 An internal template variant isolates the throughput pipeline from the existing
 arch22 implementation. `arch22/chunk_kda_fwd_prepare_target_config.h` defines
 the host selection contract and the shared workspace slot size. The host emits

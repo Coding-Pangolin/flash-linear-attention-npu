@@ -97,7 +97,7 @@ class PrepareOutputLayoutTest(unittest.TestCase):
 
     def test_four_layouts_keep_all_thirteen_output_slots_head_major(self):
         fake_torch = types.ModuleType("torch")
-        fake_torch.float32, fake_torch.bfloat16 = object(), object()
+        fake_torch.float32, fake_torch.bfloat16, fake_torch.float16 = object(), object(), object()
         fake_torch.empty = lambda shape, dtype, device: FakeTensor(shape, dtype)
         layouts = {
             "BNSD": ((2, 2, 65, 128), (2, 4, 65, 128)),
@@ -125,6 +125,25 @@ class PrepareOutputLayoutTest(unittest.TestCase):
                         mock.patch.object(self.stable, "_current_stream_ptr", return_value=0):
                     out = self.stable.npu_chunk_kda_fwd_prepare(
                         q, q, v, v, v, 128**-.5, layout=layout, backward_mode=mode)
+                    self.assertEqual(len(out), 13)
+                    for slot, value in enumerate(out):
+                        if slot in mask:
+                            self.assertEqual(value.shape, expected[slot])
+                            self.assertIs(value.dtype, fake_torch.float32 if slot in {0,10,11,12}
+                                          else fake_torch.bfloat16)
+                        else:
+                            self.assertIsNone(value)
+
+                # Exercise the independent legacy ctypes allocation path too;
+                # NTD uses different q/k and value head counts in this fixture.
+                beta = FakeTensor(vshape[:-1], fake_torch.bfloat16)
+                with self.subTest(backend="ctypes", layout=layout, mode=mode), \
+                        mock.patch.dict(sys.modules, {"torch": fake_torch}), \
+                        mock.patch.object(ACLNN_CTYPES, "_empty", side_effect=lambda shape, like, dtype: FakeTensor(shape, dtype)), \
+                        mock.patch.object(ACLNN_CTYPES, "_call_aclnn", side_effect=lambda name, build_args, outputs: outputs):
+                    out = ACLNN_CTYPES.npu_chunk_kda_fwd_prepare(
+                        q, q, v, v, beta, 128**-.5, layout=layout, backward_mode=mode,
+                        cu_seqlens=[0, 1, 65] if layout in {"TND", "NTD"} else None)
                     self.assertEqual(len(out), 13)
                     for slot, value in enumerate(out):
                         if slot in mask:

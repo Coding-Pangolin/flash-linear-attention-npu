@@ -22,19 +22,10 @@ except ModuleNotFoundError as exc:
 
 
 OP_NAME = "chunk_kda_fwd_prepare"
-SUITES = {
-    "accuracy": ("", 200),
-    "forward": ("_forward", 4),
-    "perf": ("_perf", 128),
-    "paths": ("_paths", 10),
-    "mss": ("_mss", 6),
-    "a5_legacy_mss": ("_a5_legacy_mss", 432),
-    "target": ("_target", 6),
-    "target_mss": ("_target_mss", 2),
-}
+SUITES = {"accuracy": ("", 200), "perf": ("_perf", 10), "mss": ("_mss", 432)}
 
 
-@lru_cache(maxsize=len(SUITES))
+@lru_cache(maxsize=3)
 def _cases(suite: str) -> list[dict]:
     suffix, expected_count = SUITES[suite]
     path = Path(__file__).resolve().parent / f"atk_{OP_NAME}{suffix}.json"

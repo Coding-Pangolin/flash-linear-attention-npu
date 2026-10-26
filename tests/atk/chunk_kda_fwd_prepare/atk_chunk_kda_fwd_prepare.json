@@ -7,7 +7,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -18,14 +18,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -328,7 +323,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -339,14 +334,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -674,7 +664,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -685,14 +675,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -990,7 +975,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -1001,14 +986,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -1331,7 +1311,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -1342,14 +1322,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -1652,7 +1627,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -1663,14 +1638,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -1998,7 +1968,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -2009,14 +1979,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -2319,7 +2284,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -2330,14 +2295,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -2665,7 +2625,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -2676,14 +2636,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -2986,7 +2941,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -2997,14 +2952,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -3332,7 +3282,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -3343,14 +3293,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -3653,7 +3598,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -3664,14 +3609,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -3999,7 +3939,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -4010,14 +3950,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -4320,7 +4255,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -4331,14 +4266,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -4666,7 +4596,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -4677,14 +4607,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -4987,7 +4912,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -4998,14 +4923,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -5333,7 +5253,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -5344,14 +5264,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -5654,7 +5569,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -5665,14 +5580,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -6039,7 +5949,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -6050,14 +5960,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -6498,7 +6403,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -6509,14 +6414,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -6921,7 +6821,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -6932,14 +6832,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -18523,7 +18418,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -18534,14 +18429,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -18877,7 +18767,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -18888,14 +18778,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -19204,7 +19089,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -19215,14 +19100,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -19566,7 +19446,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -19577,14 +19457,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -19887,7 +19762,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -19898,14 +19773,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -20233,7 +20103,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -20244,14 +20114,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -20554,7 +20419,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -20565,14 +20430,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -20900,7 +20760,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -20911,14 +20771,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -21221,7 +21076,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -21232,14 +21087,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -21562,7 +21412,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -21573,14 +21423,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -21878,7 +21723,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -21889,14 +21734,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -22224,7 +22064,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -22235,14 +22075,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -22540,7 +22375,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -22551,14 +22386,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -22881,7 +22711,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -22892,14 +22722,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -23202,7 +23027,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -23213,14 +23038,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -23548,7 +23368,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -23559,14 +23379,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -23864,7 +23679,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -23875,14 +23690,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -24205,7 +24015,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -24216,14 +24026,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -24526,7 +24331,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -24537,14 +24342,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -24872,7 +24672,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -24883,14 +24683,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -25193,7 +24988,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -25204,14 +24999,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -25539,7 +25329,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -25550,14 +25340,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -25860,7 +25645,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -25871,14 +25656,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -26206,7 +25986,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -26217,14 +25997,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -26527,7 +26302,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -26538,14 +26313,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -26873,7 +26643,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -26884,14 +26654,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -27238,7 +27003,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -27249,14 +27014,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -27661,7 +27421,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -27672,14 +27432,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -28021,7 +27776,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -28032,14 +27787,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -28483,7 +28233,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -28494,14 +28244,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -28854,7 +28599,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -28865,14 +28610,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -29216,7 +28956,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -29227,14 +28967,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -29540,7 +29275,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -29551,14 +29286,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -29886,7 +29616,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -29897,14 +29627,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -30207,7 +29932,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -30218,14 +29943,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -30553,7 +30273,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -30564,14 +30284,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -30880,7 +30595,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -30891,14 +30606,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -31242,7 +30952,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -31253,14 +30963,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -55406,7 +55111,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -55417,14 +55122,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -55768,7 +55468,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -55779,14 +55479,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -56095,7 +55790,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -56106,14 +55801,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -56457,7 +56147,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -56468,14 +56158,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -56784,7 +56469,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -56795,14 +56480,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -57146,7 +56826,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -57157,14 +56837,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -58177,7 +57852,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -58188,14 +57863,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -58539,7 +58209,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -58550,14 +58220,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -58861,7 +58526,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -58872,14 +58537,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -59223,7 +58883,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -59234,14 +58894,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -59550,7 +59205,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -59561,14 +59216,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -59899,7 +59549,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -59910,14 +59560,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -61637,7 +61282,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -61648,14 +61293,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -61986,7 +61626,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -61997,14 +61637,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -62308,7 +61943,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -62319,14 +61954,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -62670,7 +62300,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -62681,14 +62311,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -63085,7 +62710,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -63096,14 +62721,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -67688,7 +67308,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -67699,14 +67319,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -68010,7 +67625,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -68021,14 +67636,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -68356,7 +67966,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -68367,14 +67977,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -68680,7 +68285,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -68691,14 +68296,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -69034,7 +68634,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -69045,14 +68645,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -69353,7 +68948,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -69364,14 +68959,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -69707,7 +69297,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -69718,14 +69308,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -71442,7 +71027,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -71453,14 +71038,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -71892,7 +71472,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -71903,14 +71483,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -72216,7 +71791,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -72227,14 +71802,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -76811,7 +76381,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -76822,14 +76392,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -77138,7 +76703,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -77149,14 +76714,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -77484,7 +77044,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -77495,14 +77055,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -77806,7 +77361,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -77817,14 +77372,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -78155,7 +77705,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -78166,14 +77716,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -78479,7 +78024,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -78490,14 +78035,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -78828,7 +78368,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -78839,14 +78379,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -80563,7 +80098,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -80574,14 +80109,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -80917,7 +80447,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -80928,14 +80458,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -81241,7 +80766,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -81252,14 +80777,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -81598,7 +81118,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -81609,14 +81129,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -81925,7 +81440,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -81936,14 +81451,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -86528,7 +86038,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -86539,14 +86049,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -86849,7 +86354,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -86860,14 +86365,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -88625,7 +88125,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -88636,14 +88136,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -88947,7 +88442,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -88958,14 +88453,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -89309,7 +88799,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -89320,14 +88810,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -89718,7 +89203,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -89729,14 +89214,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -90160,7 +89640,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -90171,14 +89651,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -90487,7 +89962,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -90498,14 +89973,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -90841,7 +90311,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -90852,14 +90322,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -91162,7 +90627,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -91173,14 +90638,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -91516,7 +90976,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -91527,14 +90987,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -91840,7 +91295,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -91851,14 +91306,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -92202,7 +91652,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -92213,14 +91663,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -92526,7 +91971,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -92537,14 +91982,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -92916,7 +92356,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -92927,14 +92367,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -93243,7 +92678,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -93254,14 +92689,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -93641,7 +93071,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -93652,14 +93082,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -98206,7 +97631,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -98217,14 +97642,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -98560,7 +97980,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -98571,14 +97991,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -98876,7 +98291,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -98887,14 +98302,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -99238,7 +98648,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -99249,14 +98659,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -99609,7 +99014,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -99620,14 +99025,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -101369,7 +100769,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -101380,14 +100780,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -101691,7 +101086,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -101702,14 +101097,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -106286,7 +105676,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -106297,14 +105687,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -106607,7 +105992,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -106618,14 +106003,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -106969,7 +106349,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -106980,14 +106360,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -107296,7 +106671,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -107307,14 +106682,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -107653,7 +107023,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -107664,14 +107034,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -108024,7 +107389,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -108035,14 +107400,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -108381,7 +107741,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -108392,14 +107752,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -108752,7 +108107,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -108763,14 +108118,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -109093,7 +108443,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -109104,14 +108454,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -109417,7 +108762,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -109428,14 +108773,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -109766,7 +109106,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -109777,14 +109117,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -110082,7 +109417,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -110093,14 +109428,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -110431,7 +109761,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -110442,14 +109772,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -110753,7 +110078,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -110764,14 +110089,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -112521,7 +111841,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -112532,14 +111852,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -112845,7 +112160,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -112856,14 +112171,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -113194,7 +112504,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -113205,14 +112515,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -113518,7 +112823,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -113529,14 +112834,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -113952,7 +113252,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -113963,14 +113263,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -115690,7 +114985,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -115701,14 +114996,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -117450,7 +116740,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -117461,14 +116751,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -117769,7 +117054,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -117780,14 +117065,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -118123,7 +117403,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -118134,14 +117414,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -118445,7 +117720,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -118456,14 +117731,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -118794,7 +118064,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -118805,14 +118075,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -119206,7 +118471,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -119217,14 +118482,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -119547,7 +118807,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -119558,14 +118818,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -119874,7 +119129,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -119885,14 +119140,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -124469,7 +123719,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -124480,14 +123730,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -124785,7 +124030,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -124796,14 +124041,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -129388,7 +128628,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -129399,14 +128639,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -129715,7 +128950,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -129726,14 +128961,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -134310,7 +133540,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -134321,14 +133551,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -134637,7 +133862,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -134648,14 +133873,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -139240,7 +138460,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -139251,14 +138471,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -139561,7 +138776,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -139572,14 +138787,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -139967,7 +139177,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -139978,14 +139188,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -140294,7 +139499,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -140305,14 +139510,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -142070,7 +141270,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -142081,14 +141281,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -142391,7 +141586,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -142402,14 +141597,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -142789,7 +141979,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -142800,14 +141990,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -143105,7 +142290,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -143116,14 +142301,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -144881,7 +144061,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -144892,14 +144072,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -149449,7 +148624,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -149460,14 +148635,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -149803,7 +148973,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -149814,14 +148984,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -150130,7 +149295,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -150141,14 +149306,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -150520,7 +149680,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -150531,14 +149691,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -150888,7 +150043,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -150899,14 +150054,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -151237,7 +150387,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -151248,14 +150398,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -152978,7 +152123,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -152989,14 +152134,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -153332,7 +152472,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -153343,14 +152483,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -153651,7 +152786,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -153662,14 +152797,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -154085,7 +153215,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -154096,14 +153226,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -154412,7 +153537,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -154423,14 +153548,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -154774,7 +153894,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -154785,14 +153905,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -159342,7 +158457,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -159353,14 +158468,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -159688,7 +158798,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -159699,14 +158809,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -160012,7 +159117,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -160023,14 +159128,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -160366,7 +159466,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -160377,14 +159477,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -160693,7 +159788,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -160704,14 +159799,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -162461,7 +161551,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -162472,14 +161562,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -162870,7 +161955,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -162881,14 +161966,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -163216,7 +162296,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -163227,14 +162307,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -167784,7 +166859,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -167795,14 +166870,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -172379,7 +171449,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -172390,14 +171460,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -174120,7 +173185,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -174131,14 +173196,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -174469,7 +173529,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -174480,14 +173540,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -174796,7 +173851,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -174807,14 +173862,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -175230,7 +174280,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -175241,14 +174291,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -175549,7 +174594,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -175560,14 +174605,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -175898,7 +174938,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -175909,14 +174949,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -176214,7 +175249,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -176225,14 +175260,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -176576,7 +175606,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -176587,14 +175617,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -176895,7 +175920,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -176906,14 +175931,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -177301,7 +176321,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -177312,14 +176332,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -177622,7 +176637,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -177633,14 +176648,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -177971,7 +176981,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -177982,14 +176992,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [
@@ -179709,7 +178714,7 @@
     "triton_name": null,
     "kernel_name": null,
     "version": "v2.1",
-    "expected_error_msg": "",
+    "expected_error_msg": null,
     "api": "pytorch",
     "api_type": "executor_chunk_kda_fwd_prepare",
     "aclnn_api_type": "aclnn_function",
@@ -179720,14 +178725,9 @@
     "kernel_api_type": "kernel_function",
     "backward": false,
     "standard": {
-      "acc": {
-        "cv_fused_double_benchmark": {
-          "max_re_ratio": 5,
-          "avg_re_ratio": 1.5,
-          "root_mean_squared_ratio": 1.5
-        }
-      },
-      "perf": "not_key"
+      "acc": "mixed_tolerance_bm",
+      "perf": "not_key",
+      "mem": 1.1
     },
     "outputs": null,
     "inputs": [

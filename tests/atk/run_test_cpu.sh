@@ -68,15 +68,23 @@ record_ran_type() {
 # 多项时输出每项结果 + 汇总行；单项时仅输出该项结果，不显示汇总行。
 print_result_summary() {
   if [[ ! -f "$RESULT_CHECK_PY" ]]; then
-    log_info "跳过结果检查：找不到 ${RESULT_CHECK_PY}"
-    return 0
+    die "找不到结果检查器：${RESULT_CHECK_PY}"
   fi
   local fail=0 ran="${#RAN_TYPES[@]}"
   [[ $ran -gt 0 ]] || return 0
   local pass=0
   for t in "${RAN_TYPES[@]}"; do
+    local check_args=()
+    if [[ "$OP" == chunk_kda_fwd_prepare* ]]; then
+      case "$t" in
+        accuracy) check_args=(--case-file "$CASE_FILE" --start "${ACCURACY_START:-0}"); [[ -z "$ACCURACY_END" ]] || check_args+=(--end "$ACCURACY_END") ;;
+        performance) check_args=(--case-file "${OP_DIR}/atk_${OP}_perf.json" --start "${PERFORMANCE_START:-0}"); [[ -z "$PERFORMANCE_END" ]] || check_args+=(--end "$PERFORMANCE_END") ;;
+        determinism) check_args=(--case-file "${OP_DIR}/atk_${OP}_mss.json" --start "${DETERMINISM_START:-0}"); [[ -z "$DETERMINISM_END" ]] || check_args+=(--end "$DETERMINISM_END") ;;
+        mssanitizer) check_args=(--case-file "${OP_DIR}/atk_${OP}_mss.json" --start "${MSS_START:-0}"); [[ -z "$MSS_END" ]] || check_args+=(--end "$MSS_END") ;;
+      esac
+    fi
     if python3 "$RESULT_CHECK_PY" --type "$t" \
-        --output-root "$ATK_OUTPUT_ROOT" --op "$OP"; then
+        --output-root "$ATK_OUTPUT_ROOT" --op "$OP" "${check_args[@]}"; then
       pass=$((pass + 1))
     else
       fail=$((fail + 1))
@@ -140,6 +148,16 @@ set_case_range_args() {
     CASE_RANGE_ARGS=(-s "$start" -e "$end")
   fi
 }
+
+validate_prepare_cases() {
+  if [[ "$OP" == chunk_kda_fwd_prepare* ]]; then
+    PREPARE_TASK_ARGS=(--disable_id_seed --save_report_json)
+    python3 "$RESULT_CHECK_PY" --type accuracy --output-root "$ATK_OUTPUT_ROOT" --op "$OP" \
+      --validate-case-file "$1"
+  fi
+}
+
+PREPARE_TASK_ARGS=()
 
 # 从 npu-smi 探测真实 SOC，返回 ascend910b/ascend910_93/ascend950；探测失败返回空。
 detect_soc_from_npu() {
@@ -384,6 +402,7 @@ if should_run gen_cases; then
 fi
 
 if should_run accuracy; then
+  validate_prepare_cases "$CASE_FILE"
   log_info "开始精度与 NaN 检测：mixed_tolerance_bm + CPU单标杆 + GM 初始化"
   set_case_range_args "精度与 NaN 检测 case 范围" "$ACCURACY_START" "$ACCURACY_END"
   "$ATK_BIN" node --name npu_dut --backend npu --devices "$NPU_DEVICE_ID" \
@@ -395,7 +414,7 @@ if should_run accuracy; then
       --task accuracy \
       --bm_device cpu \
       -p "./executor_${OP}.py" \
-      "${CASE_RANGE_ARGS[@]}" \
+      "${CASE_RANGE_ARGS[@]}" "${PREPARE_TASK_ARGS[@]}" \
       "${GM_INIT_ARGS[@]}" \
       -to "$ATK_TIMEOUT"
   log_info "完成精度与 NaN 检测"
@@ -403,6 +422,7 @@ if should_run accuracy; then
 fi
 
 if should_run performance; then
+  validate_prepare_cases "${OP_DIR}/atk_${OP}_perf.json"
   log_info "开始性能测试：performance_device"
   set_case_range_args "性能测试 case 范围" "$PERFORMANCE_START" "$PERFORMANCE_END"
   "$ATK_BIN" node --name npu_dut --backend npu --devices "$NPU_DEVICE_ID" \
@@ -411,14 +431,16 @@ if should_run performance; then
       -c "atk_${OP}_perf.json" \
       --task performance_device \
       -p "executor_${OP}.py" \
-      "${CASE_RANGE_ARGS[@]}" \
+      "${CASE_RANGE_ARGS[@]}" "${PREPARE_TASK_ARGS[@]}" \
       --save_data profile \
       -sp \
       -to "$PERFORMANCE_TIMEOUT"
   log_info "完成性能测试"
+  if [[ "$OP" == chunk_kda_fwd_prepare* ]]; then record_ran_type performance; fi
 fi
 
 if should_run determinism; then
+  validate_prepare_cases "${OP_DIR}/atk_${OP}_mss.json"
   log_info "开始确定性测试：accuracy_dc（循环次数=${DC_LOOP_NUMS}，超时=${DC_TIMEOUT}s）"
   set_case_range_args "确定性测试 case 范围" "$DETERMINISM_START" "$DETERMINISM_END"
   "$ATK_BIN" node --name npu_dut --backend npu --devices "$NPU_DEVICE_ID" \
@@ -428,12 +450,13 @@ if should_run determinism; then
       --task accuracy_dc \
       --dc_loop_nums "$DC_LOOP_NUMS" \
       -to "$DC_TIMEOUT" \
-      "${CASE_RANGE_ARGS[@]}"
+      "${CASE_RANGE_ARGS[@]}" "${PREPARE_TASK_ARGS[@]}"
   log_info "完成确定性测试"
   record_ran_type determinism
 fi
 
 if should_run mssanitizer; then
+  validate_prepare_cases "${OP_DIR}/atk_${OP}_mss.json"
   command -v mssanitizer >/dev/null 2>&1 || die "找不到 mssanitizer，请先加载支持 sanitizer 的 CANN/调试环境"
   log_info "开始内存检测：mssanitizer ${MSS_TOOL}"
   log_info "ATK mssanitizer 日志：${MSS_LOG_PATH}"
@@ -447,7 +470,7 @@ if should_run mssanitizer; then
       --task run \
       --mssanitizer \
       -msl "$MSS_LOG_PATH" \
-      "${CASE_RANGE_ARGS[@]}"
+      "${CASE_RANGE_ARGS[@]}" "${PREPARE_TASK_ARGS[@]}"
   log_info "完成内存检测"
   record_ran_type mssanitizer
 fi

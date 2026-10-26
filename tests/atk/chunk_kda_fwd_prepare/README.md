@@ -1,129 +1,158 @@
-# A2 Prepare：六 key 原生 ATK 验收
+# chunk_kda_fwd_prepare ATK 测试
 
-NPU DUT 只调用已安装包的公开 `chunk_kda_fwd_prepare`。正式入口现场生成
-公开输入、计算两路 CPU 参考，不依赖本地 tensor、参考或 DUT 输出缓存。
-本文描述验收合同；不声明当前包已通过。逐项结果随最终包独立归档。
+本目录按 ATK 公开输入格式验证 `chunk_kda_fwd_prepare`。NPU 节点只调用稳定入口
+`fla_npu.ops.ascendc.chunk_kda_fwd_prepare`，不加载 `torch_npu` dispatcher。
 
-## 范围与身份
+## 输入与输出
 
-A2 key 仅包含 GateT、BetaT、pipelineVariant。数学/输出模式为一次调用内
-不可变的 tiling 字段。AIC/AIV 共用同一派发，BF16 relay 优先，
-其次是 CommonMath，最后是运行时泛化路径。A5 保留旧入口。
+YAML 和三份冻结 JSON 都直接声明以下 21 个公开输入，顺序与 executor 一致：
 
-| key | gate / beta | pipeline | MSS/DC id |
-| ---: | --- | --- | ---: |
-| 2570 | BF16 / BF16 | Generic | 0 |
-| 7690 | BF16 / FP32 | Generic | 1 |
-| 2590 | FP32 / BF16 | Generic | 2 |
-| 7710 | FP32 / FP32 | Generic | 3 |
-| 68126 | FP32 / BF16 | Target | 4 |
-| 68106 | BF16 / BF16 | Target | 5 |
+```text
+q, k, v, g, beta,
+scale, layout, chunk_size, epsilon,
+use_qk_l2norm_in_kernel, use_gate_in_kernel,
+use_beta_sigmoid_in_kernel, allow_neg_eigval, safe_gate,
+lower_bound, use_exp2,
+a_log, dt_bias, cu_seqlens, chunk_indices, backward_mode
+```
 
-这些是 CANN 编码器预期值；必须另采实际 key。Generic 代表为 H5/T1665，
-Target 保持 H96/T8192 合同。默认 DC/MSS 每 key 一例，不重复追加 target 文件。
-A5 的原432例保存在 `_a5_legacy_mss.json`，不可把 A2 检查推断为 A5 通过。
+用例中不使用 marker tensor、序列化 `case_spec` 或其他隐藏控制字段。
+`a_log`、`dt_bias`、`cu_seqlens` 和 `chunk_indices` 按场景传空或真实数据。
 
-## 输入、参考与输出
+接口固定保留 13 个输出槽位：
 
-21个公开输入及13个输出槽位保持原顺序；禁用输出必须为 None。
-none/recompute/save/forward 分别比较6/12/13/7个启用输出，
-不能通过过滤错误输出、修改 dtype 或缩小 shape 取得通过。
+```text
+gk, aqk, akk, w, u, qg, kg, qg_scaled,
+q_hat, k_hat, q_rstd, k_rstd, beta_eff
+```
 
-三个 ATK 角色使用 `--syc_dataset` 的同一份已量化输入：
+`backward_mode` 只控制真实搬出，不改变输出槽位数：
 
-- NPU DUT：每轮执行新安装包，检查全部启用输出的合同及有限值。
-- truth_fp64：benchmark CPU 角色，FP64完整求逆；不模拟 DUT 的近似和内部 BF16 舍入。
-- control_fp32_bf16：非 benchmark CPU 角色，FP32计算，保持原参考定义中的 BF16 舍入点。
+| 模式 | 真实输出 |
+| --- | --- |
+| `none` | `gk/aqk/w/u/kg/qg_scaled` |
+| `recompute` | `none` 模式输出，加 `akk/q_hat/k_hat/q_rstd/k_rstd/beta_eff` |
+| `save` | 全部 13 个输出，额外保存 `qg` |
 
-两个 CPU 角色共享已审计数学与布局转换，并非两个独立来源的算法。
-有限值检查在 CPU 上读取每个完整 DUT 输出，返回给 ATK 的 NPU tensor
-及 dtype 保持原样，避免额外的 Cast/IsFinite/ReduceAll 干扰 MSS 插桩。
-使用原生 `cv_fused_double_benchmark`：max=5、avg=1.5、RMS=1.5，
-其他默认项不改。要求原生比较器可导入；不得以本地补丁替代缺失比较器。
+CPU 节点使用 FP64 独立标杆计算；NPU 节点检查 13 个槽位的可选性、shape、dtype
+和有限值。性能任务在 `with_output=false` 时只检查接口合同，不执行同步、有限值扫描
+或 D2H 搬运。
 
-## 固定清单
+## 用例资产
 
 | 文件 | 数量 | 用途 |
 | --- | ---: | --- |
-| `atk_chunk_kda_fwd_prepare.json` | 200 | 完整原始输入与 id/name/seed；保留原有 Save 输出 |
-| `atk_chunk_kda_fwd_prepare_forward.json` | 4 | 独立补充四布局 Forward，不替换原始200例 |
-| `atk_chunk_kda_fwd_prepare_perf.json` | 128 | 32模型 × 普通/safe gate × FP32/BF16 gate |
-| `atk_chunk_kda_fwd_prepare_mss.json` | 6 | 每个实际 key 的 DC50及四种 MSS |
-| `atk_chunk_kda_fwd_prepare_paths.json` | 10 | 开发专项：尾块、奇数 head、ring/drain与回退 |
-| `atk_chunk_kda_fwd_prepare_regression_perf.json` | 10 | 保留旧性能护栏 |
-| `runtime_minimal.json` | 4 | Generic 最小精度快筛；不代替完整验收 |
+| `atk_chunk_kda_fwd_prepare.json` | 200 | 精度、功能、布局、dense/varlen、tail、GVA 和输出模式 |
+| `atk_chunk_kda_fwd_prepare_perf.json` | 10 | 10 个模型大 shape，连续 BNSD、纯推理输出 |
+| `atk_chunk_kda_fwd_prepare_mss.json` | 432 | 每个可达 TilingKey 一条，用于确定性及后续内存检查 |
 
-模型清单保留完整 cu_seqlens，默认 seed3。beta BF16、sigmoid=true、
-allow_neg=false、exp2=true、L2、scale=1/√128、save。这些尚未确认的模型属性
-仍是显式测试配置。200泛化及128模型各只跑原 seed，不默认扩成600/384。
-额外种子仅由 `--seeds` 显式启用，不能计作更多泛化结构。
-精度可显式设置 `--precision-jobs 3` 并行独立 case；默认1。
-DC/MSS/performance始终串行，性能配对期间不得并行运行精度。
+200 条精度用例是 200 个不同结构，而不是少量结构重复 seed。它们包含 100 条均匀
+分布和 100 条正态分布，并覆盖模板属性的全部合法二元组合。432 条 TilingKey 用例由
+以下轴的合法笛卡尔积构成：
 
-## 正式入口
-
-先加载 CANN、官方 ATK 和隔离安装包的环境，核对真实导入路径和 op API。
-所有输出目录必须全新；脚本拒绝覆盖旧报告。
-
-```bash
-python -B scripts/test_delivery.py
-python -B scripts/delivery_cases.py
-python -B gen_chunk_kda_fwd_prepare.py --summary
-atk case -f chunk_kda_fwd_prepare.yaml -p gen_chunk_kda_fwd_prepare.py
-python -B scripts/audit_generated.py result/chunk_kda_fwd_prepare/json/all_chunk_kda_fwd_prepare.json
-
-python -B scripts/run_delivery.py --scope accuracy --out /tmp/prepare_acc_new \
-  --device 0 --port 19494 --source-commit EXACT_COMMIT \
-  --package /path/to/exact.whl --kernel-lib /path/to/libcust_opapi.so
-python -B scripts/run_delivery.py --scope model-accuracy --out /tmp/prepare_model_new \
-  --device 0 --port 19494 --source-commit EXACT_COMMIT \
-  --package /path/to/exact.whl --kernel-lib /path/to/libcust_opapi.so
-python -B scripts/run_delivery.py --scope accuracy --out /tmp/prepare_forward_new \
-  --case-file atk_chunk_kda_fwd_prepare_forward.json \
-  --device 0 --port 19494 --source-commit EXACT_COMMIT \
-  --package /path/to/exact.whl --kernel-lib /path/to/libcust_opapi.so
-python -B scripts/run_delivery.py --scope determinism --out /tmp/prepare_dc_new \
-  --device 0 --port 19494 --source-commit EXACT_COMMIT \
-  --package /path/to/exact.whl --kernel-lib /path/to/libcust_opapi.so
+```text
+2 gate dtype x 2 beta dtype x 2 norm mode x
+3 beta mode x 3 gate mode x 2 exp mode x 3 output mode = 432
 ```
 
-DC 固定原生50轮，不能用独立逐位诊断代替。MSS 使用同源码的插桩包，
-四种工具分别执行；以下命令对 memcheck/racecheck/initcheck/synccheck 各运行一次：
+其中三个输出模式各 144 条。内存检查当前暂停，`_mss.json` 只表示用例已准备，不能
+据此声称 sanitizer 已通过。
+
+性能文件的 10 条记录保留精度集合中的逻辑 ID `56..65`，但在该文件内的选择位置仍
+是 `0..9`。重点用例名称分别包含逻辑 ID `0063` 和 `0064`，对应性能文件位置 7 和 8：
+
+- `B=1, HK=96, HV=96, T=8192`，dense BNSD，目标 2700 us；
+- `B=1, HK=96, HV=96, T=16384`，varlen BNSD，目标 5600 us。
+
+执行前应按 case name 核对目标，不能把 ATK 重新生成后的物理顺序当作稳定 ABI。
+
+## 生成
+
+`dtype_numbers: 100` 与 `shape_distributions: [[0, 1.0]]` 组合后由 ATK 生成
+200 条用例。目标 A5 环境中的 ATK 26.8.8 只注册 `mixed_tolerance_bm`，因此 YAML
+使用该原生标准作为版本兼容选择。
+
+先用官方 ATK 生成链验证 YAML 与 generator：
 
 ```bash
-python -B scripts/run_delivery.py --scope mssanitizer --tool memcheck \
-  --out /tmp/prepare_mem_new --device 0 --port 19494 --source-commit EXACT_COMMIT \
-  --package /path/to/instrumented.run --kernel-lib /path/to/instrumented/libcust_opapi.so
-ASCEND_GLOBAL_LOG_LEVEL=3 ASCEND_MODULE_LOG_LEVEL=OP=0 ASCEND_SLOG_PRINT_TO_STDOUT=1 \
-python -B scripts/run_delivery.py --scope route-trace --out /tmp/prepare_keys_new \
-  --device 0 --port 19494 --source-commit EXACT_COMMIT \
-  --package /path/to/exact.whl --kernel-lib /path/to/libcust_opapi.so
-python -B scripts/summarize_run.py /tmp/prepare_acc_new
-python -B scripts/audit_mss.py /tmp/prepare_mem_new --tool memcheck \
-  --manifest /path/to/instrumented_build_manifest.json
+cd tests/atk/chunk_kda_fwd_prepare
+atk case \
+  -f ./chunk_kda_fwd_prepare.yaml \
+  -p ./gen_chunk_kda_fwd_prepare.py \
+  -en 0 -s 20260904
 ```
 
-精度入口检查原生每 case 状态、输出数量和每输出比较，不只看退出码。
-DC/MSS/perf 退出0只标记 reports_pending_review；仍须审核真实 key、
-自定义 kernel 的插桩 start/finish、工具错误和完整报告。超时、缺行、
-晚到告警或部分通过均不算完成。route-trace 仅证明派发，不证明精度。
-`audit_mss.py` 流式检查原始等级、逐 key 告警及完整日志哈希；六个真实 key
-各一次插桩 start/finish 必须完整对应。ERROR 保留为未关闭门禁；只有 WARNING
-时标为 `warnings_pending_review`，不直接认定算子错误，也不自动豁免。GM 所有权
-提示、冗余等待和寄存器提示应分别结合实际访问范围、依赖链及同输入旧版对照
-甄别。零 ERROR/WARNING 且 native 完整通过才自动标为 `instrumented_native_pass`。
-即使 ATK 列为 True，缺插桩、未甄别的晚到告警或包身份不一致仍不能宣称完成验收。
-性能测量不打开 OP 调试日志，并使用最佳版本同窗口 ABBA 对照；
-Task Duration 与 Event 分列，至少 warmup5、3×50及两个独立窗口。
+三份冻结 JSON 是本目录用例的唯一来源。生成器只为 `atk case` 提供精度集，
+不会覆盖这三份已验证的输入。检查数量及用例名是否重复：
 
-## Host 合同测试
+```bash
+python3 ./gen_chunk_kda_fwd_prepare.py --summary
+```
 
-从仓库根目录编译运行 `scripts/test_target_tiling.cpp`、
-`scripts/test_relay_tiling.cpp`，以及 op_host/tests 中的调度测试。
-`scripts/test_runtime_keys.cpp` 需要 CANN include，用共享声明检查六 key。
-`scripts/test_tiling_wire.cpp` 需要 host/kernel include及 CANN register 库，
-用真实 CANN SaveToBuffer逐字段核对72字节序列化；启动前加载 CANN 环境。
+`atk case` 可以合法重排 case 或重写 ID；校验时按 case name 比较 21 个公开输入的
+语义，不要求生成文件与冻结文件逐字节相同。
 
-归档 source/patch、wheel/run、所有 kernel、API、Python wrapper、执行器、
-比较器及输入清单哈希。测试报告和大二进制放独立实验目录，不提交本目录。
-日常可用已有参考缓存加速筛查，但缓存结果不能冒充上述正式无缓存验收。
+## 精度
+
+加载当前构建的 A5 wheel 和 custom OPP 后，先跑单条，再跑全量：
+
+```bash
+atk node --backend npu --devices 0 -o ./atk_output/accuracy \
+  node --backend cpu task \
+  -c ./atk_chunk_kda_fwd_prepare.json \
+  --task accuracy \
+  -p ./executor_chunk_kda_fwd_prepare.py \
+  -s 0 -e 1 -sp -to 60
+
+atk node --backend npu --devices 0 -o ./atk_output/accuracy_full \
+  node --backend cpu task \
+  -c ./atk_chunk_kda_fwd_prepare.json \
+  --task accuracy \
+  -p ./executor_chunk_kda_fwd_prepare.py \
+  -s 0 -e 200 -sp -to 60
+```
+
+单条用例执行超过 60 秒即判定超时。只有最终报告同时满足总任务 200、执行失败 0、
+精度结论通过，才能声明全量精度通过；不能只依据 shell 返回码。
+
+## 性能
+
+性能以 `msopprof` 中目标 kernel 的 duration 为准，不使用 Python wall time。先按名称
+确认性能 JSON 中的位置，再用单算 ATK `run` 命令下发；例如重点位置 7：
+
+```bash
+msopprof \
+  --application="atk node --backend npu --devices 0 task -c ./atk_chunk_kda_fwd_prepare_perf.json --task run -p ./executor_chunk_kda_fwd_prepare.py -s 7 -e 8 -sp -to 60" \
+  --output=./atk_output/profile_case_7 \
+  --aic-metrics=BasicInfo \
+  --launch-count=1 \
+  --warm-up=0 \
+  --kill=off
+```
+
+位置 8 同理。报告需记录实际 shape、case name 和 kernel duration，并分别与
+2700 us、5600 us 目标比较。
+
+## 确定性
+
+确定性使用 `_mss.json` 的 432 个 TilingKey，通过 ATK 26.8.8 的
+`accuracy_dc` 任务逐位比较，每条重复 50 轮：
+
+```bash
+atk node --backend npu --devices 0 task \
+  -c ./atk_chunk_kda_fwd_prepare_mss.json \
+  --task accuracy_dc \
+  -p ./executor_chunk_kda_fwd_prepare.py \
+  -s 0 -e 432 -sp -to 60
+```
+
+单条仍使用 60 秒上限。内存检查恢复后需另行构建 sanitizer 包并分别运行 memcheck、
+racecheck、initcheck 和 synccheck，不能复用普通优化包的结论。
+
+## 静态检查
+
+```bash
+python3 -m py_compile \
+  tests/atk/chunk_kda_fwd_prepare/gen_chunk_kda_fwd_prepare.py \
+  tests/atk/chunk_kda_fwd_prepare/executor_chunk_kda_fwd_prepare.py
+```

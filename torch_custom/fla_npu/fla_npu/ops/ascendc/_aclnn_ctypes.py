@@ -4077,8 +4077,12 @@ def npu_chunk_kda_fwd_prepare(
         raise RuntimeError("npu_chunk_kda_fwd_prepare: q/k shapes must match and beta rank must match layout.")
 
     if is_rank3:
-        seqlen, h_num, k_dim = q_shape
-        hv_num, v_dim = v_shape[1], v_shape[2]
+        if is_sequence_major:  # TND
+            seqlen, h_num, k_dim = q_shape
+            hv_num, v_dim = v_shape[1], v_shape[2]
+        else:  # NTD
+            h_num, seqlen, k_dim = q_shape
+            hv_num, v_dim = v_shape[0], v_shape[2]
         batch = 1
     else:
         if is_sequence_major:

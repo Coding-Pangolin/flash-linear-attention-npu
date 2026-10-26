@@ -1,127 +1,5 @@
 # ChunkKdaFwdPrepare 设计
 
-方案设计规则版本：V2。公开合同见 [api.md](api.md)。
-
-### A2 key 与不可变数学策略
-
-A2 使用共享 CANN 声明生成六个 key，不使用构建 key-filter：
-
-| GateT | BetaT | Generic | Target |
-| --- | --- | ---: | ---: |
-| BF16 | BF16 | 2570 | 68106 |
-| FP32 | BF16 | 2590 | 68126 |
-| BF16 | FP32 | 7690 | 不适用 |
-| FP32 | FP32 | 7710 | 不适用 |
-
-`pipelineVariant` 独立表示流水身份；不再借用 SafeGate 位。
-`normMode/betaMode/gateMode/outputMode/useExp2` 由 host 每次调用写入 tiling，
-AIC/AIV 读取同一份不可变合同。host 序列化和 device wire 使用同一字段声明，
-大小72字节，关键 offset 与 slot/workspace 上界由静态断言和真实序列化测试约束。
-A5 保留既有模板声明、key 编码与 arch35 实现。
-
-Generic 依次选择已验证范围内的 BF16 relay、CommonMath 和完整运行时泛化路径。
-CommonMath 仅固定 BF16 beta、L2、Sigmoid、exp2、Save；gateMode仍可运行时变化。
-指数域缩放与裁剪常量在循环外确定，不重新实例化旧数学开关的笛卡尔积。
-
-### A2 Generic 的布局、求逆与中间量
-
-完整 FP32 右向消元求解两个32阶叶子；每叶保持递增列的 Mul/Sub 顺序，
-不采用 Target 的 L³ 截断。两个独立消元链交错发射；每行系数 Gather 为8 lane，
-Mul 的 block stride0复用系数，减少系数搬运而不改变逐元素浮点顺序。
-beta band、norm 和 V6 同样使用紧凑行标量广播。叶子最后以批量 CAST_RINT 和
-二维 UB copy 恢复既有 Akk payload；中间 scratch 均在末次消费后才复用。
-
-FP32 gate 的 V0 norm 按32行计算平方、归约、epsilon、Sqrt、Div、Mul和BF16舍入，
-Q/K顺序复用私有区。相对 private base，values占 `[0x8000,0xC000)`、
-squares占 `[0xC000,0x10000)`。相对共享scratch起点 `0x1A000`，repeat占
-`[0,0x400)`、Brcb占 `[0x400,0x800)`、ones占 `[0x800,0x880)`，
-reduceTmp提供对齐地址 `0x1000`；均低于beta偏移表 `0x1F00`。
-当前验证的CANN9.2 ReduceSum AR/isReuseSource使用squares原位归约，
-不访问external temporary。该SDK行为是资源规划的依赖，不能外推为其他版本通过。
-norm期间共享scratch已归当前pair所有，FP32 gate位于独立共享G区，beta保持原地址。
-BF16 gate 保留既有逐行 norm。
-
-head-major V1及FP32 relay V6使用16行tile；sequence-major使用7行，保留beta Gather偏移区。
-这些路径的factor使用共享UB `[0x1A000,0x1C000)`，stage使用尾部
-`[0x2E000,0x30000)`。BF16 relay的head-major V6使用32行tile，借用另一pair
-已退休的Q/K区：factor为other private `[0,0x4000)`，stage为 `[0x4000,0x8000)`。
-借用前消费other ioFree的MTE3_MTE2许可，再以MTE2_V传递给Vector；随后归还
-同一ioFree许可。下一代输入还需等待当前VF末次使用后发布的sharedFree，故不能提前覆盖。
-两份private `[0,0x12000)`、`[0x1C000,0x2E000)`
-由各自ioFree保护；共享G/scratch由sharedFree保护，V1和V6不同时使用临时区。
-V3 beta band临时区为共享 `[0x1A000,0x1B300)`，与betaEff、偏移表不重叠。
-
-BF16 relay限定为 FP32 gate、BF16 beta、L2、Sigmoid beta、SafeSigmoid、exp2、
-Save、head-major、合法整数GVA映射（HK>0、HV>=HK、HV%HK=0）、
-epsilon=1e-6和lower_bound=-5。scale沿用host检查后的动态有限值，
-不再以精确等于1/√128作为能力条件。scale仍在原位置缩放Aqk/qg_scaled，
-不改变求逆或FP32 T relay。
-能力判断不绑定模型编号、精确T/H或cu_seqlens分布；其余配置走FP32 fallback。
-此范围使用两个32行锚点构造四个细粒度score band，减少Kminus重复处理；
-改变内部因子舍入的范围须由原生双参考独立验收。
-
-GVA的value head映射为hk=floor(hv/(HV/HK))。各hv仍独立保存gate、beta、
-score、求逆、Akk和RHS；仅IsQkOutputOwner写入共享HK的公开Q/K检查点。
-此扩展不新增跨value-head的Q/K复用，不改变slot、事件或workspace。
-
-C4/C5 的 B、X0、T和跨叶子乘法保留FP32。C5完成求逆后，BF16 relay将完整Akk
-转BF16 NZ直写L1，由FIX_MTE1保护C7读取；fallback保留FP32 GM中转。
-V6在FP32中形成K/V RHS，按原舍入点转BF16，再整head写出两个独立GM lane。
-MTE3_V完成后才允许覆盖打包区。C7为BF16操作数、FP32累加；fallback保持原精度。
-关闭的公开输出不充当内部scratch。
-
-V6只把独立factor计算放在已提交的kBeta写回之后，覆盖stage前仍等待MTE3_V。
-既有DCCI/DDR、ioFree/sharedFree和跨核RHS ready/free保持独立职责。
-C7 pair1的最后L1读取由MTE1_MTE2许可交给下一轮C2 pair1，初始化、空任务、
-回卷和退出均闭合一次许可；workspace free不能替代L1末次读取完成。
-
-规范varlen索引且未拆head时，两核类型按绝对token位置的单调lower_bound划分
-连续chunk区间。端点为0/total，区间不重不漏；非规范索引、定长和head-split
-保留原分核。原32模型仍是BNSD，BSND性能不从BNSD结果推断。
-
-### Arch22 target variant
-
-Target local-buffer handoff repair: all existing addresses, mathematics and
-cross-core ready/free counts remain unchanged. A new on-demand MTE1_MTE2 event
-(one allocate/release, no initial permit and no outstanding exit token) orders
-all preceding L1 LoadData readers before C2, norm-lookahead or C3 overwrites
-their shared head lanes. C3 consumes the ordinary M_MTE1 and FIX_M permits
-before entering its independent two-slot L0 pool, then publishes those ordinary
-permits from M and FIX after its last use. Its own slot permits remain balanced.
-This transfers physical L0 ownership without claiming the two pools are disjoint.
-V0 publishes V_MTE3 after the final gk Muls, not only before earlier public
-stores. V3 completes the identity copy's source read before overwriting X0.
-These changes address pre-existing Target racecheck reports; they require a
-fresh instrumented/native run and do not inherit Generic validation.
-
-An internal template variant isolates the throughput pipeline from the existing
-arch22 implementation. `arch22/chunk_kda_fwd_prepare_target_config.h` defines
-the host selection contract and the shared workspace slot size. The host emits
-an explicit `PreparePipeline::Target` key for that contract only.
-The public `safe_gate` contract and the 13 output slots are unchanged.
-
-The target retains the measured pipeline's AIC norm-sum lookahead, 16-row vector
-tiles, chained Kminus bands, and one-round leaf inverse. For each 32-row leaf,
-the inverse approximation retains terms through `L^3`; the off-diagonal C4/C5
-composition and C7 accumulation retain their FP32 operations. This approximation
-needs precision validation against the unchanged reference and tolerance.
-
-The target workspace has four `0x32400`-byte slots per workgroup. Each slot holds
-the Q/K context and stage payload, raw score/T relay, independent BF16 C7 RHS,
-FP32 norm-sum relay, and `0x7000` bytes of leaf-inverse scratch. Its constants
-live in `Arch22Target`, so the upstream FP32 RHS/Akk fallback layout and A5
-resources remain independent. The target uses 192 KiB UB and 368 KiB L1;
-compile-time assertions bound both resources and match the host slot size.
-
-For B=1, T=8192, HK=HV=96 and 24 AIC cores, the target selects three head
-partitions, each with 32 heads: 128 chunks become 384 work items. With 20 cores,
-two partitions of 48 heads produce 256 work items; the equal-cost four-way
-split is skipped because ties retain the smaller partition count. Both engines
-use the same target-local mapping. Other contracts retain the existing host
-schedule, kernel implementation, cache policy and workspace layout.
-
-Target与Generic资源定义独立；精度、性能、DC和MSS均按实际发布包分别验收。
-
 ## 1. 边界
 
 `ChunkKdaFwdPrepare` 是独立的 Ascend C 算子，完成：
@@ -242,7 +120,7 @@ L2 的输出档位用整档匹配，实际接受四种 mask：`none`（六个必
 | V6 | Vector | 生成 qg/qg_scaled/kg/K_beta_g/V_beta |
 | C7 | Cube | 计算 W/U |
 
-每个 Vector Stage 统一执行一次阶段计算；A2泛化路径可读取调用内不变的数学模式。每个 Stage
+每个 Vector Stage 只调用一次 VF；VF 循环体中只有 `if constexpr` 模式分支。每个 Stage
 只属于 Vector 或 Cube 一类，Cube 不读取同一 Stage 新生成的数据。
 
 ## 4. C2 分块
@@ -285,18 +163,16 @@ Q/K head，也只允许 GVA 组首 owner 写 `q_hat/k_hat/q_rstd/k_rstd`，避�
 但活跃生命周期不重叠前不会复用，也不在 UB/L1 内移动数据。
 
 - A5 UB 为两个 112 KiB 计算槽和两个 12 KiB 状态槽，总计 248 KiB。
-- A2 Generic sequence-major使用184KiB UB，head-major使用192KiB；尾部8KiB
-  由V1/V6分时复用，不视作可无条件借用的额外双缓冲。
+- A2/A3 使用 184 KiB 可用 UB，按两个私有区和一个共享区规划，尾部 8 KiB 保留。
 - L1 为 512 KiB，四个 head lane 保存 C2 payload，其余区域保存 X0、negX1、T、Akk，
   以及 C7 的 RHS（K_beta_g/V_beta）专用 lane。RHS 不再复用 head lane：C2 的
   score 与 C7 的 RHS 同址时，下一个 chunk 的 C2 会在 C7 读完 RHS 之前把该 lane
   覆盖成 Qplus/Kplus。
 - Arch35 每个 workspace slot 为 `0x1A400` Byte，保存 Qhat、Khat、betaEff
   和 72 KiB payload。
-- Arch22 Generic每slot追加20KiB AIC relay、64KiB RHS独立区及16KiB FP32 Akk区，
-  总计 `0x33400` Byte。BF16分支保留相同slot大小和间隔，每个RHS只用所保留32KiB
-  的前16KiB，其余空间不借给活跃数据。V6→C7不与V1 payload换义地址。
-  C2
+- Arch22 每个 slot 追加 20 KiB AIC 独占 relay，并再追加 32 KiB RHS 独立区
+  （V6→C7 的 K_beta_g/V_beta，不再与 V1 payload 换义地址），总计 `0x27400`
+  Byte；C2
   写四段 raw score，V3 消费后 C4 在同址前 4 KiB 写 `T`。host 根据目标
   平台选择 slot 大小，A5 不预留 Arch22 的追加区。
 
@@ -325,9 +201,9 @@ B/X0/negX1/Akk 搬入每 head 独立 L1 后即可归还 workspace payload，V6 �
 
 ## 8. 模板轴
 
-A2 key仅选择gate dtype、beta dtype和pipeline；数学与四档输出模式由不可变tiling传递。
-A5保留原编译期数学与输出模板。`q/k/v`固定为BF16。架构通过
+TilingKey 编译期选择 gate dtype、beta dtype、norm 模式、beta 模式、gate 模式、
+`use_exp2`、`safe_gate` 和三档 `OUTPUT_MODE`。`q/k/v` 不进入 dtype 模板轴，固定为 BF16。架构通过
 `__CCE_AICORE__` 编译宏选择，kernel 内没有运行时 Arch22/Arch35 分支。
 
-A2的outputMode只控制公开写回，不改变内部scratch和事件计数；CommonMath固定Save。
-A5在模板实例中使用 `if constexpr` 消除对应公开搬出。
+输出搬出在模板实例中使用 `if constexpr` 消除；设备侧 tiling 不保存运行时
+`outputMask`，Stage 和 VF 循环都不执行运行时输出判断。

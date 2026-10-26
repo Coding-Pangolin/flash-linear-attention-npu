@@ -1,6 +1,6 @@
 # ChunkKdaFwdPrepare
 
-[设计文档](docs/design.md) | [API 文档](docs/api.md)
+[A2 实现设计](docs/design_a2.md) | [原有设计 / A5](docs/design.md) | [API 文档](docs/api.md)
 
 ## 功能
 
@@ -155,3 +155,6 @@ head。S 固定为 4，C2 以四个 16 行 query band 生成因果 score。UB、
 ready/free 双向握手，生产者不会覆盖仍被消费者使用的 slot。
 
 生产实现位于 `op_kernel/`。
+当前 A2 每组最多4个 value head，AIV0处理0/2，AIV1处理1/3；两个 pair 不代表2-head工作组。
+正式 A2 ATK 交付件维护在 [work_tool PR #32](https://gitcode.com/chen-linxin4/work_tool/pull/32)
+的 `FLA_ATK/chunk_kda_fwd_prepare_a2`，避免在算子优化 PR 重复提交完整测试工程。

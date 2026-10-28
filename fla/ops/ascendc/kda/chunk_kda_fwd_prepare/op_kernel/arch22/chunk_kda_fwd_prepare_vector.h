@@ -301,8 +301,11 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
             if(k+1<steps)Gather(coefficients,g_,indices,(k+1)*4,64);
             VBarrier();
             BinaryRepeatParams update{1,1,0,4,0,1};
-            MulAddDst(inverse,rowCopies,current,32,32,update);
-            if(w_.rows>32)MulAddDst(inverse[1024],rowCopies[32],current[256],32,32,update);
+            // Strictly lower coefficients are zero at rows <= k.
+            // Retain the update order of every nonzero row, skip only zero FMAs.
+            const uint32_t first=k+1, remaining=31-k;
+            MulAddDst(inverse[first*32],rowCopies,current[first*8],32,remaining,update);
+            if(w_.rows>32)MulAddDst(inverse[1024+first*32],rowCopies[32],current[256+first*8],32,remaining,update);
             // Independent from this iteration's updates; its buffer is free.
             if(k+1<steps)Brcb(next,coefficients,8,{1,8});
             VBarrier();

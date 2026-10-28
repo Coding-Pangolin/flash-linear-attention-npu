@@ -232,6 +232,10 @@ L2读取BF16 P/Power、Eye到X及首次常驻I；四个16阶叶子通过4轮幂�
 不同lane的A/B bank独立，当前lane MMAD时预载下一lane。
 L1 lane free只在最后LoadA/LoadB完成后发布，不能用GM slot free代替。
 
+Identity叶内第k次消元仅更新行k+1..31；strict Lower保证此前各行系数精确为零。
+每个非零更新保持原先k顺序及FP32 MulAddDst，BF16转换和relay位置不变。
+这是独立指令量实验，需通过冻结数值及同输入ABBA后才可采用。
+
 ### 2.3 事件、复用与退出
 
 跨核flag分别为每slot：score-ready=slot，raw-ready=2+slot，

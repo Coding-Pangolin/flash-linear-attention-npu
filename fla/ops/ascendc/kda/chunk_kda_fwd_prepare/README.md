@@ -1,6 +1,6 @@
 # ChunkKdaFwdPrepare
 
-[A2 实现设计](docs/design_a2.md) | [原有设计 / A5](docs/design.md) | [API 文档](docs/api.md)
+[设计文档](docs/design.md) | [API 文档](docs/api.md)
 
 ## 功能
 
@@ -28,7 +28,7 @@ outputs = chunk_kda_fwd_prepare(
     allow_neg_eigval=False,
     safe_gate=False,
     lower_bound=-5.0,
-    use_exp2=False,
+    use_exp2=True,
     a_log=None,
     dt_bias=None,
     cu_seqlens=None,
@@ -62,6 +62,26 @@ BF16 或 FP32，`a_log/dt_bias` 固定为 FP32。
 
 `cu_seqlens` 和 `chunk_indices` 是可选 host int array，不是 tensor。前者 shape 为
 `[sequence_count+1]`；后者若提供，扁平长度必须为 `2*total_chunks`。
+
+## 支持范围
+
+当前 R26 A2 实现的正式支持范围为：
+
+- `q/k/v` 为 BF16，`K=V=128`，`chunk_size=64`；
+- `g` 为 FP32，`beta` 为 BF16；其它 gate/beta dtype 组合由 host 明确拒绝；
+- 布局为 BNSD、BSND、NTD 或 TND，输入连续；变长输入使用 `cu_seqlens`，rank-4 变长容器要求 `B=1`；
+- GVA 要求 `0 < HK <= HV` 且 `HV % HK == 0`；
+- A2 只接受 `use_exp2=true`。A5 保留原 arch35 入口和原有属性合同；
+- `backward_mode` 为 `none`、`forward`、`recompute` 或 `save`，13 个输出槽位及其返回顺序不变。
+
+不在上述范围内的组合必须在 host 侧返回参数错误，不会静默落入 A2 R26 流水。A2 的通用 key 由
+`normMode × gateMode` 组成六个实际实例；beta 模式、输出模式和 Exp2 通过本次调用内不可变的 tiling
+字段传入。关闭的公开输出不能作为 scratch。完整数学、平台和工具验收以对应的独立报告为准。
+
+## 已知限制
+
+R26 本轮只提供 A2 设备证据；A3 需要独立编译和设备 smoke 验证。GVA 的 `chunk_size=32` 不在支持范围内。
+Issue 672 针对 `chunk_kda_bwd_prepare`，本算子是前向 Prepare，不能用本 README 或本 PR 声称关闭该 issue。
 
 `B/T/HK/HV` 必须为正数且可由 `uint32_t` 表示；GVA 要求 `0 < HK <= HV` 且
 `HV % HK == 0`。所有输出固定为 head-major：
@@ -155,6 +175,3 @@ head。S 固定为 4，C2 以四个 16 行 query band 生成因果 score。UB、
 ready/free 双向握手，生产者不会覆盖仍被消费者使用的 slot。
 
 生产实现位于 `op_kernel/`。
-当前 A2 每组最多4个 value head，AIV0处理0/2，AIV1处理1/3；两个 pair 不代表2-head工作组。
-正式 A2 ATK 交付件维护在 [work_tool PR #32](https://gitcode.com/chen-linxin4/work_tool/pull/32)
-的 `FLA_ATK/chunk_kda_fwd_prepare_a2`，避免在算子优化 PR 重复提交完整测试工程。

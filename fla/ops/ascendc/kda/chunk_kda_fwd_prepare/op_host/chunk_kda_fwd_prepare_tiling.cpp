@@ -5,16 +5,22 @@
  */
 
 #include "chunk_kda_fwd_prepare_tiling.h"
+#include "op_common/log/log.h"
 
 #include <cmath>
+#include <cstdarg>
 #include <cstdint>
 #include <cstring>
 #include <initializer_list>
 #include <limits>
+#include <cstdio>
+#include <string>
 
 #include "chunk_kda_fwd_prepare_tiling_processor.h"
 #include "../op_kernel/chunk_kda_fwd_prepare_tiling_key.h"
 #include "../op_kernel/chunk_kda_fwd_prepare_runtime_key.h"
+#include "../op_kernel/chunk_kda_fwd_prepare_runtime_policy.h"
+#include "../op_kernel/arch22_rewrite/resource.h"
 #include "platform/soc_spec.h"
 #include "register/op_impl_registry.h"
 #include "tiling/platform/platform_ascendc.h"
@@ -22,6 +28,31 @@
 
 namespace optiling {
 namespace {
+
+constexpr const char *OP_NAME = "aclnnChunkKdaFwdPrepare";
+
+void ReportTilingFailure(const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    va_list copy;
+    va_copy(copy, args);
+    const int size = std::vsnprintf(nullptr, 0, format, copy);
+    va_end(copy);
+    std::string result;
+    if (size > 0) {
+        result.resize(static_cast<size_t>(size) + 1);
+        std::vsnprintf(result.data(), result.size(), format, args);
+        result.resize(static_cast<size_t>(size));
+    } else {
+        result = "tiling validation failed";
+    }
+    va_end(args);
+    OP_LOGE_FOR_INVALID_ARGUMENT_WITH_REASON(
+        OP_NAME, "tiling", result.c_str());
+}
+
+#define TILING_LOG(node, ...) ReportTilingFailure(__VA_ARGS__)
 
 constexpr int64_t PREPARE_CHUNK_SIZE = 64;
 constexpr int64_t PREPARE_K_DIM = 128;
@@ -237,7 +268,7 @@ bool ResolveSequenceInfo(gert::TilingContext *context,
     isVarLen = cuTensor != nullptr;
     if (!isVarLen) {
         if (chunkTensor != nullptr) {
-            OP_LOGE(context->GetNodeName(),
+            TILING_LOG(context->GetNodeName(),
                     "chunk_indices 只有与 cu_seqlens 同时传入时才合法。");
             return false;
         }
@@ -248,24 +279,24 @@ bool ResolveSequenceInfo(gert::TilingContext *context,
     }
 
     if (!shape.packed && shape.batch != 1) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "rank-4 变长输入要求 B=1，当前 B=%ld。", shape.batch);
         return false;
     }
     const auto &cuShape = cuTensor->GetStorageShape();
     if (cuShape.GetDimNum() != 1 || cuShape.GetDim(0) < 2) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "cu_seqlens 必须是一维且至少包含 [0, total_tokens]。");
         return false;
     }
     const int64_t *cu = cuTensor->GetData<int64_t>();
     if (cu == nullptr) {
-        OP_LOGE(context->GetNodeName(), "tiling 阶段无法读取 cu_seqlens。");
+        TILING_LOG(context->GetNodeName(), "tiling 阶段无法读取 cu_seqlens。");
         return false;
     }
     seqNum = static_cast<uint64_t>(cuShape.GetDim(0) - 1);
     if (cu[0] != 0 || cu[seqNum] != shape.seqLen) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "cu_seqlens 首元素必须为 0，末元素必须等于 T=%ld。",
                 shape.seqLen);
         return false;
@@ -275,7 +306,7 @@ bool ResolveSequenceInfo(gert::TilingContext *context,
     for (uint64_t seq = 0; seq < seqNum; ++seq) {
         if (cu[seq] < 0 || cu[seq + 1] < cu[seq] ||
             cu[seq + 1] > shape.seqLen) {
-            OP_LOGE(context->GetNodeName(),
+            TILING_LOG(context->GetNodeName(),
                     "cu_seqlens 必须非递减且元素范围为 [0, T]，错误位置=%lu。",
                     static_cast<unsigned long>(seq));
             return false;
@@ -288,7 +319,7 @@ bool ResolveSequenceInfo(gert::TilingContext *context,
         totalChunks += sequenceChunks;
     }
     if (totalChunks == 0) {
-        OP_LOGE(context->GetNodeName(), "变长输入至少需要一个非空 sequence。");
+        TILING_LOG(context->GetNodeName(), "变长输入至少需要一个非空 sequence。");
         return false;
     }
 
@@ -298,14 +329,14 @@ bool ResolveSequenceInfo(gert::TilingContext *context,
     const auto &chunkShape = chunkTensor->GetStorageShape();
     if (chunkShape.GetDimNum() != 1 ||
         static_cast<uint64_t>(chunkShape.GetDim(0)) != totalChunks * 2) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "chunk_indices 必须是一维 [2 * total_chunks]，total_chunks=%lu。",
                 static_cast<unsigned long>(totalChunks));
         return false;
     }
     const int64_t *indices = chunkTensor->GetData<int64_t>();
     if (indices == nullptr) {
-        OP_LOGE(context->GetNodeName(), "tiling 阶段无法读取 chunk_indices。");
+        TILING_LOG(context->GetNodeName(), "tiling 阶段无法读取 chunk_indices。");
         return false;
     }
     uint64_t offset = 0;
@@ -315,7 +346,7 @@ bool ResolveSequenceInfo(gert::TilingContext *context,
         for (uint64_t chunk = 0; chunk < chunks; ++chunk) {
             if (indices[offset] != static_cast<int64_t>(seq) ||
                 indices[offset + 1] != static_cast<int64_t>(chunk)) {
-                OP_LOGE(context->GetNodeName(),
+                TILING_LOG(context->GetNodeName(),
                         "chunk_indices 必须按 sequence-major 顺序保存 (seq_id, local_chunk_id)。");
                 return false;
             }
@@ -335,7 +366,7 @@ bool CheckOptionalInput(gert::TilingContext *context,
     const auto *dtBiasShape = context->GetOptionalInputShape(PREPARE_INPUT_DT_BIAS);
     if ((aLogDesc == nullptr) != (aLogShape == nullptr) ||
         (dtBiasDesc == nullptr) != (dtBiasShape == nullptr)) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "a_log/dt_bias 的 descriptor 与 shape 元数据必须成对存在。");
         return false;
     }
@@ -344,32 +375,32 @@ bool CheckOptionalInput(gert::TilingContext *context,
 
     if (!useGateInKernel) {
         if (hasALog || hasDtBias || safeGate) {
-            OP_LOGE(context->GetNodeName(),
+            TILING_LOG(context->GetNodeName(),
                     "use_gate_in_kernel=false 时 a_log、dt_bias 必须为空且 safe_gate 必须为 false。");
             return false;
         }
         return true;
     }
     if (!hasALog) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "use_gate_in_kernel=true 时必须传入 a_log。");
         return false;
     }
     if (aLogDesc->GetDataType() != ge::DT_FLOAT ||
         (dtBiasDesc != nullptr && dtBiasDesc->GetDataType() != ge::DT_FLOAT)) {
-        OP_LOGE(context->GetNodeName(), "a_log 和 dt_bias 只支持 FP32。");
+        TILING_LOG(context->GetNodeName(), "a_log 和 dt_bias 只支持 FP32。");
         return false;
     }
     const auto &aLog = aLogShape->GetStorageShape();
     if (!HasShape(aLog, {shape.valueHeadNum})) {
-        OP_LOGE(context->GetNodeName(), "a_log 必须为 [HV]，当前 HV=%ld。",
+        TILING_LOG(context->GetNodeName(), "a_log 必须为 [HV]，当前 HV=%ld。",
                 shape.valueHeadNum);
         return false;
     }
     if (hasDtBias) {
         const auto &dtBias = dtBiasShape->GetStorageShape();
         if (!HasShape(dtBias, {shape.valueHeadNum * shape.kDim})) {
-            OP_LOGE(context->GetNodeName(),
+            TILING_LOG(context->GetNodeName(),
                     "dt_bias 必须为展平的 [HV*K]，当前 HV=%ld，K=%ld。",
                     shape.valueHeadNum, shape.kDim);
             return false;
@@ -411,7 +442,7 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
     const auto *betaDesc = context->GetInputDesc(PREPARE_INPUT_BETA);
     if (attrs == nullptr || qDesc == nullptr || kDesc == nullptr ||
         vDesc == nullptr || gDesc == nullptr || betaDesc == nullptr) {
-        OP_LOGE(context->GetNodeName(), "缺少必选输入 descriptor 或 attrs。");
+        TILING_LOG(context->GetNodeName(), "缺少必选输入 descriptor 或 attrs。");
         return ge::GRAPH_FAILED;
     }
 
@@ -435,35 +466,35 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
         useNormPtr == nullptr || useGatePtr == nullptr || useBetaPtr == nullptr ||
         allowNegPtr == nullptr || safeGatePtr == nullptr || lowerBoundPtr == nullptr ||
         useExp2Ptr == nullptr) {
-        OP_LOGE(context->GetNodeName(), "算子属性不完整。");
+        TILING_LOG(context->GetNodeName(), "算子属性不完整。");
         return ge::GRAPH_FAILED;
     }
 
     PrepareLayout parsedLayout;
     if (!ParseLayout(layout, parsedLayout)) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "layout 必须为 BNSD、BSND、NTD 或 TND，当前值=%s。",
                 layout == nullptr ? "<null>" : layout);
         return ge::GRAPH_FAILED;
     }
     if (*chunkSizePtr != PREPARE_CHUNK_SIZE) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "chunk_size 仅支持 64，当前值=%ld。", *chunkSizePtr);
         return ge::GRAPH_FAILED;
     }
     if (!std::isfinite(*scalePtr) || !std::isfinite(*epsilonPtr) ||
         *epsilonPtr <= 0.0F || !std::isfinite(*lowerBoundPtr)) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "scale/lower_bound 必须为有限数，epsilon 必须为正有限数。");
         return ge::GRAPH_FAILED;
     }
     if (*allowNegPtr && !*useBetaPtr) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "allow_neg_eigval=true 要求 use_beta_sigmoid_in_kernel=true。");
         return ge::GRAPH_FAILED;
     }
     if (*safeGatePtr && (*lowerBoundPtr < -5.0F || *lowerBoundPtr >= 0.0F)) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "safe_gate=true 时 lower_bound 必须在 [-5, 0) 内，当前值=%f。",
                 *lowerBoundPtr);
         return ge::GRAPH_FAILED;
@@ -471,7 +502,7 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
 
     PrepareShapeInfo shape;
     if (!ResolveShape(context, parsedLayout, shape)) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "q/k/v/g/beta shape 与 layout=%s 不匹配。",
                 layout);
         return ge::GRAPH_FAILED;
@@ -480,7 +511,7 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
         attrs->GetAttrPointer<int64_t>(PREPARE_ATTR_OUTPUT_MODE);
     if (outputModePtr == nullptr || *outputModePtr < PREPARE_OUTPUT_MODE_NONE ||
         *outputModePtr > PREPARE_OUTPUT_MODE_FORWARD) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "output_mode 只支持 0(none)、1(recompute)、2(save)、3(forward)。");
         return ge::GRAPH_FAILED;
     }
@@ -490,7 +521,7 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
         shape.kDim != PREPARE_K_DIM || shape.vDim != PREPARE_V_DIM ||
         shape.valueHeadNum < shape.qkHeadNum ||
         shape.valueHeadNum % shape.qkHeadNum != 0) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "要求 B/T/HK/HV 为正且可用 uint32 表示、K=V=128、HV>=HK 且 HV%%HK=0；"
                 "当前 B=%ld,T=%ld,HK=%ld,HV=%ld,K=%ld,V=%ld。",
                 shape.batch, shape.seqLen, shape.qkHeadNum, shape.valueHeadNum,
@@ -502,7 +533,7 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
         vDesc->GetDataType() != ge::DT_BF16 ||
         !IsGateDtype(gDesc->GetDataType()) ||
         !IsGateDtype(betaDesc->GetDataType())) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "q/k/v 只支持 BF16，g/beta 分别支持 BF16 或 FP32。当前 dtype=%d/%d/%d/%d/%d。",
                 static_cast<int>(qDesc->GetDataType()),
                 static_cast<int>(kDesc->GetDataType()),
@@ -525,7 +556,7 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
                                 PREPARE_K_DIM * gateElementBytes) &&
             FitsDmaSourceStride(shape.valueHeadNum, betaElementBytes);
         if (!strideValid) {
-            OP_LOGE(context->GetNodeName(),
+            TILING_LOG(context->GetNodeName(),
                     "sequence-major 输入的跨 head DMA stride 超过 uint32 范围，"
                     "当前 HK=%ld,HV=%ld。",
                     shape.qkHeadNum, shape.valueHeadNum);
@@ -545,7 +576,7 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
     if (!ResolveSequenceInfo(context, shape, seqNum, totalChunks, isVarLen) ||
         seqNum > std::numeric_limits<uint32_t>::max() ||
         totalChunks > std::numeric_limits<uint32_t>::max()) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "sequence/chunk 元数据无效或数量超过 uint32 范围。");
         return ge::GRAPH_FAILED;
     }
@@ -555,16 +586,13 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
     const uint64_t aicCoreNum = platform.GetCoreNumAic();
     const bool isAscend950 =
         platform.GetCurNpuArch() == NpuArch::DAV_3510;
-    const bool useArch22TargetVariant =
-        KdaPrepare::Arch22TargetConfig::Matches({
-            static_cast<uint64_t>(shape.batch),
-            static_cast<uint64_t>(shape.seqLen),
-            static_cast<uint64_t>(shape.qkHeadNum),
-            static_cast<uint64_t>(shape.valueHeadNum), totalChunks,
-            isAscend950, isVarLen, shape.sequenceMajor,
-            betaDesc->GetDataType() == ge::DT_BF16,
-            *useNormPtr, *useBetaPtr && !*allowNegPtr, !*useGatePtr,
-            *useExp2Ptr, outputMode == CHUNK_KDA_FWD_PREPARE_OUTPUT_SAVE});
+    const bool useArch22TargetVariant = false; // A2 rewrite owns its complete pipeline.
+    if (!isAscend950 && !*useExp2Ptr) {
+        TILING_LOG(context->GetNodeName(),
+                   "A2 R26 requires use_exp2=true, current value=%d.",
+                   static_cast<int>(*useExp2Ptr));
+        return ge::GRAPH_FAILED;
+    }
     ChunkKdaFwdPrepareScheduleContext scheduleContext;
     scheduleContext.batch = static_cast<uint64_t>(shape.batch);
     scheduleContext.qkHeadNum = static_cast<uint64_t>(shape.qkHeadNum);
@@ -582,7 +610,7 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
                : CHUNK_KDA_FWD_PREPARE_ARCH22_SLOT_BYTES);
     ChunkKdaFwdPrepareSchedule schedule;
     if (!ChunkKdaFwdPrepareTilingProcessor(scheduleContext).Process(schedule)) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "无法生成 chunk-first/GVA 完整头组调度，AIC 核数=%lu。",
                 static_cast<unsigned long>(aicCoreNum));
         return ge::GRAPH_FAILED;
@@ -615,8 +643,19 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
     const auto pipeline = useArch22TargetVariant
         ? PreparePipeline::Target : PreparePipeline::Generic;
     const uint64_t tilingKey = isAscend950 ? legacyTilingKey
-        : RuntimeKey::Encode(gateDtypeToken, betaDtypeToken, pipeline);
+        : RuntimeKey::Encode(normMode, gateMode);
 
+    if (!isAscend950) {
+        if(gDesc->GetDataType()!=ge::DT_FLOAT || betaDesc->GetDataType()!=ge::DT_BF16) {
+            TILING_LOG(context->GetNodeName(), "A2 rewrite requires FP32 g and BF16 beta");
+            return ge::GRAPH_FAILED;
+        }
+        const uint64_t chunks=isVarLen?totalChunks:uint64_t(shape.batch)*totalChunks;
+        const uint64_t pairs=(uint64_t(shape.valueHeadNum)+1)/2;
+        schedule.usedCoreNum=static_cast<uint32_t>(std::min<uint64_t>(aicCoreNum,chunks*pairs));
+        schedule.headsPerPartition=2;
+        schedule.workspaceBytes=platform.GetLibApiWorkSpaceSize()+uint64_t(schedule.usedCoreNum)*KdaPrepare::Rewrite::GroupBytes;
+    }
     ChunkKdaFwdPrepareTilingData tiling;
     tiling.set_batch(static_cast<uint32_t>(shape.batch));
     tiling.set_seqNum(static_cast<uint32_t>(seqNum));
@@ -642,14 +681,14 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
     context->SetTilingKey(tilingKey);
     context->SetBlockDim(schedule.usedCoreNum);
     if (context->SetScheduleMode(PREPARE_MIX_BATCH_MODE) != ge::GRAPH_SUCCESS) {
-        OP_LOGE(context->GetNodeName(),
+        TILING_LOG(context->GetNodeName(),
                 "设置 MIX AIC/AIV batch 调度模式失败。");
         return ge::GRAPH_FAILED;
     }
     size_t *workspace = context->GetWorkspaceSizes(1);
     if (workspace == nullptr ||
         schedule.workspaceBytes > std::numeric_limits<size_t>::max()) {
-        OP_LOGE(context->GetNodeName(), "workspace 大小超过平台 size_t 范围。");
+        TILING_LOG(context->GetNodeName(), "workspace 大小超过平台 size_t 范围。");
         return ge::GRAPH_FAILED;
     }
     workspace[0] = static_cast<size_t>(schedule.workspaceBytes);

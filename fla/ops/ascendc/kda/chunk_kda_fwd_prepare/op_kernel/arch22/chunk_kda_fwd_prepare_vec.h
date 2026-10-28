@@ -108,6 +108,10 @@ public:
         ioFree_[1] = pipe_->AllocEventID<AscendC::HardEvent::MTE3_MTE2>(); // ID 1
         inputReady_[0] = pipe_->AllocEventID<AscendC::HardEvent::MTE2_V>(); // ID 0
         inputReady_[1] = pipe_->AllocEventID<AscendC::HardEvent::MTE2_V>(); // ID 1
+        if constexpr (std::is_same_v<GateT, float>) {
+            normReady_[0] = pipe_->AllocEventID<AscendC::HardEvent::MTE2_V>();
+            normReady_[1] = pipe_->AllocEventID<AscendC::HardEvent::MTE2_V>();
+        }
         outputReady_[0] = pipe_->AllocEventID<AscendC::HardEvent::V_MTE3>(); // ID 0
         outputReady_[1] = pipe_->AllocEventID<AscendC::HardEvent::V_MTE3>(); // ID 1
         mte3ToV_[0] = pipe_->AllocEventID<AscendC::HardEvent::MTE3_V>(); // ID 0
@@ -123,8 +127,7 @@ public:
         }
         // mode 0x2 的核间 flag 是固定物理编号，不经过 EventID 分配器。
         // pair0/pair1: ready=0/1，free=2/3。
-        constexpr uint16_t kReadyFlagId[2] = {0, 1};
-        constexpr uint16_t kFreeFlagId[2] = {2, 3};
+        // Keep the fixed IDs as arithmetic, avoiding indexed constant loads.
         const uint32_t total = TotalWorkItems(args_.tiling);
         const uint32_t workBegin = TokenBalancedWorkBoundary(
             args_, total, workgroup_, coreCount_);
@@ -161,7 +164,7 @@ public:
                 for (uint32_t pair = 0; pair < 2; ++pair) {
                     const uint32_t localHead = pair * 2 + aiv_;
                     AscendC::CrossCoreWaitFlag<0x2, PIPE_MTE2>(
-                        kFreeFlagId[pair]);
+                        static_cast<uint16_t>(pair + 2));
                     if (localHead < activeHeads) {
                         const uint32_t valueHead = groupBegin + localHead;
                         StageV0(chunk, valueHead, localHead, pair);
@@ -169,29 +172,29 @@ public:
                     }
                     // 尾部无任务的 AIV 仍参加集合，但不计算地址或访问 GM。
                     AscendC::CrossCoreSetFlag<0x2, PIPE_MTE3>(
-                        kReadyFlagId[pair]);
+                        static_cast<uint16_t>(pair));
                 }
                 for (uint32_t pair = 0; pair < 2; ++pair) {
                     const uint32_t localHead = pair * 2 + aiv_;
                     AscendC::CrossCoreWaitFlag<0x2, PIPE_MTE2>(
-                        kFreeFlagId[pair]);
+                        static_cast<uint16_t>(pair + 2));
                     if (localHead < activeHeads) {
                         const uint32_t valueHead = groupBegin + localHead;
                         StageV3(chunk, valueHead, localHead, pair);
                     }
                     AscendC::CrossCoreSetFlag<0x2, PIPE_MTE3>(
-                        kReadyFlagId[pair]);
+                        static_cast<uint16_t>(pair));
                 }
                 for (uint32_t pair = 0; pair < 2; ++pair) {
                     const uint32_t localHead = pair * 2 + aiv_;
                     AscendC::CrossCoreWaitFlag<0x2, PIPE_MTE2>(
-                        kFreeFlagId[pair]);
+                        static_cast<uint16_t>(pair + 2));
                     if (localHead < activeHeads) {
                         const uint32_t valueHead = groupBegin + localHead;
                         StageV6(chunk, valueHead, localHead, pair);
                     }
                     AscendC::CrossCoreSetFlag<0x2, PIPE_MTE3>(
-                        kReadyFlagId[pair]);
+                        static_cast<uint16_t>(pair));
                 }
                 groupBegin += activeHeads;
             }
@@ -199,7 +202,7 @@ public:
         // 消费最后一次 C7 发布，保证每次 set 都有对应 wait。
         for (uint32_t pair = 0; pair < 2; ++pair) {
             AscendC::CrossCoreWaitFlag<0x2, PIPE_MTE2>(
-                kFreeFlagId[pair]);
+                static_cast<uint16_t>(pair + 2));
             AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(ioFree_[pair]);
             ReleasePairEvents(pair);
         }
@@ -231,6 +234,9 @@ private:
     {
         pipe_->ReleaseEventID<AscendC::HardEvent::MTE3_MTE2>(ioFree_[pair]);
         pipe_->ReleaseEventID<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
+        if constexpr (std::is_same_v<GateT, float>) {
+            pipe_->ReleaseEventID<AscendC::HardEvent::MTE2_V>(normReady_[pair]);
+        }
         pipe_->ReleaseEventID<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
         pipe_->ReleaseEventID<AscendC::HardEvent::MTE3_V>(mte3ToV_[pair]);
     }
@@ -282,8 +288,17 @@ private:
             static_cast<uint32_t>(Shape::kHeadDim * sizeof(bfloat16_t)),
             qkStride, 0, 0};
         AscendC::DataCopyPadExtParams<bfloat16_t> qkPad{false, 0, 0, 0};
+        const bool earlyNorm = std::is_same_v<GateT, float> &&
+            RuntimeMath<CompilePolicy>::Norm(args_.tiling) == QkNormMode::L2 &&
+            chunk.validRows == Shape::kChunkRows;
         AscendC::DataCopyPad(q, qGm_[qkOffset], qkCopy, qkPad);
+        if (earlyNorm) {
+            AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(normReady_[0]);
+        }
         AscendC::DataCopyPad(k, kGm_[qkOffset], qkCopy, qkPad);
+        if (earlyNorm) {
+            AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(normReady_[1]);
+        }
         AscendC::DataCopyExtParams gateCopy{static_cast<uint16_t>(chunk.validRows),
             static_cast<uint32_t>(Shape::kHeadDim * sizeof(GateT)),
             gateStride, 0, 0};
@@ -323,7 +338,28 @@ private:
             }
         }
         AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
-        AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
+        if (!earlyNorm) {
+            AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
+        }
+        if constexpr (std::is_same_v<GateT, float>) {
+            if (RuntimeMath<CompilePolicy>::Norm(args_.tiling) == QkNormMode::L2) {
+                // Share the Q/K call sites across full and partial chunks.
+                // FP32 gate DMA targets shared G, disjoint from norm scratch.
+                auto tileBuf = ub[base + Arch22Ub::kGateOrKMinus]
+                                   .template ReinterpretCast<float>();
+                if (earlyNorm) {
+                    AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(normReady_[0]);
+                }
+                L2NormRowsBatched(q, qRstd, tileBuf, chunk.validRows);
+                if (earlyNorm) {
+                    AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(normReady_[1]);
+                }
+                L2NormRowsBatched(k, kRstd, tileBuf, chunk.validRows);
+            }
+        }
+        if (earlyNorm) {
+            AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
+        }
         if (args_.tiling.inputSequenceMajor) {
             auto offsets = ub[Arch22Ub::kBetaGatherOffsets]
                                .template ReinterpretCast<uint32_t>();
@@ -331,10 +367,8 @@ private:
                             static_cast<uint32_t>(0), chunk.validRows);
             AscendC::PipeBarrier<PIPE_V>();
         }
-        // 本 Stage 的一次向量计算完成 Q/K 可选 L2 norm、beta 变换、
-        // gate 变换和逐 token cumsum，并生成后续 Stage 所需中间量。
-        // tileBuf 复用 kMinus 所在的私有区（V1 之前未被使用；BF16 gate
-        // 场景下 gate 自身也在此区，但已整体 Cast 到 g，可以安全复用）。
+        // FP32-gate norm is complete at the shared call sites above. BF16 gate
+        // keeps its original V0Vf norm and casts gate before reusing tileBuf.
         V0Vf(q, k, qRstd, kRstd, gate, beta, betaEff, dtBias, aLog, g,
              scratch, ub[base + Arch22Ub::kGateOrKMinus]
                           .template ReinterpretCast<float>(),
@@ -350,8 +384,14 @@ private:
         qhatContext.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(args_.workspace + slot + Workspace::kQHat));
         khatContext.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(args_.workspace + slot + Workspace::kKHat));
         betaContext.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(args_.workspace + slot + Workspace::kBetaEff));
-        AscendC::DataCopy(qhatContext, q, chunk.validRows * Shape::kHeadDim);
-        AscendC::DataCopy(khatContext, k, chunk.validRows * Shape::kHeadDim);
+        // Save/Recompute already publish the same BF16 Q/K below. V6 can read
+        // those immutable checkpoints after the unchanged V0/V1 ready chain.
+        // Disabled public outputs retain their dedicated workspace contexts.
+        if (RuntimeMath<CompilePolicy>::Output(args_.tiling) != OutputMode::Recompute &&
+            RuntimeMath<CompilePolicy>::Output(args_.tiling) != OutputMode::Save) {
+            AscendC::DataCopy(qhatContext, q, chunk.validRows * Shape::kHeadDim);
+            AscendC::DataCopy(khatContext, k, chunk.validRows * Shape::kHeadDim);
+        }
         AscendC::DataCopyPad(betaContext, betaEff,
             AscendC::DataCopyExtParams{
                 1, static_cast<uint32_t>(chunk.validRows * sizeof(float)),
@@ -400,7 +440,6 @@ private:
     __aicore__ inline void StageV1(const ChunkRange &chunk, uint32_t localHead,
                                    uint32_t pair)
     {
-        AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(mte3ToV_[pair]);
         const uint32_t base = Arch22Ub::kPrivateBase[pair];
         auto ub = ubBuf_.Get<uint8_t>();
         auto qHat = ub[base + Arch22Ub::kQ].template ReinterpretCast<bfloat16_t>();
@@ -415,7 +454,7 @@ private:
         // SIMD 路径按 USE_EXP2 选择等价截断域；仅 log2 分支乘 ln(2)，
         // 两个分支最终都调用自然底 Exp。
         V1Vf(qHat, kHat, qPlus, kPlus, kMinus, g, scratch,
-             chunk.validRows);
+             chunk.validRows, pair);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(sharedFree_);
         AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
         AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
@@ -441,7 +480,10 @@ private:
         auto lkk = ub[base + Arch22Ub::kV3Lkk].template ReinterpretCast<float>();
         auto b = ub[base + Arch22Ub::kV3B].template ReinterpretCast<float>();
         auto x0 = ub[base + Arch22Ub::kV3X0].template ReinterpretCast<float>();
-        auto x1 = ub[base + Arch22Ub::kV3X1].template ReinterpretCast<float>();
+        const bool packedLeaves = chunk.validRows == Shape::kChunkRows;
+        const uint32_t x1Offset = packedLeaves
+            ? Arch22Ub::kV3X0 + 32 * sizeof(float) : Arch22Ub::kV3X1;
+        auto x1 = ub[base + x1Offset].template ReinterpretCast<float>();
         auto negX1 = ub[base + Arch22Ub::kV3NegX1].template ReinterpretCast<float>();
         auto betaEff = ub[Arch22Ub::kV3BetaEff].template ReinterpretCast<float>();
         auto akkPack = ub[base + Arch22Ub::kV3AkkPack]
@@ -476,6 +518,16 @@ private:
                 1, static_cast<uint32_t>(chunk.validRows * sizeof(float)),
                 0, 0, 0}, pad);
         AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
+        if constexpr (BF16_RELAY) {
+            if (pair == 1 && !args_.tiling.inputSequenceMajor) {
+                // Pair0's V3 MTE3 readers have drained. Queue only its private
+                // V6 inputs AFTER pair1 raw/beta-ready, before pair1 computes.
+                AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(ioFree_[0]);
+                LoadV6PrivateInputs(chunk, valueHead - 2, localHead - 2, 0);
+                LoadV6Value(chunk, valueHead - 2, 0);
+                v6PrivatePrefetched_ = true;
+            }
+        }
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
         // 本 Stage 一次完成因果 mask、scale、beta 和两个 32x32 叶逆，
         // 生成 Aqk/B/X0/X1/negX1/稳定 Akk；negX1 供 C5 做普通 Mmad。
@@ -520,37 +572,122 @@ private:
                         32 * sizeof(bfloat16_t), 2, 64, 0});
             }
         }
-        if (chunk.validRows > 32) {
+        if (BF16_RELAY && coarseEligible_ && chunk.validRows == Shape::kChunkRows) {
+            // The Gather tables are dead; their 8 KiB now hold the strictly
+            // lower BF16 P matrix for the resident hierarchy on AIC.
+            static_assert(Workspace::kX0 + 4096 * sizeof(bfloat16_t) <= Workspace::kNegX1);
+            AscendC::GlobalTensor<bfloat16_t> pRelay;
+            pRelay.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(
+                args_.workspace + slot + Workspace::kPayload + Workspace::kX0));
+            AscendC::DataCopy(pRelay,
+                coeffOffsetInt.template ReinterpretCast<bfloat16_t>(), 4096);
+        } else if (chunk.validRows > 32) {
             AscendC::GlobalTensor<float> payload;
             payload.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(
                 args_.workspace + slot + Workspace::kPayload));
-            AscendC::DataCopy(payload[Workspace::kX0 / sizeof(float)], x0, 1024);
+            if (packedLeaves) {
+                // Keep the public/internal GM contract contiguous. Read the
+                // top half of each interleaved UB row directly, without repack.
+                AscendC::DataCopy(payload[Workspace::kX0 / sizeof(float)], x0,
+                                  AscendC::DataCopyParams(32, 4, 4, 0));
+            } else {
+                AscendC::DataCopy(payload[Workspace::kX0 / sizeof(float)], x0, 1024);
+            }
             AscendC::DataCopy(payload[Workspace::kNegX1 / sizeof(float)], negX1, 1024);
             AscendC::DataCopy(payload[Workspace::kB / sizeof(float)], b, 1024);
         }
-        // 公开 Akk 的 BF16 store 完成后，复用已死亡的 raw score 区构造内部 FP32 Akk。
-        // [0xD000,0x11000) 位于当前 private slot 内，不覆盖 x0/x1。
+        // Retire the BF16/public/payload readers before releasing this record.
+        // Keep this drain even when the unused FP32 relay is compiled out.
         AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(mte3ToV_[pair]);
         AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(mte3ToV_[pair]);
-        auto akkFp32 = ub[base + Arch22Ub::kV3CompactRaw].template ReinterpretCast<float>();
-        AscendC::Duplicate(akkFp32, 0.0f, 4096);
-        AscendC::PipeBarrier<PIPE_V>();
-        AscendC::DataCopy(akkFp32, x0, AscendC::DataCopyParams(32, 4, 0, 4));
-        AscendC::DataCopy(akkFp32[32 * 64 + 32], x1,
-                          AscendC::DataCopyParams(32, 4, 0, 4));
-        AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
-        AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
-        AscendC::GlobalTensor<float> akkFp32Relay;
-        akkFp32Relay.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(
-            args_.workspace + slot + Workspace::kArch22AkkFp32));
-        AscendC::DataCopy(akkFp32Relay, akkFp32, 4096);
+        if constexpr (!BF16_RELAY) {
+            // Only the FP32 C4/C5/C7 path consumes this matrix. BF16 C4 reads
+            // Payload+kAkk, and BF16 C5 completes q10 directly in BF16 L1.
+            auto akkFp32 = ub[base + Arch22Ub::kV3CompactRaw].template ReinterpretCast<float>();
+            AscendC::Duplicate(akkFp32, 0.0f, 4096);
+            AscendC::PipeBarrier<PIPE_V>();
+            const uint16_t leafSrcGap = packedLeaves ? 4 : 0;
+            AscendC::DataCopy(akkFp32, x0, AscendC::DataCopyParams(32, 4, leafSrcGap, 4));
+            AscendC::DataCopy(akkFp32[32 * 64 + 32], x1,
+                              AscendC::DataCopyParams(32, 4, leafSrcGap, 4));
+            AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
+            AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(outputReady_[pair]);
+            AscendC::GlobalTensor<float> akkFp32Relay;
+            akkFp32Relay.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(
+                args_.workspace + slot + Workspace::kArch22AkkFp32));
+            AscendC::DataCopy(akkFp32Relay, akkFp32, 4096);
+        }
         AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(ioFree_[pair]);
+    }
+
+    __aicore__ inline void LoadV6PrivateInputs(
+        const ChunkRange &chunk, uint32_t valueHead,
+        uint32_t localHead, uint32_t pair)
+    {
+        const uint32_t base = Arch22Ub::kPrivateBase[pair];
+        auto ub = ubBuf_.Get<uint8_t>();
+        auto qg = ub[base + Arch22Ub::kV6Qg].template ReinterpretCast<bfloat16_t>();
+        auto kg = ub[base + Arch22Ub::kV6Kg].template ReinterpretCast<bfloat16_t>();
+        auto betaEff = ub[base + Arch22Ub::kBetaEff].template ReinterpretCast<float>();
+        const uint64_t slot = WorkspaceSlotBase(
+            workgroup_, localHead, Workspace::kArch22WorkgroupStride,
+            Workspace::kArch22SlotStride);
+        AscendC::GlobalTensor<bfloat16_t> qhat;
+        AscendC::GlobalTensor<bfloat16_t> khat;
+        AscendC::GlobalTensor<float> betaContext;
+        if (RuntimeMath<CompilePolicy>::Output(args_.tiling) == OutputMode::Recompute ||
+            RuntimeMath<CompilePolicy>::Output(args_.tiling) == OutputMode::Save) {
+            // Checkpoints are HK/head-major even for sequence-major inputs.
+            // GVA partitions contain the QK owner. Its V0 store retires before
+            // V3, including when these immutable inputs are prefetched.
+            const uint32_t qkHead = QkHeadForValueHead(args_.tiling, valueHead);
+            const uint64_t qkOffset = QkHeadTensorOffset(
+                args_.tiling, chunk, qkHead, Shape::kHeadDim);
+            qhat.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(args_.qHat) + qkOffset);
+            khat.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(args_.kHat) + qkOffset);
+        } else {
+            qhat.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(args_.workspace + slot + Workspace::kQHat));
+            khat.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(args_.workspace + slot + Workspace::kKHat));
+        }
+        betaContext.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(args_.workspace + slot + Workspace::kBetaEff));
+        AscendC::DataCopy(qg, qhat, chunk.validRows * Shape::kHeadDim);
+        AscendC::DataCopy(kg, khat, chunk.validRows * Shape::kHeadDim);
+        AscendC::DataCopyPadExtParams<float> pad{false, 0, 0, 0};
+        AscendC::DataCopyPad(betaEff, betaContext,
+            AscendC::DataCopyExtParams{
+                1, static_cast<uint32_t>(chunk.validRows * sizeof(float)),
+                0, 0, 0}, pad);
+    }
+
+    __aicore__ inline void LoadV6Value(
+        const ChunkRange &chunk, uint32_t valueHead, uint32_t pair)
+    {
+        auto vBeta = ubBuf_.Get<uint8_t>()[Arch22Ub::kPrivateBase[pair] + Arch22Ub::kV6VBeta]
+                         .template ReinterpretCast<bfloat16_t>();
+        const uint32_t vStride = args_.tiling.inputSequenceMajor
+                                     ? static_cast<uint32_t>(
+                                           static_cast<uint64_t>(
+                                               args_.tiling.valueHeadNum - 1) *
+                                           Shape::kValueDim * sizeof(bfloat16_t))
+                                     : 0;
+        AscendC::DataCopyPad(vBeta,
+            vGm_[ValueInputOffset(args_.tiling, chunk, valueHead)],
+            AscendC::DataCopyExtParams{static_cast<uint16_t>(chunk.validRows),
+                static_cast<uint32_t>(Shape::kValueDim * sizeof(bfloat16_t)),
+                vStride, 0, 0},
+            AscendC::DataCopyPadExtParams<bfloat16_t>{false, 0, 0, 0});
     }
 
     __aicore__ inline void StageV6(const ChunkRange &chunk, uint32_t valueHead,
                                    uint32_t localHead, uint32_t pair)
     {
-        AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(ioFree_[pair]);
+        bool prefetched = false;
+        if constexpr (BF16_RELAY) {
+            prefetched = pair == 0 && v6PrivatePrefetched_;
+        }
+        if (!prefetched) {
+            AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(ioFree_[pair]);
+        }
         const uint32_t base = Arch22Ub::kPrivateBase[pair];
         auto ub = ubBuf_.Get<uint8_t>();
         auto qg = ub[base + Arch22Ub::kV6Qg].template ReinterpretCast<bfloat16_t>();
@@ -564,38 +701,22 @@ private:
         const uint64_t slot = WorkspaceSlotBase(
             workgroup_, localHead, Workspace::kArch22WorkgroupStride,
             Workspace::kArch22SlotStride);
-        AscendC::GlobalTensor<bfloat16_t> qhat;
-        AscendC::GlobalTensor<bfloat16_t> khat;
-        AscendC::GlobalTensor<float> betaContext;
-        qhat.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(args_.workspace + slot + Workspace::kQHat));
-        khat.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(args_.workspace + slot + Workspace::kKHat));
-        betaContext.SetGlobalBuffer(reinterpret_cast<__gm__ float *>(args_.workspace + slot + Workspace::kBetaEff));
         AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(sharedFree_);
-        AscendC::DataCopy(qg, qhat, chunk.validRows * Shape::kHeadDim);
-        AscendC::DataCopy(kg, khat, chunk.validRows * Shape::kHeadDim);
-        AscendC::DataCopyPadExtParams<float> pad{false, 0, 0, 0};
-        AscendC::DataCopyPad(betaEff, betaContext,
-            AscendC::DataCopyExtParams{
-                1, static_cast<uint32_t>(chunk.validRows * sizeof(float)),
-                0, 0, 0}, pad);
+        if (!prefetched) {
+            LoadV6PrivateInputs(chunk, valueHead, localHead, pair);
+        }
         AscendC::DataCopy(g,
-                          gkGm_[HeadTensorOffset(args_.tiling, chunk, valueHead,
-                                                Shape::kHeadDim)],
-                          chunk.validRows * Shape::kHeadDim);
-        const uint32_t vStride = args_.tiling.inputSequenceMajor
-                                     ? static_cast<uint32_t>(
-                                           static_cast<uint64_t>(
-                                               args_.tiling.valueHeadNum - 1) *
-                                           Shape::kValueDim * sizeof(bfloat16_t))
-                                     : 0;
-        AscendC::DataCopyPad(vBeta,
-            vGm_[ValueInputOffset(args_.tiling, chunk, valueHead)],
-            AscendC::DataCopyExtParams{static_cast<uint16_t>(chunk.validRows),
-                static_cast<uint32_t>(Shape::kValueDim * sizeof(bfloat16_t)),
-                vStride, 0, 0},
-            AscendC::DataCopyPadExtParams<bfloat16_t>{false, 0, 0, 0});
+            gkGm_[HeadTensorOffset(args_.tiling, chunk, valueHead, Shape::kHeadDim)],
+            chunk.validRows * Shape::kHeadDim);
+        if (!prefetched) {
+            LoadV6Value(chunk, valueHead, pair);
+        }
+        // The original ready covers all earlier MTE2 prefetches as well as G.
         AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
         AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
+        if (prefetched) {
+            v6PrivatePrefetched_ = false;
+        }
         AscendC::GlobalTensor<RelayT> kBetaRelay;
         AscendC::GlobalTensor<RelayT> vBetaRelay;
         kBetaRelay.SetGlobalBuffer(reinterpret_cast<__gm__ RelayT *>(
@@ -694,15 +815,6 @@ private:
                      {1, 1, 1, rowStride, rowStride, 0});
     }
 
-    // Keep one eight-lane block per row. Mul reuses it across the row
-    // with src1BlkStride=0; src1RepStride=1 selects the next row.
-    __aicore__ inline void CopyRowScalarBlocks(
-        AscendC::LocalTensor<float> dstTile,
-        AscendC::LocalTensor<float> rowScalars, uint32_t rows)
-    {
-        AscendC::DataCopy(dstTile, rowScalars, rows * 8);
-    }
-
     __aicore__ inline void MulTileByRowScalars(
         AscendC::LocalTensor<float> dst, AscendC::LocalTensor<float> tile,
         AscendC::LocalTensor<float> rowScalarBlocks, uint32_t rows)
@@ -753,12 +865,104 @@ private:
         }
     }
 
+    __aicore__ inline void SolveTwoFullLeavesJointGather(
+        AscendC::LocalTensor<float> x0, AscendC::LocalTensor<float> x1,
+        AscendC::LocalTensor<float> lkk,
+        AscendC::LocalTensor<uint32_t> offsets,
+        AscendC::LocalTensor<float> raw)
+    {
+        constexpr uint32_t kLeaf = 32;
+        constexpr uint32_t kStride = Shape::kChunkRows;
+        constexpr uint32_t kBottom = kLeaf * kStride + kLeaf;
+        constexpr uint32_t kCoeffLanes = 8;
+        constexpr uint32_t kJointLanes = 2 * kCoeffLanes;
+        constexpr uint32_t kPairedRow = 2 * kLeaf;
+        constexpr uint8_t kRepStride = kPairedRow * sizeof(float) / 32;
+        static_assert(Arch22Ub::kPrivateBytes - Arch22Ub::kV3CompactRaw >=
+                      4096 * sizeof(float));
+        static_assert(Arch22Ub::kV3Leaf1 - Arch22Ub::kV3Leaf0 ==
+                      1024 * sizeof(uint32_t));
+        static_assert(Arch22Ub::kV3Leaf1 + kLeaf * kJointLanes * sizeof(uint32_t) <=
+                      Arch22Ub::kV3B);
+        static_assert(Arch22Ub::kV3X0 + kLeaf * kPairedRow * sizeof(float) ==
+                      Arch22Ub::kV3NegX1);
+        auto bottomOffsets = offsets[256];
+        auto jointOffsets = offsets[1024];
+        AscendC::Adds(bottomOffsets.template ReinterpretCast<int32_t>(),
+                      offsets.template ReinterpretCast<int32_t>(),
+                      static_cast<int32_t>(kBottom * sizeof(float)), 256);
+        AscendC::PipeBarrier<PIPE_V>();
+        // Both leaves and their products keep top32/bottom32 in each paired
+        // row until the existing strided consumers retire them.
+        AscendC::DataCopy(jointOffsets, offsets,
+                          AscendC::DataCopyParams(32, 1, 0, 1));
+        AscendC::DataCopy(jointOffsets[kCoeffLanes], bottomOffsets,
+                          AscendC::DataCopyParams(32, 1, 0, 1));
+        AscendC::PipeBarrier<PIPE_V>();
+        auto prodA = raw[2048];
+        auto prodB = prodA[kLeaf];
+        if constexpr (BF16_RELAY) {
+            // B was copied before this solve. Lkk has no later consumer;
+            // gather negative coefficients for the full-order MulAddDst path.
+            // FP32 rounding differs from Mul+Sub: native double-reference
+            // precision is required before this experiment can be promoted.
+            // Only the four leading bands were initialized by the unpack.
+            // Do not read the uninitialized upper-right padding of Lkk.
+            for (uint32_t band = 0;
+                 band < Shape::kChunkRows / Shape::kSubChunkRows; ++band) {
+                const uint32_t row = band * Shape::kSubChunkRows;
+                AscendC::Muls(lkk[row * Shape::kChunkRows],
+                    lkk[row * Shape::kChunkRows], -1.0F,
+                    static_cast<uint64_t>(Shape::kPrefixRows[band]),
+                    static_cast<uint8_t>(Shape::kSubChunkRows), {1, 1, 8, 8});
+            }
+            AscendC::PipeBarrier<PIPE_V>();
+        }
+        AscendC::Gather(raw, lkk, jointOffsets, uint32_t{0},
+                        (kLeaf - 1) * kJointLanes);
+        AscendC::PipeBarrier<PIPE_V>();
+        for (uint32_t column = 0; column + 1 < kLeaf; ++column) {
+            const uint32_t rows = kLeaf - column - 1;
+            if constexpr (BF16_RELAY) {
+                AscendC::MulAddDst(x0[(column + 1) * kPairedRow],
+                    x0[column * kPairedRow], raw, uint64_t{kLeaf},
+                    static_cast<uint8_t>(rows), {1, 1, 0, kRepStride, 0, 2});
+                AscendC::MulAddDst(x1[(column + 1) * kPairedRow],
+                    x1[column * kPairedRow], raw[kCoeffLanes], uint64_t{kLeaf},
+                    static_cast<uint8_t>(rows), {1, 1, 0, kRepStride, 0, 2});
+                // Retire raw readers before the next Gather overwrites them.
+                AscendC::PipeBarrier<PIPE_V>();
+            } else {
+                AscendC::Mul(prodA, x0[column * kPairedRow], raw, kLeaf,
+                             static_cast<uint8_t>(rows),
+                             {1, 1, 0, kRepStride, 0, 2});
+                AscendC::Mul(prodB, x1[column * kPairedRow], raw[kCoeffLanes], kLeaf,
+                             static_cast<uint8_t>(rows),
+                             {1, 1, 0, kRepStride, 0, 2});
+                AscendC::PipeBarrier<PIPE_V>();
+                AscendC::Sub(x0[(column + 1) * kPairedRow], x0[(column + 1) * kPairedRow],
+                             prodA, kPairedRow, static_cast<uint8_t>(rows),
+                             {1, 1, 1, kRepStride, kRepStride, kRepStride});
+            }
+            if (column + 2 < kLeaf) {
+                AscendC::Gather(raw, lkk, jointOffsets,
+                    static_cast<uint32_t>((kStride + 1) * (column + 1) * sizeof(float)),
+                    (kLeaf - column - 2) * kJointLanes);
+            }
+            AscendC::PipeBarrier<PIPE_V>();
+        }
+    }
+
     __aicore__ inline void SolveTwoLeavesRightLooking(
         AscendC::LocalTensor<float> x0, AscendC::LocalTensor<float> x1,
         AscendC::LocalTensor<float> lkk,
         AscendC::LocalTensor<uint32_t> offsets,
         AscendC::LocalTensor<float> raw, uint32_t topRows, uint32_t bottomRows)
     {
+        if (topRows == 32 && bottomRows == 32) {
+            SolveTwoFullLeavesJointGather(x0, x1, lkk, offsets, raw);
+            return;
+        }
         constexpr uint32_t kLeaf = 32;
         constexpr uint32_t kStride = Shape::kChunkRows;
         constexpr uint32_t kBottom = 32 * kStride + 32;
@@ -832,7 +1036,6 @@ private:
         auto shared = ubBuf_.Get<uint8_t>()[Arch22Ub::kSharedScratch]
                           .template ReinterpretCast<float>();
         auto reduceTmp = shared[1024].template ReinterpretCast<uint8_t>();
-        auto repeatScalars = shared;
         auto blockScalars = shared[256];
         auto ones = shared[512];
         static_assert((1024 + 64) * sizeof(float) <= 0x1F00);
@@ -860,9 +1063,7 @@ private:
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Brcb(blockScalars, rstd[begin], kRows / 8, {1, 8});
             AscendC::PipeBarrier<PIPE_V>();
-            CopyRowScalarBlocks(repeatScalars, blockScalars, rows);
-            AscendC::PipeBarrier<PIPE_V>();
-            MulTileByRowScalars(values, values, repeatScalars, rows);
+            MulTileByRowScalars(values, values, blockScalars, rows);
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Cast(src[begin * Shape::kHeadDim], values,
                           AscendC::RoundMode::CAST_RINT, elems);
@@ -881,10 +1082,7 @@ private:
     {
         const uint32_t count = validRows * Shape::kHeadDim;
         if (RuntimeMath<CompilePolicy>::Norm(args_.tiling) == QkNormMode::L2 &&
-                      std::is_same_v<GateT, float>) {
-            L2NormRowsBatched(q, qRstd, tileBuf, validRows);
-            L2NormRowsBatched(k, kRstd, tileBuf, validRows);
-        } else if (RuntimeMath<CompilePolicy>::Norm(args_.tiling) == QkNormMode::L2) {
+            !std::is_same_v<GateT, float>) {
             // 每行按冻结语义执行 x * rsqrt(sum(x^2) + epsilon)。AR
             // ReduceSum 以 isReuseSource=true 调用，归约复用平方结果区；
             // 传入的临时区从 1 KiB 对齐地址开始，不额外占用 UB。
@@ -952,7 +1150,7 @@ private:
                               AscendC::RoundMode::CAST_RINT, Shape::kHeadDim);
                 AscendC::PipeBarrier<PIPE_V>();
             }
-        } else {
+        } else if (RuntimeMath<CompilePolicy>::Norm(args_.tiling) != QkNormMode::L2) {
             // 固定输出合同下 Identity 仍写确定值；反向关闭 L2Norm 时不会
             // 使用 rstd，但不能留下未初始化输出。
             AscendC::Duplicate(qRstd, 1.0F, validRows);
@@ -1082,14 +1280,44 @@ private:
             AscendC::Muls(g, g, domain_.stepScale, count);
             AscendC::PipeBarrier<PIPE_V>();
         }
+        bool scannedFullChunk = false;
+        if constexpr (BF16_RELAY && std::is_same_v<GateT, float>) {
+            if (validRows == Shape::kChunkRows &&
+                static_cast<GateMode>(args_.tiling.gateMode) == GateMode::SafeSigmoid) {
+                // Gate/norm have retired tileBuf. Six disjoint ping/pong levels
+                // finish in G; no input is overwritten while a level reads it.
+                // FP32 addition order changes: require native double-reference
+                // validation, retaining sequential accumulation for all tails.
+                static_assert(Shape::kChunkRows == 64);
+                uint32_t level = 0;
+                for (uint32_t offset = 1; offset < Shape::kChunkRows;
+                     offset <<= 1, ++level) {
+                    auto src = (level & 1U) == 0 ? g : tileBuf;
+                    auto dst = (level & 1U) == 0 ? tileBuf : g;
+                    const uint32_t prefix = offset * Shape::kHeadDim;
+                    AscendC::Adds(dst, src, 0.0F, prefix);
+                    AscendC::Add(dst[prefix], src[prefix], src, count - prefix);
+                    AscendC::PipeBarrier<PIPE_V>();
+                }
+                scannedFullChunk = true;
+            }
+        }
         // token 维前缀和保留 headDim 向量宽度，不跨 chunk 传播。
         // 这里刻意保留逐行累加：保证 gk（FP32 公开输出）与改动前逐位一致，
-        // 63 步累加相对整块指令链的开销很小。
-        for (uint32_t row = 1; row < validRows; ++row) {
-            AscendC::Add(g[row * Shape::kHeadDim],
-                         g[row * Shape::kHeadDim],
-                         g[(row - 1) * Shape::kHeadDim], Shape::kHeadDim);
-            AscendC::PipeBarrier<PIPE_V>();
+        // Reuse the same128-element FP32 mask without changing the sequential
+        // prefix additions or their barriers. Restore mode before any padding.
+        if (!scannedFullChunk && validRows > 1) {
+            AscendC::SetMaskCount();
+            AscendC::SetVectorMask<float, AscendC::MaskMode::COUNTER>(Shape::kHeadDim);
+            for (uint32_t row = 1; row < validRows; ++row) {
+                AscendC::Add<float, false>(g[row * Shape::kHeadDim],
+                             g[row * Shape::kHeadDim],
+                             g[(row - 1) * Shape::kHeadDim],
+                             AscendC::MASK_PLACEHOLDER, 1, {1, 1, 1, 8, 8, 8});
+                AscendC::PipeBarrier<PIPE_V>();
+            }
+            AscendC::SetMaskNorm();
+            AscendC::ResetMask();
         }
         if (validRows < Shape::kChunkRows) {
             const uint32_t tail =
@@ -1109,7 +1337,7 @@ private:
         AscendC::LocalTensor<bfloat16_t> kPlus,
         AscendC::LocalTensor<bfloat16_t> kMinus,
         AscendC::LocalTensor<float> g,
-        AscendC::LocalTensor<float> scratch, uint32_t validRows)
+        AscendC::LocalTensor<float> scratch, uint32_t validRows, uint32_t pair)
     {
         const float clampMin = domain_.StoredBound(ExpDomain::kV1Bf16LowerBase2);
         const float clampMax = domain_.StoredBound(ExpDomain::kV1Bf16UpperBase2);
@@ -1120,6 +1348,7 @@ private:
         auto factor = scratch;
         auto stage = ubBuf_.Get<uint8_t>()[kTailStage].template ReinterpretCast<float>();
         const uint32_t active = CeilDiv(validRows, CoarseScore::kAnchorRows);
+        bool v0OutputPending = true;
         auto references = kMinus[(CoarseScore::kReferences - Arch22Ub::kGateOrKMinus)
                                 / sizeof(bfloat16_t)].template ReinterpretCast<float>();
         // A short coarse band's midpoint can be in the preceding source tile.
@@ -1165,6 +1394,12 @@ private:
                 AscendC::PipeBarrier<PIPE_V>();
                 // All readers of this G tile finish in the final own band.
                 // Future source rows stay untouched; references were saved above.
+                if (v0OutputPending && s == sourceBand) {
+                    // Earlier writes avoid V0's MTE3 sources. Retire the original
+                    // event before the first destructive G/Q/K write.
+                    AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(mte3ToV_[pair]);
+                    v0OutputPending = false;
+                }
                 auto product = s == sourceBand ? g[rowBegin * Shape::kHeadDim] : factor;
                 AscendC::Mul(product, stage, factor, elems);
                 AscendC::PipeBarrier<PIPE_V>();
@@ -1212,14 +1447,15 @@ private:
         AscendC::LocalTensor<bfloat16_t> kPlus,
         AscendC::LocalTensor<bfloat16_t> kMinus,
         AscendC::LocalTensor<float> g,
-        AscendC::LocalTensor<float> scratch, uint32_t validRows)
+        AscendC::LocalTensor<float> scratch, uint32_t validRows, uint32_t pair)
     {
         if constexpr (BF16_RELAY) {
             if (coarseEligible_) {
-                V1CoarseFactorsVf(qHat, kHat, qPlus, kPlus, kMinus, g, scratch, validRows);
+                V1CoarseFactorsVf(qHat, kHat, qPlus, kPlus, kMinus, g, scratch, validRows, pair);
                 return;
             }
         }
+        AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(mte3ToV_[pair]);
         constexpr float base2Min = ExpDomain::kV1Bf16LowerBase2;
         constexpr float base2Max = ExpDomain::kV1Bf16UpperBase2;
         const float clampMin = domain_.StoredBound(base2Min);
@@ -1343,6 +1579,62 @@ private:
         }
     }
 
+    __aicore__ inline void SolveFourLeaves16(
+        AscendC::LocalTensor<float> lkk, AscendC::LocalTensor<float> x,
+        AscendC::LocalTensor<int32_t> offsets,
+        AscendC::LocalTensor<float> raw,
+        AscendC::LocalTensor<float> castScratch,
+        AscendC::LocalTensor<bfloat16_t> akkPack)
+    {
+        constexpr uint32_t kLeaf = 16;
+        constexpr uint32_t kRow = 64;
+        constexpr uint32_t kTable = 1024;
+        auto leafOffsets = offsets[kTable];
+        AscendC::CreateVecIndex(offsets, 0, kTable);
+        AscendC::CreateVecIndex(leafOffsets, 0, kTable);
+        AscendC::PipeBarrier<PIPE_V>();
+        AscendC::ShiftRight(offsets, offsets, 6, kTable);
+        AscendC::ShiftRight(leafOffsets, leafOffsets, 4, kTable);
+        AscendC::PipeBarrier<PIPE_V>();
+        AscendC::Muls(offsets, offsets, int32_t{-16384}, kTable);
+        AscendC::Muls(leafOffsets, leafOffsets, int32_t{4160}, kTable);
+        AscendC::PipeBarrier<PIPE_V>();
+        AscendC::Adds(offsets, offsets, int32_t{256}, kTable);
+        AscendC::PipeBarrier<PIPE_V>();
+        AscendC::Add(offsets, offsets, leafOffsets, kTable);
+        AscendC::Duplicate(x, 0.0F, kLeaf * kRow);
+        // Only initialized score-band prefixes may be read.
+        for (uint32_t band = 0; band < 4; ++band) {
+            AscendC::Muls(lkk[band * 16 * kRow], lkk[band * 16 * kRow],
+                -1.0F, uint64_t{Shape::kPrefixRows[band]}, uint8_t{16}, {1, 1, 8, 8});
+        }
+        AscendC::PipeBarrier<PIPE_V>();
+        for (uint32_t lane = 0; lane < 8; ++lane) {
+            uint64_t mask[2] = {(1ULL << lane) | (1ULL << (16 + lane)) |
+                (1ULL << (32 + lane)) | (1ULL << (48 + lane)), 0};
+            AscendC::Duplicate(x[lane * kRow], 1.0F, mask, uint8_t{2}, uint16_t{1}, uint8_t{65});
+        }
+        AscendC::PipeBarrier<PIPE_V>();
+        // S2: AIV publishes identity and strictly lower -L. AIC computes
+        // the complete leaf polynomial with BF16 intermediates in L1.
+        // Reuse the two expired offset tables, never uninitialized Lkk padding.
+        auto p = offsets.template ReinterpretCast<bfloat16_t>();
+        AscendC::Duplicate(p, static_cast<bfloat16_t>(0), 4096);
+        AscendC::PipeBarrier<PIPE_V>();
+        for (uint32_t row = 1; row < kRow; ++row) {
+            AscendC::Cast(p[row * kRow], lkk[row * kRow], AscendC::RoundMode::CAST_RINT, row);
+        }
+        auto cast = castScratch.template ReinterpretCast<bfloat16_t>();
+        AscendC::Cast(cast, x, AscendC::RoundMode::CAST_RINT, kLeaf * kRow);
+        AscendC::Duplicate(akkPack, static_cast<bfloat16_t>(0), 4096);
+        AscendC::PipeBarrier<PIPE_V>();
+        for (uint32_t leaf = 0; leaf < 4; ++leaf) {
+            AscendC::DataCopy(akkPack[leaf * kLeaf * (kRow + 1)], cast[leaf * kLeaf],
+                AscendC::DataCopyParams(16, 1, 3, 3));
+        }
+        AscendC::PipeBarrier<PIPE_V>();
+    }
+
     __aicore__ inline void V3Vf(
         AscendC::LocalTensor<float> raw, AscendC::LocalTensor<float> betaEff,
         AscendC::LocalTensor<bfloat16_t> aqk,
@@ -1410,10 +1702,8 @@ private:
             auto rawAkk = raw[stackedBand + rows * n];
             AscendC::Brcb(betaBrcb, betaPadded[rowBegin], 2, {1, 8});
             AscendC::PipeBarrier<PIPE_V>();
-            CopyRowScalarBlocks(betaRepeat, betaBrcb, rows);
-            AscendC::PipeBarrier<PIPE_V>();
             const uint8_t stride = static_cast<uint8_t>(n / 8);
-            AscendC::Mul(rawAkk, rawAkk, betaRepeat, n,
+            AscendC::Mul(rawAkk, rawAkk, betaBrcb, n,
                          static_cast<uint8_t>(rows),
                          {1, 1, 0, stride, stride, 1});
             AscendC::PipeBarrier<PIPE_V>();
@@ -1431,24 +1721,36 @@ private:
 
         AscendC::PipeBarrier<PIPE_V>();
         // I+Lkk=[[A00,0],[B,A11]]；在同一次 VF 中求两个 32 阶单位下三角逆。
-        AscendC::Duplicate(x0, 0.0F, 1024);
-        AscendC::Duplicate(x1, 0.0F, 1024);
+        if constexpr (BF16_RELAY) {
+            if (coarseEligible_ && validRows == Shape::kChunkRows) {
+                SolveFourLeaves16(lkk, x0, coeffOffsetInt, raw, negX1, akkPack);
+                return;
+            }
+        }
+        const bool packedLeaves = validRows == Shape::kChunkRows;
+        if (packedLeaves) {
+            AscendC::Duplicate(x0, 0.0F, 2048);
+        } else {
+            AscendC::Duplicate(x0, 0.0F, 1024);
+            AscendC::Duplicate(x1, 0.0F, 1024);
+        }
         AscendC::PipeBarrier<PIPE_V>();
         const uint32_t bottomRows = validRows > 32 ? validRows - 32 : 0;
         // FP32 向量指令要求 UB 首地址按 32 Byte 对齐，不能直接从
         // x[row, row] 发起长度为 1 的 Duplicate。按对角元素在 32 Byte
         // block 内的 lane 分组：同一 lane 相邻两个对角元素跨 8 行，
-        // repeat stride 为 8 * 4 + 1 = 33 个 block。
+        // 连续32列/交错64列的repeat stride分别为33/65个block。
         constexpr uint32_t kFp32PerBlock = 8;
         constexpr uint16_t kDiagonalBlockStride = 1;
-        constexpr uint8_t kDiagonalRepeatStride = 33;
+        const uint32_t leafRowStride = packedLeaves ? 64 : 32;
+        const uint8_t kDiagonalRepeatStride = packedLeaves ? 65 : 33;
         const uint32_t topDiagonalLanes =
             topRows < kFp32PerBlock ? topRows : kFp32PerBlock;
         for (uint32_t lane = 0; lane < topDiagonalLanes; ++lane) {
             uint64_t diagonalMask[2] = {1ULL << lane, 0};
             const uint8_t repeat = static_cast<uint8_t>(
                 CeilDiv(topRows - lane, kFp32PerBlock));
-            AscendC::Duplicate(x0[lane * 32], 1.0F, diagonalMask, repeat,
+            AscendC::Duplicate(x0[lane * leafRowStride], 1.0F, diagonalMask, repeat,
                                kDiagonalBlockStride, kDiagonalRepeatStride);
         }
         const uint32_t bottomDiagonalLanes =
@@ -1457,7 +1759,7 @@ private:
             uint64_t diagonalMask[2] = {1ULL << lane, 0};
             const uint8_t repeat = static_cast<uint8_t>(
                 CeilDiv(bottomRows - lane, kFp32PerBlock));
-            AscendC::Duplicate(x1[lane * 32], 1.0F, diagonalMask, repeat,
+            AscendC::Duplicate(x1[lane * leafRowStride], 1.0F, diagonalMask, repeat,
                                kDiagonalBlockStride, kDiagonalRepeatStride);
         }
         AscendC::PipeBarrier<PIPE_V>();
@@ -1485,7 +1787,11 @@ private:
         // B 已在解包 rawAkk 时直接写入；其余行保持零。
         AscendC::PipeBarrier<PIPE_V>();
         // C5 直接执行普通 MMAD：negX1@T，不依赖不存在的 negate 参数。
-        AscendC::Muls(negX1, x1, -1.0F, 1024);
+        if (packedLeaves) {
+            AscendC::Muls(negX1, x1, -1.0F, uint64_t{32}, uint8_t{32}, {1, 1, 4, 8});
+        } else {
+            AscendC::Muls(negX1, x1, -1.0F, 1024);
+        }
         AscendC::PipeBarrier<PIPE_V>();
 
         // q00=X0、q01=0、q11=X1；q10 留给 C5 的 negX1@T。
@@ -1494,17 +1800,22 @@ private:
         // The coefficient offsets are dead after the solve. Pack two full,
         // initialized leaves there before copying their valid rows into Akk.
         auto cast0 = coeffOffsetInt.template ReinterpretCast<bfloat16_t>();
-        auto cast1 = cast0[2048];
-        AscendC::Cast(cast0, x0, AscendC::RoundMode::CAST_RINT, 1024);
-        AscendC::Cast(cast1, x1, AscendC::RoundMode::CAST_RINT, 1024);
+        auto cast1 = packedLeaves ? cast0[32] : cast0[2048];
+        if (packedLeaves) {
+            AscendC::Cast(cast0, x0, AscendC::RoundMode::CAST_RINT, 2048);
+        } else {
+            AscendC::Cast(cast0, x0, AscendC::RoundMode::CAST_RINT, 1024);
+            AscendC::Cast(cast1, x1, AscendC::RoundMode::CAST_RINT, 1024);
+        }
         AscendC::PipeBarrier<PIPE_V>();
+        const uint16_t castSrcGap = packedLeaves ? 2 : 0;
         if (topRows > 0) {
             AscendC::DataCopy(akkPack, cast0,
-                AscendC::DataCopyParams(static_cast<uint16_t>(topRows), 2, 0, 2));
+                AscendC::DataCopyParams(static_cast<uint16_t>(topRows), 2, castSrcGap, 2));
         }
         if (bottomRows > 0) {
             AscendC::DataCopy(akkPack[32 * Shape::kChunkRows + 32], cast1,
-                AscendC::DataCopyParams(static_cast<uint16_t>(bottomRows), 2, 0, 2));
+                AscendC::DataCopyParams(static_cast<uint16_t>(bottomRows), 2, castSrcGap, 2));
         }
         AscendC::PipeBarrier<PIPE_V>();
     }
@@ -1542,23 +1853,23 @@ private:
             AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(inputReady_[pair]);
             AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(ioFree_[otherPair]);
         }
-        const uint32_t kTileRows = wide ? 32U : 16U;
+        const uint32_t kTileRows = wide ? 64U : 16U;
         static_assert(Arch22Ub::kHardwareBytes - Arch22Ub::kUsableBytes >= 8192);
         static_assert(Arch22Ub::kV6KBetaG + 16384 <= 0x10000);
         static_assert(kV6BatchBetaRepeat + 512 <= Arch22Ub::kBetaEff);
         static_assert(kV6BatchBetaBrcb + 2048 <= kV6BatchBetaRepeat);
+        static_assert(2 * 64 * Shape::kHeadDim * sizeof(float) <= kV6BatchBetaBrcb);
+        static_assert(kV6BatchBetaBrcb <= Arch22Ub::kPrivateBytes);
         auto ub = ubBuf_.Get<uint8_t>();
         auto factor = wide
             ? ub[Arch22Ub::kPrivateBase[otherPair]].template ReinterpretCast<float>()
             : scratch;
         auto stage = wide
-            ? ub[Arch22Ub::kPrivateBase[otherPair] + 0x4000].template ReinterpretCast<float>()
+            ? ub[Arch22Ub::kPrivateBase[otherPair] + 0x8000].template ReinterpretCast<float>()
             : ub[kV6BatchStage].template ReinterpretCast<float>();
-        static_assert(2 * 32 * Shape::kHeadDim * sizeof(float) <= Arch22Ub::kGateOrKMinus);
+        // The whole borrowed 64KiB is dead after the original ioFree bridge.
         auto betaBrcb = ub[Arch22Ub::kPrivateBase[pair] + kV6BatchBetaBrcb]
                             .template ReinterpretCast<float>();
-        auto betaRepeat = ub[Arch22Ub::kPrivateBase[pair] + kV6BatchBetaRepeat]
-                              .template ReinterpretCast<float>();
         AscendC::Brcb(betaBrcb, betaEff,
                       static_cast<uint8_t>(Shape::kChunkRows / 8), {1, 8});
         AscendC::PipeBarrier<PIPE_V>();
@@ -1595,9 +1906,7 @@ private:
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Mul(stage, stage, factor, elems);
             AscendC::PipeBarrier<PIPE_V>();
-            CopyRowScalarBlocks(betaRepeat, betaBrcb[8 * rowBegin], rows);
-            AscendC::PipeBarrier<PIPE_V>();
-            MulTileByRowScalars(stage, stage, betaRepeat, rows);
+            MulTileByRowScalars(stage, stage, betaBrcb[8 * rowBegin], rows);
             // Both BF16 RHS buffers stay live until StageV6's final drain.
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Cast(kBetaG[offset], stage, AscendC::RoundMode::CAST_RINT, elems);
@@ -1634,12 +1943,12 @@ private:
             AscendC::Cast(qgScaled[offset], stage,
                           AscendC::RoundMode::CAST_RINT, elems);
             AscendC::PipeBarrier<PIPE_V>();
-            // Side04: betaRepeat still describes these rows. K's MTE3
+            // Side04: the original Brcb block still describes these rows. K's MTE3
             // was consumed before kg; V finishes before packed/stage reuse.
             AscendC::Cast(stage, vBeta[offset], AscendC::RoundMode::CAST_NONE,
                           elems);
             AscendC::PipeBarrier<PIPE_V>();
-            MulTileByRowScalars(stage, stage, betaRepeat, rows);
+            MulTileByRowScalars(stage, stage, betaBrcb[8 * rowBegin], rows);
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Cast(vBeta[offset], stage, AscendC::RoundMode::CAST_RINT, elems);
             AscendC::PipeBarrier<PIPE_V>();
@@ -1688,7 +1997,6 @@ private:
                          : kBetaG.template ReinterpretCast<float>()[1536];
         // 原 BF16 K_beta_g 缓冲不再作为输出；用其前 4 KiB 保存 beta 广播。
         auto betaBrcb = kBetaG.template ReinterpretCast<float>();
-        auto betaRepeat = betaBrcb[512];
         AscendC::Brcb(betaBrcb, betaEff,
                       static_cast<uint8_t>(Shape::kChunkRows / 8), {1, 8});
         AscendC::PipeBarrier<PIPE_V>();
@@ -1725,9 +2033,7 @@ private:
             AscendC::PipeBarrier<PIPE_V>();
             AscendC::Mul(stage, stage, factor, elems);
             AscendC::PipeBarrier<PIPE_V>();
-            CopyRowScalarBlocks(betaRepeat, betaBrcb[8 * rowBegin], rows);
-            AscendC::PipeBarrier<PIPE_V>();
-            MulTileByRowScalars(stage, stage, betaRepeat, rows);
+            MulTileByRowScalars(stage, stage, betaBrcb[8 * rowBegin], rows);
             StartRhsFp32(kBetaRelay[offset], stage, elems, pair);
             // E'(G)=exp(clamp(g[last]-g[row]))
             SubRowMinusTile(factor, g[last], g[offset], rows);
@@ -1771,13 +2077,10 @@ private:
                                       : kTileRows;
             const uint32_t elems = rows * Shape::kHeadDim;
             const uint32_t offset = rowBegin * Shape::kHeadDim;
-            CopyRowScalarBlocks(betaRepeat, betaBrcb[8 * rowBegin],
-                                        rows);
-            AscendC::PipeBarrier<PIPE_V>();
             AscendC::Cast(stage, vBeta[offset], AscendC::RoundMode::CAST_NONE,
                           elems);
             AscendC::PipeBarrier<PIPE_V>();
-            MulTileByRowScalars(stage, stage, betaRepeat, rows);
+            MulTileByRowScalars(stage, stage, betaBrcb[8 * rowBegin], rows);
             AscendC::PipeBarrier<PIPE_V>();
             StoreRhsFp32(vBetaRelay[offset], stage, elems, pair);
         }
@@ -1814,6 +2117,7 @@ private:
 
     PrepareKernelArgs args_{};
     bool coarseEligible_ = false;
+    bool v6PrivatePrefetched_ = false;
     AscendC::TPipe *pipe_ = nullptr;
     uint32_t workgroup_ = 0;
     uint32_t aiv_ = 0;
@@ -1821,6 +2125,8 @@ private:
     AscendC::TBuf<AscendC::TPosition::VECCALC> ubBuf_{};
     AscendC::TEventID ioFree_[2]{};
     AscendC::TEventID inputReady_[2]{};
+    // Q-ready and K-ready, shared across StageV0 calls and consumed per call.
+    AscendC::TEventID normReady_[2]{};
     AscendC::TEventID outputReady_[2]{};
     AscendC::TEventID mte3ToV_[2]{};
     AscendC::TEventID scalarRead_{};

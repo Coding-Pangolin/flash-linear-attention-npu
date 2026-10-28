@@ -79,8 +79,8 @@ public:
         }
         // mode 0x2 的核间 flag 是固定物理编号，不经过 EventID 分配器。
         // pair0/pair1: ready=0/1，free=2/3。
-        constexpr uint16_t kReadyFlagId[2] = {0, 1};
-        constexpr uint16_t kFreeFlagId[2] = {2, 3};
+        // Compute IDs directly: dynamically indexing a constexpr array can
+        // emit a read-only-memory load and cache maintenance on arch22.
         const uint32_t total = TotalWorkItems(args_.tiling);
         const uint32_t workBegin = TokenBalancedWorkBoundary(
             args_, total, workgroup_, coreCount_);
@@ -98,7 +98,7 @@ public:
         // 两个 pair 的初始许可由 AIC 发布；后续许可由 C7 写回完成后发布。
         for (uint32_t pair = 0; pair < 2; ++pair) {
             AscendC::CrossCoreSetFlag<0x2, PIPE_FIX>(
-                kFreeFlagId[pair]);
+                static_cast<uint16_t>(pair + 2));
         }
 
         for (uint32_t work = workBegin; work < workEnd; ++work) {
@@ -125,7 +125,7 @@ public:
                         AscendC::WaitFlag<AscendC::HardEvent::MTE1_MTE2>(akkLaneFree_);
                     }
                     AscendC::CrossCoreWaitFlag<0x2, PIPE_MTE2>(
-                        kReadyFlagId[pair]);
+                        static_cast<uint16_t>(pair));
                     for (uint32_t headInPair = 0; headInPair < 2; ++headInPair) {
                         const uint32_t localHead = pair * 2 + headInPair;
                         if (localHead < activeHeads) {
@@ -133,7 +133,7 @@ public:
                         }
                     }
                     AscendC::CrossCoreSetFlag<0x2, PIPE_FIX>(
-                        kFreeFlagId[pair]);
+                        static_cast<uint16_t>(pair + 2));
                 }
 
                 // C4 会把同一 L1 head lane 从 score 输入换义为 B；先确认
@@ -143,15 +143,15 @@ public:
                 // C4：读取 V3 的 B/X0/negX1，计算 T=B@X0 并常驻 L1。
                 for (uint32_t pair = 0; pair < 2; ++pair) {
                     AscendC::CrossCoreWaitFlag<0x2, PIPE_MTE2>(
-                        kReadyFlagId[pair]);
+                        static_cast<uint16_t>(pair));
                     for (uint32_t headInPair = 0; headInPair < 2; ++headInPair) {
                         const uint32_t localHead = pair * 2 + headInPair;
                         if (localHead < activeHeads) {
-                            StageC4(chunk, localHead);
+                            StageC4(chunk, groupBegin + localHead, localHead);
                         }
                     }
                     AscendC::CrossCoreSetFlag<0x2, PIPE_MTE2>(
-                        kFreeFlagId[pair]);
+                        static_cast<uint16_t>(pair + 2));
                 }
 
                 // C5：只在下半块存在时计算 Akk[32:M,0:32]=negX1@T。
@@ -167,9 +167,9 @@ public:
                 // workspace，再分别计算 W 与 U。
                 for (uint32_t pair = 0; pair < 2; ++pair) {
                     AscendC::CrossCoreWaitFlag<0x2, PIPE_MTE2>(
-                        kReadyFlagId[pair]);
+                        static_cast<uint16_t>(pair));
                     StageC7(chunk, groupBegin, activeHeads, pair,
-                            kFreeFlagId[pair]);
+                            static_cast<uint16_t>(pair + 2));
                 }
                 groupBegin += activeHeads;
             }
@@ -346,8 +346,119 @@ private:
         }
     }
 
+    template <uint32_t Block>
+    __aicore__ inline void MergeGemmL1(
+        const AscendC::LocalTensor<bfloat16_t> &a,
+        const AscendC::LocalTensor<bfloat16_t> &b,
+        const AscendC::LocalTensor<bfloat16_t> &c,
+        uint32_t rowA, uint32_t colA, uint32_t rowB, uint32_t colB,
+        uint32_t rowC, uint32_t colC, bool publish,
+        const ChunkRange &chunk, uint32_t valueHead, uint32_t localHead,
+        bool accumulate = false, bool finish = true)
+    {
+        static_assert(Block == 16 || Block == 32);
+        auto l0A = l0ABuf_.Get<bfloat16_t>();
+        auto l0B = l0BBuf_.Get<bfloat16_t>();
+        auto l0C = l0CBuf_.Get<float>();
+        AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
+        AscendC::LoadData2DParams loadA{};
+        loadA.repeatTimes = Block / 16;
+        loadA.srcStride = 4;
+        for (uint32_t row = 0; row < Block / 16; ++row) {
+            AscendC::LoadData(l0A[row * (Block / 16) * 256],
+                a[colA * 64 + (rowA + 16 * row) * 16], loadA);
+        }
+        AscendC::LoadData3DParamsV2<bfloat16_t> loadB{};
+        loadB.l1H = 1;
+        loadB.l1W = 64;
+        loadB.channelSize = 64;
+        loadB.kExtension = Block;
+        loadB.mExtension = Block;
+        loadB.kStartPt = colB;
+        loadB.mStartPt = rowB;
+        loadB.strideW = 1;
+        loadB.strideH = 1;
+        loadB.filterW = 1;
+        loadB.filterH = 1;
+        loadB.dilationFilterW = 1;
+        loadB.dilationFilterH = 1;
+        loadB.enTranspose = true;
+        AscendC::LoadData(l0B, b, loadB);
+        AscendC::SetFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
+        AscendC::WaitFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
+        if (!accumulate) { AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(fixToM_); }
+        AscendC::MmadParams mm{};
+        mm.m = Block;
+        mm.n = Block;
+        mm.k = Block;
+        mm.cmatrixInitVal = !accumulate;
+        AscendC::Mmad(l0C, l0A, l0B, mm);
+        AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
+        if (!finish) { return; }
+        AscendC::SetFlag<AscendC::HardEvent::M_FIX>(mToFix_);
+        AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(mToFix_);
+        auto l1Fix = AscendC::FixpipeParamsV220(Block, Block, Block, 64, false);
+        l1Fix.quantPre = QuantMode_t::F322BF16;
+        AscendC::Fixpipe<bfloat16_t, float, kFixpipeNz>(c[colC * 64 + rowC * 16], l0C, l1Fix);
+        if (publish && RuntimeMath<CompilePolicy>::Output(args_.tiling) != OutputMode::None) {
+            AscendC::GlobalTensor<bfloat16_t> output;
+            output.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(args_.akk) +
+                AOutputOffset(args_.tiling, chunk, valueHead) + rowC * 64 + colC);
+            auto gmFix = AscendC::FixpipeParamsV220(Block, Block, Block, 64, false);
+            gmFix.quantPre = QuantMode_t::F322BF16;
+            AscendC::Fixpipe<bfloat16_t, float, AscendC::CFG_ROW_MAJOR>(output, l0C, gmFix);
+        }
+        AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+        AscendC::SetFlag<AscendC::HardEvent::FIX_MTE1>(fixToMte1_[localHead]);
+        AscendC::WaitFlag<AscendC::HardEvent::FIX_MTE1>(fixToMte1_[localHead]);
+    }
+
+    template <uint32_t Block>
+    __aicore__ inline void MergeBlockL1(uint32_t base, const ChunkRange &chunk,
+        uint32_t valueHead, uint32_t localHead)
+    {
+        auto lane = l1Buf_.Get<uint8_t>()[L1::kHeadLane[localHead]]
+                        .template ReinterpretCast<bfloat16_t>();
+        auto p = lane;
+        auto inverse = lane[Arch22L1::kAkkInHeadLane / sizeof(bfloat16_t)];
+        auto tmp = lane[0x8000 / sizeof(bfloat16_t)];
+        const uint32_t lower = base + Block;
+        MergeGemmL1<Block>(inverse, p, tmp, lower, lower, lower, base, lower, base,
+                           false, chunk, valueHead, localHead);
+        MergeGemmL1<Block>(tmp, inverse, inverse, lower, base, base, base, lower, base,
+                           true, chunk, valueHead, localHead);
+    }
+
+    __aicore__ inline void ResidentLeaves16(const ChunkRange &chunk,
+        uint32_t valueHead, uint32_t localHead)
+    {
+        // Six 64x64 BF16 matrices inside the existing 72 KiB head lane.
+        // P at0, X at16KiB, temporary at32KiB, identity at40KiB,
+        // power at48KiB. Only the four diagonal leaf tiles are consumed.
+        static_assert(0xC000 + 0x2000 <= L1::kHeadLaneBytes);
+        auto lane = l1Buf_.Get<uint8_t>()[L1::kHeadLane[localHead]]
+                        .template ReinterpretCast<bfloat16_t>();
+        auto x = lane[Arch22L1::kAkkInHeadLane / sizeof(bfloat16_t)];
+        auto identity = lane[0xA000 / sizeof(bfloat16_t)];
+        auto power = lane[0xC000 / sizeof(bfloat16_t)];
+        for (uint32_t iteration = 0; iteration < 4; ++iteration) {
+            for (uint32_t leaf = 0; leaf < 4; ++leaf) {
+                const uint32_t base = 16 * leaf;
+                // X_new = X*I + X*power, accumulated in FP32, then BF16.
+                MergeGemmL1<16>(x, identity, x, base, base, base, base,
+                    base, base, false, chunk, valueHead, localHead, false, false);
+                MergeGemmL1<16>(x, power, x, base, base, base, base,
+                    base, base, iteration == 3, chunk, valueHead, localHead, true, true);
+                if (iteration != 3) {
+                    MergeGemmL1<16>(power, power, power, base, base, base, base,
+                        base, base, false, chunk, valueHead, localHead);
+                }
+            }
+        }
+    }
+
     __aicore__ inline void StageC4(const ChunkRange &chunk,
-                                   uint32_t localHead)
+                                   uint32_t valueHead, uint32_t localHead)
     {
         const uint64_t slot = WorkspaceSlotBase(
             workgroup_, localHead, Workspace::kArch22WorkgroupStride,
@@ -369,6 +480,33 @@ private:
         akkCopy.dstNzNStride = 1;
         akkCopy.dstNzC0Stride = Shape::kChunkRows;
         akkCopy.dstNzMatrixStride = 0;
+        if constexpr (BF16_RELAY) {
+            if (coarseEligible_ && chunk.validRows == Shape::kChunkRows) {
+                static_assert(0x8000 + Shape::kChunkRows * Shape::kChunkRows * sizeof(bfloat16_t)
+                              <= L1::kHeadLaneBytes);
+                AscendC::GlobalTensor<bfloat16_t> pSource;
+                pSource.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t *>(
+                    args_.workspace + slot + Workspace::kPayload + Workspace::kX0));
+                AscendC::DataCacheCleanAndInvalid<bfloat16_t, AscendC::CacheLine::ENTIRE_DATA_CACHE,
+                    AscendC::DcciDst::CACHELINE_OUT>(pSource);
+                AscendC::DataSyncBarrier<AscendC::MemDsbT::DDR>();
+                AscendC::DataCopy(akkL1, akkSource, akkCopy);
+                auto pL1 = l1Bytes[L1::kHeadLane[localHead]].template ReinterpretCast<bfloat16_t>();
+                AscendC::DataCopy(pL1, pSource, akkCopy);
+                auto identityL1 = l1Bytes[L1::kHeadLane[localHead] + 0xA000]
+                    .template ReinterpretCast<bfloat16_t>();
+                auto powerL1 = l1Bytes[L1::kHeadLane[localHead] + 0xC000]
+                    .template ReinterpretCast<bfloat16_t>();
+                AscendC::DataCopy(identityL1, akkSource, akkCopy);
+                AscendC::DataCopy(powerL1, pSource, akkCopy);
+                AscendC::SetFlag<AscendC::HardEvent::MTE2_MTE1>(mte2ToMte1_);
+                AscendC::WaitFlag<AscendC::HardEvent::MTE2_MTE1>(mte2ToMte1_);
+                ResidentLeaves16(chunk, valueHead, localHead);
+                MergeBlockL1<16>(0, chunk, valueHead, localHead);
+                MergeBlockL1<16>(32, chunk, valueHead, localHead);
+                return;
+            }
+        }
         AscendC::DataCopy(akkL1, akkSource, akkCopy);
 
         if (chunk.validRows <= 32) {
@@ -489,6 +627,14 @@ private:
     __aicore__ inline void StageC5(const ChunkRange &chunk, uint32_t valueHead,
                                    uint32_t localHead)
     {
+        if constexpr (BF16_RELAY) {
+            if (coarseEligible_ && chunk.validRows == Shape::kChunkRows) {
+                MergeBlockL1<32>(0, chunk, valueHead, localHead);
+                // Preserve the original final C5-to-C7 L1-ready token.
+                AscendC::SetFlag<AscendC::HardEvent::FIX_MTE1>(fixToMte1_[localHead]);
+                return;
+            }
+        }
         if (chunk.validRows <= 32) {
             return;
         }
@@ -702,6 +848,47 @@ private:
             loadB.dilationFilterH = 1;
             loadB.enTranspose = true;
             AscendC::SetHF32Mode(false);
+            if constexpr (BF16_RELAY) {
+                // W/U share the inverse. The two RHS and two accumulators fit
+                // only in BF16; the FP32 relay retains its original schedule.
+                constexpr uint32_t kRhsBytes = 64 * Shape::kHeadDim * sizeof(RelayT);
+                constexpr uint32_t kOutputBytes = 64 * Shape::kHeadDim * sizeof(float);
+                static_assert(2 * kRhsBytes <= 0x10000);
+                static_assert(2 * kOutputBytes <= 0x10000);
+                AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
+                for (uint32_t row = 0; row < m / 16; ++row) {
+                    AscendC::LoadData(l0A[row * (m / kFractalColumns) * kFractalElements],
+                                      akkL1[row * kFractalElements], loadA);
+                }
+                for (uint32_t rhs = 0; rhs < 2; ++rhs) {
+                    auto rhsL1 = l1Bytes[Arch22L1::kRhsLane[headInPair] + rhs * Arch22L1::kRhsVBeta]
+                                     .template ReinterpretCast<RelayT>();
+                    auto rhsL0 = l0BBuf_.Get<uint8_t>()[rhs * kRhsBytes].template ReinterpretCast<RelayT>();
+                    AscendC::LoadData(rhsL0, rhsL1, loadB);
+                }
+                AscendC::SetFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
+                AscendC::WaitFlag<AscendC::HardEvent::MTE1_M>(mte1ToM_);
+                AscendC::WaitFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+                AscendC::MmadParams mm{};
+                mm.m = m; mm.n = Shape::kHeadDim; mm.k = m;
+                mm.cmatrixInitVal = true;
+                for (uint32_t rhs = 0; rhs < 2; ++rhs) {
+                    auto rhsL0 = l0BBuf_.Get<uint8_t>()[rhs * kRhsBytes].template ReinterpretCast<RelayT>();
+                    auto resultL0 = l0CBuf_.Get<uint8_t>()[rhs * kOutputBytes].template ReinterpretCast<float>();
+                    AscendC::Mmad(resultL0, l0A, rhsL0, mm);
+                }
+                AscendC::SetFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
+                AscendC::SetFlag<AscendC::HardEvent::M_FIX>(mToFix_);
+                AscendC::WaitFlag<AscendC::HardEvent::M_FIX>(mToFix_);
+                auto fix = AscendC::FixpipeParamsV220(
+                    Shape::kHeadDim, chunk.validRows, m, Shape::kHeadDim, false);
+                fix.quantPre = QuantMode_t::F322BF16;
+                auto uL0C = l0CBuf_.Get<uint8_t>()[kOutputBytes].template ReinterpretCast<float>();
+                AscendC::Fixpipe<bfloat16_t, float, AscendC::CFG_ROW_MAJOR>(wGm_[out], l0C, fix);
+                AscendC::Fixpipe<bfloat16_t, float, AscendC::CFG_ROW_MAJOR>(uGm_[out], uL0C, fix);
+                // Both stores precede this release, including the final drain.
+                AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+            } else {
             for (uint32_t rhs = 0; rhs < 2; ++rhs) {
                 AscendC::WaitFlag<AscendC::HardEvent::M_MTE1>(mToMte1_);
                 for (uint32_t row = 0; row < m / 16; ++row) {
@@ -732,6 +919,7 @@ private:
                     AscendC::Fixpipe<bfloat16_t, float, AscendC::CFG_ROW_MAJOR>(uGm_[out], l0C, fix);
                 }
                 AscendC::SetFlag<AscendC::HardEvent::FIX_M>(fixToM_);
+            }
             }
         }
         AscendC::SetFlag<AscendC::HardEvent::MTE1_MTE2>(rhsLaneFree_);

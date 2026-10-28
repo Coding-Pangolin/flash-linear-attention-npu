@@ -1,0 +1,321 @@
+// Copyright (c) 2026. SPDX-License-Identifier: BSD-3-Clause
+#pragma once
+#include "common.h"
+
+namespace KdaPrepare::Rewrite {
+template<uint32_t Norm,uint32_t Gate> class Vector {
+    PrepareKernelArgs a_; TPipe *pipe_; uint32_t core_,lane_;
+    TBuf<TPosition::VECCALC> ub_;
+    LocalTensor<bfloat16_t> q_,k_,v_;
+    LocalTensor<float> g_,work_,small_,qr_,kr_,beta_,bias_,blocks_;
+    Work w_; uint64_t base_;
+    template<class T> __aicore__ inline void Read(LocalTensor<T> dst,GM_ADDR ptr,
+        uint64_t offset,uint32_t rows,uint32_t width,uint32_t heads,bool strided=true) {
+        // A DMA must not reuse UB while an earlier vector producer still writes it.
+        SetFlag<HardEvent::V_MTE2>(EVENT_ID0);WaitFlag<HardEvent::V_MTE2>(EVENT_ID0);
+        DataCopyExtParams p{static_cast<uint16_t>(rows),static_cast<uint32_t>(width*sizeof(T)),
+            static_cast<uint32_t>(strided&&a_.tiling.inputSequenceMajor?(heads-1)*width*sizeof(T):0),0,0};
+        DataCopyPadExtParams<T> pad{false,0,0,0};
+        DataCopyPad(dst,Gm<T>(ptr,offset),p,pad);
+    }
+    __aicore__ inline void DrainStores() {
+        SetFlag<HardEvent::MTE3_V>(EVENT_ID0);WaitFlag<HardEvent::MTE3_V>(EVENT_ID0);
+    }
+    template<class T> __aicore__ inline void Store(GM_ADDR ptr,uint64_t offset,
+        LocalTensor<T> src,uint32_t count) {
+        DataCopyExtParams p{1,static_cast<uint32_t>(count*sizeof(T)),0,0,0};
+        DataCopyPad(Gm<T>(ptr,offset),src,p);
+    }
+    template<class T> __aicore__ inline void Write(GM_ADDR ptr,uint64_t offset,
+        LocalTensor<T> src,uint32_t count,bool drain=true) {
+        VToMte3();Store(ptr,offset,src,count);if(drain)DrainStores();
+    }
+    __aicore__ inline void RowMultiply(LocalTensor<float> dst,LocalTensor<float> src,
+        LocalTensor<float> broadcast,uint32_t rows,uint32_t width) {
+        BinaryRepeatParams p{1,1,0,static_cast<uint8_t>(width/8),
+            static_cast<uint8_t>(width/8),1};
+        Mul(dst,src,broadcast,64,rows,p);
+        if(width==128) Mul(dst[64],src[64],broadcast,64,rows,p);
+        VBarrier();
+    }
+    __aicore__ inline void Normalize(LocalTensor<bfloat16_t> src,LocalTensor<float> rstd) {
+        Duplicate(rstd,1.0F,64);VBarrier();
+        if constexpr(Norm==1) {
+            auto values=work_,squares=work_[8192],ones=small_[1536];
+            uint32_t rows=w_.rows,count=rows*128;
+            Cast(values,src,RoundMode::CAST_NONE,count);VBarrier();
+            Mul(squares,values,values,count);VBarrier();
+            BinaryRepeatParams pairs{1,1,1,16,16,16};
+            Add(squares,squares,squares[64],64,rows,pairs);VBarrier();
+            WholeReduceSum(rstd,squares,64,rows,1,1,16);VBarrier();
+            Adds(rstd,rstd,a_.tiling.epsilon,rows);VBarrier();
+            Sqrt(rstd,rstd,rows);VBarrier();
+            Duplicate(ones,1.0F,64);VBarrier();
+            Div(rstd,ones,rstd,rows);VBarrier();
+            Brcb(blocks_,rstd,8,{1,8});VBarrier();
+            RowMultiply(values,values,blocks_,rows,128);
+            Cast(src,values,RoundMode::CAST_RINT,count);VBarrier();
+        }
+    }
+    __aicore__ inline void Prepare() {
+        Duplicate(q_,bfloat16_t(0),8192);Duplicate(k_,bfloat16_t(0),8192);
+        Duplicate(g_,0.0F,8192);Duplicate(beta_,0.0F,64);VBarrier();
+        const auto &t=a_.tiling;uint32_t h=w_.head[lane_],qh=w_.qh[lane_];
+        Read(q_,a_.q,In(t,w_,qh,t.qkHeadNum,128),w_.rows,128,t.qkHeadNum);
+        Read(k_,a_.k,In(t,w_,qh,t.qkHeadNum,128),w_.rows,128,t.qkHeadNum);
+        Read(g_,a_.rawGate,In(t,w_,h,t.valueHeadNum,128),w_.rows,128,t.valueHeadNum);
+        auto raw=small_[2048].template ReinterpretCast<bfloat16_t>();
+        if(t.inputSequenceMajor) Read(raw,a_.beta,In(t,w_,h,t.valueHeadNum,1),w_.rows,1,t.valueHeadNum);
+        else Read(raw,a_.beta,In(t,w_,h,t.valueHeadNum,1),1,w_.rows,t.valueHeadNum,false);
+        if constexpr(Gate!=0) {
+            Read(small_[384],a_.aLog,h,1,1,1,false);
+            if(t.hasDtBias) Read(bias_,a_.dtBias,uint64_t(h)*128,1,128,1,false);
+        }
+        Mte2ToV();
+        if(t.inputSequenceMajor) {
+            SetFlag<HardEvent::MTE2_S>(EVENT_ID0);WaitFlag<HardEvent::MTE2_S>(EVENT_ID0);
+            auto packed=small_[2560].template ReinterpretCast<bfloat16_t>();
+            for(uint32_t r=0;r<w_.rows;++r)packed.SetValue(r,raw.GetValue(r*16));
+            SToV();Cast(beta_,packed,RoundMode::CAST_NONE,w_.rows);
+        } else Cast(beta_,raw,RoundMode::CAST_NONE,w_.rows);
+        VBarrier();
+        if(t.betaMode!=0) {
+            Muls(beta_,beta_,-1.0F,w_.rows);VBarrier();
+            Exp(beta_,beta_,w_.rows);VBarrier();
+            Adds(beta_,beta_,1.0F,w_.rows);VBarrier();
+            Duplicate(small_[1536],1.0F,w_.rows);VBarrier();
+            Div(beta_,small_[1536],beta_,w_.rows);VBarrier();
+            if(t.betaMode==2){Muls(beta_,beta_,2.0F,w_.rows);VBarrier();}
+        }
+        Normalize(q_,qr_);Normalize(k_,kr_);
+        if(t.outputMode==1||t.outputMode==2) {
+            VToMte3(); // Checkpoints remain read-only until the score batch is drained.
+            if(w_.owner[lane_]) {
+                Store(a_.qHat,Out(t,w_,qh,t.qkHeadNum,128),q_,w_.rows*128);
+                Store(a_.kHat,Out(t,w_,qh,t.qkHeadNum,128),k_,w_.rows*128);
+                Store(a_.qRstd,Out(t,w_,qh,t.qkHeadNum,1),qr_,w_.rows);
+                Store(a_.kRstd,Out(t,w_,qh,t.qkHeadNum,1),kr_,w_.rows);
+            }
+            Store(a_.betaEff,Out(t,w_,h,t.valueHeadNum,1),beta_,w_.rows);
+        }
+        GatePrefix();
+        Write(a_.gk,Out(t,w_,h,t.valueHeadNum,128),g_,w_.rows*128,false);
+    }
+    __aicore__ inline void GatePrefix() {
+        uint32_t count=w_.rows*128;
+        if constexpr(Gate!=0) {
+            Exp(small_[384],small_[384],1);VBarrier();VToS();
+            float a=small_.GetValue(384);
+            if(a_.tiling.hasDtBias) {
+                BinaryRepeatParams p{1,1,1,16,16,0};
+                Add(g_,g_,bias_,64,w_.rows,p);
+                Add(g_[64],g_[64],bias_[64],64,w_.rows,p);VBarrier();
+            }
+            if constexpr(Gate==2) {
+                Muls(work_,g_,-a,count);VBarrier();Exp(work_,work_,count);VBarrier();
+                Adds(work_,work_,1.0F,count);VBarrier();Duplicate(g_,a_.tiling.lowerBound,count);VBarrier();
+                Div(g_,g_,work_,count);VBarrier();
+            } else {
+                // Compensated log1p(exp(-abs(x))); preserve small Softplus steps.
+                for(uint32_t begin=0;begin<w_.rows;begin+=32) {
+                    uint32_t n=(w_.rows-begin<32?w_.rows-begin:32)*128;
+                    auto x=g_[begin*128],u=work_,sum=work_[4096];
+                    auto residual=q_[8192].template ReinterpretCast<float>();
+                    Abs(u,x,n);VBarrier();Muls(u,u,-1.0F,n);VBarrier();Exp(u,u,n);VBarrier();
+                    Adds(sum,u,1.0F,n);VBarrier();Adds(residual,sum,-1.0F,n);VBarrier();
+                    Sub(residual,u,residual,n);VBarrier();Div(residual,residual,sum,n);VBarrier();
+                    Ln(u,sum,n);VBarrier();Add(u,u,residual,n);VBarrier();
+                    Maxs(x,x,0.0F,n);VBarrier();Add(u,u,x,n);VBarrier();Muls(x,u,-a,n);VBarrier();
+                }
+            }
+        }
+        // Padded input rows are zero. All scans stop at this work's 64-row chunk.
+        // Association differs from sequential FP32: this is separately native-tested.
+        BinaryRepeatParams local{1,1,1,128,128,128};
+        for(uint32_t r=1;r<8;++r) {
+            Add(g_[r*128],g_[r*128],g_[(r-1)*128],64,8,local);
+            Add(g_[r*128+64],g_[r*128+64],g_[(r-1)*128+64],64,8,local);VBarrier();
+        }
+        for(uint32_t block=1;block<8;++block) {
+            uint32_t last=(block+1)*8-1,previous=block*8-1;
+            Add(g_[last*128],g_[last*128],g_[previous*128],128);VBarrier();
+        }
+        BinaryRepeatParams carry{1,1,1,16,16,0};
+        for(uint32_t block=1;block<8;++block) {
+            uint32_t first=block*8,previous=first-1;
+            Add(g_[first*128],g_[first*128],g_[previous*128],64,7,carry);
+            Add(g_[first*128+64],g_[first*128+64],g_[previous*128+64],64,7,carry);
+        }
+        VBarrier();
+        if(a_.tiling.useExp2){Muls(g_,g_,1.4426950408889634F,count);VBarrier();}
+    }
+    template<bool Exp2> __aicore__ inline void Factor(LocalTensor<float> f,
+        uint32_t count,float lo,float hi) {
+        float scale=Exp2?1.0F:0.6931471805599453F;
+        Maxs(f,f,lo*scale,count);VBarrier();Mins(f,f,hi*scale,count);VBarrier();
+        if constexpr(Exp2){Muls(f,f,0.6931471805599453F,count);VBarrier();}
+        Exp(f,f,count);VBarrier();
+    }
+    __aicore__ inline void Difference(LocalTensor<float> dst,uint32_t begin,
+        uint32_t reference,uint32_t rows,bool negative,bool fence=true) {
+        BinaryRepeatParams p{1,1,1,16,static_cast<uint8_t>(negative?0:16),
+            static_cast<uint8_t>(negative?16:0)};
+        for(uint32_t half=0;half<2;++half) {
+            auto x=g_[begin*128+64*half],ref=g_[reference*128+64*half];
+            if(negative)Sub(dst[64*half],ref,x,64,rows,p);
+            else Sub(dst[64*half],x,ref,64,rows,p);
+        }
+        if(fence)VBarrier();
+    }
+    __aicore__ inline LocalTensor<bfloat16_t> MinusBuffer(uint32_t band) {
+        if(band<2)return v_[band*2048];
+        if(band==2)return q_[8192];
+        return k_[8192];
+    }
+    template<bool Exp2> __aicore__ inline void ScorePayload() {
+        auto factor=work_,values=work_[8192];auto qOut=q_[8192],kOut=k_[8192];
+        uint32_t bands=(w_.rows+15)/16,count=bands*2048;
+        for(uint32_t band=0;band<bands;++band) {
+            uint32_t begin=band*16,end=w_.rows<begin+16?w_.rows:begin+16;
+            Difference(factor[begin*128],begin,(begin+end)/2,16,false,false);
+        }
+        VBarrier();Factor<Exp2>(factor,count,-126,120);
+        Cast(values,q_,RoundMode::CAST_NONE,count);VBarrier();
+        Mul(values,values,factor,count);VBarrier();Cast(qOut,values,RoundMode::CAST_RINT,count);VBarrier();
+        Cast(values,k_,RoundMode::CAST_NONE,count);VBarrier();
+        Mul(values,values,factor,count);VBarrier();Cast(kOut,values,RoundMode::CAST_RINT,count);VBarrier();
+        VToMte3();
+        Store(a_.workspace+base_+Payload,0,qOut,count);
+        Store(a_.workspace+base_+Payload+0x4000,0,kOut,count);
+        DrainStores(); // Upper Q/K may now become K- sources, preserving their lifetime.
+        for(uint32_t band=0;band<bands;++band) {
+            uint32_t begin=band*16,end=w_.rows<begin+16?w_.rows:begin+16;
+            uint32_t n=16*(band+1);
+            Difference(factor,0,(begin+end)/2,n,true);Factor<Exp2>(factor,n*128,-126,120);
+            Cast(values,k_,RoundMode::CAST_NONE,n*128);VBarrier();
+            Mul(values,values,factor,n*128);VBarrier();
+            Cast(MinusBuffer(band),values,RoundMode::CAST_RINT,n*128);VBarrier();
+        }
+        VToMte3();
+        for(uint32_t band=0;band<bands;++band)
+            Store(a_.workspace+base_+Payload+MinusOffset(band),0,MinusBuffer(band),16*(band+1)*128);
+        DrainStores(); // All three BF16 source buffers are now available to current RHS.
+    }
+    template<bool Exp2> __aicore__ inline void RhsAndOutputs() {
+        const auto &t=a_.tiling;uint32_t count=w_.rows*128,h=w_.head[lane_];
+        auto factor=work_,values=work_[8192];auto rhs=q_[8192],qg=k_[8192];
+        Brcb(blocks_,beta_,8,{1,8});VBarrier();
+        Adds(factor,g_,0.0F,count);VBarrier();Factor<Exp2>(factor,count,-80,80);
+        Cast(values,k_,RoundMode::CAST_NONE,count);VBarrier();Mul(values,values,factor,count);VBarrier();
+        Cast(rhs,values,RoundMode::CAST_RINT,count);VBarrier();Cast(values,rhs,RoundMode::CAST_NONE,count);VBarrier();
+        RowMultiply(values,values,blocks_,w_.rows,128);
+        Duplicate(rhs,bfloat16_t(0),8192);VBarrier();Cast(rhs,values,RoundMode::CAST_RINT,count);VBarrier();
+        Write(a_.workspace+base_+RhsK,0,rhs,8192,false);
+        Cast(values,q_,RoundMode::CAST_NONE,count);VBarrier();Mul(values,values,factor,count);VBarrier();
+        Cast(qg,values,RoundMode::CAST_RINT,count);VBarrier();
+        if(t.outputMode==2)Write(a_.qg,Out(t,w_,h,t.valueHeadNum,128),qg,count,false);
+        Cast(values,qg,RoundMode::CAST_NONE,count);VBarrier();Muls(values,values,t.scale,count);VBarrier();
+        Cast(v_,values,RoundMode::CAST_RINT,count);VBarrier();
+        Write(a_.qgScaled,Out(t,w_,h,t.valueHeadNum,128),v_,count,false);
+        DrainStores(); // Release RHS/qg/scaled sources before using the three buffers again.
+        Difference(factor,0,w_.rows-1,w_.rows,true);Factor<Exp2>(factor,count,-80,80);
+        Cast(values,k_,RoundMode::CAST_NONE,count);VBarrier();Mul(values,values,factor,count);VBarrier();
+        Cast(v_,values,RoundMode::CAST_RINT,count);VBarrier();
+        Write(a_.kg,Out(t,w_,h,t.valueHeadNum,128),v_,count,false);
+        Duplicate(qg,bfloat16_t(0),8192);VBarrier();
+        Read(qg,a_.v,In(t,w_,h,t.valueHeadNum,128),w_.rows,128,t.valueHeadNum);Mte2ToV();
+        Cast(values,qg,RoundMode::CAST_NONE,count);VBarrier();RowMultiply(values,values,blocks_,w_.rows,128);
+        Duplicate(rhs,bfloat16_t(0),8192);VBarrier();Cast(rhs,values,RoundMode::CAST_RINT,count);VBarrier();
+        Write(a_.workspace+base_+RhsV,0,rhs,8192,false);
+    }
+    __aicore__ inline void LowerAndAqk() {
+        // Cross-core raw-ready orders GM production, not this AIV's preceding
+        // RHS vector consumer of work_. Retire that UB reader before raw DMA.
+        SetFlag<HardEvent::V_MTE2>(EVENT_ID0);WaitFlag<HardEvent::V_MTE2>(EVENT_ID0);
+        auto raw=Gm<float>(a_.workspace+base_+Raw);PublishCache(raw);
+        uint32_t bands=(w_.rows+15)/16;
+        for(uint32_t s=0;s<bands;++s) {
+            uint32_t n=16*(s+1),offset=256*s*(s+1);
+            DataCopyExtParams p{32,n*4,(64-n)*4,0,0};
+            DataCopyPadExtParams<float> pad{false,0,0,0};
+            DataCopyPad(work_[offset],raw[s*2048],p,pad);
+        }
+        Mte2ToV();DrainStores(); // kg uses v_, which becomes the Aqk buffer below.
+        Duplicate(q_,bfloat16_t(0),4096);
+        Duplicate(v_,bfloat16_t(0),4096);VBarrier();
+        // Four independent 16-row bands replace the scalar row/beta dispatch.
+        Muls(small_[256],beta_,-1.0F,64);VBarrier();
+        Brcb(blocks_,small_[256],8,{1,8});VBarrier();
+        for(uint32_t band=0;band<bands;++band) {
+            uint32_t n=16*(band+1),pack=256*band*(band+1),begin=band*16;
+            auto qraw=work_[pack],kraw=work_[pack+16*n],tmp=work_[8192];
+            UnaryRepeatParams cast{1,1,4,static_cast<uint8_t>(n/8)};
+            Muls(tmp,qraw,a_.tiling.scale,16*n);VBarrier();
+            Cast(v_[begin*64],tmp,RoundMode::CAST_RINT,n,16,cast);VBarrier();
+            BinaryRepeatParams mul{1,1,0,static_cast<uint8_t>(n/8),static_cast<uint8_t>(n/8),1};
+            Mul(tmp,kraw,blocks_[begin*8],n,16,mul);VBarrier();
+            Cast(q_[begin*64],tmp,RoundMode::CAST_RINT,n,16,cast);VBarrier();
+        }
+        // Matrix rows do not overlap. One barrier retires all independent masks.
+        for(uint32_t r=0;r<64;++r) {
+            uint64_t mask[2]={~uint64_t(0)<<r,0};
+            Duplicate(q_[r*64],bfloat16_t(0),mask,1,1,8);
+            if(r<63) {
+                mask[0]=~uint64_t(0)<<(r+1);
+                Duplicate(v_[r*64],bfloat16_t(0),mask,1,1,8);
+            }
+        }
+        VBarrier();
+        Write(a_.aqk,Out(a_.tiling,w_,w_.head[lane_],a_.tiling.valueHeadNum,64),v_,w_.rows*64);
+        if(a_.tiling.outputMode!=0) {
+            Duplicate(v_,bfloat16_t(0),4096);VBarrier();
+            Write(a_.akk,Out(a_.tiling,w_,w_.head[lane_],a_.tiling.valueHeadNum,64),v_,w_.rows*64,false);
+        }
+        Write(a_.workspace+base_+Lower,0,q_,4096,false);
+        DrainStores(); // Next work may now overwrite Q/K and all checkpoint sources.
+    }
+    __aicore__ inline void IdentityOnce() {
+        Duplicate(k_,bfloat16_t(0),4096);VBarrier();VToS();
+        for(uint32_t r=0;r<64;++r)k_.SetValue(r*64+r,bfloat16_t(1));
+        SToV();
+        // Private immutable GM regions. Both complete before the first score-ready.
+        for(uint32_t slot=0;slot<2;++slot)
+            Write(a_.workspace+GmLane(core_,slot,lane_)+Eye,0,k_,4096);
+    }
+
+public:
+    __aicore__ inline void Init(const PrepareKernelArgs &a,TPipe *pipe) {
+        a_=a;pipe_=pipe;uint32_t sub=GetSubBlockNum();core_=GetBlockIdx()/sub;lane_=GetSubBlockIdx();
+        pipe_->InitBuffer(ub_,UbBytes);auto bytes=ub_.template Get<uint8_t>();
+        q_=bytes[UbQ].template ReinterpretCast<bfloat16_t>();k_=bytes[UbK].template ReinterpretCast<bfloat16_t>();
+        g_=bytes[UbG].template ReinterpretCast<float>();work_=bytes[UbWork].template ReinterpretCast<float>();
+        v_=bytes[UbV].template ReinterpretCast<bfloat16_t>();small_=bytes[UbSmall].template ReinterpretCast<float>();
+        qr_=small_;kr_=small_[64];beta_=small_[128];bias_=small_[256];blocks_=small_[1024];
+        if(core_<a_.tiling.usedCoreNum)IdentityOnce();
+    }
+    __aicore__ inline void Process() {
+        if(core_>=a_.tiling.usedCoreNum)return;
+        uint32_t generation=0;
+        for(uint64_t job=core_;job<WorkCount(a_.tiling);job+=a_.tiling.usedCoreNum,++generation) {
+            uint32_t slot=generation&1;w_=Describe(a_,job);base_=GmLane(core_,slot,lane_);
+            CrossCoreWaitFlag<0x2,PIPE_MTE3>(6+slot);
+            if(w_.active[lane_]&&w_.rows) {
+                Prepare();
+                if(a_.tiling.useExp2)ScorePayload<true>();else ScorePayload<false>();
+            }
+            PublishCache(Gm<uint8_t>(a_.workspace+base_));
+            CrossCoreSetFlag<0x2,PIPE_MTE3>(slot);
+            if(w_.active[lane_]&&w_.rows) {
+                if(a_.tiling.useExp2)RhsAndOutputs<true>();else RhsAndOutputs<false>();
+            }
+            CrossCoreSetFlag<0x2,PIPE_MTE3>(RhsReadyBase+slot);
+            CrossCoreWaitFlag<0x2,PIPE_MTE2>(2+slot);
+            if(w_.active[lane_]&&w_.rows)LowerAndAqk();
+            PublishCache(Gm<uint8_t>(a_.workspace+base_));
+            CrossCoreSetFlag<0x2,PIPE_MTE3>(4+slot);
+        }
+        CrossCoreWaitFlag<0x2,PIPE_MTE3>(6);
+        CrossCoreWaitFlag<0x2,PIPE_MTE3>(7);
+    }
+};
+}

@@ -11,6 +11,15 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
     LocalTensor<float> g_,work_,small_,qr_,kr_,beta_,bias_,blocks_;
     Work w_; uint64_t base_;
     bool aLogCached_=false;
+    template<class T> __aicore__ inline void BindTensor(LocalTensor<T> &dst,
+        const LocalTensor<uint8_t> &allocation,uint32_t offset,uint32_t bytes) {
+        TBuffAddr address{};
+        address.logicPos=static_cast<uint8_t>(TPosition::VECCALC);
+        address.bufferHandle=allocation.GetBufferHandle();
+        address.bufferAddr=static_cast<uint32_t>(allocation.GetPhyAddr())+offset;
+        address.dataLen=bytes;
+        dst.SetAddr(address);
+    }
     template<class T> __aicore__ inline void Read(LocalTensor<T> dst,GM_ADDR ptr,
         uint64_t offset,uint32_t rows,uint32_t width,uint32_t heads,bool strided=true,bool streaming=false) {
         // A DMA must not reuse UB while an earlier vector producer still writes it.
@@ -415,10 +424,14 @@ public:
     __aicore__ inline Vector(const PrepareKernelArgs &a):a_(a) {}
     __aicore__ inline void Init(const PrepareKernelArgs &a,TPipe *pipe) {
         pipe_=pipe;uint32_t sub=GetSubBlockNum();core_=GetBlockIdx()/sub;lane_=GetSubBlockIdx();
-        pipe_->InitBuffer(ub_,UbBytes);auto bytes=ub_.template Get<uint8_t>();
-        q_=bytes[UbQ].template ReinterpretCast<bfloat16_t>();k_=bytes[UbK].template ReinterpretCast<bfloat16_t>();
-        g_=bytes[UbG].template ReinterpretCast<float>();work_=bytes[UbWork].template ReinterpretCast<float>();
-        v_=bytes[UbV].template ReinterpretCast<bfloat16_t>();small_=bytes[UbSmall].template ReinterpretCast<float>();
+        pipe_->InitBuffer(ub_,UbBytes);
+        // TBuf still owns the same single UB allocation. Explicitly initialize
+        // every descriptor field before it persists across stages.
+        auto bytes=ub_.template Get<uint8_t>();
+        BindTensor(q_,bytes,UbQ,UbK-UbQ);BindTensor(k_,bytes,UbK,UbG-UbK);
+        BindTensor(g_,bytes,UbG,UbWork-UbG);BindTensor(work_,bytes,UbWork,UbV-UbWork);
+        BindTensor(v_,bytes,UbV,UbSmall-UbV);BindTensor(small_,bytes,UbSmall,UbMask-UbSmall);
+        BindTensor(triangle_,bytes,UbMask,UbBytes-UbMask);
         qr_=small_;kr_=small_[64];beta_=small_[128];bias_=small_[256];blocks_=small_[1024];
         triangle_=bytes[UbMask];
         if(core_<a_.tiling.usedCoreNum){

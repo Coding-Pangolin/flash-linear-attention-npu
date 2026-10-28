@@ -117,8 +117,10 @@ beta DMA [0x2e000,0x2e800)，BF16 pack [0x2e800,0x2e880)。
 sequence-major beta的有界tile按2.4读取，不再每标量启动一行DMA。
 只读索引：beta Small[2816,2880)即UB[0x2ec00,0x2ed00)；Identity叶内Gather
 Small[2880,2944)即UB[0x2ed00,0x2ee00)。二者与ALog缓存/临时量不重叠。
-Identity叶内阶段复用Small[0,512)、[512,1024)为两个2KiB系数广播缓冲，
-Small[1536,1600)为两份当前行，[2048,2112)为下一列系数。
+Identity叶内阶段复用Small[1536,1600)为两份当前行。
+Lower store经MTE3_V退休后，UB[UbQ,UbG)整64KiB用于最多31列的系数广播；
+work_[2048,4096)为最多1984个int32索引，[4096,6144)为对应FP32系数，
+与前8KiB叶逆及g_中FP32 Lower互不重叠。
 qr/kr/beta/bias已完成本work末次读取才能覆盖；ALog和两个只读索引始终保留。
 FP32 beta 直接保留低位，不经 BF16 中转；FP32 beta_eff 按真实值写回。
 
@@ -203,8 +205,11 @@ Identity key将未Cast的FP32负Lower另存已经退休的g_[0:4096]。
 LeafInverse32从私有Eye加载完整64行padding模板至v_，两个32阶对角块Cast为FP32，
 按64行×32列打包至work_[0:2048]。依次k=0..min(r-1,31)：
 `X[i,:] += (-L)[i,k] * X[k,:]`，两叶互相独立；strict mask令i<=k系数为0。
-第k步复制当前X行时Gather下一列，第k步MulAddDst时Brcb下一列；两个系数广播区轮换，
-每步两个PIPE_V屏障，均无部分覆盖。FP32叶内结果一次CAST_RINT为BF16并填回v_对角块。
+先统一生成各k列索引，一次Gather所有64×steps个系数，再一次Brcb到已退休的Q/K区；
+steps<=31、Brcb最多248个repeat，广播区最大62KiB。
+第k次仅更新行k+1..31，跳过精确零系数；第二叶仅在r>32时执行对应更新。
+非零更新保持原k顺序和FP32 MulAddDst；每步两个PIPE_V屏障，无部分覆盖。
+FP32叶内结果一次CAST_RINT为BF16并填回v_对角块。
 其余零/单位padding保留，写私有Payload低8KiB；该区最后score消费者已由raw-ready释放。
 启用Akk时同时写全部有效行的对角叶块和零区，后续Cube写跨32行下块。
 
@@ -232,9 +237,6 @@ L2读取BF16 P/Power、Eye到X及首次常驻I；四个16阶叶子通过4轮幂�
 不同lane的A/B bank独立，当前lane MMAD时预载下一lane。
 L1 lane free只在最后LoadA/LoadB完成后发布，不能用GM slot free代替。
 
-Identity叶内第k次消元仅更新行k+1..31；strict Lower保证此前各行系数精确为零。
-每个非零更新保持原先k顺序及FP32 MulAddDst，BF16转换和relay位置不变。
-这是独立指令量实验，需通过冻结数值及同输入ABBA后才可采用。
 
 ### 2.3 事件、复用与退出
 
@@ -328,11 +330,3 @@ Vector/Cube 在构造时绑定同一份只读 PrepareKernelArgs 引用，避免�
 独占guard、运行tag。日常可只读引用已验证双参考缓存，DUT须新算；交付ATK另库保持独立运行。
 代码设计文档不混入某次实验的临时“通过”声明；最终验证与性能原始证据由独立交付件绑定。
 未通过合同明确记录，不以模型平均收益抵消逐例回退，不以原窄合同fast替代本实现验收。
-
-### Identity coefficient batching experiment
-
-Lower的GM store完成后退休Q/K并将UB[UbQ,UbG)64KiB复用于31列系数广播；
-work[2048,4096)存最多1984个int32索引，work[4096,6144)存对应FP32系数。
-inverse仍仅使用work[0,2048)，g[0,4096)保留FP32 Lower，三者不重叠。
-一次Gather及Brcb替代逐k准备，非零FMA顺序和BF16发布点保持不变。
-这是独立指令组织实验，精度和ABBA通过后才能采用；不扩大UB或跨核事件。

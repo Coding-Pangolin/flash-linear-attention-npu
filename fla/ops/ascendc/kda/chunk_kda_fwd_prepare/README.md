@@ -1,6 +1,6 @@
 # ChunkKdaFwdPrepare
 
-[设计文档](docs/design.md) | [API 文档](docs/api.md)
+[A2设计文档](docs/design_a2.md) | [API 文档](docs/api.md)
 
 ## 功能
 

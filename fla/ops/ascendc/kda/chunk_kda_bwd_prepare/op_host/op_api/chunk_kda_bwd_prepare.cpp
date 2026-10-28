@@ -33,7 +33,7 @@ const std::array<const aclTensor *, 3> ChunkKdaBwdPrepare(
                 return {nullptr, nullptr, nullptr};
             }
             if (chunkSize != 64 || cuSeqlensOptional->Size() < 2 ||
-                cuSeqlensOptional->Size() > 1025 || (*cuSeqlensOptional)[0] != 0 ||
+                (*cuSeqlensOptional)[0] != 0 ||
                 (*cuSeqlensOptional)[cuSeqlensOptional->Size() - 1] != shape.T) {
                 return {nullptr, nullptr, nullptr};
             }

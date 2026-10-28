@@ -76,7 +76,7 @@ public:
             auto cu = ctx_.cuSeqlensShape->GetStorageShape();
             auto indices = ctx_.chunkIndicesShape->GetStorageShape();
             if (cu.GetDimNum() != 1 || indices.GetDimNum() != 1 ||
-                cu.GetDim(0) < 2 || cu.GetDim(0) > 1025 ||
+                cu.GetDim(0) < 2 ||
                 chunks > std::numeric_limits<int64_t>::max() / 2 ||
                 indices.GetDim(0) != 2 * chunks) return Fail("metadata shapes");
             tiling_.seqNum = cu.GetDim(0) - 1;

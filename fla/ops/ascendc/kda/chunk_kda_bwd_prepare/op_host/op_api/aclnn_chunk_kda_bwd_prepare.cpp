@@ -81,8 +81,8 @@ aclnnStatus ValidateMetadata(
     const aclIntArray *cu, const aclIntArray *indices, int64_t totalTokens,
     int64_t chunkSize, int64_t expectedChunks)
 {
-    if (cu->Size() < 2 || cu->Size() > 1025) {
-        return InvalidValue("cu_seqlens.size", std::to_string(cu->Size()), "[2,1025]");
+    if (cu->Size() < 2) {
+        return InvalidValue("cu_seqlens.size", std::to_string(cu->Size()), ">=2");
     }
     if ((*cu)[0] != 0 || (*cu)[cu->Size() - 1] != totalTokens) {
         return InvalidArgument("cu_seqlens", "must start at 0 and end at T=" + std::to_string(totalTokens));

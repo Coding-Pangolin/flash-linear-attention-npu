@@ -4,8 +4,8 @@
  * the BSD 3-Clause License (the "License").
  */
 
-#include "../chunk_kda_fwd_prepare_tiling_processor.h"
-#include "../chunk_kda_fwd_prepare_output_mask.h"
+#include "fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_host/chunk_kda_fwd_prepare_tiling_processor.h"
+#include "fla/ops/ascendc/kda/chunk_kda_fwd_prepare/op_host/chunk_kda_fwd_prepare_output_mask.h"
 
 #include <cstdint>
 #include <limits>

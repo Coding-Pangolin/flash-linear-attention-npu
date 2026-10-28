@@ -415,6 +415,9 @@ _GET_WORKSPACE_ARGTYPES = {
         ctypes.c_bool,
         ctypes.c_bool,
         ctypes.c_bool,
+        *([ctypes.c_void_p] * 2),  # q/k rstd
+        ctypes.c_char_p, ctypes.c_char_p,
+        ctypes.c_bool, ctypes.c_bool,
         *([ctypes.c_void_p] * 8),
         ctypes.POINTER(ctypes.c_uint64),
         ctypes.POINTER(ctypes.c_void_p),
@@ -431,6 +434,7 @@ _GET_WORKSPACE_ARGTYPES = {
         ctypes.c_int64,
         ctypes.c_bool,
         ctypes.c_double,
+        ctypes.c_char_p,
         *([ctypes.c_void_p] * 5),
         ctypes.POINTER(ctypes.c_uint64),
         ctypes.POINTER(ctypes.c_void_p),
@@ -605,6 +609,15 @@ def npu_prepare_wy_repr_bwd_full(
     cu_seqlens=None,
     chunk_indices=None,
 ):
+    import warnings
+
+    warnings.warn(
+        "fla_npu.ops.ascendc.npu_prepare_wy_repr_bwd_full is a deprecated API "
+        "and will be removed on January 15, 2027 (v26.12.0). Use the fused "
+        "npu_chunk_gated_delta_rule_bwd instead.",
+        FutureWarning,
+        stacklevel=4,
+    )
     dk = _empty_like(k)
     dv = _empty_like(v)
     dbeta = _empty_like(beta)
@@ -646,6 +659,15 @@ def npu_prepare_wy_repr_bwd(
     cu_seqlens=None,
     chunk_indices=None,
 ):
+    import warnings
+
+    warnings.warn(
+        "fla_npu.ops.ascendc.npu_prepare_wy_repr_bwd is a deprecated API "
+        "and will be removed on January 15, 2027 (v26.12.0). Use the fused "
+        "npu_chunk_gated_delta_rule_bwd instead.",
+        FutureWarning,
+        stacklevel=4,
+    )
     dk = _empty_like(k)
     dv = _empty_like(v)
     dbeta = _empty_like(beta)
@@ -1289,6 +1311,15 @@ def npu_chunk_bwd_dv_local(
     cu_seqlens=None,
     chunk_indices=None,
 ):
+    import warnings
+
+    warnings.warn(
+        "fla_npu.ops.ascendc.npu_chunk_bwd_dv_local is a deprecated API "
+        "and will be removed on January 15, 2027 (v26.12.0). Use the fused "
+        "npu_chunk_gated_delta_rule_bwd instead.",
+        FutureWarning,
+        stacklevel=4,
+    )
     out = _empty_like(d_o)
     return _call_aclnn(
         "aclnnChunkBwdDvLocal",
@@ -1408,6 +1439,15 @@ def npu_prepare_wy_repr_bwd_da(
     cu_seqlens=None,
     chunk_indices=None,
 ):
+    import warnings
+
+    warnings.warn(
+        "fla_npu.ops.ascendc.npu_prepare_wy_repr_bwd_da is a deprecated API "
+        "and will be removed on January 15, 2027 (v26.12.0). Use the fused "
+        "npu_chunk_gated_delta_rule_bwd instead.",
+        FutureWarning,
+        stacklevel=4,
+    )
     out = _empty_like(A)
     return _call_aclnn(
         "aclnnPrepareWyReprBwdDa",
@@ -1447,6 +1487,15 @@ def npu_chunk_bwd_dqkwg(
     use_exp2=None,
     transpose_state_layout=None,
 ):
+    import warnings
+
+    warnings.warn(
+        "fla_npu.ops.ascendc.npu_chunk_bwd_dqkwg is a deprecated API "
+        "and will be removed on January 15, 2027 (v26.12.0). Use the fused "
+        "npu_chunk_gated_delta_rule_bwd instead.",
+        FutureWarning,
+        stacklevel=4,
+    )
     import torch
 
     # 参数校验: None/标量/维度错误/dtype 错误在 Python 侧崩溃或只会触发 CANN
@@ -2034,6 +2083,16 @@ def npu_recompute_w_u_fwd(
     cu_seqlens=None,
     chunk_indices=None,
 ):
+    import warnings
+
+    warnings.warn(
+        "fla_npu.ops.ascendc.npu_recompute_w_u_fwd is a deprecated API "
+        "and will be removed on January 15, 2027 (v26.12.0). Use the fused "
+        "npu_chunk_gated_delta_rule_fwd / npu_chunk_gated_delta_rule_bwd "
+        "instead.",
+        FutureWarning,
+        stacklevel=4,
+    )
     w_shape = list(_shape(v))
     w_shape[3] = int(k.shape[3])
     w_out = _empty(w_shape, v, dtype=k.dtype)
@@ -2315,6 +2374,15 @@ def npu_chunk_local_cumsum(
     head_first=True,
     output_dtype="float32",
 ):
+    import warnings
+
+    warnings.warn(
+        "fla_npu.ops.ascendc.npu_chunk_local_cumsum is a deprecated API "
+        "and will be removed on January 15, 2027 (v26.12.0). Use the fused "
+        "npu_chunk_gated_delta_rule_fwd instead.",
+        FutureWarning,
+        stacklevel=4,
+    )
     output_dtype_name, out_dtype = _chunk_local_cumsum_output_dtype(g, output_dtype)
     g_contig = g.contiguous()
     out = _empty(_shape(g_contig), g_contig, dtype=out_dtype)
@@ -2345,6 +2413,15 @@ def npu_chunk_scaled_dot_kkt(
     chunk_indices=None,
     chunk_size=64,
 ):
+    import warnings
+
+    warnings.warn(
+        "fla_npu.ops.ascendc.npu_chunk_scaled_dot_kkt is a deprecated API "
+        "and will be removed on January 15, 2027 (v26.12.0). Use the fused "
+        "npu_chunk_gated_delta_rule_fwd instead.",
+        FutureWarning,
+        stacklevel=4,
+    )
     import torch
 
     B, Hv, T = _validate_chunk_scaled_dot_kkt(k, g, beta, cu_seqlens, chunk_indices, chunk_size)
@@ -2986,7 +3063,7 @@ def npu_causal_conv1d(
 
     warnings.warn(
         "fla_npu.ops.ascendc.npu_causal_conv1d is a deprecated compatibility "
-        "API and will be removed in 2027/02. Use causal_conv1d_fn or "
+        "API and will be removed on January 15, 2027 (v26.12.0). Use causal_conv1d_fn or "
         "causal_conv1d_update instead.",
         FutureWarning,
         stacklevel=4,
@@ -3331,6 +3408,53 @@ def _run_kda_bwd_optimized(args):
     return _call_aclnn("aclnnChunkKdaBwdV2",build,outputs)
 
 
+def _run_kda_bwd_arch22(args):
+    import torch
+    from ._kda_policy import _prepare_kda_bwd_arch22
+
+    bias_shape = None if args["dt_bias"] is None else args["dt_bias"].shape
+    a = _prepare_kda_bwd_arch22(args)
+    q = a["q"]
+    token, scalar = a["_output_token_shape"], a["_output_beta_shape"]
+    dq = _empty(token, q, dtype=torch.float32)
+    dk = _empty(token, q, dtype=torch.float32)
+    dv = _empty(token, q, dtype=torch.bfloat16)
+    db = _empty(scalar, q, dtype=torch.float32)
+    dg = _empty(token, q, dtype=torch.float32)
+    heads = a["beta"].shape[0 if a["cu_seqlens"] is not None else 1]
+    da = _empty((heads,), q, dtype=torch.float32) if a["use_gate_in_kernel"] else None
+    dbias = (_empty(bias_shape, q, dtype=torch.float32)
+             if a["use_gate_in_kernel"] and bias_shape is not None else None)
+    outputs = (dq, dk, dv, db, dg, None, da, dbias)
+
+    def build(ctx):
+        def nd(x, name):
+            return ctx.tensor(x, name, acl_format_override=ACL_FORMAT_ND,
+                              storage_shape_override=tuple(x.shape) if x is not None else None)
+
+        values = [nd(a[name], name) for name in (
+            "q", "k", "v", "beta", "gk", "Aqk", "Akk", "w", "qg", "kg",
+            "v_new", "h", "d_o", "raw_g", "A_log", "dt_bias", "initial_state", "dht")]
+        values += [
+            ctx.int_array(a["cu_seqlens"]), ctx.int_array(a["chunk_indices"]),
+            ctypes.c_double(a["scale"]), ctypes.c_int64(a["chunk_size"]),
+            ctypes.c_bool(a["safe_gate"]), ctypes.c_bool(a["use_gate_in_kernel"]),
+            ctypes.c_double(a["lower_bound"]), ctypes.c_bool(a["disable_recompute"]),
+            ctypes.c_bool(a["use_exp2"]), ctypes.c_bool(a["state_v_first"]),
+            nd(a["q_rstd"], "q_rstd"), nd(a["k_rstd"], "k_rstd"),
+            ctypes.c_char_p(a["input_layout"].encode("utf-8")),
+            ctypes.c_char_p(a["output_layout"].encode("utf-8")),
+            ctypes.c_bool(a["use_beta_sigmoid_in_kernel"]), ctypes.c_bool(a["allow_neg_eigval"]),
+        ]
+        physical = (dq, dk, dv, db, dg, None, da,
+                    None if dbias is None else dbias.view(heads, 128))
+        values += [nd(value, name) for value, name in
+                   zip(physical, ("dq", "dk", "dv", "db", "dg", "dh0", "dA", "dbias"))]
+        return values
+
+    return _call_aclnn("aclnnChunkKdaBwd", build, outputs)
+
+
 def npu_chunk_kda_bwd(
     q,
     k,
@@ -3357,15 +3481,24 @@ def npu_chunk_kda_bwd(
     chunk_size=64,
     safe_gate=True,
     lower_bound=-5.0,
-    use_gate_in_kernel=False,
+    use_gate_in_kernel=True,
     disable_recompute=True,
     use_exp2=True,
     state_v_first=False,
     implementation="auto",
     q_rstd=None,
     k_rstd=None,
+    input_layout="BNSD",
+    output_layout="BNSD",
+    use_beta_sigmoid_in_kernel=False,
+    allow_neg_eigval=False,
 ):
-    """Run the canonical head-major fused KDA backward ACLNN operator.
+    """Run KDA backward through the platform's total ACLNN entry point.
+
+    Gate backward requires use_gate_in_kernel=True, raw_g and A_log.
+
+    A2/A3 support explicit input/output layouts via the L0 composition.
+    The legacy head-major policy below remains on the A5 fused path.
 
     Dense tensors use ``[B, H, T, D]`` and packed tensors use ``[H, T, D]``.
     ``Aqk/Akk/w/qg/kg/v_new/h/gk`` are the saved intermediates returned by
@@ -3376,7 +3509,15 @@ def npu_chunk_kda_bwd(
     ``None`` unless raw-gate backward is enabled.
     """
     import torch
+    from ._kda_policy import _is_kda_bwd_arch22, _validate_kda_bwd_a5_options
 
+    use_gate_in_kernel = _optional_bool(use_gate_in_kernel, True)
+    if not use_gate_in_kernel:
+        raise ValueError("npu_chunk_kda_bwd: use_gate_in_kernel must be True.")
+
+    if _is_kda_bwd_arch22(q):
+        return _run_kda_bwd_arch22(locals())
+    _validate_kda_bwd_a5_options(locals())
     if _select_kda_bwd_optimized(implementation, q_rstd, k_rstd, _optional_bool(disable_recompute, True)):
         return _run_kda_bwd_optimized(locals())
 
@@ -3400,7 +3541,6 @@ def npu_chunk_kda_bwd(
             "npu_chunk_kda_bwd: initial_state and dht are not supported by the current fused backward."
         )
 
-    use_gate_in_kernel = _optional_bool(use_gate_in_kernel, False)
     safe_gate = _optional_bool(safe_gate, True)
     if not safe_gate:
         raise RuntimeError(
@@ -3670,7 +3810,12 @@ def npu_chunk_kda_bwd(
             ctypes.c_double(float(scale)), ctypes.c_int64(chunk_size),
             ctypes.c_bool(safe_gate), ctypes.c_bool(use_gate_in_kernel),
             ctypes.c_double(lower_bound), ctypes.c_bool(True), ctypes.c_bool(True),
-            ctypes.c_bool(False), nd_tensor(ctx, dq, "dq"), nd_tensor(ctx, dk, "dk"),
+            ctypes.c_bool(False),
+            nd_tensor(ctx, None, "q_rstd"), nd_tensor(ctx, None, "k_rstd"),
+            ctypes.c_char_p(b"NTD" if is_varlen else b"BNSD"),
+            ctypes.c_char_p(b"NTD" if is_varlen else b"BNSD"),
+            ctypes.c_bool(False), ctypes.c_bool(False),
+            nd_tensor(ctx, dq, "dq"), nd_tensor(ctx, dk, "dk"),
             nd_tensor(ctx, dv, "dv"), nd_tensor(ctx, db, "db"), nd_tensor(ctx, dg, "dg"),
             nd_tensor(ctx, None, "dh0"), nd_tensor(ctx, d_a, "dA"), nd_tensor(ctx, d_bias, "dbias"),
         ],
@@ -4266,6 +4411,16 @@ def npu_kda_gate_cumsum(
     safe_gate=False,
     lower_bound=None,
 ):
+    import warnings
+
+    warnings.warn(
+        "fla_npu.ops.ascendc.npu_kda_gate_cumsum is a deprecated API "
+        "and will be removed on January 15, 2027 (v26.12.0). Use the fused "
+        "npu_chunk_kda_fwd instead.",
+        FutureWarning,
+        stacklevel=4,
+    )
+
     import torch
 
     out = _empty(_shape(g), g, dtype=torch.float32)
@@ -4789,9 +4944,12 @@ def npu_chunk_kda_bwd_recompute(
     use_gate_in_kernel=True,
     use_exp2=True,
     lower_bound=-5.0,
+    input_layout="BNSD",
 ):
     import torch
+    from ._kda_policy import _validate_kda_recompute_layout
 
+    _validate_kda_recompute_layout(input_layout)
     if chunk_size != 64:
         raise RuntimeError("npu_chunk_kda_bwd_recompute: chunk_size must be 64.")
     if q.dtype != torch.bfloat16 or k.dtype != torch.bfloat16 or v.dtype != torch.bfloat16:
@@ -4831,6 +4989,7 @@ def npu_chunk_kda_bwd_recompute(
             ctypes.c_int64(int(chunk_size)),
             ctypes.c_bool(bool(use_exp2)),
             ctypes.c_double(float(lower_bound)),
+            ctypes.c_char_p(input_layout.encode("utf-8")),
             ctx.tensor(w, "w"),
             ctx.tensor(u, "u"),
             ctx.tensor(qg, "qg"),

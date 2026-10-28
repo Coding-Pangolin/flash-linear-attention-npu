@@ -3,8 +3,8 @@
 #include "chunk_kda_fwd_prepare_common.h"
 namespace KdaPrepare::Arch22 {
 constexpr FixpipeConfig NzOutput={CO2Layout::NZ,false};
-class Cube {
-    PrepareKernelArgs a_;TPipe *pipe_;uint32_t core_,slot_;bool identityReady_[2];Work w_;
+template<uint32_t Norm> class Cube {
+    const PrepareKernelArgs &a_;TPipe *pipe_;uint32_t core_,slot_;bool identityReady_[2];Work w_;
     TBuf<TPosition::A1> l1_;TBuf<TPosition::A2> la_;
     TBuf<TPosition::B2> lb_;TBuf<TPosition::CO1> lc_;
     TEventID copyReady_,loadReady_,abFree_[2],matrixReady_,cFree_,l1Ready_,laneFree_[2],scoreReleased_;
@@ -159,25 +159,37 @@ class Cube {
         // issue them before waiting for Vector's Lower/Aqk publication.
     }
     __aicore__ inline void InversePair() {
-        for(uint32_t lane=0;lane<2;++lane) {
-            if(!w_.active[lane])continue;
-            uint64_t base=GmLane(core_,slot_,lane);auto source=Gm<bfloat16_t>(a_.workspace+base);
-            PublishCache(source);
-            CopyNz(L1(lane,P),source[Lower/2],64,64);
-            CopyNz(L1(lane,Power),source[Lower/2],64,64);
-            CopyNz(L1(lane,X),source[Eye/2],64,64);
-            if(!identityReady_[lane]) {
-                CopyNz(L1(lane,I),source[Eye/2],64,64);identityReady_[lane]=true;
+        if constexpr(Norm==0) {
+            for(uint32_t lane=0;lane<2;++lane) {
+                if(!w_.active[lane])continue;
+                uint64_t base=GmLane(core_,slot_,lane);
+                auto source=Gm<bfloat16_t>(a_.workspace+base);
+                CopyNz(L1(lane,P),source[Lower/2],64,64);
+                CopyNz(L1(lane,X),source[Payload/2],64,64);
             }
+            CopiesReady();
+            if(w_.rows>32)MergePair<32>(0);
+        } else {
+            for(uint32_t lane=0;lane<2;++lane) {
+                if(!w_.active[lane])continue;
+                uint64_t base=GmLane(core_,slot_,lane);auto source=Gm<bfloat16_t>(a_.workspace+base);
+                PublishCache(source);
+                CopyNz(L1(lane,P),source[Lower/2],64,64);
+                CopyNz(L1(lane,Power),source[Lower/2],64,64);
+                CopyNz(L1(lane,X),source[Eye/2],64,64);
+                if(!identityReady_[lane]) {
+                    CopyNz(L1(lane,I),source[Eye/2],64,64);identityReady_[lane]=true;
+                }
+            }
+            CopiesReady();
+            for(uint32_t iteration=0;iteration<4;++iteration) {
+                PackedLeavesPair(false,iteration==3);
+                if(iteration!=3)PackedLeavesPair(true,false);
+            }
+            if(w_.rows>16)MergePair<16>(0);
+            if(w_.rows>48)MergePair<16>(32);
+            if(w_.rows>32)MergePair<32>(0);
         }
-        CopiesReady();
-        for(uint32_t iteration=0;iteration<4;++iteration) {
-            PackedLeavesPair(false,iteration==3);
-            if(iteration!=3)PackedLeavesPair(true,false);
-        }
-        if(w_.rows>16)MergePair<16>(0);
-        if(w_.rows>48)MergePair<16>(32);
-        if(w_.rows>32)MergePair<32>(0);
     }
     __aicore__ inline void PreloadWu(uint32_t lane) {
         uint32_t m=((w_.rows+15)/16)*16;
@@ -210,8 +222,9 @@ class Cube {
         }
     }
 public:
+    __aicore__ inline Cube(const PrepareKernelArgs &a):a_(a) {}
     __aicore__ inline void Init(const PrepareKernelArgs &a,TPipe *pipe) {
-        a_=a;pipe_=pipe;core_=GetBlockIdx();
+        pipe_=pipe;core_=GetBlockIdx();
         pipe_->InitBuffer(l1_,L1Bytes);pipe_->InitBuffer(la_,0x10000);
         pipe_->InitBuffer(lb_,0x10000);pipe_->InitBuffer(lc_,0x10000);
         copyReady_=pipe_->AllocEventID<HardEvent::MTE2_MTE1>();
@@ -264,7 +277,7 @@ public:
 };
 template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> __aicore__ inline void Run(const PrepareKernelArgs &a) {
     TPipe pipe;
-    if ASCEND_IS_AIV {Vector<Norm,Gate,GateT,BetaT> v;v.Init(a,&pipe);v.Process();}
-    if ASCEND_IS_AIC {Cube c;c.Init(a,&pipe);c.Process();}
+    if ASCEND_IS_AIV {Vector<Norm,Gate,GateT,BetaT> v(a);v.Init(a,&pipe);v.Process();}
+    if ASCEND_IS_AIC {Cube<Norm> c(a);c.Init(a,&pipe);c.Process();}
 }
 }

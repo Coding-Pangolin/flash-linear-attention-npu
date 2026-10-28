@@ -21,7 +21,7 @@ d_aqk, dv, dq_raw = chunk_kda_bwd_prepare(
 B、H、T 必须为正。layout 只决定 rank 和轴顺序，`cu_seqlens` 决定是否变长：
 
 - 不传 `cu_seqlens`：四维按 B 个等长序列处理，三维按单序列处理。
-- 传入 `cu_seqlens`：四种 layout 均可用，四维要求 B=1。元数据有 2..1025 项，
+- 传入 `cu_seqlens`：四种 layout 均可用，四维要求 B=1。元数据至少有 2 项，无固定序列数上限，
   非递减、起点为 0、终点为 T，允许空序列。
 - 变长 h 为 `[1,total_chunks,H,128,128]`（四维 Token）或
   `[total_chunks,H,128,128]`（三维 Token）；`total_chunks = sum(ceil(seq_len/64))`。

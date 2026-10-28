@@ -48,6 +48,18 @@ int main()
                 assert(data.inputLayout == layout && data.isVariable == variable);
                 assert(data.stateVFirst == direction);
                 assert(data.NV == 5 && data.T == 65 && data.B == 1);
+                if (variable) {
+                    for (int64_t size : {2, 1025, 1028, 1029, 65537}) {
+                        gert::StorageShape metadata({size}, {size});
+                        ctx.cuSeqlensShape = &metadata;
+                        assert(processor.Process() == ge::GRAPH_SUCCESS);
+                        assert(data.seqNum == size - 1);
+                    }
+                    gert::StorageShape tooShort({1}, {1});
+                    ctx.cuSeqlensShape = &tooShort;
+                    assert(processor.Process() == ge::GRAPH_FAILED);
+                    ctx.cuSeqlensShape = &cu;
+                }
                 std::cout << layouts[layout] << " state=" << direction << " key="
                           << processor.GetTilingKey() << " blocks=" << processor.GetBlockDim() << '\n';
                 ctx.layout = "INVALID";

@@ -8,8 +8,8 @@
 #include "lib/matmul_intf.h"
 #if defined(CHUNK_KDA_PREPARE_RUNTIME_KEYS)
 #include "chunk_kda_fwd_prepare_runtime_key.h"
-#include "arch22_rewrite/vector.h"
-#include "arch22_rewrite/cube.h"
+#include "arch22/chunk_kda_fwd_prepare_vector.h"
+#include "arch22/chunk_kda_fwd_prepare_cube.h"
 #else
 #include "chunk_kda_fwd_prepare_tiling_key.h"
 #include "chunk_kda_fwd_prepare_kernel.h"
@@ -87,7 +87,7 @@ __global__ __aicore__ void chunk_kda_fwd_prepare(
 
 #if defined(CHUNK_KDA_PREPARE_RUNTIME_KEYS)
     static_assert(NORM_MODE<=1 && GATE_MODE<=2);
-    KdaPrepare::Rewrite::Run<NORM_MODE,GATE_MODE>(args);
+    KdaPrepare::Arch22::Run<NORM_MODE,GATE_MODE,DTYPE_G,DTYPE_BETA>(args);
 #else
     using Policy = KdaPrepare::PrepareCompilePolicy<
         static_cast<KdaPrepare::QkNormMode>(NORM_MODE),

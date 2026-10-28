@@ -65,22 +65,24 @@ BF16 或 FP32，`a_log/dt_bias` 固定为 FP32。
 
 ## 支持范围
 
-当前 R26 A2 实现的正式支持范围为：
+A2 实现的合同范围为：
 
 - `q/k/v` 为 BF16，`K=V=128`，`chunk_size=64`；
-- `g` 为 FP32，`beta` 为 BF16；其它 gate/beta dtype 组合由 host 明确拒绝；
+- `g` 和 `beta` 各自支持 BF16/FP32，四种组合独立选择正确的输入加载；其余 dtype 由 host 拒绝；
 - 布局为 BNSD、BSND、NTD 或 TND，输入连续；变长输入使用 `cu_seqlens`，rank-4 变长容器要求 `B=1`；
 - GVA 要求 `0 < HK <= HV` 且 `HV % HK == 0`；
 - A2 只接受 `use_exp2=true`。A5 保留原 arch35 入口和原有属性合同；
 - `backward_mode` 为 `none`、`forward`、`recompute` 或 `save`，13 个输出槽位及其返回顺序不变。
 
-不在上述范围内的组合必须在 host 侧返回参数错误，不会静默落入 A2 R26 流水。A2 的通用 key 由
+不在上述范围内的组合必须在 host 侧返回参数错误，不会静默落入 A2 流水。A2 的通用 key 由
 `normMode × gateMode` 组成六个实际实例；beta 模式、输出模式和 Exp2 通过本次调用内不可变的 tiling
-字段传入。关闭的公开输出不能作为 scratch。完整数学、平台和工具验收以对应的独立报告为准。
+字段传入。四个 dtype 对象各包含相同六个 key，不增加数学模式的笛卡尔积。
+实现位于 `op_kernel/arch22/`；A2 只有统一 BF16 resident relay，不再保留 Target/GeneralVec 或 FP32 relay 分支。
+关闭的公开输出不能作为 scratch。完整数学、平台和工具验收以对应的独立报告为准。
 
 ## 已知限制
 
-R26 本轮只提供 A2 设备证据；A3 需要独立编译和设备 smoke 验证。GVA 的 `chunk_size=32` 不在支持范围内。
+本次优化的设备验收范围为 A2；A3 需要独立编译和设备 smoke 验证。GVA 的 `chunk_size=32` 不在支持范围内。
 Issue 672 针对 `chunk_kda_bwd_prepare`，本算子是前向 Prepare，不能用本 README 或本 PR 声称关闭该 issue。
 
 `B/T/HK/HV` 必须为正数且可由 `uint32_t` 表示；GVA 要求 `0 < HK <= HV` 且

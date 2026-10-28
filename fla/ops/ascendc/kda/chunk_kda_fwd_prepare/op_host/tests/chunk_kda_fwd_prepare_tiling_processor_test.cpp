@@ -51,8 +51,8 @@ bool CheckChunkOnlySchedule()
         2, 4, 8, 16, 0, 24, 1024, false};
     optiling::ChunkKdaFwdPrepareSchedule schedule;
     return optiling::ChunkKdaFwdPrepareTilingProcessor(context).Process(schedule) &&
-        schedule.chunkWorkItems == 32 && schedule.totalWorkItems == 32 &&
-        schedule.usedCoreNum == 24 && schedule.headsPerPartition == 8 &&
+        schedule.chunkWorkItems == 32 && schedule.totalWorkItems == 128 &&
+        schedule.usedCoreNum == 24 && schedule.headsPerPartition == 2 &&
         schedule.workspaceBytes ==
             1024 + 24 *
                 optiling::CHUNK_KDA_FWD_PREPARE_ARCH22_WORKGROUP_BYTES;
@@ -63,8 +63,7 @@ bool CheckArchSpecificWorkspace()
     optiling::ChunkKdaFwdPrepareScheduleContext arch22Context{
         2, 4, 8, 16, 0, 24, 1024, false};
     auto arch35Context = arch22Context;
-    arch35Context.workspaceSlotBytes =
-        optiling::CHUNK_KDA_FWD_PREPARE_ARCH35_SLOT_BYTES;
+    arch35Context.isArch22 = false;
     optiling::ChunkKdaFwdPrepareSchedule arch22Schedule;
     optiling::ChunkKdaFwdPrepareSchedule arch35Schedule;
     return optiling::ChunkKdaFwdPrepareTilingProcessor(arch22Context)
@@ -95,8 +94,8 @@ bool CheckVarLenSchedule()
         1, 3, 12, 0, 7, 6, 4096, true};
     optiling::ChunkKdaFwdPrepareSchedule schedule;
     return optiling::ChunkKdaFwdPrepareTilingProcessor(context).Process(schedule) &&
-        schedule.chunkWorkItems == 7 && schedule.totalWorkItems == 7 &&
-        schedule.usedCoreNum == 6 && schedule.headsPerPartition == 12;
+        schedule.chunkWorkItems == 7 && schedule.totalWorkItems == 42 &&
+        schedule.usedCoreNum == 6 && schedule.headsPerPartition == 2;
 }
 
 bool CheckInvalidGva()
@@ -125,6 +124,30 @@ bool CheckHeadPartitionWorkItemOverflow()
     return !optiling::ChunkKdaFwdPrepareTilingProcessor(context).Process(schedule);
 }
 
+bool CheckOddHeadAndWorkspaceOverflow()
+{
+    optiling::ChunkKdaFwdPrepareScheduleContext context{
+        1, 3, 3, 1, 0, 24, 0, false};
+    optiling::ChunkKdaFwdPrepareSchedule schedule;
+    if (!optiling::ChunkKdaFwdPrepareTilingProcessor(context).Process(schedule) ||
+        schedule.totalWorkItems != 2 || schedule.usedCoreNum != 2 ||
+        schedule.workspaceBytes != 2 * KdaPrepare::Arch22::GroupBytes) {
+        return false;
+    }
+    context.libApiWorkspaceBytes = std::numeric_limits<uint64_t>::max();
+    return !optiling::ChunkKdaFwdPrepareTilingProcessor(context).Process(schedule);
+}
+
+bool CheckA5PartitionUnchanged()
+{
+    const optiling::ChunkKdaFwdPrepareScheduleContext context{
+        1, 4, 8, 1, 0, 24, 0, false, false};
+    optiling::ChunkKdaFwdPrepareSchedule schedule;
+    return optiling::ChunkKdaFwdPrepareTilingProcessor(context).Process(schedule) &&
+        schedule.totalWorkItems == 4 && schedule.headsPerPartition == 2 &&
+        schedule.workspaceBytes == 4 * optiling::CHUNK_KDA_FWD_PREPARE_ARCH35_WORKGROUP_BYTES;
+}
+
 } // namespace
 
 int main()
@@ -135,7 +158,8 @@ int main()
                    CheckGvaHeadSplitSchedule() &&
                    CheckVarLenSchedule() && CheckInvalidGva() &&
                    CheckChunkWorkItemOverflow() &&
-                   CheckHeadPartitionWorkItemOverflow()
+                   CheckHeadPartitionWorkItemOverflow() &&
+                   CheckOddHeadAndWorkspaceOverflow() && CheckA5PartitionUnchanged()
                ? 0
                : 1;
 }

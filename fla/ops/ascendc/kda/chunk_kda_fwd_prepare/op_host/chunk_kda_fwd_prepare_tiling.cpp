@@ -20,7 +20,7 @@
 #include "../op_kernel/chunk_kda_fwd_prepare_tiling_key.h"
 #include "../op_kernel/chunk_kda_fwd_prepare_runtime_key.h"
 #include "../op_kernel/chunk_kda_fwd_prepare_runtime_policy.h"
-#include "../op_kernel/arch22_rewrite/resource.h"
+#include "../op_kernel/arch22/chunk_kda_fwd_prepare_resource.h"
 #include "platform/soc_spec.h"
 #include "register/op_impl_registry.h"
 #include "tiling/platform/platform_ascendc.h"
@@ -586,10 +586,9 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
     const uint64_t aicCoreNum = platform.GetCoreNumAic();
     const bool isAscend950 =
         platform.GetCurNpuArch() == NpuArch::DAV_3510;
-    const bool useArch22TargetVariant = false; // A2 rewrite owns its complete pipeline.
     if (!isAscend950 && !*useExp2Ptr) {
         TILING_LOG(context->GetNodeName(),
-                   "A2 R26 requires use_exp2=true, current value=%d.",
+                   "A2 requires use_exp2=true, current value=%d.",
                    static_cast<int>(*useExp2Ptr));
         return ge::GRAPH_FAILED;
     }
@@ -602,12 +601,7 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
     scheduleContext.aicCoreNum = aicCoreNum;
     scheduleContext.libApiWorkspaceBytes = platform.GetLibApiWorkSpaceSize();
     scheduleContext.isVarLen = isVarLen;
-    scheduleContext.targetPipeline = useArch22TargetVariant;
-    scheduleContext.workspaceSlotBytes =
-        isAscend950 ? CHUNK_KDA_FWD_PREPARE_ARCH35_SLOT_BYTES
-        : (useArch22TargetVariant
-               ? KdaPrepare::Arch22TargetConfig::kSlotBytes
-               : CHUNK_KDA_FWD_PREPARE_ARCH22_SLOT_BYTES);
+    scheduleContext.isArch22 = !isAscend950;
     ChunkKdaFwdPrepareSchedule schedule;
     if (!ChunkKdaFwdPrepareTilingProcessor(scheduleContext).Process(schedule)) {
         TILING_LOG(context->GetNodeName(),
@@ -637,25 +631,12 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
     const uint64_t legacyTilingKey = GET_TPL_TILING_KEY(
         gateDtypeToken, betaDtypeToken, normMode, betaMode, gateMode,
         static_cast<uint64_t>(*useExp2Ptr),
-        useArch22TargetVariant ? uint64_t{1}
-                               : static_cast<uint64_t>(*safeGatePtr),
+        static_cast<uint64_t>(*safeGatePtr),
         outputMode);
-    const auto pipeline = useArch22TargetVariant
-        ? PreparePipeline::Target : PreparePipeline::Generic;
+    const auto pipeline = PreparePipeline::Generic;
     const uint64_t tilingKey = isAscend950 ? legacyTilingKey
         : RuntimeKey::Encode(normMode, gateMode);
 
-    if (!isAscend950) {
-        if(gDesc->GetDataType()!=ge::DT_FLOAT || betaDesc->GetDataType()!=ge::DT_BF16) {
-            TILING_LOG(context->GetNodeName(), "A2 rewrite requires FP32 g and BF16 beta");
-            return ge::GRAPH_FAILED;
-        }
-        const uint64_t chunks=isVarLen?totalChunks:uint64_t(shape.batch)*totalChunks;
-        const uint64_t pairs=(uint64_t(shape.valueHeadNum)+1)/2;
-        schedule.usedCoreNum=static_cast<uint32_t>(std::min<uint64_t>(aicCoreNum,chunks*pairs));
-        schedule.headsPerPartition=2;
-        schedule.workspaceBytes=platform.GetLibApiWorkSpaceSize()+uint64_t(schedule.usedCoreNum)*KdaPrepare::Rewrite::GroupBytes;
-    }
     ChunkKdaFwdPrepareTilingData tiling;
     tiling.set_batch(static_cast<uint32_t>(shape.batch));
     tiling.set_seqNum(static_cast<uint32_t>(seqNum));

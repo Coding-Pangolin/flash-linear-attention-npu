@@ -120,6 +120,10 @@ aclnnStatus aclnnChunkKdaFwdPrepare(
 `BSND/TND` 输入还要求 q/k、v、g 和 beta 的跨 head DMA stride 均可由 `uint32_t`
 表示，完整公式见 [README 输入输出约束](../README.md#输入输出)。
 
+A2 额外要求 `use_exp2=true`；不支持的指数域在 host 返回参数错误。
+A2 的 g、beta 各自支持 BF16/FP32；输入加载类型不改变内部 FP32 gate/beta 计算或 BF16 relay。
+A5 沿用原 arch35 支持范围和入口。
+
 ## Shape
 
 输入 shape 和固定的 head-major 输出 shape 见 [README Shape 表](../README.md#输入输出)。

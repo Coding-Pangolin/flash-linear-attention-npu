@@ -2,9 +2,9 @@
 #pragma once
 #include "kernel_operator.h"
 #include "../chunk_kda_fwd_prepare_struct.h"
-#include "resource.h"
+#include "chunk_kda_fwd_prepare_resource.h"
 
-namespace KdaPrepare::Rewrite {
+namespace KdaPrepare::Arch22 {
 using namespace AscendC;
 __aicore__ inline uint32_t MinusOffset(uint32_t band) {
     return 0x8000+band*(band+1)*0x800;

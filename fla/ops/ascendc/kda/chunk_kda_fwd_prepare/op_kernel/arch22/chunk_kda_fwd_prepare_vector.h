@@ -285,29 +285,30 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         UnaryRepeatParams pack{1,1,4,4};
         Cast(inverse,v_,RoundMode::CAST_NONE,32,32,pack);
         Cast(inverse[1024],v_[32*64+32],RoundMode::CAST_NONE,32,32,pack);VBarrier();
-        auto indices=small_[InverseGatherIndexSmall].template ReinterpretCast<uint32_t>();
-        auto coefficients=small_[2048],rowCopies=small_[1536];
+        auto indices=small_[InverseGatherIndexSmall].template ReinterpretCast<int32_t>();
+        auto batchIndices=work_[2048].template ReinterpretCast<int32_t>();
+        auto gathered=work_[4096],rowCopies=small_[1536];
         uint32_t steps=w_.rows<32?w_.rows-1:31;
-        // qr/kr/beta/bias are retired after LowerAndAqk. Two 2KiB
-        // coefficient broadcasts reuse small_[0:1024], without extra UB.
+        // Q/K are retired; only their GM Lower copy is needed by Cube.
+        // Reserve a bounded alias across their combined 64KiB UB region.
+        DrainStores();
+        auto coefficients=ub_.template GetWithOffset<float>((UbG-UbQ)/4,UbQ);
         if(steps) {
-            Gather(coefficients,g_,indices,0,64);VBarrier();
-            Brcb(small_,coefficients,8,{1,8});VBarrier();
+            for(uint32_t k=0;k<steps;++k)
+                Adds(batchIndices[k*64],indices,static_cast<int32_t>(k*4),64);
+            VBarrier();
+            Gather(gathered,g_,batchIndices.template ReinterpretCast<uint32_t>(),0,64*steps);
+            VBarrier();
+            Brcb(coefficients,gathered,static_cast<uint8_t>(8*steps),{1,8});VBarrier();
         }
         for(uint32_t k=0;k<steps;++k) {
-            auto current=small_[(k&1)*512],next=small_[((k+1)&1)*512];
+            auto current=coefficients[k*512];
             UnaryRepeatParams rows{1,1,4,128};
-            Adds(rowCopies,inverse[k*32],0.0F,32,2,rows);
-            if(k+1<steps)Gather(coefficients,g_,indices,(k+1)*4,64);
-            VBarrier();
+            Adds(rowCopies,inverse[k*32],0.0F,32,2,rows);VBarrier();
             BinaryRepeatParams update{1,1,0,4,0,1};
-            // Strictly lower coefficients are zero at rows <= k.
-            // Retain the update order of every nonzero row, skip only zero FMAs.
-            const uint32_t first=k+1, remaining=31-k;
+            const uint32_t first=k+1,remaining=31-k;
             MulAddDst(inverse[first*32],rowCopies,current[first*8],32,remaining,update);
             if(w_.rows>32)MulAddDst(inverse[1024+first*32],rowCopies[32],current[256+first*8],32,remaining,update);
-            // Independent from this iteration's updates; its buffer is free.
-            if(k+1<steps)Brcb(next,coefficients,8,{1,8});
             VBarrier();
         }
         // v_ still holds the immutable zero off-diagonal/identity padding.

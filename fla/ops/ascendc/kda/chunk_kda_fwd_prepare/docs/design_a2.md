@@ -328,3 +328,11 @@ Vector/Cube 在构造时绑定同一份只读 PrepareKernelArgs 引用，避免�
 独占guard、运行tag。日常可只读引用已验证双参考缓存，DUT须新算；交付ATK另库保持独立运行。
 代码设计文档不混入某次实验的临时“通过”声明；最终验证与性能原始证据由独立交付件绑定。
 未通过合同明确记录，不以模型平均收益抵消逐例回退，不以原窄合同fast替代本实现验收。
+
+### Identity coefficient batching experiment
+
+Lower的GM store完成后退休Q/K并将UB[UbQ,UbG)64KiB复用于31列系数广播；
+work[2048,4096)存最多1984个int32索引，work[4096,6144)存对应FP32系数。
+inverse仍仅使用work[0,2048)，g[0,4096)保留FP32 Lower，三者不重叠。
+一次Gather及Brcb替代逐k准备，非零FMA顺序和BF16发布点保持不变。
+这是独立指令组织实验，精度和ABBA通过后才能采用；不扩大UB或跨核事件。

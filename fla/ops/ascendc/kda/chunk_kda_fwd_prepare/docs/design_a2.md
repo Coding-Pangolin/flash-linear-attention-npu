@@ -1,22 +1,6 @@
-# ChunkKdaFwdPrepare A2 设计（R37）
+# ChunkKdaFwdPrepare 设计
 
-> 本文按仓库 CANNBot/CATLASS 五阶段工作流（PR833）记录 A2 的实际实现。设计、直调验证、适配后 ATK 验收和上库门禁分开记录；本文只描述已经进入候选源码的实现，不把实验性方案当成支持合同。
-
-- 关联实现：`fla/ops/ascendc/kda/chunk_kda_fwd_prepare`
-- PR：[#994](https://github.com/flashserve/flash-linear-attention-npu/pull/994)
-- 验证源码：`2f58ee1011a616f0220072d6e88838e4700f87b3`（`r37_pr_alog`）
-- 960 合入基线：`5c176bcdcb762e2cfb689cd99e2a9dfe06d56521`；当前 main 基点：`a7c608f2e3f828779ceeec1fcf155a6e37ede83c`
-- ATK 交付：[`work_tool !32`](https://gitcode.com/chen-linxin4/work_tool/pull/32)
-
-## CANNBot/PR833 阶段映射
-
-| 阶段 | 本算子交付物 | 本候选状态 |
-| --- | --- | --- |
-| 01 接口确认 | `README.md`、`docs/api.md`、host 参数检查和 13 槽 ABI | 已绑定 |
-| 02 数学标杆 | FP64 truth、FP32-BF16 control、布局/变长/输出掩码合同 | 已冻结并由 ATK executor 复用 |
-| 03 直调实现 | A2 `arch22` kernel、六个 runtime key、资源和事件账本 | 已 clean 构建 |
-| 04 直调验证 | 小 shape 生命周期、32 模型、泛化合同、dtype 和 DC50 | 已完成对应范围；见 ATK 绑定清单 |
-| 05 适配与上库 | Stable ABI、Python wrapper、ATK 独立交付和 PR 门禁 | PR994/!32；MSS 与全量性能仍按报告逐项复核 |
+方案设计规则版本：V2。公开合同与 13 槽输出掩码见 [api.md](api.md)。
 
 ## 1. 目标
 
@@ -218,3 +202,12 @@ host拒绝非法head比、chunk/K/V、dtype、标量、metadata及DMA stride溢�
 关闭输出仅返回None，不改变内部必须的矩阵生产。
 极端gate/beta、norm epsilon、tail padding及高阶逆的数值路径遵守冻结比较器，
 失败合同明确标失败，不新增FP32 relay回退族，也不更改truth/control或容差。
+
+### 2.5 Gate 参数缓存
+
+非 Precomputed gate 的 exp(a_log) 在每个 AIV 开始工作前计算一次。
+HV≤128 时按实际 value-head 索引读取 Small UB 中的缓存，不随 grid-stride
+work 切换而混淆 head；超过容量时仍使用逐 work 读取/计算，数学语义和六个 key 不变。
+该缓存占用现有 Small UB 内 FP32 索引 [2688,2816)，不增大 UB 分配，
+与 FP32 beta DMA、BF16 pack 及 triangle mask 区域均不重叠。
+缓存初始化经 MTE2→V→S 依赖完成后才可消费，不增加跨核事件。

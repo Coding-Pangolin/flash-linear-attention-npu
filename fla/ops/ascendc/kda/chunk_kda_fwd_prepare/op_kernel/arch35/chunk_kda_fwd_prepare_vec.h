@@ -1025,6 +1025,41 @@ private:
         }
     }
 
+    // Keep the A5 copy contract for both layouts.  The old rewrite always
+    // used DataCopyPad, even for the contiguous BNSD case, and therefore paid
+    // the padded 2-D DMA setup cost on every q/k/g/v tile.  For BSND the same
+    // helper emits one strided tile DMA; it does not materialize a full
+    // transpose and preserves the A5 sequence-major address contract.
+    template <typename T, typename LocalT, typename GlobalT>
+    __aicore__ inline void CopyRowsIn(LocalT dst, GlobalT src, uint64_t offset,
+                                      uint32_t rows, uint32_t cols,
+                                      uint64_t rowStride)
+    {
+        if (rows == 0 || cols == 0) {
+            return;
+        }
+        if (rowStride == cols) {
+            const uint64_t rowBytes = static_cast<uint64_t>(rows) * cols * sizeof(T);
+            if (rowBytes >= 32 && rowBytes % 32 == 0) {
+                AscendC::DataCopy(dst, src[offset], rows * cols);
+                return;
+            }
+            AscendC::DataCopyExtParams flatParams{
+                1, static_cast<uint32_t>(rowBytes), 0, 0, 0};
+            AscendC::DataCopyPadExtParams<T> flatPad{false, 0, 0, 0};
+            AscendC::DataCopyPad(dst, src[offset], flatParams, flatPad);
+            return;
+        }
+        AscendC::DataCopyExtParams params{
+            static_cast<uint16_t>(rows),
+            static_cast<uint32_t>(cols * sizeof(T)),
+            static_cast<uint32_t>((rowStride - cols) * sizeof(T)),
+            0, 0};
+        AscendC::DataCopyPadExtParams<T> pad{
+            false, 0, 0, 0};
+        AscendC::DataCopyPad(dst, src[offset], params, pad);
+    }
+
     __aicore__ inline void StageV0(const ChunkRange &chunk,
                                     uint32_t valueHead,
                                     uint32_t localHead,
@@ -1063,48 +1098,24 @@ private:
             RawGateInputOffset(args_.tiling, chunk, valueHead);
         const uint64_t betaOffset =
             BetaInputOffset(args_.tiling, chunk, valueHead);
-        const uint32_t qkStride = args_.tiling.inputSequenceMajor
-                                      ? static_cast<uint32_t>(
-                                            static_cast<uint64_t>(
-                                                args_.tiling.qkHeadNum - 1) *
-                                            Shape::kHeadDim * sizeof(bfloat16_t))
-                                      : 0;
-        const uint32_t gateStride = args_.tiling.inputSequenceMajor
-                                        ? static_cast<uint32_t>(
-                                              static_cast<uint64_t>(
-                                                  args_.tiling.valueHeadNum - 1) *
-                                              Shape::kHeadDim * sizeof(GateT))
-                                        : 0;
-
         AscendC::Mutex::Lock<PIPE_MTE2>(mutex);
-        AscendC::DataCopyPad(q, qGm_[qkOffset],
-            {static_cast<uint16_t>(chunk.validRows),
-             static_cast<uint32_t>(Shape::kHeadDim * sizeof(bfloat16_t)),
-             qkStride, 0, 0},
-            {false, 0, 0, 0});
-        AscendC::DataCopyPad(k, kGm_[qkOffset],
-            {static_cast<uint16_t>(chunk.validRows),
-             static_cast<uint32_t>(Shape::kHeadDim * sizeof(bfloat16_t)),
-             qkStride, 0, 0},
-            {false, 0, 0, 0});
-        AscendC::DataCopyPad(gate, gateGm_[gateOffset],
-            {static_cast<uint16_t>(chunk.validRows),
-             static_cast<uint32_t>(Shape::kHeadDim * sizeof(GateT)),
-             gateStride, 0, 0},
-            {false, 0, 0, 0});
+        const uint64_t qkRowStride = args_.tiling.inputSequenceMajor
+                                         ? static_cast<uint64_t>(args_.tiling.qkHeadNum) *
+                                               Shape::kHeadDim
+                                         : Shape::kHeadDim;
+        const uint64_t gateRowStride = args_.tiling.inputSequenceMajor
+                                           ? static_cast<uint64_t>(args_.tiling.valueHeadNum) *
+                                                 Shape::kHeadDim
+                                           : Shape::kHeadDim;
+        CopyRowsIn<bfloat16_t>(q, qGm_, qkOffset, chunk.validRows, Shape::kHeadDim, qkRowStride);
+        CopyRowsIn<bfloat16_t>(k, kGm_, qkOffset, chunk.validRows, Shape::kHeadDim, qkRowStride);
+        CopyRowsIn<GateT>(gate, gateGm_, gateOffset, chunk.validRows, Shape::kHeadDim, gateRowStride);
         if (args_.tiling.inputSequenceMajor) {
-            const uint32_t betaStride = static_cast<uint32_t>(
-                static_cast<uint64_t>(args_.tiling.valueHeadNum - 1) *
-                sizeof(BetaT));
-            AscendC::DataCopyPad(beta, betaGm_[betaOffset],
-                {static_cast<uint16_t>(chunk.validRows),
-                 static_cast<uint32_t>(sizeof(BetaT)), betaStride, 0, 0},
-                {false, 0, 0, 0});
+            CopyRowsIn<BetaT>(beta, betaGm_, betaOffset, chunk.validRows, 1,
+                       args_.tiling.valueHeadNum);
         } else {
-            AscendC::DataCopyPad(beta, betaGm_[betaOffset],
-                {1, static_cast<uint32_t>(chunk.validRows * sizeof(BetaT)),
-                 0, 0, 0},
-                {false, 0, 0, 0});
+            CopyRowsIn<BetaT>(beta, betaGm_, betaOffset, 1, chunk.validRows,
+                       chunk.validRows);
         }
         if constexpr (CompilePolicy::gateMode != GateMode::PrecomputedStep) {
             if (args_.tiling.hasDtBias) {
@@ -1395,17 +1406,11 @@ private:
             chunk.validRows * Shape::kHeadDim);
         const uint64_t vOffset =
             ValueInputOffset(args_.tiling, chunk, valueHead);
-        const uint32_t vStride = args_.tiling.inputSequenceMajor
-                                     ? static_cast<uint32_t>(
-                                           static_cast<uint64_t>(
-                                               args_.tiling.valueHeadNum - 1) *
-                                           Shape::kValueDim * sizeof(bfloat16_t))
-                                     : 0;
-        AscendC::DataCopyPad(vBeta, vGm_[vOffset],
-            {static_cast<uint16_t>(chunk.validRows),
-             static_cast<uint32_t>(Shape::kValueDim * sizeof(bfloat16_t)),
-             vStride, 0, 0},
-            {false, 0, 0, 0});
+        const uint64_t vRowStride = args_.tiling.inputSequenceMajor
+                                        ? static_cast<uint64_t>(args_.tiling.valueHeadNum) *
+                                              Shape::kValueDim
+                                        : Shape::kValueDim;
+        CopyRowsIn<bfloat16_t>(vBeta, vGm_, vOffset, chunk.validRows, Shape::kValueDim, vRowStride);
         AscendC::Mutex::Unlock<PIPE_MTE2>(mutex);
 
         AscendC::Mutex::Lock<PIPE_V>(mutex);

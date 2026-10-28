@@ -203,6 +203,29 @@ host拒绝非法head比、chunk/K/V、dtype、标量、metadata及DMA stride溢�
 极端gate/beta、norm epsilon、tail padding及高阶逆的数值路径遵守冻结比较器，
 失败合同明确标失败，不新增FP32 relay回退族，也不更改truth/control或容差。
 
+### 2.4.1 BSND/TND 的实际布局路径
+
+本算子不把 dense BSND 的 q/k/v 整体物化为 BNSD。A5 `fwd_prepare` 的公共合同是：
+输入保持调用者布局，kernel 在每个 chunk 内用行描述完成一次连续或等步长的 tile DMA，
+然后在 UB/L1 中使用统一的 head-major 矩阵。BNSD/NTD 行间连续时走 flat `DataCopy`；
+BSND/TND 行间跨 head 时走 `DataCopyExtParams + DataCopyPad`，一次描述有效行、列字节数和
+行间 stride。这个 stride 是元素间距换算后的字节数，不是额外的 transpose workspace。
+
+因此 layout 不增加 tiling key，也不改变 score/inverse/RHS 数学流水：
+
+* dense BNSD：q/k/v/g 的 tile 直接连续搬运；beta 仍按现有小标量规则处理；
+* dense BSND：q/k/v/g 的 tile 保持 sequence-major 地址，使用单次 row-gather DMA；
+* packed NTD：使用连续 head tile；
+* packed TND：使用对应的 row stride，不能把 batch/sequence 的 stride 混成 head stride。
+
+`chunk_kda_bwd_finalize` 没有 layout 参数，要求输入 contiguous 且已经是内部 head-major；
+它不是 BSND 转置的参考实现。若上游公共 API 需要输出 head-major，应在上游 adapter 完成
+contiguous/view 归一化，不能把这项工作误算成 finalize kernel 的优化。
+
+当前实现采用 A5 的 `CopyRowsIn` 结构：连续路径省去 Pad descriptor，非连续路径只描述当前
+tile，并与两 slot 的 MTE2/V/MTE3 生命周期重叠。端到端报告必须同时列出 layout 搬运、
+Prepare Task 和 Event；只有 Task 与总耗时都改善时，才可称为 BSND 优化。
+
 ### 2.5 Gate 参数缓存
 
 非 Precomputed gate 的 exp(a_log) 在每个 AIV 开始工作前计算一次。

@@ -19,6 +19,11 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         address.bufferAddr=static_cast<uint32_t>(allocation.GetPhyAddr())+offset;
         address.dataLen=bytes;
         dst.SetAddr(address);
+        // Materialize all descriptor fields before cross-stage scalar readers.
+        volatile TBuffAddr &stored=dst.address_;
+        stored.dataLen=address.dataLen;stored.bufferAddr=address.bufferAddr;
+        stored.bufferHandle=address.bufferHandle;stored.logicPos=address.logicPos;
+        dst.SetShapeInfo(ShapeInfo{});
     }
     template<class T> __aicore__ inline void Read(LocalTensor<T> dst,GM_ADDR ptr,
         uint64_t offset,uint32_t rows,uint32_t width,uint32_t heads,bool strided=true,bool streaming=false) {
@@ -432,8 +437,9 @@ public:
         BindTensor(g_,bytes,UbG,UbWork-UbG);BindTensor(work_,bytes,UbWork,UbV-UbWork);
         BindTensor(v_,bytes,UbV,UbSmall-UbV);BindTensor(small_,bytes,UbSmall,UbMask-UbSmall);
         BindTensor(triangle_,bytes,UbMask,UbBytes-UbMask);
-        qr_=small_;kr_=small_[64];beta_=small_[128];bias_=small_[256];blocks_=small_[1024];
-        triangle_=bytes[UbMask];
+        BindTensor(qr_,bytes,UbSmall,256);BindTensor(kr_,bytes,UbSmall+256,256);
+        BindTensor(beta_,bytes,UbSmall+512,256);BindTensor(bias_,bytes,UbSmall+1024,512);
+        BindTensor(blocks_,bytes,UbSmall+4096,2048);
         if(core_<a_.tiling.usedCoreNum){
             if constexpr(Norm==0) {
                 auto offsets=small_[InverseGatherIndexSmall].template ReinterpretCast<uint32_t>();

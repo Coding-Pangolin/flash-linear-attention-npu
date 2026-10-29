@@ -91,6 +91,10 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
             Read(gateRaw,a_.rawGate,In(t,w_,h,t.valueHeadNum,128),w_.rows,128,t.valueHeadNum,true,true);
         }
         auto raw=small_[2048].template ReinterpretCast<BetaT>();
+        if constexpr(sizeof(BetaT)==2) {
+            // Define complete raw/packed conversion blocks, including inactive lanes.
+            Duplicate(small_[2048],0.0F,544);VBarrier();
+        }
         if(t.inputSequenceMajor) {
             // beta alone has scalar-width rows. Read a bounded head tile,
             // then select this lane's head; never materialize the full tensor.
@@ -347,7 +351,7 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         }
         Mte2ToV();DrainStores(); // kg uses v_, which becomes the Aqk buffer below.
         Duplicate(q_,bfloat16_t(0),4096);
-        Duplicate(v_,bfloat16_t(0),4096);
+        Duplicate(v_,bfloat16_t(0),8192);
         if constexpr(Norm==0)Duplicate(g_,0.0F,4096);
         VBarrier();
         // Four independent 16-row bands replace the scalar row/beta dispatch.

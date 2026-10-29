@@ -123,6 +123,11 @@ work_[2048,4096)为最多1984个int32索引，[4096,6144)为对应FP32系数，
 与前8KiB叶逆及g_中FP32 Lower互不重叠。
 qr/kr/beta/bias已完成本work末次读取才能覆盖；ALog和两个只读索引始终保留。
 FP32 beta 直接保留低位，不经 BF16 中转；FP32 beta_eff 按真实值写回。
+BF16 beta每work在DMA之前将原始/打包转换区Small[2048,2592)初始化为零，
+不覆盖ALog缓存、只读Gather索引或mask。Lower阶段将v_完整16KiB初始化，
+Eye DMA只覆盖其前8KiB，其余转换非活跃区域保持定义值；公开写回仍仅有效行。
+持久UB tensor通过同一TBuf分配派生有界TBuffAddr，逐字段初始化并显式落栈，
+ShapeInfo置零；地址、容量与账本一致，不依赖未初始化的描述符字节。
 
 每 AIC 的 L1 为192KiB，两 lane 各96KiB。每 lane 相对地址：
 

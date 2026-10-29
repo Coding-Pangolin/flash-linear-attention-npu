@@ -85,17 +85,25 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         // independently of the six Norm/Gate tiling keys.
         auto gateRaw=work_.template ReinterpretCast<GateT>();
         if constexpr(sizeof(GateT)==sizeof(float)) {
-            Read(g_,a_.rawGate,GateInputOffset(t,w_,h,128),w_.rows,128,t.valueHeadNum,true,true);
+            Read(g_,a_.rawGate,GateInputOffset(t,w_,h,128),w_.rows,128,t.valueHeadNum,t.inputSequenceMajor,true);
         } else {
             // work_ is free until Normalize/GatePrefix. Do not expand in-place.
-            Read(gateRaw,a_.rawGate,GateInputOffset(t,w_,h,128),w_.rows,128,t.valueHeadNum,true,true);
+            Read(gateRaw,a_.rawGate,GateInputOffset(t,w_,h,128),w_.rows,128,t.valueHeadNum,t.inputSequenceMajor,true);
         }
         auto raw=small_[2048].template ReinterpretCast<BetaT>();
         if constexpr(sizeof(BetaT)==2) {
             // Define complete raw/packed conversion blocks, including inactive lanes.
             Duplicate(small_[2048],0.0F,544);VBarrier();
         }
-        {
+        if(!t.inputSequenceMajor) {
+            // Head-major beta is contiguous: FP32 DMA writes beta_ directly;
+            // BF16 retains the existing raw scratch and conversion boundary.
+            if constexpr(sizeof(BetaT)==sizeof(float)) {
+                Read(beta_,a_.beta,BetaInputOffset(t,w_,h),1,w_.rows,1,false);
+            } else {
+                Read(raw,a_.beta,BetaInputOffset(t,w_,h),1,w_.rows,1,false);
+            }
+        } else {
             // beta alone has scalar-width rows. Read a bounded head tile,
             // then select this lane's head; never materialize the full tensor.
             constexpr uint32_t BetaTileHeads=8;
@@ -120,7 +128,11 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         if constexpr(sizeof(GateT)!=sizeof(float)) {
             Cast(g_,gateRaw,RoundMode::CAST_NONE,w_.rows*128);VBarrier();
         }
-        {
+        if(!t.inputSequenceMajor) {
+            if constexpr(sizeof(BetaT)!=sizeof(float)) {
+                Cast(beta_,raw,RoundMode::CAST_NONE,w_.rows);
+            }
+        } else {
             // Scalar rows are padded to 32B by DMA. Gather row starts in
             // Vector, preserving BF16 bits and the original FP32 Cast order.
             auto offsets=small_[BetaGatherIndexSmall].template ReinterpretCast<uint32_t>();
@@ -528,7 +540,7 @@ public:
                     offsets.SetValue(row,(row*64+(Gate==0?0:(row/32)*32))*4);
                 SToV();
             }
-            { // Fixed token-major beta for all q/k/v layouts.
+            if(a_.tiling.inputSequenceMajor) { // Sequence-major beta tile indices only.
                 auto offsets=small_[BetaGatherIndexSmall].template ReinterpretCast<uint32_t>();
                 // BF16 Gather may consume a full 128-entry offset register pair.
                 // Upper masked lanes have neutral indices in the existing spare UB.

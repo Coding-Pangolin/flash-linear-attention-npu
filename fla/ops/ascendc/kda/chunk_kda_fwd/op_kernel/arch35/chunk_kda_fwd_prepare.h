@@ -1018,7 +1018,10 @@ private:
 
     __aicore__ inline uint64_t RawGateOffset(uint64_t b, uint64_t hv, uint64_t t, uint64_t d) const
     {
-        return ((b * T_ + t) * HV_ + hv) * K_ + d;
+        if (inputSequenceMajor_) {
+            return ((b * T_ + t) * HV_ + hv) * K_ + d;
+        }
+        return ((b * HV_ + hv) * T_ + t) * K_ + d;
     }
 
     __aicore__ inline uint64_t KVOffset(uint64_t b, uint64_t hv, uint64_t t, uint64_t d, uint64_t dim) const
@@ -1374,7 +1377,8 @@ private:
         const uint64_t tileRow = token - activeGateChunkStart_;
         LocalTensor<float> gate =
             LocalGateChunk().template ReinterpretCast<float>()[tileRow * K_];
-        CopyRowsIn(gate, rawG_, RawGateOffset(b, hv, token, 0), rows, K_, HV_ * K_);
+        CopyRowsIn(gate, rawG_, RawGateOffset(b, hv, token, 0), rows, K_,
+                   inputSequenceMajor_ ? HV_ * K_ : K_);
         SetFlag<HardEvent::MTE2_V>(mte2ToVEvent_);
     }
 

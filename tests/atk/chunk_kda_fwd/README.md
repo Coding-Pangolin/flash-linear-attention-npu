@@ -5,10 +5,9 @@
 
 ## 输入限制
 
-- `layout` 支持 `BSND/BNSD/TND/NTD`，只描述 q/k/v；输出布局由接口固定约定。
+- `layout` 支持 `BSND/BNSD/TND/NTD`；`layout` 只描述输入，输出布局由接口固定约定。
 - `BSND` 下 `q/k=[B,T,H_k,K]`，`v=[B,T,H_v,V]`，`g=[B,T,H_v,K]`，`beta=[B,T,H_v]`。
-- `BNSD` 下 `q/k=[B,H_k,T,K]`，`v=[B,H_v,T,V]`；g/beta 仍是 `[B,T,H_v,K]` / `[B,T,H_v]`。
-- `TND/NTD` 下 g/beta 固定 `[T,H_v,K]` / `[T,H_v]`，不随 qkv layout 变化。
+- `BNSD` 下 `q/k=[B,H_k,T,K]`，`v=[B,H_v,T,V]`，`g=[B,H_v,T,K]`，`beta=[B,H_v,T]`。
 - `TND/NTD` 使用打包 token；`cu_seqlens` 从 `0` 开始、以总 token 数结束且单调不减。
 - head 映射满足 `0 < H_k <= H_v <= 128` 且 `H_v % H_k == 0`。
 - `q/k/v` 支持 `BFLOAT16/FLOAT16`；`g` 支持 `FLOAT/BFLOAT16`；`beta` 支持 `FLOAT/BFLOAT16`。

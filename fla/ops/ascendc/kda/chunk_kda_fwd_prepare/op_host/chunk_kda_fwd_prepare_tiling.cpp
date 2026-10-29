@@ -179,14 +179,14 @@ bool ResolveShape(gert::TilingContext *context, PrepareLayout layout,
             info.kDim = q.GetDim(2);
             info.vDim = v.GetDim(2);
             if (!HasShape(v, {info.valueHeadNum, info.seqLen, info.vDim}) ||
-                !HasShape(g, {info.seqLen, info.valueHeadNum, info.kDim})) {
+                !HasShape(g, {info.valueHeadNum, info.seqLen, info.kDim})) {
                 return false;
             }
         }
         if (layout == PrepareLayout::TND) {
             return HasShape(beta, {info.seqLen, info.valueHeadNum});
         }
-        return HasShape(beta, {info.seqLen, info.valueHeadNum});
+        return HasShape(beta, {info.valueHeadNum, info.seqLen});
     }
 
     if (q.GetDimNum() != 4 || v.GetDimNum() != 4 || g.GetDimNum() != 4) {
@@ -210,7 +210,7 @@ bool ResolveShape(gert::TilingContext *context, PrepareLayout layout,
         info.kDim = q.GetDim(3);
         info.vDim = v.GetDim(3);
         if (!HasShape(v, {info.batch, info.valueHeadNum, info.seqLen, info.vDim}) ||
-            !HasShape(g, {info.batch, info.seqLen, info.valueHeadNum, info.kDim})) {
+            !HasShape(g, {info.batch, info.valueHeadNum, info.seqLen, info.kDim})) {
             return false;
         }
     }
@@ -218,7 +218,7 @@ bool ResolveShape(gert::TilingContext *context, PrepareLayout layout,
         return HasShape(beta,
                         {info.batch, info.seqLen, info.valueHeadNum});
     }
-    return HasShape(beta, {info.batch, info.seqLen, info.valueHeadNum});
+    return HasShape(beta, {info.batch, info.valueHeadNum, info.seqLen});
 }
 
 bool IsGateDtype(ge::DataType dtype)
@@ -542,7 +542,7 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
                 static_cast<int>(betaDesc->GetDataType()));
         return ge::GRAPH_FAILED;
     }
-    { // g/beta are token-major for every q/k/v layout.
+    { // Only sequence-major sources have a cross-head DMA stride.
         const uint64_t gateElementBytes =
             gDesc->GetDataType() == ge::DT_FLOAT ? sizeof(float) : 2U;
         const uint64_t betaElementBytes =
@@ -551,9 +551,9 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
             (!shape.sequenceMajor ||
              (FitsDmaSourceStride(shape.qkHeadNum, PREPARE_K_DIM * 2U) &&
               FitsDmaSourceStride(shape.valueHeadNum, PREPARE_V_DIM * 2U))) &&
-            FitsDmaSourceStride(shape.valueHeadNum,
-                                PREPARE_K_DIM * gateElementBytes) &&
-            FitsDmaSourceStride(shape.valueHeadNum, betaElementBytes);
+            (!shape.sequenceMajor ||
+             (FitsDmaSourceStride(shape.valueHeadNum, PREPARE_K_DIM * gateElementBytes) &&
+              FitsDmaSourceStride(shape.valueHeadNum, betaElementBytes)));
         if (!strideValid) {
             TILING_LOG(context->GetNodeName(),
                     "输入的跨 head DMA stride 超过 uint32 范围，"

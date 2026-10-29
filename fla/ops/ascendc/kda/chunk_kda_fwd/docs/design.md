@@ -22,16 +22,6 @@ Gate/Prepare、Post-WU、FwdH、Finalize 四个阶段依次提交，使阶段间
 A2/A3 和单 chunk 场景仍使用单次物理 L0。阶段选择仅使用私有 `stage` 属性，不增加公开属性、
 接口字段或独立算子原型。
 
-## 原始 g/beta 输入边界
-
-公共合同见 [API](api.md)：g/beta 固定 token-major，layout 仅描述 q/k/v。
-V2 组合不转换 g/beta，独立 Prepare 直接分块 DMA/Gather。旧融合入口仍以
-head-major beta 服务 Prepare/Post-WU/Finalize，因此 L2 对 dense beta 转 `[B,HV,T]`、
-packed beta 转 `[HV,T]`，不以 qkv layout 决定是否转换。raw g 不做全量转置；
-packed 扩 rank 时保留 `[1,T,HV,K]` 次序。内嵌 GateCumsum 的输入标志固定 token-major，
-A5 computeGateInPrepare 的 RawGateOffset/行距同样固定 token-major。两者生成的 gk
-保持 head-major；独立 KdaGateCumsum 的公共 API 不受本次内部调用变更影响。
-
 ## 阶段职责
 
 ### KdaGateCumsum

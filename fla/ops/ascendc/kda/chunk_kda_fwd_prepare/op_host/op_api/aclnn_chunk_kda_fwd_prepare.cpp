@@ -391,9 +391,9 @@ aclnnStatus CheckInputDmaStride(
         ((layout != PrepareLayout::BSND && layout != PrepareLayout::TND) ||
          (FitsDmaSourceStride(info.qkHeadNum, PREPARE_K_DIM * 2U) &&
           FitsDmaSourceStride(info.valueHeadNum, PREPARE_V_DIM * 2U))) &&
-        FitsDmaSourceStride(info.valueHeadNum,
-                            PREPARE_K_DIM * gateElementBytes) &&
-        FitsDmaSourceStride(info.valueHeadNum, betaElementBytes);
+        ((layout != PrepareLayout::BSND && layout != PrepareLayout::TND) ||
+         (FitsDmaSourceStride(info.valueHeadNum, PREPARE_K_DIM * gateElementBytes) &&
+          FitsDmaSourceStride(info.valueHeadNum, betaElementBytes)));
     PREPARE_CHECK(strideValid, ACLNN_ERR_PARAM_INVALID,
                "输入的跨 head DMA stride 超过 uint32 范围，当前 HK=%ld,HV=%ld。",
                info.qkHeadNum, info.valueHeadNum);
@@ -438,10 +438,10 @@ aclnnStatus ResolveShape(const ChunkKdaFwdPrepareParams &params,
         PREPARE_CHECK(
             HasShape(params.v, {info.valueHeadNum, info.seqLen, info.vDim}) &&
                 HasShape(params.g,
-                         {info.seqLen, info.valueHeadNum, info.kDim}) &&
-                HasShape(params.beta, {info.seqLen, info.valueHeadNum}),
+                         {info.valueHeadNum, info.seqLen, info.kDim}) &&
+                HasShape(params.beta, {info.valueHeadNum, info.seqLen}),
             ACLNN_ERR_PARAM_INVALID,
-            "NTD 要求 v 为 [HV,T,V]；g/beta 固定为 [T,HV,K]、[T,HV]。");
+            "NTD 要求 v/g/beta 分别为 [HV,T,V]、[HV,T,K]、[HV,T]。");
     } else if (layout == PrepareLayout::BSND) {
         info.batch = Dim(params.q, 0);
         info.seqLen = Dim(params.q, 1);
@@ -470,12 +470,12 @@ aclnnStatus ResolveShape(const ChunkKdaFwdPrepareParams &params,
             HasShape(params.v,
                      {info.batch, info.valueHeadNum, info.seqLen, info.vDim}) &&
                 HasShape(params.g,
-                         {info.batch, info.seqLen, info.valueHeadNum,
+                         {info.batch, info.valueHeadNum, info.seqLen,
                           info.kDim}) &&
                 HasShape(params.beta,
-                         {info.batch, info.seqLen, info.valueHeadNum}),
+                         {info.batch, info.valueHeadNum, info.seqLen}),
             ACLNN_ERR_PARAM_INVALID,
-            "BNSD 要求 v 为 [B,HV,T,V]；g/beta 固定为 [B,T,HV,K]、[B,T,HV]。");
+            "BNSD 要求 v/g/beta 分别为 [B,HV,T,V]、[B,HV,T,K]、[B,HV,T]。");
     }
 
     PREPARE_CHECK(FitsUint32(info.batch) && FitsUint32(info.seqLen) &&

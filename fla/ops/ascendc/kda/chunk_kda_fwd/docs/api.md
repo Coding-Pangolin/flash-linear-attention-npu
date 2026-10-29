@@ -43,11 +43,11 @@ outputs = chunk_kda_fwd(
 | --- | --- | --- | --- |
 | `q` / `k` | 必选 | 输入 layout 对应 Shape；FP16/BF16 | query / key；三算子组合场景要求 BF16 |
 | `v` | 必选 | 与 `q` 同 dtype | value |
-| `g` | 必选 | dense `[B,T,HV,K]`；packed `[T,HV,K]`；FP32/BF16 | 固定 token-major；raw gate 或已激活的自然对数 gate |
-| `beta` | 必选 | dense `[B,T,HV]`；packed `[T,HV]`；FP32/BF16 | 固定 token-major；delta 系数 |
+| `g` | 必选 | 去掉 V 维的 Shape（含 K 维）；FP32/BF16 | raw gate，或已激活的自然对数 gate |
+| `beta` | 必选 | 去掉 K 维的 Shape；FP32/BF16 | delta 系数 |
 | `scale` | 必选 | float | attention scale |
 | `chunk_size` | `64` | int | 分块长度；只支持 `64`，其它取值（含 `128`）参数校验阶段返回 `ACLNN_ERR_PARAM_INVALID` |
-| `layout` | `"BSND"` | str | `BSND`/`BNSD`/`TND`/`NTD`，只解释 q/k/v |
+| `layout` | `"BSND"` | str | `BSND`/`BNSD`/`TND`/`NTD`，只解释输入 |
 | `initial_state` | `None` | `[N,H_v,K,V]` 或 `state_v_first=true` 时 `[N,H_v,V,K]`；FP32 | 算子就地更新，第 12 个返回值就是它本身 |
 | `output_final_state` | `False` | bool | 控制第 2 槽 `final_state` 是否返回 |
 | `cu_seqlens` | `None` | `[N+1]`；INT64 | 变长序列边界 |
@@ -73,18 +73,6 @@ outputs = chunk_kda_fwd(
 `use_exp2` 取非默认值时，调用必须落在三算子组合场景（BF16 q/k/v、`K=V=128`、
 `chunk_size=64`），否则 Python 入口在发起调用前按 fla-org 参考实现拒绝，不会静默忽略；
 具体字段语义见 [归一化 / gate 开关](#归一化--gate-开关)。
-
-### g/beta 布局迁移与反向边界
-
-`layout` 只描述 q/k/v。调用者保存的原始 g/beta 必须是 token-major：dense 为
-`[B,T,HV,K]` / `[B,T,HV]`，packed 为 `[T,HV,K]` / `[T,HV]`；BNSD/NTD 的
-q/k/v 不能作为再次转置 g/beta 的依据。`gk` 及其他公开中间输出继续使用 Head First。
-
-该改动不改变独立 backward 的输入合同。向 backward 传原始 `raw_g`/beta 时，按其
-`input_layout` 单独适配；使用默认 Head First 调用时，从保存的 token-major 输入显式
-transpose/contiguous，不能将本接口的原始 g/beta 直接当作 Head First。
-完整示例见 `examples/chunk_kda.py`，其反向输入由保留的 BSND/BSN 原始数据构造，
-不再从 qkv 的前向物理布局推断。
 
 ### 返回
 
@@ -280,7 +268,7 @@ V2 入口新增五个可选开关，Python 侧以关键字参数暴露，默认�
 
 ## 输入与输出布局
 
-`layout` 只解释 q/k/v 输入。g/beta 固定 token-major，与 layout 无关；gk/beta_eff 等保存中间量仍为 head-major。旧 head-major g/beta 不自动兼容；T=HV 时形状不能识别数据语义。输出固定为：
+`layout` 只解释 q/k/v/g/beta 输入。输出固定为：
 
 - `attnOut`: BSND 或 TND。
 - `finalStateOut`: `[N,H_v,K,V]` 或 `stateVFirst=true` 时 `[N,H_v,V,K]`。

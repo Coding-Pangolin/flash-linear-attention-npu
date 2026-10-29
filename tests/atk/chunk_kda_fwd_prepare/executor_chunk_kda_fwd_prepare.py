@@ -234,7 +234,7 @@ def _gate_and_beta(
     compute_dtype: torch.dtype,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     layout = str(spec["layout"])
-    gate = (inputs.g.unsqueeze(0) if layout in {"NTD", "TND"} else inputs.g).to(compute_dtype)
+    gate = _layout_to_bsnd(inputs.g, layout).to(compute_dtype)
     if _as_bool(spec["use_gate_in_kernel"]):
         if inputs.a_log is None:
             raise RuntimeError(f"{OP_NAME}: CPU reference requires a_log")
@@ -251,7 +251,7 @@ def _gate_and_beta(
         else:
             gate = -a * torch.nn.functional.softplus(raw)
 
-    beta = (inputs.beta.unsqueeze(0) if layout in {"NTD", "TND"} else inputs.beta).to(compute_dtype)
+    beta = _layout_to_bsnd(inputs.beta, layout, scalar=True).to(compute_dtype)
     if _as_bool(spec["use_beta_sigmoid_in_kernel"]):
         beta = torch.sigmoid(beta)
         if _as_bool(spec["allow_neg_eigval"]):

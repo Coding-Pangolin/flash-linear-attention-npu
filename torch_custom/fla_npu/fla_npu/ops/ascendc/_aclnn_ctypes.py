@@ -3940,8 +3940,8 @@ def npu_chunk_kda_fwd(
         batch, h_num, seqlen, k_dim = 1, q_shape[0], q_shape[1], q_shape[2]
         hv_num, v_dim = v_shape[0], v_shape[2]
         expected_v = (hv_num, seqlen, v_dim)
-        expected_g = (seqlen, hv_num, k_dim)
-        expected_beta = (seqlen, hv_num)
+        expected_g = (hv_num, seqlen, k_dim)
+        expected_beta = (hv_num, seqlen)
     elif layout == "BSND":
         batch, seqlen, h_num, k_dim = q_shape
         hv_num, v_dim = v_shape[2], v_shape[3]
@@ -3952,10 +3952,10 @@ def npu_chunk_kda_fwd(
         batch, h_num, seqlen, k_dim = q_shape
         hv_num, v_dim = v_shape[1], v_shape[3]
         expected_v = (batch, hv_num, seqlen, v_dim)
-        expected_g = (batch, seqlen, hv_num, k_dim)
-        expected_beta = (batch, seqlen, hv_num)
+        expected_g = (batch, hv_num, seqlen, k_dim)
+        expected_beta = (batch, hv_num, seqlen)
     if v_shape != expected_v or g_shape != expected_g or beta_shape != expected_beta:
-        raise RuntimeError("npu_chunk_kda_fwd: v must match qkv layout; g/beta must use fixed token-major shapes.")
+        raise RuntimeError("npu_chunk_kda_fwd: v/g/beta shapes do not match the selected layout.")
     if h_num <= 0 or hv_num < h_num or hv_num % h_num != 0 or h_num > 128 or hv_num > 128:
         raise RuntimeError("npu_chunk_kda_fwd: H/HV must satisfy 0 < H <= HV <= 128 and HV % H == 0.")
     if q.dtype not in {torch.float16, torch.bfloat16} or k.dtype != q.dtype or v.dtype != q.dtype:
@@ -4236,12 +4236,6 @@ def npu_chunk_kda_fwd_prepare(
         else:
             batch, h_num, seqlen, k_dim = q_shape
             hv_num, v_dim = v_shape[1], v_shape[3]
-    gate_shape = ((seqlen, hv_num, k_dim) if is_rank3 else
-                  (batch, seqlen, hv_num, k_dim))
-    if tuple(g_shape) != gate_shape or tuple(beta_shape) != gate_shape[:-1]:
-        raise RuntimeError(
-            "npu_chunk_kda_fwd_prepare: g/beta must use fixed token-major "
-            "[B,T,HV,K]/[B,T,HV] or packed [T,HV,K]/[T,HV], independently of q/k/v layout.")
     if h_num <= 0 or hv_num < h_num or hv_num > 0xFFFFFFFF or hv_num % h_num != 0:
         raise RuntimeError(
             "npu_chunk_kda_fwd_prepare: H/HV must be positive uint32 values with H <= HV and HV % H == 0.")

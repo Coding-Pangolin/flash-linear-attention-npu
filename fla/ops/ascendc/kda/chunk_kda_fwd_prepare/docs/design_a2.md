@@ -61,7 +61,7 @@ StageV0 及 V 输入阶段的 DataCopyPad 直接按 dense BSND 行 stride 读取
 `arch22/chunk_kda_bwd_finalize_vector.h` 中 `outputTokenMajor` 分支直接使用
 带目标 stride 的 DataCopyPad 写出 BSND/TND，输入仍是连续 Head First。
 这里借鉴的是按消费 tile 读入、按公开布局直接写出的方法，不能混淆输入与输出 layout。
-Prepare 的 q/k/v 按公开 layout 读取；原始 g/beta 固定 token-major，使用下文的分块读取，不产生全量 transpose 临时张量。
+Prepare 的 q/k/v/g/beta 均按原公开 layout 读取，进入相同连续 UB tile；使用下文的分块读取，不产生全量 transpose 临时张量。
 
 ### 2.1 符号、工作域和选择
 
@@ -308,23 +308,27 @@ host拒绝非法head比、chunk/K/V、dtype、标量、metadata及DMA stride溢�
 极端gate/beta、norm epsilon、tail padding及高阶逆的数值路径遵守冻结比较器，
 失败合同明确标失败，不新增FP32 relay回退族，也不更改truth/control或容差。
 
-### 2.4.1 qkv layout 与固定 token-major g/beta 的局部搬运
+### 2.4.1 四种公开布局的局部搬运
 
 实际A2入口为 `CHUNK_KDA_PREPARE_RUNTIME_KEYS` 下的 `Arch22::Run`。
-`QkvInputOffset` 按 inputSequenceMajor 计算 q/k/v 地址；`GateInputOffset` 与
-`BetaInputOffset` 固定计算 `((b*T+token)*HV+head)*width`，packed 使用 b=0。
-`Read` 接收各输入自身的 tokenMajor 属性，通过 DataCopyPad 读取有效行；
-token-major 行间隙为 `(heads-1)*width*sizeof(T)`。g 始终按此 stride 读取，
-q/k/v 仅 BSND/TND 使用该 stride。内部矩阵和公开输出仍为 head-major。
-不增加整份 q/k/v/g transpose 或全输入临时张量。
+`QkvInputOffset`、`GateInputOffset` 与 `BetaInputOffset` 均按已有 inputSequenceMajor
+计算来源地址；packed 使用 b=0。head-major 的 g 地址为 `((b*HV+head)*T+token)*K`，
+sequence-major 为 `((b*T+token)*HV+head)*K`；beta 去掉末尾 K。
 
-beta的有效行宽只有1个元素。HV<=8时连续读取r×HV个beta，HV>8时只读取当前head
-所属的至多8列tile，末tile列数取剩余head，UB每行pad到32B。
-再Vector Gather当前head：HV<=8的索引为row×HV×sizeof(BetaT)，否则row×32字节；
-baseAddr为tile内head字节偏移。FP32直接Gather，BF16以uint16位模式Gather后按原顺序Cast。
-只处理有效行，不越过head/序列边界。最多重复读取8列beta；仍用原2KiB beta DMA区。
-初始化索引经S_V发布；MTE2_V保护DMA→Gather，PIPE_V保护Gather→Cast/激活。
-全部 qkv layout 使用相同 beta tile/Gather，索引始终初始化；没有新增 key、资源容量或跨核事件。
+`Read` 用 DataCopyPad 只读取有效行。BNSD/NTD 连续读取每个 head 的 Q/K/V/g；
+BSND/TND 行间隙为 `(heads-1)*width*sizeof(T)`，到达相同连续 UB tile。
+不增加整份 q/k/v/g transpose 或全输入临时张量，不增加布局 key 或 tiling 字段。
+
+head-major beta 在既有 raw scratch 一次连续读取有效 r 个元素，MTE2_V 后转为 FP32 beta；
+BF16沿用原Cast，FP32仅拷贝，不做Gather。sequence-major beta 保留八列以内tile：
+HV<=8连续读取r×HV个元素，HV>8仅读当前head所属的至多8列，末tile取剩余列并pad到32B。
+Gather索引HV<=8为row×HV×sizeof(BetaT)，否则row×32字节；baseAddr为tile内head偏移。
+FP32直接Gather，BF16按uint16位模式Gather后Cast，保持原舍入顺序。
+
+仅sequence-major初始化完整128项BetaGather索引，masked上半区为中性零；不修改inverse索引。
+初始化经S_V发布，MTE2_V保护DMA→Gather/Cast，PIPE_V保护后续beta激活。
+两条读取策略使用相同既有scratch和事件边界，inactive lane完整参与跨核协议。
+尾块只读取有效行；不跨head/序列边界，不增加UB容量、key或跨核事件。
 
 ### 2.4.2 一次性输入L2 cache策略
 
@@ -342,8 +346,8 @@ L1/L0 内部搬运。令 b=ceil(r/16)、m=16b、s=16×(1+…+b)，g/beta 元素�
 |对象|GM 生产/消费|每活跃 lane 字节数；r=64 示例|驻留、复用与搬运方法|
 |---|---|---|---|
 |Q、K 输入|各读一次|各 r×128×2；各16KiB|UB Q/K；BSND/TND 分行 stride DMA，其余连续；GVA 当前仍逐 value head 重读|
-|raw g 输入|读一次|r×128×sg；FP32 为32KiB|固定 token-major 分行 DMA 到 UB，FP32 prefix/RHS 末次消费后复用|
-|beta 输入|一个连续矩形 tile|r×c×sb，c≤min(HV,8)；FP32 最多2KiB|UB 有界 tile/Gather；邻接 head 的冗余读取计入性能|
+|raw g 输入|读一次|r×128×sg；FP32 为32KiB|BNSD/NTD连续、BSND/TND分行DMA到UB，FP32 prefix/RHS末次消费后复用|
+|beta 输入|head-major连续；sequence-major矩形tile|head-major r×sb；sequence-major r×c×sb，c≤min(HV,8)|复用UB raw区；只在sequence-major有邻head冗余读取/Gather，计入性能|
 |V 输入|读一次|r×128×2；16KiB|RHS 阶段读入，不用公开输出作中转|
 |score Payload|AIV 写、AIC 读各一次|512m+256s；各72KiB|Q+/K+ 与四 band K-；scoreReleased 后释放其 L1 区|
 |Raw score|AIC 写、AIV 读各一次|128s；各20KiB|32KiB 是分配容量，四 band 只搬实际矩形；raw-ready 后读|

@@ -309,21 +309,30 @@ __aicore__ inline uint64_t ValueInputOffset(
            Shape::kValueDim;
 }
 
-// Public raw g/beta are token-major, independently of q/k/v.
 __aicore__ inline uint64_t RawGateInputOffset(
     const PrepareRuntimeTiling &tiling, const ChunkRange &chunk,
     uint32_t valueHead)
 {
-    return ((static_cast<uint64_t>(chunk.batchIndex) * tiling.seqLen +
-             chunk.tokenBegin) * tiling.valueHeadNum + valueHead) * Shape::kHeadDim;
+    if (tiling.inputSequenceMajor) {
+        return ((static_cast<uint64_t>(chunk.batchIndex) * tiling.seqLen +
+                 chunk.tokenBegin) * tiling.valueHeadNum + valueHead) *
+               Shape::kHeadDim;
+    }
+    return ((static_cast<uint64_t>(chunk.batchIndex) * tiling.valueHeadNum +
+             valueHead) * tiling.seqLen + chunk.tokenBegin) *
+           Shape::kHeadDim;
 }
 
 __aicore__ inline uint64_t BetaInputOffset(
     const PrepareRuntimeTiling &tiling, const ChunkRange &chunk,
     uint32_t valueHead)
 {
-    return (static_cast<uint64_t>(chunk.batchIndex) * tiling.seqLen +
-            chunk.tokenBegin) * tiling.valueHeadNum + valueHead;
+    if (tiling.inputSequenceMajor) {
+        return (static_cast<uint64_t>(chunk.batchIndex) * tiling.seqLen +
+                chunk.tokenBegin) * tiling.valueHeadNum + valueHead;
+    }
+    return (static_cast<uint64_t>(chunk.batchIndex) * tiling.valueHeadNum +
+            valueHead) * tiling.seqLen + chunk.tokenBegin;
 }
 
 // betaEff、qg/qgScaled/kg/gk 以及矩阵输出固定使用 head-major 布局。

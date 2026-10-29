@@ -56,8 +56,8 @@ BF16 或 FP32，`a_log/dt_bias` 固定为 FP32。
 | --- | --- | --- | --- |
 | `q/k` | BNSD `[B,HK,T,128]`；BSND `[B,T,HK,128]` | NTD `[HK,T,128]`；TND `[T,HK,128]` | BF16 |
 | `v` | BNSD `[B,HV,T,128]`；BSND `[B,T,HV,128]` | NTD `[HV,T,128]`；TND `[T,HV,128]` | BF16 |
-| `g` | 固定 `[B,T,HV,128]` | 固定 `[T,HV,128]` | BF16/FP32，与 qkv layout 无关 |
-| `beta` | 固定 `[B,T,HV]` | 固定 `[T,HV]` | BF16/FP32，与 qkv layout 无关 |
+| `g` | BNSD `[B,HV,T,128]`；BSND `[B,T,HV,128]` | NTD `[HV,T,128]`；TND `[T,HV,128]` | BF16/FP32，跟随 layout |
+| `beta` | BNSD `[B,HV,T]`；BSND `[B,T,HV]` | NTD `[HV,T]`；TND `[T,HV]` | BF16/FP32，跟随 layout |
 | `a_log` | `[HV]` | `[HV]` | 仅 kernel 内计算 gate 时必传 |
 | `dt_bias` | `[HV*128]` | `[HV*128]` | 可选，逻辑 shape 为 `[HV,128]` |
 
@@ -89,10 +89,10 @@ Issue 672 针对 `chunk_kda_bwd_prepare`，本算子是前向 Prepare，不能�
 `B/T/HK/HV` 必须为正数且可由 `uint32_t` 表示；GVA 要求 `0 < HK <= HV` 且
 `HV % HK == 0`。所有输出固定为 head-major：
 
-`layout` 只描述 q/k/v。g/beta 固定 token-major，要求 `(HV-1)*128*sizeof(g)` 和
-`(HV-1)*sizeof(beta)` 不超过 `UINT32_MAX`；BSND/TND 的 q/k/v 还要求
-`(HK-1)*128*2`、`(HV-1)*128*2` 不超过 `UINT32_MAX`。
-旧 head-major g/beta 不自动转换；其形状可区分时返回参数错误。
+`layout` 同时描述 q/k/v/g/beta。仅 BSND/TND 的跨 head DMA 要求
+`(HK-1)*128*2`、`(HV-1)*128*2`、`(HV-1)*128*sizeof(g)` 和
+`(HV-1)*sizeof(beta)` 不超过 `UINT32_MAX`；BNSD/NTD 按 head 连续读取。
+不根据 shape 猜测或自动切换布局语义，也不增加整张输入的布局转置。
 
 | 输出 | dense shape | 无 batch shape | dtype |
 | --- | --- | --- | --- |

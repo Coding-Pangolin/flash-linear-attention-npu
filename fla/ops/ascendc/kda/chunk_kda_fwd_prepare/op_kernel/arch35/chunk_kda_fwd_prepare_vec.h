@@ -1069,9 +1069,12 @@ private:
                                                 args_.tiling.qkHeadNum - 1) *
                                             Shape::kHeadDim * sizeof(bfloat16_t))
                                       : 0;
-        const uint32_t gateStride = static_cast<uint32_t>(
-            static_cast<uint64_t>(args_.tiling.valueHeadNum - 1) *
-            Shape::kHeadDim * sizeof(GateT));
+        const uint32_t gateStride = args_.tiling.inputSequenceMajor
+                                        ? static_cast<uint32_t>(
+                                              static_cast<uint64_t>(
+                                                  args_.tiling.valueHeadNum - 1) *
+                                              Shape::kHeadDim * sizeof(GateT))
+                                        : 0;
 
         AscendC::Mutex::Lock<PIPE_MTE2>(mutex);
         AscendC::DataCopyPad(q, qGm_[qkOffset],
@@ -1089,13 +1092,18 @@ private:
              static_cast<uint32_t>(Shape::kHeadDim * sizeof(GateT)),
              gateStride, 0, 0},
             {false, 0, 0, 0});
-        { // beta DMA uses padded token-major rows for all q/k/v layouts.
+        if (args_.tiling.inputSequenceMajor) {
             const uint32_t betaStride = static_cast<uint32_t>(
                 static_cast<uint64_t>(args_.tiling.valueHeadNum - 1) *
                 sizeof(BetaT));
             AscendC::DataCopyPad(beta, betaGm_[betaOffset],
                 {static_cast<uint16_t>(chunk.validRows),
                  static_cast<uint32_t>(sizeof(BetaT)), betaStride, 0, 0},
+                {false, 0, 0, 0});
+        } else {
+            AscendC::DataCopyPad(beta, betaGm_[betaOffset],
+                {1, static_cast<uint32_t>(chunk.validRows * sizeof(BetaT)),
+                 0, 0, 0},
                 {false, 0, 0, 0});
         }
         if constexpr (CompilePolicy::gateMode != GateMode::PrecomputedStep) {
@@ -1116,9 +1124,27 @@ private:
         AscendC::Mutex::Unlock<PIPE_MTE2>(mutex);
 
         AscendC::Mutex::Lock<PIPE_V>(mutex);
-        { // beta DMA uses padded token-major rows for all q/k/v layouts.
+        if (args_.tiling.inputSequenceMajor) {
             AscendC::VF_CALL<Detail::StageV0Vf<
                 GateT, BetaT, CompilePolicy, true>>(
+                reinterpret_cast<__ubuf__ bfloat16_t *>(q.GetPhyAddr()),
+                reinterpret_cast<__ubuf__ bfloat16_t *>(k.GetPhyAddr()),
+                reinterpret_cast<__ubuf__ GateT *>(gate.GetPhyAddr()),
+                reinterpret_cast<__ubuf__ BetaT *>(beta.GetPhyAddr()),
+                reinterpret_cast<__ubuf__ float *>(dtBias.GetPhyAddr()),
+                reinterpret_cast<__ubuf__ float *>(aLog.GetPhyAddr()),
+                reinterpret_cast<__ubuf__ float *>(g.GetPhyAddr()),
+                reinterpret_cast<__ubuf__ float *>(gRef.GetPhyAddr()),
+                reinterpret_cast<__ubuf__ float *>(gLast.GetPhyAddr()),
+                reinterpret_cast<__ubuf__ float *>(qRstd.GetPhyAddr()),
+                reinterpret_cast<__ubuf__ float *>(kRstd.GetPhyAddr()),
+                reinterpret_cast<__ubuf__ float *>(betaEff.GetPhyAddr()),
+                static_cast<uint16_t>(chunk.validRows), args_.tiling.epsilon,
+                args_.tiling.lowerBound, args_.tiling.hasDtBias,
+                args_.aLog != nullptr);
+        } else {
+            AscendC::VF_CALL<Detail::StageV0Vf<
+                GateT, BetaT, CompilePolicy, false>>(
                 reinterpret_cast<__ubuf__ bfloat16_t *>(q.GetPhyAddr()),
                 reinterpret_cast<__ubuf__ bfloat16_t *>(k.GetPhyAddr()),
                 reinterpret_cast<__ubuf__ GateT *>(gate.GetPhyAddr()),

@@ -1389,21 +1389,8 @@ def npu_chunk_kda_fwd(q, k, v, g, beta, scale, chunk_size=64, *,
             "npu_chunk_kda_fwd: epsilon must be a positive finite number.")
     import torch
 
-    rank3 = layout in ("TND", "NTD")
-    sequence_major = layout in ("BSND", "TND")
-    if (layout not in ("BNSD", "BSND", "NTD", "TND")
-            or any(t.ndim != (3 if rank3 else 4) for t in (q, k, v))):
-        raise RuntimeError("npu_chunk_kda_fwd: q/k/v ranks must match BNSD/BSND/NTD/TND layout.")
-    token_axis = (0 if sequence_major else 1) if rank3 else (1 if sequence_major else 2)
-    head_axis = (1 if sequence_major else 0) if rank3 else (2 if sequence_major else 1)
-    gate_shape = ((int(q.shape[token_axis]), int(v.shape[head_axis]), int(k.shape[-1]))
-                  if rank3 else (int(q.shape[0]), int(q.shape[token_axis]),
-                                 int(v.shape[head_axis]), int(k.shape[-1])))
-    if tuple(g.shape) != gate_shape or tuple(beta.shape) != gate_shape[:-1]:
-        raise RuntimeError(
-            "npu_chunk_kda_fwd: g/beta must use fixed token-major "
-            "[B,T,HV,K]/[B,T,HV] or packed [T,HV,K]/[T,HV], independently of q/k/v layout.")
-    # K/V 档位：只支持 K=V=64 与 K=V=128，混合档与其它取值都拒绝。
+    # K/V 档位：只支持 K=V=64 与 K=V=128，混合档与其它取值都拒绝。单列一条
+    # 判据而不是交给 L2，是为了让两条后端在 Python 侧就给出同一句话。
     key_dim = int(k.shape[-1])
     value_dim = int(v.shape[-1])
     if key_dim != value_dim or key_dim not in _KDA_FWD_SUPPORTED_KV_DIMS:
@@ -1536,12 +1523,6 @@ def npu_chunk_kda_fwd_prepare(q, k, v, g, beta, scale, chunk_size=64, *,
     else:
         batch, qk_heads, seq_len, key_dim = q.shape
         value_heads, value_dim = v.shape[1], v.shape[3]
-    gate_shape = ((seq_len, value_heads, key_dim) if rank3 else
-                  (batch, seq_len, value_heads, key_dim))
-    if tuple(g.shape) != gate_shape or tuple(beta.shape) != gate_shape[:-1]:
-        raise RuntimeError(
-            "npu_chunk_kda_fwd_prepare: g/beta must use fixed token-major "
-            "[B,T,HV,K]/[B,T,HV] or packed [T,HV,K]/[T,HV], independently of q/k/v layout.")
     key_shape = ((value_heads, seq_len, key_dim) if rank3
                  else (batch, value_heads, seq_len, key_dim))
     value_shape = ((value_heads, seq_len, value_dim) if rank3

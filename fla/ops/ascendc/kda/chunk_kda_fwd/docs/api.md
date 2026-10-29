@@ -43,11 +43,11 @@ outputs = chunk_kda_fwd(
 | --- | --- | --- | --- |
 | `q` / `k` | 必选 | 输入 layout 对应 Shape；FP16/BF16 | query / key；三算子组合场景要求 BF16 |
 | `v` | 必选 | 与 `q` 同 dtype | value |
-| `g` | 必选 | 去掉 V 维的 Shape（含 K 维）；FP32/BF16 | raw gate，或已激活的自然对数 gate |
-| `beta` | 必选 | 去掉 K 维的 Shape；FP32/BF16 | delta 系数 |
+| `g` | 必选 | dense `[B,T,HV,K]`；packed `[T,HV,K]`；FP32/BF16 | 固定 token-major；raw gate 或已激活的自然对数 gate |
+| `beta` | 必选 | dense `[B,T,HV]`；packed `[T,HV]`；FP32/BF16 | 固定 token-major；delta 系数 |
 | `scale` | 必选 | float | attention scale |
 | `chunk_size` | `64` | int | 分块长度；只支持 `64`，其它取值（含 `128`）参数校验阶段返回 `ACLNN_ERR_PARAM_INVALID` |
-| `layout` | `"BSND"` | str | `BSND`/`BNSD`/`TND`/`NTD`，只解释输入 |
+| `layout` | `"BSND"` | str | `BSND`/`BNSD`/`TND`/`NTD`，只解释 q/k/v |
 | `initial_state` | `None` | `[N,H_v,K,V]` 或 `state_v_first=true` 时 `[N,H_v,V,K]`；FP32 | 算子就地更新，第 12 个返回值就是它本身 |
 | `output_final_state` | `False` | bool | 控制第 2 槽 `final_state` 是否返回 |
 | `cu_seqlens` | `None` | `[N+1]`；INT64 | 变长序列边界 |
@@ -268,7 +268,7 @@ V2 入口新增五个可选开关，Python 侧以关键字参数暴露，默认�
 
 ## 输入与输出布局
 
-`layout` 只解释 q/k/v/g/beta 输入。输出固定为：
+`layout` 只解释 q/k/v 输入。g/beta 固定 token-major，与 layout 无关；gk/beta_eff 等保存中间量仍为 head-major。旧 head-major g/beta 不自动兼容；T=HV 时形状不能识别数据语义。输出固定为：
 
 - `attnOut`: BSND 或 TND。
 - `finalStateOut`: `[N,H_v,K,V]` 或 `stateVFirst=true` 时 `[N,H_v,V,K]`。

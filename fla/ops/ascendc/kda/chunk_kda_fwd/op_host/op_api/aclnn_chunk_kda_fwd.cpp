@@ -303,9 +303,9 @@ aclnnStatus ResolveShapeInfo(const ChunkKdaFwdParams &params, KdaFwdLayout layou
         info.hvNum = Dim(params.v, 0);
         info.vDim = Dim(params.v, 2);
         CHECK_COND(HasShape(params.v, {info.hvNum, info.seqlen, info.vDim}) &&
-                       HasShape(params.g, {info.hvNum, info.seqlen, info.kDim}) &&
-                       HasShape(params.beta, {info.hvNum, info.seqlen}),
-                   ACLNN_ERR_PARAM_INVALID, "NTD expects v/g/beta as [HV,T,V], [HV,T,K], [HV,T].");
+                       HasShape(params.g, {info.seqlen, info.hvNum, info.kDim}) &&
+                       HasShape(params.beta, {info.seqlen, info.hvNum}),
+                   ACLNN_ERR_PARAM_INVALID, "NTD expects v/g/beta as [HV,T,V], [T,HV,K], [T,HV].");
     } else if (layout == KdaFwdLayout::BSND) {
         info.batch = Dim(params.q, 0);
         info.seqlen = Dim(params.q, 1);
@@ -326,10 +326,10 @@ aclnnStatus ResolveShapeInfo(const ChunkKdaFwdParams &params, KdaFwdLayout layou
         info.hvNum = Dim(params.v, 1);
         info.vDim = Dim(params.v, 3);
         CHECK_COND(HasShape(params.v, {info.batch, info.hvNum, info.seqlen, info.vDim}) &&
-                       HasShape(params.g, {info.batch, info.hvNum, info.seqlen, info.kDim}) &&
-                       HasShape(params.beta, {info.batch, info.hvNum, info.seqlen}),
+                       HasShape(params.g, {info.batch, info.seqlen, info.hvNum, info.kDim}) &&
+                       HasShape(params.beta, {info.batch, info.seqlen, info.hvNum}),
                    ACLNN_ERR_PARAM_INVALID,
-                   "BNSD expects v/g/beta as [B,HV,T,V], [B,HV,T,K], [B,HV,T].");
+                   "BNSD expects v/g/beta as [B,HV,T,V], [B,T,HV,K], [B,T,HV].");
     }
     info.seqNum = params.cuSeqlensOptional == nullptr
                       ? info.batch
@@ -717,31 +717,29 @@ aclnnStatus aclnnChunkKdaFwdGetWorkspaceSize(
     const aclTensor *qHead = params.q;
     const aclTensor *kHead = params.k;
     const aclTensor *vHead = params.v;
-    const aclTensor *gHead = params.g;
+    const aclTensor *gTokenMajor = params.g;
     const aclTensor *betaHead = params.beta;
-    if (parsedLayout == KdaFwdLayout::BSND) {
-        // beta is small and its scalar-per-token rows are not DMA friendly in
-        // sequence-major form. Keep only this lightweight transpose.
-        betaHead = Transpose(params.beta, {0, 2, 1}, executorPtr);
-    } else if (parsedLayout == KdaFwdLayout::TND) {
+    // Fused consumers still require head-major beta. Its public layout is
+    // token-major regardless of the independently selected q/k/v layout.
+    betaHead = info.isRank3 ? Transpose(params.beta, {1, 0}, executorPtr)
+                             : Transpose(params.beta, {0, 2, 1}, executorPtr);
+    if (parsedLayout == KdaFwdLayout::TND) {
         qHead = Transpose(params.q, {1, 0, 2}, executorPtr);
         kHead = Transpose(params.k, {1, 0, 2}, executorPtr);
         vHead = Transpose(params.v, {1, 0, 2}, executorPtr);
-        gHead = Transpose(params.g, {1, 0, 2}, executorPtr);
-        betaHead = Transpose(params.beta, {1, 0}, executorPtr);
     }
     CHECK_RET(qHead != nullptr && kHead != nullptr && vHead != nullptr &&
-                  gHead != nullptr && betaHead != nullptr,
+                  gTokenMajor != nullptr && betaHead != nullptr,
               ACLNN_ERR_INNER_NULLPTR);
 
     if (info.isRank3) {
         qHead = AsRank4(qHead, MakeShape({1, info.hNum, info.seqlen, info.kDim}), executorPtr);
         kHead = AsRank4(kHead, MakeShape({1, info.hNum, info.seqlen, info.kDim}), executorPtr);
         vHead = AsRank4(vHead, MakeShape({1, info.hvNum, info.seqlen, info.vDim}), executorPtr);
-        gHead = AsRank4(gHead, MakeShape({1, info.hvNum, info.seqlen, info.kDim}), executorPtr);
+        gTokenMajor = AsRank4(gTokenMajor, MakeShape({1, info.seqlen, info.hvNum, info.kDim}), executorPtr);
         betaHead = AsRank4(betaHead, MakeShape({1, info.hvNum, info.seqlen}), executorPtr);
         CHECK_RET(qHead != nullptr && kHead != nullptr && vHead != nullptr &&
-                      gHead != nullptr && betaHead != nullptr,
+                      gTokenMajor != nullptr && betaHead != nullptr,
                   ACLNN_ERR_INNER_NULLPTR);
     }
 
@@ -867,7 +865,7 @@ aclnnStatus aclnnChunkKdaFwdGetWorkspaceSize(
 
     auto launchStage = [&](int64_t stage) {
         return l0op::KdaChunkForward(
-            qHead, kHead, vHead, gHead, betaHead, params.aLogOptional,
+            qHead, kHead, vHead, gTokenMajor, betaHead, params.aLogOptional,
             params.dtBiasOptional, initialStateCompute, params.cuSeqlensOptional,
             params.chunkIndicesOptional, params.scale, params.chunkSize,
             params.safeGate, parsedLayout == KdaFwdLayout::BSND,

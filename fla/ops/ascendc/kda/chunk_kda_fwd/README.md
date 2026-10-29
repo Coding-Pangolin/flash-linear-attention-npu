@@ -37,15 +37,15 @@ gk_i = cumsum(gate)_i / ln(2)
 | --- | --- | --- | --- |
 | `q/k` | 必选 | 输入 layout 对应 Shape；FP16/BF16 | Query/Key |
 | `v` | 必选 | 输入 layout 对应 Shape；与 q 同 dtype | Value |
-| `g` | 必选 | 输入 layout 对应 K 维 Shape；FP32/BF16 | raw gate 或已激活自然对数 gate |
-| `beta` | 必选 | 去掉 g 的 K 维；FP32/BF16 | Delta 系数 |
+| `g` | 必选 | dense `[B,T,HV,K]` / packed `[T,HV,K]`；FP32/BF16 | 固定 token-major；raw gate 或已激活自然对数 gate |
+| `beta` | 必选 | dense `[B,T,HV]` / packed `[T,HV]`；FP32/BF16 | 固定 token-major；Delta 系数 |
 | `A_log` | 条件必选 | `[H_v]`，FP32 | `use_gate_in_kernel=true` 时必选 |
 | `dt_bias` | 可选 | `[H_v*K]`，FP32 | gate bias |
 | `initial_state` | 可选 | `[N,H_v,K,V]` 或 `[N,H_v,V,K]`，FP32 | 由 `state_v_first` 解释 |
 | `cu_seqlens` | 可选 | `[N+1]`，INT64 | 变长序列 |
 | `chunk_indices` | 可选 | `[2*N_c]`，INT64 | canonical chunk 顺序 |
 
-`layout` 只描述上述输入。BSND/TND 由 L2 使用 `l0op::Transpose` 转为内部 BNSD/NTD。
+`layout` 只描述 q/k/v。V2 直接将四布局 qkv 与 token-major g/beta 传给独立 Prepare；旧融合入口仅对 TND qkv 做 head-major 适配，g 始终按 token-major 分块读取，beta 单独适配为其内部消费者要求的 head-major。所有 L2 转换计入执行成本。
 
 ## 输出
 

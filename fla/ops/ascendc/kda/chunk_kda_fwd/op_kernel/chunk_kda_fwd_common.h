@@ -154,7 +154,7 @@ __aicore__ inline GateRuntimeTiling MakeGateTiling(const TilingData &tiling)
         tiling.gateDataType,
         tiling.useGateInKernel ? 1 : 0,
         tiling.safeGate ? 1 : 0,
-        tiling.inputSequenceMajor ? 1 : 0,
+        1, // Raw g is always token-major; this is not the q/k/v layout flag.
         tiling.lowerBound,
         tiling.gateUsedCoreNum,
     };

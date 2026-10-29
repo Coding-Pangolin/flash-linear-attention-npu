@@ -300,8 +300,8 @@ def _prepare_inputs(
         q=_layout_from_bsnd(q_bsnd, layout),
         k=_layout_from_bsnd(k_bsnd, layout),
         v=_layout_from_bsnd(v_bsnd, layout),
-        g=_layout_from_bsnd(g_bsnd, layout),
-        beta=_layout_from_bsnd(beta_bsnd, layout, beta=True),
+        g=(g_bsnd.squeeze(0) if layout in {"NTD", "TND"} else g_bsnd).contiguous(),
+        beta=(beta_bsnd.squeeze(0) if layout in {"NTD", "TND"} else beta_bsnd).contiguous(),
         A_log=A_log,
         dt_bias=dt_bias,
         initial_state=initial_state,
@@ -313,7 +313,7 @@ def _prepare_inputs(
 
 def _gate_cumsum(inputs: _PreparedInputs, spec: dict) -> torch.Tensor:
     layout = str(spec["layout"])
-    g = _layout_to_bsnd(inputs.g, layout).to(
+    g = (inputs.g.unsqueeze(0) if layout in {"NTD", "TND"} else inputs.g).to(
         torch.float64 if inputs.g.dtype == torch.float64 else torch.float32
     )
     compute_dtype = g.dtype
@@ -402,7 +402,7 @@ def _reference_impl(inputs: _PreparedInputs, spec: dict):
     q = _layout_to_bsnd(inputs.q, layout)
     k = _layout_to_bsnd(inputs.k, layout)
     v = _layout_to_bsnd(inputs.v, layout)
-    beta = _layout_to_bsnd(inputs.beta, layout, beta=True)
+    beta = inputs.beta.unsqueeze(0) if layout in {"NTD", "TND"} else inputs.beta
     gk = _gate_cumsum(inputs, spec)
     compute_dtype = torch.float64 if any(
         tensor is not None and tensor.dtype == torch.float64
@@ -533,7 +533,7 @@ def _reference_model_parallel(inputs: _PreparedInputs, spec: dict):
     q = _layout_to_bsnd(inputs.q, layout)
     k = _layout_to_bsnd(inputs.k, layout)
     v = _layout_to_bsnd(inputs.v, layout)
-    beta = _layout_to_bsnd(inputs.beta, layout, beta=True)
+    beta = inputs.beta.unsqueeze(0) if layout in {"NTD", "TND"} else inputs.beta
     gk = _gate_cumsum(inputs, spec)
     compute_dtype = torch.float64 if any(
         tensor is not None and tensor.dtype == torch.float64
@@ -833,7 +833,8 @@ def _run_positive_npu(inputs: _PreparedInputs, spec: dict):
         import ascend_ops  # noqa: F401
 
         gk = _gate_cumsum(inputs, spec).permute(0, 2, 1, 3).contiguous()
-        beta = inputs.beta.to(torch.float32).contiguous()
+        beta = (inputs.beta.permute(1, 0) if inputs.beta.dim() == 2
+                else inputs.beta.permute(0, 2, 1)).to(torch.float32).contiguous()
         outputs = list(torch.ops.ascend_ops.chunk_kda_fwd_direct(
             inputs.q,
             inputs.k,
@@ -923,7 +924,7 @@ def _mutate_raw(inputs: _PreparedInputs, spec: dict, outputs: list):
     elif mutation == "g_shape":
         values["g"] = inputs.g[..., :-16].contiguous()
     elif mutation == "beta_shape":
-        values["beta"] = inputs.beta.narrow(_head_axis(layout), 0, max(1, int(spec["HV"]) - 1)).contiguous()
+        values["beta"] = inputs.beta.narrow(inputs.beta.dim() - 1, 0, max(1, int(spec["HV"]) - 1)).contiguous()
     elif mutation in {"h_zero", "hv_lt_h", "hv_not_divisible", "h_gt_128"}:
         head_sizes = {
             "h_zero": (0, 4),
@@ -936,8 +937,8 @@ def _mutate_raw(inputs: _PreparedInputs, spec: dict, outputs: list):
         values["q"] = _resize_axis(inputs.q, head_axis, h_num)
         values["k"] = _resize_axis(inputs.k, head_axis, h_num)
         values["v"] = _resize_axis(inputs.v, head_axis, hv_num)
-        values["g"] = _resize_axis(inputs.g, head_axis, hv_num)
-        values["beta"] = _resize_axis(inputs.beta, head_axis, hv_num)
+        values["g"] = _resize_axis(inputs.g, inputs.g.dim() - 2, hv_num)
+        values["beta"] = _resize_axis(inputs.beta, inputs.beta.dim() - 1, hv_num)
     elif mutation.startswith("k_"):
         # k_mixed 把 K 降到 64 而 V 保持 128：K/V 不同档，公开契约要求两侧都拒绝。
         k_size = {"k_lt_16": 8, "k_gt_256": 272, "k_unaligned": 24,

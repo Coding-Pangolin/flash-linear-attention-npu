@@ -20,10 +20,10 @@ constexpr uint32_t UbV=0x28000, UbSmall=0x2C000, UbMask=0x2F000;
 constexpr uint32_t ALogCacheSmall=2688, ALogCacheHeads=128;
 constexpr uint32_t BetaGatherIndexSmall=2816;
 constexpr uint32_t InverseGatherIndexSmall=2944;
-static_assert(InverseGatherIndexSmall>=BetaGatherIndexSmall+64);
+static_assert(InverseGatherIndexSmall>=BetaGatherIndexSmall+128);
 static_assert(UbSmall+(InverseGatherIndexSmall+64)*sizeof(uint32_t)<=UbMask);
 static_assert(BetaGatherIndexSmall>=ALogCacheSmall+ALogCacheHeads);
-static_assert(UbSmall+(BetaGatherIndexSmall+64)*sizeof(uint32_t)<=UbMask);
+static_assert(UbSmall+(BetaGatherIndexSmall+128)*sizeof(uint32_t)<=UbMask);
 static_assert(ALogCacheSmall>=2592);
 static_assert(UbSmall+(ALogCacheSmall+ALogCacheHeads)*sizeof(float)<=UbMask);
 constexpr uint32_t MinusOffsetHost(uint32_t band) {

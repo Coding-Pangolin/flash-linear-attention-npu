@@ -115,8 +115,11 @@ A5 保留原模板声明、arch35 实现和字段；下面的资源和协议专�
 small_ 内 rstd 为 [0x2c000,0x2c200)，FP32 beta 为 [0x2c200,0x2c300)，
 beta DMA [0x2e000,0x2e800)，BF16 pack [0x2e800,0x2e880)。
 sequence-major beta的有界tile按2.4读取，不再每标量启动一行DMA。
-只读索引：beta Small[2816,2880)即UB[0x2ec00,0x2ed00)；Identity叶内Gather
-Small[2880,2944)即UB[0x2ed00,0x2ee00)。二者与ALog缓存/临时量不重叠。
+只读索引：beta Small[2816,2944)即UB[0x2ec00,0x2ee00)，完整定义128个uint32索引；
+前64项为实际row stride，额外masked项为零，覆盖BF16 Gather的完整索引读取范围。
+Identity叶内Gather使用Small[2944,3008)即UB[0x2ee00,0x2ef00)。
+二者与ALog缓存/临时量不重叠，均在现有Small UB内，不增加190KiB分配。
+资源头的static_assert同时检查128项beta范围、64项叶内范围与Mask边界。
 Identity叶内阶段复用Small[1536,1600)为两份当前行。
 Lower store经MTE3_V退休后，UB[UbQ,UbG)整64KiB用于最多31列的系数广播；
 work_[2048,4096)为最多1984个int32索引，[4096,6144)为对应FP32系数，

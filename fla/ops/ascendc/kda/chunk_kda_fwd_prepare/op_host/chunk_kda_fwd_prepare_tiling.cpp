@@ -5,7 +5,7 @@
  */
 
 #include "chunk_kda_fwd_prepare_tiling.h"
-#include "op_common/log/log.h"
+#include "chunk_kda_fwd_prepare_log.h"
 
 #include <cmath>
 #include <cstdarg>
@@ -48,7 +48,7 @@ void ReportTilingFailure(const char *format, ...)
         result = "tiling validation failed";
     }
     va_end(args);
-    OP_LOGE_FOR_INVALID_ARGUMENT_WITH_REASON(
+    kda_prepare::ReportInvalidArgument(
         OP_NAME, "tiling", result.c_str());
 }
 

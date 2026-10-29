@@ -5,7 +5,7 @@
  */
 
 // Load structured reporters before opdev's legacy validation macros.
-#include "op_common/log/log.h"
+#include "../chunk_kda_fwd_prepare_log.h"
 #include "aclnn_chunk_kda_fwd_prepare.h"
 #include "chunk_kda_fwd_prepare.h"
 #include "../chunk_kda_fwd_prepare_output_mask.h"
@@ -114,14 +114,14 @@ std::string FormatMessage(const char *format, ...)
 
 aclnnStatus InvalidConstraint(aclnnStatus status, const std::string &reason)
 {
-    OP_LOGE_FOR_INVALID_VALUE_WITH_REASON(
+    kda_prepare::ReportInvalidValue(
         OP_NAME, "constraint", "invalid", reason);
     return status;
 }
 
 aclnnStatus InternalFailure(aclnnStatus status, const char *reason)
 {
-    OP_LOGE_FOR_INVALID_ARGUMENT_WITH_REASON(OP_NAME, "internal", reason);
+    kda_prepare::ReportInvalidArgument(OP_NAME, "internal", reason);
     return status;
 }
 

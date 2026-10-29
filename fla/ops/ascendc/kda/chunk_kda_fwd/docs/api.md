@@ -74,6 +74,18 @@ outputs = chunk_kda_fwd(
 `chunk_size=64`），否则 Python 入口在发起调用前按 fla-org 参考实现拒绝，不会静默忽略；
 具体字段语义见 [归一化 / gate 开关](#归一化--gate-开关)。
 
+### g/beta 布局迁移与反向边界
+
+`layout` 只描述 q/k/v。调用者保存的原始 g/beta 必须是 token-major：dense 为
+`[B,T,HV,K]` / `[B,T,HV]`，packed 为 `[T,HV,K]` / `[T,HV]`；BNSD/NTD 的
+q/k/v 不能作为再次转置 g/beta 的依据。`gk` 及其他公开中间输出继续使用 Head First。
+
+该改动不改变独立 backward 的输入合同。向 backward 传原始 `raw_g`/beta 时，按其
+`input_layout` 单独适配；使用默认 Head First 调用时，从保存的 token-major 输入显式
+transpose/contiguous，不能将本接口的原始 g/beta 直接当作 Head First。
+完整示例见 `examples/chunk_kda.py`，其反向输入由保留的 BSND/BSN 原始数据构造，
+不再从 qkv 的前向物理布局推断。
+
 ### 返回
 
 12 个槽位顺序固定，槽位数与参数取值无关；不产出的槽位为 `None`：

@@ -329,6 +329,38 @@ beta、a_log、dt_bias、全部workspace及输出保持原cache策略。
 cache hint仅影响复用策略，不代替ready/release，不改变布局、数学或六key选择。
 效果必须由同输入ABBA确认，不能从提示本身推断硬件cache命中率或带宽收益。
 
+### 2.4.3 每个活跃 lane 的逻辑 GM 搬运量
+
+下面按一个有效 value head、一个 chunk 计数，字节数不包括 cache line、总线对齐放大、
+L1/L0 内部搬运。令 b=ceil(r/16)、m=16b、s=16×(1+…+b)，g/beta 元素大小为 sg/sb。
+读写地址与释放条件分别对应 Stage 0–6 和 2.2/2.3；表中容量不能替代实际有效搬运量。
+
+|对象|GM 生产/消费|每活跃 lane 字节数；r=64 示例|驻留、复用与搬运方法|
+|---|---|---|---|
+|Q、K 输入|各读一次|各 r×128×2；各16KiB|UB Q/K；BSND/TND 分行 stride DMA，其余连续；GVA 当前仍逐 value head 重读|
+|raw g 输入|读一次|r×128×sg；FP32 为32KiB|固定 token-major 分行 DMA 到 UB，FP32 prefix/RHS 末次消费后复用|
+|beta 输入|一个连续矩形 tile|r×c×sb，c≤min(HV,8)；FP32 最多2KiB|UB 有界 tile/Gather；邻接 head 的冗余读取计入性能|
+|V 输入|读一次|r×128×2；16KiB|RHS 阶段读入，不用公开输出作中转|
+|score Payload|AIV 写、AIC 读各一次|512m+256s；各72KiB|Q+/K+ 与四 band K-；scoreReleased 后释放其 L1 区|
+|Raw score|AIC 写、AIV 读各一次|128s；各20KiB|32KiB 是分配容量，四 band 只搬实际矩形；raw-ready 后读|
+|RHS K/V|AIV 写、AIC 读各一次|各16KiB，合计各32KiB|尾行在 UB 补零后仍搬完整矩阵；AIC 提前载入 L1，W/U 共用 inverse|
+|Lower|AIV 写一次|8KiB|所有 key 当前均写完整 BF16 Lower；key0 的 AIC 不读该区域；其余 key 见下文|
+|Identity 叶内逆|AIV 写、AIC 读各一次|各8KiB|复用已退休 Payload 低地址，统一 BF16 relay；key0 为完整64阶结果|
+|Eye|每 lane 两 slot 各初始化一次|启动时共16KiB写入|immutable GM；Identity 每 work 读8KiB到UB；L2 每 work 读8KiB到L1 X，并在 lane 首次工作额外读8KiB到L1 I|
+|ALog、dt_bias|ALog按容量缓存，bias逐 work读|缓存最多128×4B/每AIV；有bias时512B/work|使用Small区；不随qkv layout改变地址语义|
+
+Identity+Softplus/SafeSigmoid 的 AIC 另读8KiB Lower；L2 的 AIC 分别将同一 Lower
+读入 P 与 Power，各8KiB，不能因逻辑内容相同而只计一次。L2 的 inverse 更新与分层合并
+常驻 L1，不逐轮写回 GM；W/U 在 paired L0 中共享 inverse 的装载。
+
+完整 Save13 的有效输出按上述 r 计算；r=64 且该 value head 是 Q/K checkpoint owner 时，
+唯一输出区域共160.75KiB：gk 32KiB，Aqk/Akk各8KiB，W/U/qg/kg/qgScaled/qHat/kHat各16KiB，
+qRstd/kRstd/betaEff各256B。GVA 非 owner 不写 qHat/kHat/qRstd/kRstd，减去32.5KiB。
+这只是唯一输出区域大小：Akk 的完整初始化/叶内结果之后，L2 Cube 还覆盖写5KiB下三角块，
+Identity+Softplus/SafeSigmoid还覆盖写2KiB的32×32合并块；key0不再由Cube覆盖Akk。
+这些重复写回、RHS padding、Eye初始化和全部启动成本均包含在算子 Task/Event 中。
+尾块只向公开输出写有效行；被关闭的槽不写回，不能从其节省量扣除仍必要的内部生产。
+
 ### 2.5 Gate 参数缓存
 
 非 Precomputed gate 的 exp(a_log) 在每个 AIV 开始工作前计算一次。

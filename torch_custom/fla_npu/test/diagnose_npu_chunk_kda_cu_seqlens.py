@@ -194,7 +194,7 @@ def _make_model_shape_dump(dump_path: pathlib.Path) -> pathlib.Path:
 
 
 def _to_input_layout(tensor: torch.Tensor, layout: str) -> torch.Tensor:
-    """Convert canonical BSND/BSN inputs to the requested public input layout."""
+    """Convert canonical BSND q/k/v to the requested public input layout."""
     if layout == "BSND":
         return tensor.contiguous()
     if layout == "BNSD":
@@ -537,8 +537,8 @@ def run_diagnostic(
     q_input = _to_input_layout(q, layout)
     k_input = _to_input_layout(k, layout)
     v_input = _to_input_layout(v, layout)
-    raw_gate_input = _to_input_layout(raw_gate, layout)
-    beta_input = _to_input_layout(beta, layout)
+    raw_gate_input = (raw_gate.squeeze(0) if rank3 else raw_gate).contiguous()
+    beta_input = (beta.squeeze(0) if rank3 else beta).contiguous()
     indices = _chunk_indices(cu, chunk_size)
     op_inputs = (q_input, k_input, v_input, raw_gate_input, beta_input, q.shape[-1] ** -0.5, chunk_size)
     op_kwargs: dict[str, object] = {

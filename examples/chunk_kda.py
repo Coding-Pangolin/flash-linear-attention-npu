@@ -336,8 +336,7 @@ def run_once(args: argparse.Namespace) -> int:
     scale = args.scale if args.scale is not None else kd ** -0.5
     cu = parse_cu_seqlens(args.cu_seqlens, tokens, batch)
     packed = cu is not None
-    # 打包场景本脚本按 head-major 拼写构造（[H,T,D] / beta [H,T]），即 NTD；
-    # 与 MindSpeed 入口 _bsnd_to_head_major 的口径一致。
+    # 打包 q/k/v 使用 NTD；g/beta 始终保留 token-major，不跟随 qkv layout。
     layout = "NTD" if packed else args.layout
     if padded_layout_unsupported(layout, packed):
         raise ValueError(f"unsupported layout {layout} for packed={packed}")
@@ -356,8 +355,8 @@ def run_once(args: argparse.Namespace) -> int:
     q_op = to_op_layout(q).contiguous()
     k_op = to_op_layout(k).contiguous()
     v_op = to_op_layout(v).contiguous()
-    g_op = to_op_layout(g).contiguous()
-    beta_op = to_op_layout(beta, is_beta=True).contiguous()
+    g_op = (g.reshape(batch * tokens, hv, kd) if packed else g).contiguous()
+    beta_op = (beta.reshape(batch * tokens, hv) if packed else beta).contiguous()
 
     saved = {}
     if args.qk_l2norm:
@@ -477,11 +476,11 @@ def run_once(args: argparse.Namespace) -> int:
               f"(o absmax={o.detach().float().abs().max().item():.6g})", flush=True)
         return 0
 
-    # 反向：用前向保存量算梯度。反向的 q/k/v/beta 一律是 head-major
-    # （dense 为 [B,H,T,D]、packed 为 [H,T,D]），与前向的公开输入布局不同。
+    # 从保留的 BSND/BSN 原始输入构造反向 Head First 输入；反向合同没有改变。
     def to_head_major(x: torch.Tensor, is_beta: bool = False) -> torch.Tensor:
         if packed:
-            return x.contiguous()
+            flat = x.reshape(batch * tokens, *x.shape[2:])
+            return (flat.permute(1, 0) if is_beta else flat.permute(1, 0, 2)).contiguous()
         # 反向要求连续张量（permute 视图会被 optimized 路径拒绝）。
         return (x.permute(0, 2, 1) if is_beta else x.permute(0, 2, 1, 3)).contiguous()
 
@@ -490,7 +489,7 @@ def run_once(args: argparse.Namespace) -> int:
     grad_out = (grad_out.permute(1, 0, 2) if packed
                 else grad_out.permute(0, 2, 1, 3)).contiguous()
     bwd_kwargs = dict(
-        raw_g=to_head_major(g_op),
+        raw_g=to_head_major(g),
         A_log=tensors["A_log"],
         dt_bias=tensors["dt_bias"].reshape(hv, kd),
         initial_state=None,
@@ -513,19 +512,19 @@ def run_once(args: argparse.Namespace) -> int:
         if use_optimized_bwd:
             bwd_kwargs.update(q_rstd=saved["q_rstd"], k_rstd=saved["k_rstd"])
     else:
-        bwd_q, bwd_k = to_head_major(q_op), to_head_major(k_op)
+        bwd_q, bwd_k = to_head_major(q), to_head_major(k)
     if args.qk_l2norm:
         print(f"[info] backward path: "
               f"{'optimized (in-kernel L2Norm)' if use_optimized_bwd else 'fused + l2norm_bwd'}; "
               f"device={device}", flush=True)
-    bwd_v = to_head_major(v_op)
-    bwd_beta = to_head_major(beta_op, is_beta=True)
+    bwd_v = to_head_major(v)
+    bwd_beta = to_head_major(beta, is_beta=True)
     dq, dk, dv, dbeta, dg, _dh0, _da, _dbias = chunk_kda_bwd(
         bwd_q, bwd_k, bwd_v, bwd_beta, gk, aqk, akk, w, qg, kg, v_new, hstate,
         grad_out, scale, **bwd_kwargs)
     if args.qk_l2norm and not use_optimized_bwd:
-        dq = l2norm_bwd(dq, to_head_major(q_op), saved["q_rstd"])
-        dk = l2norm_bwd(dk, to_head_major(k_op), saved["k_rstd"])
+        dq = l2norm_bwd(dq, to_head_major(q), saved["q_rstd"])
+        dk = l2norm_bwd(dk, to_head_major(k), saved["k_rstd"])
     if torch_npu is not None and device.type == "npu":
         torch.npu.synchronize()
 

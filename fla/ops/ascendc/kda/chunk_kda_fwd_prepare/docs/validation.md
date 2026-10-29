@@ -1,40 +1,108 @@
-# Token-major g/beta 迁移开发记录
+# Token-major g/beta 迁移验证记录
 
-状态：开发中，不能作为最终设备验收。
+2026-10-29，开发期记录。A5、MSS 警告和完整 forward 正式验收尚未完成，不能作为最终归档。
 
-用户确认 g/beta 固定 token-major，qkv layout 独立。方案变更为 Stage0 的输入地址、DMA stride、beta UB 解包和索引初始化；Stage1–6 的数学、BF16 relay、资源及跨核协议保持既有实现。
+## 实际源码与构建
 
-CPU 标杆数学/比较器不变，AST 检查确认只有两个输入解析表达式变化。纯 CPU 96 组合覆盖四 layout、六 key、四 dtype，两套参考共比较1824输出；仅6个 control beta_eff 输出因 CPU sigmoid 的连续/strided vector 路径出现最多1.1920928955078125e-7差值，其余输出逐位相同。这是标杆解析核对，不代替原生 NPU 双标杆，也不改变正式容差。
+设备验证源码为 `81fc9dac9b3624a3102ed39032803a62ab9668ed`，性能对照为旧合同最优
+`1ff4dc0296c21e0054dfc8a264a76f380647e39e`。后续文档、Example 和诊断脚本修改不改变
+本次构建的 host/kernel/wrapper，不能把其他未构建的 device 修改绑定到这些结果。
 
-首个独立 Prepare 地址迁移候选 `564a86cd42794be9df926202eb434347ca9f9bee` 已 clean 源编译，
-A2 包 SHA256 为 `a8824b9a8afc34bc791ac0e8c8f1974f5a76aff9299ece1f9a88ee8219482ecb`。
-原生小例16/208、模型1/2/31/32共4/52通过；head交换、尾行篡改和缺失None槽的错误注入均检出。
-四layout复用相同g/beta对象，13槽输出逐位相同；旧形状、错误HV和FP16 g/beta在host拒绝。
-首个四模型ABBA窗口的Task变化依次为case1 -0.242%、case31 +0.303%、case2 +0.104%、
-case32 +0.494%；仅表明此窗口未见明显回退，不将亚百分比差异宣称为优化收益。
+| clean 包 | SHA256 |
+| --- | --- |
+| A2 Prepare release | `47897c197b16393deb507c0124d6e3f3eba38f035a9fe405e099fcb4105c5047` |
+| A2 sanitizer,ccec_g | `103d346284831311e6d7110b8fbafa1826977b72ab7217e2e026edaad9b1c0d1` |
+| A2 完整 forward | `be894bbec178bde959bccce5d47b427afc54b0ab049c3c5d2dc832d2b04a452c` |
+| A5 Prepare | `400b729983767c91a910666b30303b36866f210d1d7d5fa50ea74aab651f1c37` |
 
-完整 forward/V2 的公共校验、raw g地址及 fused beta adapter 已同步源码，CPU输入解析
-等价性32组合/768输出逐位通过；其设备闭环待新构建。独立 Prepare 的上述通过记录不覆盖
-本段新增的完整forward修改或后续TwoSum合并，不得宣称端到端可交付。
+release 命令：`bash build.sh --soc=ascend910b --pkg --vendor_name=fla_npu --ops=chunk_kda_fwd_prepare -j24`。
+插桩增加 `--op_debug_config sanitizer,ccec_g`；完整 forward 使用 `--ops=chunk_kda_fwd`；
+A5 使用 `--soc=ascend950`。四种 g/beta dtype 对象各含六 key，无 ZIP device 对象复用。
+Stable C++/schema 90文件相同后复用匹配 ABI 库，其 hash、真实安装和卡号由构建清单单独绑定。
 
-已知数值问题：基线1ff的部分 FP32 Precomputed gk 前缀未通过冻结标准。TwoSum 独立实验
-`bf09ac393911e2a21e693d4a6403658f1efc4cac` 已通过旧合同六key、补充数值及泛化集，但有独立性能成本。
-地址迁移的四模型证据建立后，候选源码纳入这项修正；新合同组合后的原生数值与性能仍须重新验证。
+## 合同与原生双标杆
 
-最终验证范围：新合同全32/416、紧凑泛化与同规模组合、六 key MSS/DC、实际对象/key 绑定、全成本 ABBA5/50/3及A5匹配证据。资源仍为 AIV UB190KiB、两代 GM slot 与原十个跨核 flag；运行验证待补充。
+qkv 四 layout；g/beta 固定 token-major，与 qkv layout 无关，分别支持 BF16/FP32。
+六个 Norm×Gate key、chunk64、K=V128、13槽及 BF16 relay 不变；没有全量 L2 transpose。
+FP32 Precomputed 增加 TwoSum residual，key0 在 UB 内完成 FP32 完整64阶逆后一次舍入至 BF16 relay。
+修正前源码63734eb的同输入六key为5/6、76/78，失败key0 Akk/U RMS比2.7638384101477302、
+1.520506862403927；修正后13/13及六key6/78通过，没有增加FP32 relay回退族。
 
-## 2026-10-29 key0局部64阶求逆实验
+ATK26.9.24 原生 `cv_fused_double_benchmark`：FP64 TRUTH / FP32-BF16 CONTROL，
+max/avg/RMS比阈值5/1.5/1.5，原生小值域计数默认2不变，不是 `mixed_tolerance_bm`。
+独立交付 executor 对冻结版本 AST 核对只有两个 g/beta 输入解析表达式变化，数学、舍入和角色不变。
 
-组合基线63734ebaf639ca3fe9a4521a3df0ab9589019216已clean构建，新合同六key为5/6、76/78。
-失败仅key0的Akk、U，原生RMS比为2.7638384101477302、1.520506862403927，阈值仍1.5。
-旧TwoSum源码bf09ac393911e2a21e693d4a6403658f1efc4cac在相同q/k/v/g/beta实际hash上复现相同失败。
-CPU逐Stage诊断中，BF16叶逆/合并复现误差；局部FP32完整64阶求逆后一次BF16舍入贴近CONTROL。
-CPU诊断只用于定位，不是设备验收，不调整TRUTH/CONTROL/容差。
+| 范围 | 用例通过 | 输出通过 |
+| --- | --- | --- |
+| 原200例通用精度，最大T2048 | 200/200 | 2096/2096 |
+| seed3全32模型，FP32 g/BF16 beta、safe gate、Save | 32/32 | 416/416 |
+| 六key | 6/6 | 78/78 |
+| 数值边界 | 9/9 | 86/86 |
+| 布局/dtype小边界 | 16/16 | 208/208 |
+| dtype专项 | 24/24 | 220/220 |
+| head专项 | 16/16 | 208/208 |
 
-本实验只改已有key0的局部求逆及其Cube消费，不改变固定token-major合同、六key、BF16 relay或其他数学key。
-先用同一key0输入原生比较13槽，再六key及数值9例；通过才晋级dtype/heads/小边界/通用集。
-DUT采集按ATK --save_data output保留13槽，直接观察gk、Aqk、Akk、W/U和beta_eff；CPU诊断保持原顺序分离
-叶逆/合并与一次BF16舍入。shape/dtype/有效区按spec限定，仅比较有效token，不将padding纳入精度统计。
-目标是消除由已定位合并舍入导致的额外误差，原冻结原生双标杆为唯一PASS/FAIL。
-资源为既有190KiB UB、192KiB L1及两代workspace；地址/活跃期与PIPE_V、MTE3退休见design_a2 Stage4/5。
-clean源码、安装包hash、实际binary/key和NPU精度/性能待本次实验补充；当前不能视作已通过候选。
+200例原生报告SHA256：`7b939b58f9b1df1752b277ce93ba0b2b725f4667993893576ae72f7f76addded`。
+执行配置与公开200例 JSON 的规范化 hash 相同。模型缓存只读复用，g/beta在RAM重排并逆排列断言；
+当前NPU DUT重新执行，每例三角色实际输入hash一致，不继承旧合同通过。公开交付件现场生成输入与
+双参考，不依赖私人缓存。head交换、尾行篡改、缺失None槽错误注入均检出；同一g/beta四layout输出
+逐位相同。可区分旧形状、错误HV、FP16 g/beta在host拒绝，T=HV排列歧义不能靠shape识别。
+
+## DC50 与 MSS
+
+按用户确认，每实际key一例、各六例；不扩成200例。执行与公开六例配置规范化hash一致。
+
+- DC50：六例原生通过，每例50轮。
+- initcheck/racecheck：实际key0–5，零ERROR、零WARNING。
+- memcheck：零ERROR、56,460条WARNING；独立输出地址观察后逐条审计，全部区间在实际Akk逻辑
+  tensor内，零未审计区间。包含关系本身不证明工具误报，保留原日志及ownership审查。
+- synccheck：零ERROR、6,900条冗余set/wait WARNING（5,940 set、960 wait），不称零警告通过。
+
+Akk审查：AIV初始化/叶逆store退休后发LowerReady，AIC等待后写叶块或合并；每chunk/value-head
+区域独立，GVA QK checkpoint不与Akk别名。未为消除工具警告修改同步或输出指针。
+
+## 配对性能与回退
+
+A2 ABBA=A1/B1/B2/A2，warmup5/repeat50/3groups，每窗口150次，Task/Event分列。
+同逻辑输入在API外重排g/beta，实际两端物理hash、逆排列及输出重复性核对，独占监测无外来进程。
+32模型首窗口、四模型第二窗口及公开20组合的224个窗口、33,600个Task样本，与原始msprof
+`op_summary` 的 `Task Duration(us)` 逐项相同。Event来自同一批profiler调用，另行统计。
+
+| 模型 | 旧Task p50(us) | 候选Task p50(us) |
+| --- | --- | --- |
+| 1 | 3439.1485 | 3432.8385 |
+| 2 | 6744.4750 | 6751.9550 |
+| 31 | 3128.2825 | 3140.1430 |
+| 32 | 6220.5340 | 6238.4150 |
+
+全32逐例变化−0.1835%～+0.4562%，不宣称亚百分比优化收益，四模型独立第二窗口另列。
+公开20组合使用冻结PR32 shape/参数/值域，实际输入hash绑定A/B；不声称相同seed跨ATK/Torch
+生成器就有相同tensor。全部T131046，逐例Task/Event及身份收录在独立交付绑定与CSV。
+
+有两项明确回退：key1 L2+Precomputed 3274.74→4145.61us（+26.59%）；key0 Identity+Precomputed
+3458.89→5261.93us（+52.13%）。包含必要数值修正成本，不用其他组合平均抵消，也不能回退到未通过
+双标杆的路径。第二独立窗口分别为+26.30%、+52.68%，已复现。其余18组合约−0.15%～+0.61%。BSND/TND H4约3379/3380us，与同组BNSD3422us接近。
+
+最早私有组合19使用signed模型g并关闭norm，旧/新DUT均非有限；冻结FP64 truth部分值超过BF16
+上界，CONTROL也溢出。保留该失败诊断，不作为通过性能证据；公开20原配方、200精度及阈值未改动。
+
+## Simulator 和调用链
+
+当前release实际metadata/binary/key绑定的小shape simulator：key0、BSND、T1665、HK=HV3。
+core0捕获三代work及真实Cube/Vector、Vector/MTE交叠；core13 jobs13/33/53，slot0/1/0，最后一行
+有效，lane1 inactive仍完成跨核协议。两次capture退出0、DUT返回、binary未变；模拟微秒不作NPU
+性能，也不冒充六key全部核心证明。
+
+完整forward旧/新源码各clean构建，四layout、K64/K128 legacy/强制V2共12例、132可见输出逐位相同。
+更新公开Example在BNSD/BSND/NTD三例前向NPU冒烟通过，包含GVA/尾块。反向从保留canonical输入
+建立原Head First张量，BWD算子合同未改；本轮未声称反向设备全量验收。
+
+另一个完整forward原生双标杆诊断仍仅2/12例、122/132输出通过，十例失败为W小值域计数。
+参考解析不变、旧/新逐位一致只证明迁移不新增差异，不替代端到端正式验收。
+
+## 剩余门槛
+
+A5当前源码clean包已生成，但空闲物理卡1/2/5/6的最小Torch分配/矩阵乘探针均报
+`507033 / TsdOpen failed`，发生在调用本算子前；没有重启或停止共享作业/服务。
+新合同A5精度和hash匹配性能尚未完成，逐例A5/A2≥0.5无新证据，不继承旧窄合同79.37%。
+Precomputed性能回退、MSS警告及完整forward失败均保留；当前整体不能标为最终验收通过。

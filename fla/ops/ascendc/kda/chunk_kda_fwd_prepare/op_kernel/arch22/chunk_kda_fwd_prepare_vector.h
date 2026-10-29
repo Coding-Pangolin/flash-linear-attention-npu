@@ -452,6 +452,9 @@ public:
             }
             if(a_.tiling.inputSequenceMajor) {
                 auto offsets=small_[BetaGatherIndexSmall].template ReinterpretCast<uint32_t>();
+                // BF16 Gather may consume a full 128-entry offset register pair.
+                // Upper masked lanes have neutral indices in the existing spare UB.
+                Duplicate(offsets,uint32_t(0),128);VBarrier();VToS();
                 const uint32_t stride=a_.tiling.valueHeadNum<=8?
                     a_.tiling.valueHeadNum*sizeof(BetaT):32;
                 for(uint32_t row=0;row<64;++row)offsets.SetValue(row,row*stride);

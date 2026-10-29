@@ -19,7 +19,7 @@ constexpr uint32_t UbV=0x28000, UbSmall=0x2C000, UbMask=0x2F000;
 // index 2560 and its BF16 packed output ends at 2592.
 constexpr uint32_t ALogCacheSmall=2688, ALogCacheHeads=128;
 constexpr uint32_t BetaGatherIndexSmall=2816;
-constexpr uint32_t InverseGatherIndexSmall=2880;
+constexpr uint32_t InverseGatherIndexSmall=2944;
 static_assert(InverseGatherIndexSmall>=BetaGatherIndexSmall+64);
 static_assert(UbSmall+(InverseGatherIndexSmall+64)*sizeof(uint32_t)<=UbMask);
 static_assert(BetaGatherIndexSmall>=ALogCacheSmall+ALogCacheHeads);

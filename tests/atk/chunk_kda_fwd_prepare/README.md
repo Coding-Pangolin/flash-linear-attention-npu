@@ -1,5 +1,7 @@
 # chunk_kda_fwd_prepare ATK 测试
 
+2026-10-29 输入合同迁移：g/beta 固定 token-major，qkv layout 独立；JSON 已更新输入 shape，标杆仅修改 g/beta 解析。历史合同的执行结果不作为本次迁移的验收，正式新合同设备验证待补充。外部 A2 独立交付件及六 runtime key MSS/DC 在 work_tool PR32 维护；下文旧模板数量不代表 A2 runtime key 数。
+
 本目录按 ATK 公开输入格式验证 `chunk_kda_fwd_prepare`。NPU 节点只调用稳定入口
 `fla_npu.ops.ascendc.chunk_kda_fwd_prepare`，不加载 `torch_npu` dispatcher。
 

@@ -38,7 +38,7 @@ beta --activation--> betaEff ----|-------------------------+
                                                           v
                                                     Lower/Aqk
                                                           |
-                             Identity: FP32叶内32阶计算 ---+
+                             Identity: 局部FP32求逆（Precomputed为64阶，其余为两份32阶） ---+
                              L2: BF16叶内16阶Cube计算 -----+--> BF16驻留合并逆
                                                                |
                                         BF16 RHS --------------+--> W/U
@@ -50,7 +50,7 @@ beta --activation--> betaEff ----|-------------------------+
 |1|ScorePayload，FP32 Exp/乘法及BF16 Cast|Q/K/G→GM Payload|score-ready覆盖其MTE3|
 |2|Cube::Scores，ND2NZ/LoadData/Mmad/Fixpipe|Payload→FP32 Raw|raw-ready；scoreReleased释放L1读取租约|
 |3|RhsAndOutputs|G/K/V/beta→BF16 RHS及公开输出|rhs-ready；DMA退休后复用UB|
-|4|LowerAndAqk；Identity另含LeafInverse32|Raw→Lower/Aqk及可选BF16叶逆|lower-ready覆盖全部相关store|
+|4|LowerAndAqk；Identity另含LeafInverse32/64|Raw→Lower/Aqk及可选BF16叶逆|lower-ready覆盖全部相关store|
 |5|InversePair/PackedLeavesPair/MergePair|BF16 Lower/叶逆→resident X|每次FIX_MTE1后才读X；末次读取后复用|
 |6|PreloadWu/Wu|共享resident X、独立RHS→W/U|MTE1释放L1；FIX结束释放GM slot|
 
@@ -91,8 +91,8 @@ Norm/Gate 为静态策略。Raw/Sigmoid/TwoSigmoid、输出掩码及实际标量
 不按模型编号、精确 shape、epsilon、scale 或 lower_bound 开优化资格。
 A2 host 拦截非 Exp2，内核中的指数域辅助函数不构成未验证合同的公开支持声明。
 A5 保留原模板声明、arch35 实现和字段；下面的资源和协议专指 A2。
-现有Norm静态key也选择叶内计算组织：Identity保留FP32 Lower并在UB内解两个32阶叶块，
-只在交接时转BF16；L2保留四个16阶BF16 Cube叶逆。两者仍用统一BF16 inverse/RHS relay、
+六个静态key同时选择叶内计算组织：Identity保留FP32 Lower；Precomputed在UB内完成64阶逆，
+Softplus/SafeSigmoid在UB内解两个32阶叶块。只在交接时转BF16；L2保留四个16阶BF16 Cube叶逆。两者仍用统一BF16 inverse/RHS relay、
 相同工作描述符、地址上界和事件协议。此选择不依赖模型、layout、精确shape或标量常量。
 依据为冻结泛化用例中Identity的叶内量化误差和无差别FP32叶内计算的可复现指令开销；
 不增加第七个key，也没有FP32 GM/L1 relay实现族。每个可达key必须独立通过冻结比较。
@@ -107,7 +107,7 @@ A5 保留原模板声明、arch35 实现和字段；下面的资源和协议专�
 |[0,0x8000)|q_：低16KiB Q，另16KiB临时|Q checkpoint、score payload、RHS 完成消费后用于 Lower|
 |[0x8000,0x10000)|k_：低16KiB K，另16KiB临时|同上；不能在 MTE3 未排空前改写|
 |[0x10000,0x18000)|g_ FP32 64×128|prefix/RHS及gk store退休后，Identity复用前16KiB保存FP32负Lower|
-|[0x18000,0x28000)|work_ FP32 64KiB|gate暂存→norm/factor/raw；Identity在raw后复用前8KiB作两份32×32逆|
+|[0x18000,0x28000)|work_ FP32 64KiB|gate暂存→norm/factor/raw；Identity在raw后复用前8KiB作两份32×32逆，Precomputed使用前16KiB作64×64逆|
 |[0x28000,0x2c000)|v_ BF16 16KiB|Kminus→qg_scaled/kg→Aqk，按末次 DMA 消费复用|
 |[0x2c000,0x2f000)|small_ 12KiB|rstd、beta、bias、广播量和 scalar DMA 分区|
 |[0x2f000,0x2f800)|mask 2KiB|640B strict/inclusive packed triangle，初始化一次，只读|
@@ -229,13 +229,23 @@ FP32叶内结果一次CAST_RINT为BF16并填回v_对角块。
 其余零/单位padding保留，写私有Payload低8KiB；该区最后score消费者已由raw-ready释放。
 启用Akk时同时写全部有效行的对角叶块和零区，后续Cube写跨32行下块。
 
+Identity + Precomputed（key0）使用LeafInverse64：完整Eye在work_[0,4096)展开为FP32，
+g_[0,4096)继续保存未量化负Lower；按k=0..r-2执行完整64列行更新。
+每批至多16列系数，work_[4096,5120)存1024个Gather索引，work_[5120,6144)存1024个FP32系数。
+退休Q的32KiB UB别名保存16×64×8广播系数，Small[1536,1600)保存当前64列逆矩阵行。
+每批Gather、广播、每步行复制和MulAddDst之间均有PIPE_V依赖；复用Q前排空MTE3。
+padding负Lower为0，完整Eye保证无效行对角为1。完成后一次CAST_RINT到BF16，写Payload及完整有效Akk。
+Cube仅将此BF16完整逆载入resident X，不再加载P或执行32+32合并；W/U共用X的路径保持不变。
+该策略只由已有Norm/Gate key选择，g/beta dtype、shape、layout与标量不决定优化资格。
+没有FP32跨核或GM/L1 relay、额外UB分配或新事件；完整64阶局部计算的性能成本独立测量。
+
 L2 key不进行上述FP32叶内计算；启用Akk时先清零有效区域，Cube随后写完整叶对角及下块。
 两种策略都在本阶段排空Aqk、Lower、叶逆/检查点的全部MTE3，再发布同一lower-ready。
 不得提前改写Q/K、g_/work_或checkpoint DMA来源；关闭输出不作为scratch。
 
 ### Stage 5：Cube，BF16驻留逆和分层合并
 
-Identity读取BF16 P与BF16叶逆X到同一L1地址。只有一次32+32合并：
+Identity的Softplus/SafeSigmoid读取BF16 P与BF16叶逆X到同一L1地址。只有一次32+32合并：
 `Tmp=X_lower @ P_cross`，`X_cross=Tmp @ X_upper`。
 L2读取BF16 P/Power、Eye到X及首次常驻I；四个16阶叶子通过4轮幂倍增生成完整叶逆，
 随后两次16+16及一次32+32合并。

@@ -22,3 +22,19 @@ case32 +0.494%；仅表明此窗口未见明显回退，不将亚百分比差异
 地址迁移的四模型证据建立后，候选源码纳入这项修正；新合同组合后的原生数值与性能仍须重新验证。
 
 最终验证范围：新合同全32/416、紧凑泛化与同规模组合、六 key MSS/DC、实际对象/key 绑定、全成本 ABBA5/50/3及A5匹配证据。资源仍为 AIV UB190KiB、两代 GM slot 与原十个跨核 flag；运行验证待补充。
+
+## 2026-10-29 key0局部64阶求逆实验
+
+组合基线63734ebaf639ca3fe9a4521a3df0ab9589019216已clean构建，新合同六key为5/6、76/78。
+失败仅key0的Akk、U，原生RMS比为2.7638384101477302、1.520506862403927，阈值仍1.5。
+旧TwoSum源码bf09ac393911e2a21e693d4a6403658f1efc4cac在相同q/k/v/g/beta实际hash上复现相同失败。
+CPU逐Stage诊断中，BF16叶逆/合并复现误差；局部FP32完整64阶求逆后一次BF16舍入贴近CONTROL。
+CPU诊断只用于定位，不是设备验收，不调整TRUTH/CONTROL/容差。
+
+本实验只改已有key0的局部求逆及其Cube消费，不改变固定token-major合同、六key、BF16 relay或其他数学key。
+先用同一key0输入原生比较13槽，再六key及数值9例；通过才晋级dtype/heads/小边界/通用集。
+DUT采集按ATK --save_data output保留13槽，直接观察gk、Aqk、Akk、W/U和beta_eff；CPU诊断保持原顺序分离
+叶逆/合并与一次BF16舍入。shape/dtype/有效区按spec限定，仅比较有效token，不将padding纳入精度统计。
+目标是消除由已定位合并舍入导致的额外误差，原冻结原生双标杆为唯一PASS/FAIL。
+资源为既有190KiB UB、192KiB L1及两代workspace；地址/活跃期与PIPE_V、MTE3退休见design_a2 Stage4/5。
+clean源码、安装包hash、实际binary/key和NPU精度/性能待本次实验补充；当前不能视作已通过候选。

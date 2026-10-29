@@ -3,7 +3,7 @@
 #include "chunk_kda_fwd_prepare_common.h"
 namespace KdaPrepare::Arch22 {
 constexpr FixpipeConfig NzOutput={CO2Layout::NZ,false};
-template<uint32_t Norm> class Cube {
+template<uint32_t Norm,uint32_t Gate> class Cube {
     const PrepareKernelArgs &a_;TPipe *pipe_;uint32_t core_,slot_;bool identityReady_[2];Work w_;
     TBuf<TPosition::A1> l1_;TBuf<TPosition::A2> la_;
     TBuf<TPosition::B2> lb_;TBuf<TPosition::CO1> lc_;
@@ -164,11 +164,11 @@ template<uint32_t Norm> class Cube {
                 if(!w_.active[lane])continue;
                 uint64_t base=GmLane(core_,slot_,lane);
                 auto source=Gm<bfloat16_t>(a_.workspace+base);
-                CopyNz(L1(lane,P),source[Lower/2],64,64);
+                if constexpr(Gate!=0)CopyNz(L1(lane,P),source[Lower/2],64,64);
                 CopyNz(L1(lane,X),source[Payload/2],64,64);
             }
             CopiesReady();
-            if(w_.rows>32)MergePair<32>(0);
+            if constexpr(Gate!=0)if(w_.rows>32)MergePair<32>(0);
         } else {
             for(uint32_t lane=0;lane<2;++lane) {
                 if(!w_.active[lane])continue;
@@ -278,6 +278,6 @@ public:
 template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> __aicore__ inline void Run(const PrepareKernelArgs &a) {
     TPipe pipe;
     if ASCEND_IS_AIV {Vector<Norm,Gate,GateT,BetaT> v(a);v.Init(a,&pipe);v.Process();}
-    if ASCEND_IS_AIC {Cube<Norm> c(a);c.Init(a,&pipe);c.Process();}
+    if ASCEND_IS_AIC {Cube<Norm,Gate> c(a);c.Init(a,&pipe);c.Process();}
 }
 }

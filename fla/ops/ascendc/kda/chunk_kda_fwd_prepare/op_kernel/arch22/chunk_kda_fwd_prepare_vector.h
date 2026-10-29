@@ -379,6 +379,40 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
             Write(a_.akk,Out(a_.tiling,w_,w_.head[lane_],a_.tiling.valueHeadNum,64),v_,w_.rows*64,false);
         DrainStores();
     }
+    __aicore__ inline void LeafInverse64() {
+        Read(v_,a_.workspace+base_+Eye,0,1,4096,1,false);Mte2ToV();
+        // Keep the local solve in FP32; only the completed inverse is relayed.
+        // Work: inverse[0,4096), gather indices[4096,5120), values[5120,6144).
+        auto inverse=work_;
+        Cast(inverse,v_,RoundMode::CAST_NONE,4096);VBarrier();
+        auto indices=small_[InverseGatherIndexSmall].template ReinterpretCast<int32_t>();
+        auto batchIndices=work_[4096].template ReinterpretCast<int32_t>();
+        auto gathered=work_[5120],rowCopy=small_[1536];
+        DrainStores(); // Retire Lower/Q/K stores before the Q alias is overwritten.
+        auto coefficients=ub_.template GetWithOffset<float>((UbK-UbQ)/4,UbQ);
+        const uint32_t steps=w_.rows-1;
+        for(uint32_t begin=0;begin<steps;begin+=16) {
+            const uint32_t count=steps-begin<16?steps-begin:16;
+            for(uint32_t k=0;k<count;++k)
+                Adds(batchIndices[k*64],indices,static_cast<int32_t>((begin+k)*4),64);
+            VBarrier();
+            Gather(gathered,g_,batchIndices.template ReinterpretCast<uint32_t>(),0,64*count);
+            VBarrier();
+            Brcb(coefficients,gathered,static_cast<uint8_t>(8*count),{1,8});VBarrier();
+            for(uint32_t step=0;step<count;++step) {
+                const uint32_t k=begin+step,first=k+1;
+                Adds(rowCopy,inverse[k*64],0.0F,64);VBarrier();
+                BinaryRepeatParams update{1,1,0,8,0,1};
+                MulAddDst(inverse[first*64],rowCopy,coefficients[step*512+first*8],
+                          64,63-k,update);VBarrier();
+            }
+        }
+        Cast(v_,inverse,RoundMode::CAST_RINT,4096);VBarrier();
+        Write(a_.workspace+base_+Payload,0,v_,4096,false);
+        if(a_.tiling.outputMode!=0)
+            Write(a_.akk,Out(a_.tiling,w_,w_.head[lane_],a_.tiling.valueHeadNum,64),v_,w_.rows*64,false);
+        DrainStores();
+    }
     __aicore__ inline void LowerAndAqk() {
         // Cross-core raw-ready orders GM production, not this AIV's preceding
         // RHS vector consumer of work_. Retire that UB reader before raw DMA.
@@ -422,7 +456,8 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         Write(a_.aqk,Out(a_.tiling,w_,w_.head[lane_],a_.tiling.valueHeadNum,64),v_,w_.rows*64);
         if constexpr(Norm==0) {
             Write(a_.workspace+base_+Lower,0,q_,4096,false);
-            LeafInverse32();
+            if constexpr(Gate==0)LeafInverse64();
+            else LeafInverse32();
         } else {
             if(a_.tiling.outputMode!=0) {
                 Duplicate(v_,bfloat16_t(0),4096);VBarrier();
@@ -489,7 +524,8 @@ public:
         if(core_<a_.tiling.usedCoreNum){
             if constexpr(Norm==0) {
                 auto offsets=small_[InverseGatherIndexSmall].template ReinterpretCast<uint32_t>();
-                for(uint32_t row=0;row<64;++row)offsets.SetValue(row,(row*64+(row/32)*32)*4);
+                for(uint32_t row=0;row<64;++row)
+                    offsets.SetValue(row,(row*64+(Gate==0?0:(row/32)*32))*4);
                 SToV();
             }
             { // Fixed token-major beta for all q/k/v layouts.

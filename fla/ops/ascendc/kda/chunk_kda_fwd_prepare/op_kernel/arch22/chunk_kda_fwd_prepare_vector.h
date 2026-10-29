@@ -440,7 +440,7 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         Mte2ToV();DrainStores(); // kg uses v_, which becomes the Aqk buffer below.
         Duplicate(q_,bfloat16_t(0),4096);
         Duplicate(v_,bfloat16_t(0),8192);
-        if constexpr(Norm==0)Duplicate(g_,0.0F,4096);
+        if constexpr(Norm==0 || Gate==0)Duplicate(g_,0.0F,4096);
         VBarrier();
         // Four independent 16-row bands replace the scalar row/beta dispatch.
         Muls(small_[256],beta_,-1.0F,64);VBarrier();
@@ -457,7 +457,7 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
             Mul(tmp,kraw,blocks_[begin*8],n,16,mul);VBarrier();
             Select(tmp,triangle_[16*band*(band+1)],tmp,0.0F,
                    SELMODE::VSEL_TENSOR_SCALAR_MODE,16*n);VBarrier();
-            if constexpr(Norm==0) {
+            if constexpr(Norm==0 || Gate==0) {
                 UnaryRepeatParams keep{1,1,8,static_cast<uint8_t>(n/8)};
                 Adds(g_[begin*64],tmp,0.0F,n,16,keep);VBarrier();
             }
@@ -466,9 +466,9 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         // Packed masks were initialized once. The selected FP32 zeros cast
         // to the same +0 BF16 bits as the former per-row Duplicate operations.
         Write(a_.aqk,Out(a_.tiling,w_,w_.head[lane_],a_.tiling.valueHeadNum,64),v_,w_.rows*64);
-        if constexpr(Norm==0) {
+        if constexpr(Norm==0 || Gate==0) {
             Write(a_.workspace+base_+Lower,0,q_,4096,false);
-            if constexpr(Gate==0)LeafInverse64();
+            if constexpr(Norm==0 && Gate==0)LeafInverse64();
             else LeafInverse32();
         } else {
             if(a_.tiling.outputMode!=0) {
@@ -534,10 +534,10 @@ public:
         BindTensor(beta_,bytes,UbSmall+512,256);BindTensor(bias_,bytes,UbSmall+1024,512);
         BindTensor(blocks_,bytes,UbSmall+4096,2048);
         if(core_<a_.tiling.usedCoreNum){
-            if constexpr(Norm==0) {
+            if constexpr(Norm==0 || Gate==0) {
                 auto offsets=small_[InverseGatherIndexSmall].template ReinterpretCast<uint32_t>();
                 for(uint32_t row=0;row<64;++row)
-                    offsets.SetValue(row,(row*64+(Gate==0?0:(row/32)*32))*4);
+                    offsets.SetValue(row,(row*64+((Norm==0 && Gate==0)?0:(row/32)*32))*4);
                 SToV();
             }
             if(a_.tiling.inputSequenceMajor) { // Sequence-major beta tile indices only.

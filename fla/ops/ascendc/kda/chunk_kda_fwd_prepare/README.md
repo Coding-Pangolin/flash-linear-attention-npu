@@ -72,7 +72,7 @@ A2 实现的合同范围为：
 - `g` 和 `beta` 各自支持 BF16/FP32，四种组合独立选择正确的输入加载；其余 dtype 由 host 拒绝；
 - 布局为 BNSD、BSND、NTD 或 TND，输入连续；变长输入使用 `cu_seqlens`，rank-4 变长容器要求 `B=1`；
 - GVA 要求 `0 < HK <= HV` 且 `HV % HK == 0`；
-- A2 只接受 `use_exp2=true`。A5 保留原 arch35 入口和原有属性合同；
+- A2 支持 `use_exp2=false/true`，按原接口选择自然对数域或 log2 域；A5 保留原 arch35 入口和原有属性合同；
 - `backward_mode` 为 `none`、`forward`、`recompute` 或 `save`，13 个输出槽位及其返回顺序不变。
 
 不在上述范围内的组合必须在 host 侧返回参数错误，不会静默落入 A2 流水。A2 的通用 key 由

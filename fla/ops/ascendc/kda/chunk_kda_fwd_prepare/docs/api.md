@@ -122,7 +122,7 @@ q/k/v/g/beta 均跟随 layout。跨 head DMA stride 的 `uint32_t` 限制仅对 
 BNSD/NTD 按 head 连续读取；T=HV 等 shape 歧义不改变 layout 指定的轴语义。
 普通非连续 view 由 L2 连续化，不产生默认的全量布局转置。
 
-A2 额外要求 `use_exp2=true`；不支持的指数域在 host 返回参数错误。
+A2 支持 `use_exp2=false/true`，不增加指数域 tiling key；累计 gate 的输出域遵循原接口。
 A2 的 g、beta 各自支持 BF16/FP32；输入加载类型不改变内部 FP32 gate/beta 计算或 BF16 relay。
 A5 沿用原 arch35 支持范围和入口。
 

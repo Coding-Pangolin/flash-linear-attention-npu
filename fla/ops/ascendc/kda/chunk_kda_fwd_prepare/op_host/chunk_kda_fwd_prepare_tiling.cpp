@@ -557,12 +557,6 @@ ge::graphStatus Tiling4ChunkKdaFwdPrepare(gert::TilingContext *context)
     const uint64_t aicCoreNum = platform.GetCoreNumAic();
     const bool isAscend950 =
         platform.GetCurNpuArch() == NpuArch::DAV_3510;
-    if (!isAscend950 && !*useExp2Ptr) {
-        OP_LOGE(context->GetNodeName(),
-                   "A2 requires use_exp2=true, current value=%d.",
-                   static_cast<int>(*useExp2Ptr));
-        return ge::GRAPH_FAILED;
-    }
     ChunkKdaFwdPrepareScheduleContext scheduleContext;
     scheduleContext.batch = static_cast<uint64_t>(shape.batch);
     scheduleContext.qkHeadNum = static_cast<uint64_t>(shape.qkHeadNum);

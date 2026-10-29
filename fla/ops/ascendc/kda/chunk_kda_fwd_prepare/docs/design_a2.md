@@ -38,8 +38,8 @@ beta --activation--> betaEff ----|-------------------------+
                                                           v
                                                     Lower/Aqk
                                                           |
-                             Identity: 局部FP32求逆（Precomputed为64阶，其余为两份32阶） ---+
-                             L2: BF16叶内16阶Cube计算 -----+--> BF16驻留合并逆
+                             Identity/Precomputed: 局部FP32求逆（key0为64阶，其余为两份32阶） ---+
+                             L2非Precomputed: BF16叶内16阶Cube计算 -----+--> BF16驻留合并逆
                                                                |
                                         BF16 RHS --------------+--> W/U
 ```
@@ -50,7 +50,7 @@ beta --activation--> betaEff ----|-------------------------+
 |1|ScorePayload，FP32 Exp/乘法及BF16 Cast|Q/K/G→GM Payload|score-ready覆盖其MTE3|
 |2|Cube::Scores，ND2NZ/LoadData/Mmad/Fixpipe|Payload→FP32 Raw|raw-ready；scoreReleased释放L1读取租约|
 |3|RhsAndOutputs|G/K/V/beta→BF16 RHS及公开输出|rhs-ready；DMA退休后复用UB|
-|4|LowerAndAqk；Identity另含LeafInverse32/64|Raw→Lower/Aqk及可选BF16叶逆|lower-ready覆盖全部相关store|
+|4|LowerAndAqk；Identity/Precomputed另含LeafInverse32/64|Raw→Lower/Aqk及可选BF16叶逆|lower-ready覆盖全部相关store|
 |5|InversePair/PackedLeavesPair/MergePair|BF16 Lower/叶逆→resident X|每次FIX_MTE1后才读X；末次读取后复用|
 |6|PreloadWu/Wu|共享resident X、独立RHS→W/U|MTE1释放L1；FIX结束释放GM slot|
 
@@ -91,12 +91,12 @@ Norm/Gate 为静态策略。Raw/Sigmoid/TwoSigmoid、输出掩码及实际标量
 
 共享 ACLNN/L0 的参数校验和错误处理沿用 main；本优化不重写跨平台诊断。
 不按模型编号、精确 shape、epsilon、scale 或 lower_bound 开优化资格。
-A2 host 拦截非 Exp2，内核中的指数域辅助函数不构成未验证合同的公开支持声明。
+Exp/Exp2 均按原接口支持；每个 Stage 选择一次指数域辅助函数，不增加数学 key。
 A5 保留原模板声明、arch35 实现和字段；下面的资源和协议专指 A2。
-六个静态key同时选择叶内计算组织：Identity保留FP32 Lower；Precomputed在UB内完成64阶逆，
-Softplus/SafeSigmoid在UB内解两个32阶叶块。只在交接时转BF16；L2保留四个16阶BF16 Cube叶逆。两者仍用统一BF16 inverse/RHS relay、
+六个静态key同时选择叶内计算组织：Identity或Precomputed保留FP32 Lower；key0在UB内完成64阶逆，
+key1/2/4在UB内解两个32阶叶块。只在交接时转BF16；key3/5保留四个16阶BF16 Cube叶逆。各策略仍用统一BF16 inverse/RHS relay、
 相同工作描述符、地址上界和事件协议。此选择不依赖模型、layout、精确shape或标量常量。
-依据为冻结泛化用例中Identity的叶内量化误差和无差别FP32叶内计算的可复现指令开销；
+依据为冻结泛化用例中Identity及Precomputed的叶内量化误差和无差别FP32叶内计算的可复现指令开销；
 不增加第七个key，也没有FP32 GM/L1 relay实现族。每个可达key必须独立通过冻结比较。
 
 ### 2.2 唯一资源账本
@@ -108,8 +108,8 @@ Softplus/SafeSigmoid在UB内解两个32阶叶块。只在交接时转BF16；L2�
 |---|---|---|
 |[0,0x8000)|q_：低16KiB Q，另16KiB临时|Q checkpoint、score payload、RHS 完成消费后用于 Lower|
 |[0x8000,0x10000)|k_：低16KiB K，另16KiB临时|同上；不能在 MTE3 未排空前改写|
-|[0x10000,0x18000)|g_ FP32 64×128|prefix/RHS及gk store退休后，Identity复用前16KiB保存FP32负Lower|
-|[0x18000,0x28000)|work_ FP32 64KiB|gate暂存→norm/factor/raw；Identity在raw后复用前8KiB作两份32×32逆，Precomputed使用前16KiB作64×64逆|
+|[0x10000,0x18000)|g_ FP32 64×128|prefix/RHS及gk store退休后，Identity/Precomputed复用前16KiB保存FP32负Lower|
+|[0x18000,0x28000)|work_ FP32 64KiB|gate暂存→norm/factor/raw；key1/2/4在raw后复用前8KiB作两份32×32逆，key0使用前16KiB作64×64逆|
 |[0x28000,0x2c000)|v_ BF16 16KiB|Kminus→qg_scaled/kg→Aqk，按末次 DMA 消费复用|
 |[0x2c000,0x2f000)|small_ 12KiB|rstd、beta、bias、广播量和 scalar DMA 分区|
 |[0x2f000,0x2f800)|mask 2KiB|640B strict/inclusive packed triangle，初始化一次，只读|
@@ -119,10 +119,10 @@ beta DMA [0x2e000,0x2e800)，BF16 pack [0x2e800,0x2e880)。
 sequence-major beta的有界tile按2.4读取，不再每标量启动一行DMA。
 只读索引：beta Small[2816,2944)即UB[0x2ec00,0x2ee00)，完整定义128个uint32索引；
 前64项为实际row stride，额外masked项为零，覆盖BF16 Gather的完整索引读取范围。
-Identity叶内Gather使用Small[2944,3008)即UB[0x2ee00,0x2ef00)。
+Identity/Precomputed叶内Gather使用Small[2944,3008)即UB[0x2ee00,0x2ef00)。
 二者与ALog缓存/临时量不重叠，均在现有Small UB内，不增加190KiB分配。
 资源头的static_assert同时检查128项beta范围、64项叶内范围与Mask边界。
-Identity叶内阶段复用Small[1536,1600)为两份当前行。
+Identity/Precomputed叶内阶段复用Small[1536,1600)为两份当前行。
 Lower store经MTE3_V退休后，UB[UbQ,UbG)整64KiB用于最多31列的系数广播；
 work_[2048,4096)为最多1984个int32索引，[4096,6144)为对应FP32系数，
 与前8KiB叶逆及g_中FP32 Lower互不重叠。
@@ -142,10 +142,10 @@ ShapeInfo置零；地址、容量与账本一致，不依赖未初始化的描�
 |[0,0x2000)|P，下三角 BF16|score 释放后开始，到最后 merge 读完|
 |[0x2000,0x4000)|X，BF16完整逆|eye 初始化→叶子逆→merge→W/U 最后 LoadA|
 |[0x4000,0x8000)|Tmp，merge临时及空隙|按连续 GEMM 的 FIX_MTE1 闭环复用|
-|[0x8000,0xa000)|Power，BF16叶子幂|L2叶子迭代期间活跃；Identity不使用|
+|[0x8000,0xa000)|Power，BF16叶子幂|key3/5叶子迭代期间活跃；其余key不使用|
 |[0xc000,0x10000)|RHS K 16KiB|scoreReleased 后提前载入，到W/U LoadB结束|
 |[0x10000,0x14000)|RHS V 16KiB|同上，不能被下一 work score 覆盖|
-|[0x14000,0x16000)|I，BF16 identity|L2每lane首次载入，跨work常驻；Identity不使用|
+|[0x14000,0x16000)|I，BF16 identity|key3/5每lane首次载入，跨work常驻；其余key不使用|
 
 score 阶段与逆/RHS阶段的地址重叠有 scoreReleased 事件，表中同时活跃的区域不重叠。
 L0A/L0B/L0C 各64KiB；A/B 两 lane 各有32KiB独立 bank，C通过 FIX_M 保护。
@@ -155,7 +155,7 @@ GM workspace 每 lane152KiB，record字段如下；每 slot 两lane=304KiB，每
 
 |相对地址|大小|生产→消费|
 |---|---|---|
-|0x00000 Payload|72KiB|score payload→AIC；raw-ready后Identity复用低8KiB交接BF16叶逆|
+|0x00000 Payload|72KiB|score payload→AIC；raw-ready后key0/1/2/4复用低8KiB交接BF16叶逆|
 |0x12000 Raw|32KiB|AIC FP32 score→AIV Lower/Aqk|
 |0x1a000 Lower|8KiB|AIV BF16 strict lower→AIC inverse|
 |0x1c000 Eye|8KiB|AIV identity→AIC X/I|
@@ -213,13 +213,13 @@ qg先BF16舍入，再FP32乘scale并BF16输出qg_scaled；Save在qg活跃时写�
 kg使用最后有效行G[r-1]，不取补零行。两个RHS的内部64行均零填充，写入独立GM区。
 最后DMA发布rhs-ready，AIC在scoreReleased后即可提前装入L1。
 
-### Stage 4：Vector，strict Lower、Aqk与Identity叶内逆
+### Stage 4：Vector，strict Lower、Aqk与局部FP32叶内逆
 
 等待raw-ready及前序work_ Vector消费结束。FP32 score乘scale或-beta，
 分别施加inclusive/strict三角mask。Aqk在原位置Cast BF16；完整64×64 BF16负Lower
 写入私有GM。640B packed mask一次初始化；padding负Lower=0、inverse对角=1。
 
-Identity key将未Cast的FP32负Lower另存已经退休的g_[0:4096]。
+Identity或Precomputed key将未Cast的FP32负Lower另存已经退休的g_[0:4096]。
 LeafInverse32从私有Eye加载完整64行padding模板至v_，两个32阶对角块Cast为FP32，
 按64行×32列打包至work_[0:2048]。依次k=0..min(r-1,31)：
 `X[i,:] += (-L)[i,k] * X[k,:]`，两叶互相独立；strict mask令i<=k系数为0。
@@ -241,15 +241,18 @@ Cube仅将此BF16完整逆载入resident X，不再加载P或执行32+32合并�
 该策略只由已有Norm/Gate key选择，g/beta dtype、shape、layout与标量不决定优化资格。
 没有FP32跨核或GM/L1 relay、额外UB分配或新事件；完整64阶局部计算的性能成本独立测量。
 
-L2 key不进行上述FP32叶内计算；启用Akk时先清零有效区域，Cube随后写完整叶对角及下块。
+L2非Precomputed（key3/5）不进行上述FP32叶内计算；启用Akk时先清零有效区域，Cube随后写完整叶对角及下块。
 两种策略都在本阶段排空Aqk、Lower、叶逆/检查点的全部MTE3，再发布同一lower-ready。
 不得提前改写Q/K、g_/work_或checkpoint DMA来源；关闭输出不作为scratch。
 
 ### Stage 5：Cube，BF16驻留逆和分层合并
 
-Identity的Softplus/SafeSigmoid读取BF16 P与BF16叶逆X到同一L1地址。只有一次32+32合并：
-`Tmp=X_lower @ P_cross`，`X_cross=Tmp @ X_upper`。
-L2读取BF16 P/Power、Eye到X及首次常驻I；四个16阶叶子通过4轮幂倍增生成完整叶逆，
+key1/2/4读取BF16 P与BF16叶逆X到同一L1地址。只有一次32+32合并。
+key2/4保持 `Tmp=X_lower @ P_cross`，`X_cross=Tmp @ X_upper`；
+key1采用 `Tmp=P_cross @ X_upper`，`X_cross=X_lower @ Tmp`，与冻结CONTROL的括号顺序一致。
+两种组织均为两次GEMM，每次FP32累加后Fixpipe舍入为BF16；P已包含负号。
+X_cross的目标区域不与X_lower输入重叠；Tmp沿用原有地址和FIX_MTE1事件，不增加资源或事件。
+key3/5读取BF16 P/Power、Eye到X及首次常驻I；四个16阶叶子通过4轮幂倍增生成完整叶逆，
 随后两次16+16及一次32+32合并。
 
 两者所有Cube操作数和resident X均BF16，MMAD累加FP32，Fixpipe再BF16舍入回L1；
@@ -297,8 +300,8 @@ work-free保护GM两代record；独立的RHS-ready不会推迟当前RHS到invers
 ### 2.4 搬运与数值边界
 
 每HV工作首次读取Q/K/g/beta各一次、V在RHS阶段一次；GVA当前重复读取Q/K，
-仅owner写checkpoint。payload、Raw、Lower、RHS按表中生产/消费；Identity在score租约结束后另外交接8KiB BF16叶逆，
-其Eye由Vector每work加载；L2的I在L1每lane首次载入。两者完整成本计入性能。
+仅owner写checkpoint。payload、Raw、Lower、RHS按表中生产/消费；key0/1/2/4在score租约结束后另外交接8KiB BF16叶逆，
+key0/1/2/4的Eye由Vector每work加载；key3/5的I在L1每lane首次载入。两者完整成本计入性能。
 RHS与resident inverse不经公开输出中转，完整Save的所有写出成本属于算子性能。
 layout只改变输入地址/strided DMA，内部矩阵统一；varlen由序列起止和规范索引限定。
 host拒绝非法head比、chunk/K/V、dtype、标量、metadata及DMA stride溢出；
@@ -351,19 +354,19 @@ L1/L0 内部搬运。令 b=ceil(r/16)、m=16b、s=16×(1+…+b)，g/beta 元素�
 |Raw score|AIC 写、AIV 读各一次|128s；各20KiB|32KiB 是分配容量，四 band 只搬实际矩形；raw-ready 后读|
 |RHS K/V|AIV 写、AIC 读各一次|各16KiB，合计各32KiB|尾行在 UB 补零后仍搬完整矩阵；AIC 提前载入 L1，W/U 共用 inverse|
 |Lower|AIV 写一次|8KiB|所有 key 当前均写完整 BF16 Lower；key0 的 AIC 不读该区域；其余 key 见下文|
-|Identity 叶内逆|AIV 写、AIC 读各一次|各8KiB|复用已退休 Payload 低地址，统一 BF16 relay；key0 为完整64阶结果|
-|Eye|每 lane 两 slot 各初始化一次|启动时共16KiB写入|immutable GM；Identity 每 work 读8KiB到UB；L2 每 work 读8KiB到L1 X，并在 lane 首次工作额外读8KiB到L1 I|
+|key0/1/2/4 叶内逆|AIV 写、AIC 读各一次|各8KiB|复用已退休 Payload 低地址，统一 BF16 relay；key0 为完整64阶结果|
+|Eye|每 lane 两 slot 各初始化一次|启动时共16KiB写入|immutable GM；key0/1/2/4 每 work 读8KiB到UB；key3/5 每 work 读8KiB到L1 X，并在 lane 首次工作额外读8KiB到L1 I|
 |ALog、dt_bias|ALog按容量缓存，bias逐 work读|缓存最多128×4B/每AIV；有bias时512B/work|使用Small区；不随qkv layout改变地址语义|
 
-Identity+Softplus/SafeSigmoid 的 AIC 另读8KiB Lower；L2 的 AIC 分别将同一 Lower
-读入 P 与 Power，各8KiB，不能因逻辑内容相同而只计一次。L2 的 inverse 更新与分层合并
+key1/2/4 的 AIC 另读8KiB Lower；key3/5 的 AIC 分别将同一 Lower
+读入 P 与 Power，各8KiB，不能因逻辑内容相同而只计一次。key3/5 的 inverse 更新与分层合并
 常驻 L1，不逐轮写回 GM；W/U 在 paired L0 中共享 inverse 的装载。
 
 完整 Save13 的有效输出按上述 r 计算；r=64 且该 value head 是 Q/K checkpoint owner 时，
 唯一输出区域共160.75KiB：gk 32KiB，Aqk/Akk各8KiB，W/U/qg/kg/qgScaled/qHat/kHat各16KiB，
 qRstd/kRstd/betaEff各256B。GVA 非 owner 不写 qHat/kHat/qRstd/kRstd，减去32.5KiB。
-这只是唯一输出区域大小：Akk 的完整初始化/叶内结果之后，L2 Cube 还覆盖写5KiB下三角块，
-Identity+Softplus/SafeSigmoid还覆盖写2KiB的32×32合并块；key0不再由Cube覆盖Akk。
+这只是唯一输出区域大小：Akk 的完整初始化/叶内结果之后，key3/5 Cube 还覆盖写5KiB下三角块，
+key1/2/4还覆盖写2KiB的32×32合并块；key0不再由Cube覆盖Akk。
 这些重复写回、RHS padding、Eye初始化和全部启动成本均包含在算子 Task/Event 中。
 尾块只向公开输出写有效行；被关闭的槽不写回，不能从其节省量扣除仍必要的内部生产。
 

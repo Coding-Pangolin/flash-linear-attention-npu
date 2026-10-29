@@ -32,5 +32,8 @@ foreach(PREPARE_RUNTIME_SOC ascend910b3 ascend910_9391)
 endforeach()
 
 if(ENABLE_TEST)
-    add_subdirectory(tests)
+    add_subdirectory(
+        "${CMAKE_SOURCE_DIR}/tests/operators/chunk_kda_fwd_prepare"
+        "${CMAKE_CURRENT_BINARY_DIR}/tests"
+    )
 endif()

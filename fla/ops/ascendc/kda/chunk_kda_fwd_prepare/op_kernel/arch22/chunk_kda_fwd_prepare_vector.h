@@ -192,25 +192,72 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
                 }
             }
         }
-        // Padded input rows are zero. All scans stop at this work's 64-row chunk.
-        // Association differs from sequential FP32: this is separately native-tested.
-        BinaryRepeatParams local{1,1,1,128,128,128};
-        for(uint32_t r=1;r<8;++r) {
-            Add(g_[r*128],g_[r*128],g_[(r-1)*128],64,8,local);
-            Add(g_[r*128+64],g_[r*128+64],g_[(r-1)*128+64],64,8,local);VBarrier();
+        if constexpr(Gate==0 && sizeof(GateT)==sizeof(float)) {
+            // Signed precomputed steps need the low rounding residual when
+            // prefixes cancel. Keep the same 8-row hierarchy and FP32 output.
+            Duplicate(work_,0.0F,8192);VBarrier();
+            for(uint32_t row=1;row<8;++row)
+                PrefixPair<128,128,128,8>(row*128,row*128,(row-1)*128);
+            for(uint32_t block=1;block<8;++block)
+                PrefixPair<16,16,16,1>(((block+1)*8-1)*128,
+                    ((block+1)*8-1)*128,(block*8-1)*128);
+            for(uint32_t block=1;block<8;++block)
+                PrefixPair<16,16,0,7>(block*8*128,block*8*128,(block*8-1)*128);
+            Add(g_,g_,work_,8192);VBarrier();
+        } else {
+            // Padded input rows are zero. All scans stop at this work's 64-row chunk.
+            // Association differs from sequential FP32: this is separately native-tested.
+            BinaryRepeatParams local{1,1,1,128,128,128};
+            for(uint32_t r=1;r<8;++r) {
+                Add(g_[r*128],g_[r*128],g_[(r-1)*128],64,8,local);
+                Add(g_[r*128+64],g_[r*128+64],g_[(r-1)*128+64],64,8,local);VBarrier();
+            }
+            for(uint32_t block=1;block<8;++block) {
+                uint32_t last=(block+1)*8-1,previous=block*8-1;
+                Add(g_[last*128],g_[last*128],g_[previous*128],128);VBarrier();
+            }
+            BinaryRepeatParams carry{1,1,1,16,16,0};
+            for(uint32_t block=1;block<8;++block) {
+                uint32_t first=block*8,previous=first-1;
+                Add(g_[first*128],g_[first*128],g_[previous*128],64,7,carry);
+                Add(g_[first*128+64],g_[first*128+64],g_[previous*128+64],64,7,carry);
+            }
+            VBarrier();
         }
-        for(uint32_t block=1;block<8;++block) {
-            uint32_t last=(block+1)*8-1,previous=block*8-1;
-            Add(g_[last*128],g_[last*128],g_[previous*128],128);VBarrier();
-        }
-        BinaryRepeatParams carry{1,1,1,16,16,0};
-        for(uint32_t block=1;block<8;++block) {
-            uint32_t first=block*8,previous=first-1;
-            Add(g_[first*128],g_[first*128],g_[previous*128],64,7,carry);
-            Add(g_[first*128+64],g_[first*128+64],g_[previous*128+64],64,7,carry);
-        }
-        VBarrier();
         if(a_.tiling.useExp2){Muls(g_,g_,1.4426950408889634F,count);VBarrier();}
+    }
+    template<uint8_t D,uint8_t A,uint8_t B,uint8_t Repeats>
+    __aicore__ inline void PrefixPair(uint32_t dst,uint32_t lhs,uint32_t rhs) {
+        // Work[0,8192): low prefix residuals. Three compact 8x128 FP32
+        // temporaries occupy [8192,11264), within the existing 64KiB Work.
+        auto sum=work_[8192],virtualB=work_[9216],error=work_[10240];
+        for(uint32_t half=0;half<128;half+=64)
+            Add(sum[half],g_[lhs+half],g_[rhs+half],64,Repeats,{1,1,1,16,A,B});
+        VBarrier();
+        for(uint32_t half=0;half<128;half+=64)
+            Sub(virtualB[half],sum[half],g_[lhs+half],64,Repeats,{1,1,1,16,16,A});
+        VBarrier();
+        for(uint32_t half=0;half<128;half+=64)
+            Sub(error[half],sum[half],virtualB[half],64,Repeats,{1,1,1,16,16,16});
+        VBarrier();
+        for(uint32_t half=0;half<128;half+=64)
+            Sub(error[half],g_[lhs+half],error[half],64,Repeats,{1,1,1,16,A,16});
+        VBarrier();
+        for(uint32_t half=0;half<128;half+=64)
+            Sub(virtualB[half],g_[rhs+half],virtualB[half],64,Repeats,{1,1,1,16,B,16});
+        VBarrier();
+        for(uint32_t half=0;half<128;half+=64)
+            Add(error[half],error[half],virtualB[half],64,Repeats,{1,1,1,16,16,16});
+        VBarrier();
+        for(uint32_t half=0;half<128;half+=64)
+            Add(work_[dst+half],work_[lhs+half],work_[rhs+half],64,Repeats,{1,1,1,D,A,B});
+        VBarrier();
+        for(uint32_t half=0;half<128;half+=64)
+            Add(work_[dst+half],work_[dst+half],error[half],64,Repeats,{1,1,1,D,D,16});
+        VBarrier();
+        for(uint32_t half=0;half<128;half+=64)
+            Adds(g_[dst+half],sum[half],0.0F,64,Repeats,{1,1,D,16});
+        VBarrier();
     }
     template<bool Exp2> __aicore__ inline void Factor(LocalTensor<float> f,
         uint32_t count,float lo,float hi) {

@@ -175,6 +175,14 @@ Precomputed 直接使用 step；Softplus 用 max(x,0)+log1p(exp(-abs(x))) 的补
 SafeSigmoid 使用 lower_bound/(1+exp(-exp(a_log)×(g+bias)))。
 norm和 gate 一直保持各自明确的 FP32 中间量。prefix 按8行段扫描并加carry，仅当前chunk，
 不跨序列；Exp2 的域变换沿用当前实现的舍入顺序，不能交换成另一种变换后宣称等价。
+
+Precomputed 且 g=FP32 时，有符号 step 的前缀抵消需要保留加法舍入残差。
+同一8行层级使用 TwoSum：g_ 保存高位，work_[0,8192) 保存低位；
+work_[8192,11264) 保存三份8×128 FP32临时量，总活跃44KiB，位于既有64KiB work_内。
+低位与高位在层级合并后相加，再按原顺序做 Exp2 域缩放；不改变 BF16 relay。
+该分支静态限定 GateMode=Precomputed、GateT=FP32，不以 shape、模型或标量常量选路。
+其余 gate/dtype 沿用既有扫描。此处只复用 norm 结束后的 work_，在 factor/RHS 复用前
+完成全部 Vector 读写并执行既有 barrier；没有新增 UB、workspace、key 或跨核事件。
 gk 在仍活跃时写回，checkpoint DMA 的源在 score payload 消费期间保持不变。
 
 ### Stage 1：Vector，四个16行 band 的 score payload

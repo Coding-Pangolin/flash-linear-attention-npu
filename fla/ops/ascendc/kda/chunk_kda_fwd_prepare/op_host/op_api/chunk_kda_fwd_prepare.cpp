@@ -4,7 +4,6 @@
  * CANN Open Software License Agreement Version 2.0 (the "License").
  */
 
-#include "../chunk_kda_fwd_prepare_log.h"
 #include "chunk_kda_fwd_prepare.h"
 
 #include <cstdint>
@@ -112,9 +111,8 @@ ChunkKdaFwdPrepareOutputs ChunkKdaFwdPrepare(
         ConvertIntArrayToTensor(chunkIndicesOptional, executor);
     if ((cuSeqlensOptional != nullptr && cuSeqlens == nullptr) ||
         (chunkIndicesOptional != nullptr && chunkIndices == nullptr)) {
-        kda_prepare::ReportInvalidArgument(
-            "aclnnChunkKdaFwdPrepare", "cu_seqlens/chunk_indices",
-            "optional host array conversion returned null");
+        OP_LOGE(ACLNN_ERR_INNER_NULLPTR,
+                "转换 cu_seqlens/chunk_indices 到 Tensor 失败。");
         return {};
     }
 
@@ -143,9 +141,7 @@ ChunkKdaFwdPrepareOutputs ChunkKdaFwdPrepare(
         qHatForKernel == nullptr || kHatForKernel == nullptr ||
         qRstdForKernel == nullptr || kRstdForKernel == nullptr ||
         betaEffForKernel == nullptr) {
-        kda_prepare::ReportInvalidArgument(
-            "aclnnChunkKdaFwdPrepare", "outputs",
-            "empty descriptor creation returned null");
+        OP_LOGE(ACLNN_ERR_INNER_NULLPTR, "创建空输出 descriptor 失败。");
         return {};
     }
 
@@ -160,9 +156,8 @@ ChunkKdaFwdPrepareOutputs ChunkKdaFwdPrepare(
                 useGateInKernel, useBetaSigmoidInKernel, allowNegEigval,
                 safeGate, lowerBoundAttr, useExp2, outputMode));
     if (status != ACLNN_SUCCESS) {
-        kda_prepare::ReportInvalidArgument(
-            "aclnnChunkKdaFwdPrepare", "launcher",
-            "adding the AI Core task failed");
+        OP_LOGE(ACLNN_ERR_PARAM_INVALID,
+                "添加 ChunkKdaFwdPrepare AI Core 任务失败。");
         return {};
     }
 

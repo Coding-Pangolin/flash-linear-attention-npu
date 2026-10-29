@@ -89,9 +89,7 @@ Q/K 检查点 owner 仅为 hv%G==0；不同 hk 的两个 AIV 各自准备自己�
 Norm/Gate 为静态策略。Raw/Sigmoid/TwoSigmoid、输出掩码及实际标量是 immutable tiling。
 现有 CANN dtype 注册分别生成 g/beta 四种输入对象，每对象仍只有六个数学 key。
 
-Host 参数失败通过算子私有日志适配层上报：CANN 提供参数级日志宏时使用该宏，
-旧版 CANN 9.1 使用其通用错误上报接口并保留参数名、错误值和具体原因。
-此兼容处理不改变校验条件、返回码、tiling 数据或 device 调度。
+共享 ACLNN/L0 的参数校验和错误处理沿用 main；本优化不重写跨平台诊断。
 不按模型编号、精确 shape、epsilon、scale 或 lower_bound 开优化资格。
 A2 host 拦截非 Exp2，内核中的指数域辅助函数不构成未验证合同的公开支持声明。
 A5 保留原模板声明、arch35 实现和字段；下面的资源和协议专指 A2。

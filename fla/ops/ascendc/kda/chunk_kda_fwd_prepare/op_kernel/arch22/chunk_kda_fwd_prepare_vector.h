@@ -468,7 +468,7 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         Write(a_.aqk,Out(a_.tiling,w_,w_.head[lane_],a_.tiling.valueHeadNum,64),v_,w_.rows*64);
         if constexpr(Norm==0 || Gate==0) {
             Write(a_.workspace+base_+Lower,0,q_,4096,false);
-            if constexpr(Norm==0 && Gate==0)LeafInverse64();
+            if constexpr(Gate==0)LeafInverse64();
             else LeafInverse32();
         } else {
             if(a_.tiling.outputMode!=0) {
@@ -537,7 +537,7 @@ public:
             if constexpr(Norm==0 || Gate==0) {
                 auto offsets=small_[InverseGatherIndexSmall].template ReinterpretCast<uint32_t>();
                 for(uint32_t row=0;row<64;++row)
-                    offsets.SetValue(row,(row*64+((Norm==0 && Gate==0)?0:(row/32)*32))*4);
+                    offsets.SetValue(row,(row*64+(Gate==0?0:(row/32)*32))*4);
                 SToV();
             }
             if(a_.tiling.inputSequenceMajor) { // Sequence-major beta tile indices only.

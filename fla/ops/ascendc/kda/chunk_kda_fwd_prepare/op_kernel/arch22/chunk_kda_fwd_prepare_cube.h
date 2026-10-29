@@ -142,15 +142,8 @@ template<uint32_t Norm,uint32_t Gate> class Cube {
     }
     template<uint32_t Block> __aicore__ inline void MergePair(uint32_t base) {
         uint32_t lower=base+Block;
-        if constexpr(Norm==1 && Gate==0) {
-            // Match the frozen control's X11 * (negativeLower10 * X00).
-            // Both relay matrices remain BF16; buffers and event counts match.
-            GemmPair<Block>(P,X,Tmp,lower,base,base,base,lower,base,false);
-            GemmPair<Block>(X,Tmp,X,lower,lower,lower,base,lower,base,true);
-        } else {
-            GemmPair<Block>(X,P,Tmp,lower,lower,lower,base,lower,base,false);
-            GemmPair<Block>(Tmp,X,X,lower,base,base,base,lower,base,true);
-        }
+        GemmPair<Block>(X,P,Tmp,lower,lower,lower,base,lower,base,false);
+        GemmPair<Block>(Tmp,X,X,lower,base,base,base,lower,base,true);
     }
     __aicore__ inline void PreloadRhs() {
         WaitFlag<HardEvent::MTE1_MTE2>(scoreReleased_);
@@ -171,11 +164,11 @@ template<uint32_t Norm,uint32_t Gate> class Cube {
                 if(!w_.active[lane])continue;
                 uint64_t base=GmLane(core_,slot_,lane);
                 auto source=Gm<bfloat16_t>(a_.workspace+base);
-                if constexpr(Gate!=0 || Norm==1)CopyNz(L1(lane,P),source[Lower/2],64,64);
+                if constexpr(Gate!=0)CopyNz(L1(lane,P),source[Lower/2],64,64);
                 CopyNz(L1(lane,X),source[Payload/2],64,64);
             }
             CopiesReady();
-            if constexpr(Gate!=0 || Norm==1)if(w_.rows>32)MergePair<32>(0);
+            if constexpr(Gate!=0)if(w_.rows>32)MergePair<32>(0);
         } else {
             for(uint32_t lane=0;lane<2;++lane) {
                 if(!w_.active[lane])continue;

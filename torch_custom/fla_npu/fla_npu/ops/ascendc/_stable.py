@@ -1523,6 +1523,12 @@ def npu_chunk_kda_fwd_prepare(q, k, v, g, beta, scale, chunk_size=64, *,
     else:
         batch, qk_heads, seq_len, key_dim = q.shape
         value_heads, value_dim = v.shape[1], v.shape[3]
+    gate_shape = ((seq_len, value_heads, key_dim) if rank3 else
+                  (batch, seq_len, value_heads, key_dim))
+    if tuple(g.shape) != gate_shape or tuple(beta.shape) != gate_shape[:-1]:
+        raise RuntimeError(
+            "npu_chunk_kda_fwd_prepare: g/beta must use fixed token-major "
+            "[B,T,HV,K]/[B,T,HV] or packed [T,HV,K]/[T,HV], independently of q/k/v layout.")
     key_shape = ((value_heads, seq_len, key_dim) if rank3
                  else (batch, value_heads, seq_len, key_dim))
     value_shape = ((value_heads, seq_len, value_dim) if rank3

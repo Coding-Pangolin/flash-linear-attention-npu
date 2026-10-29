@@ -4236,6 +4236,12 @@ def npu_chunk_kda_fwd_prepare(
         else:
             batch, h_num, seqlen, k_dim = q_shape
             hv_num, v_dim = v_shape[1], v_shape[3]
+    gate_shape = ((seqlen, hv_num, k_dim) if is_rank3 else
+                  (batch, seqlen, hv_num, k_dim))
+    if tuple(g_shape) != gate_shape or tuple(beta_shape) != gate_shape[:-1]:
+        raise RuntimeError(
+            "npu_chunk_kda_fwd_prepare: g/beta must use fixed token-major "
+            "[B,T,HV,K]/[B,T,HV] or packed [T,HV,K]/[T,HV], independently of q/k/v layout.")
     if h_num <= 0 or hv_num < h_num or hv_num > 0xFFFFFFFF or hv_num % h_num != 0:
         raise RuntimeError(
             "npu_chunk_kda_fwd_prepare: H/HV must be positive uint32 values with H <= HV and HV % H == 0.")

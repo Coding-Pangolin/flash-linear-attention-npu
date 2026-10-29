@@ -61,7 +61,7 @@ StageV0 及 V 输入阶段的 DataCopyPad 直接按 dense BSND 行 stride 读取
 `arch22/chunk_kda_bwd_finalize_vector.h` 中 `outputTokenMajor` 分支直接使用
 带目标 stride 的 DataCopyPad 写出 BSND/TND，输入仍是连续 Head First。
 这里借鉴的是按消费 tile 读入、按公开布局直接写出的方法，不能混淆输入与输出 layout。
-Prepare 保留外部 q/k/v/g 布局，beta 使用下文的有界 tile 读取，不产生全量 transpose 临时张量。
+Prepare 的 q/k/v 按公开 layout 读取；原始 g/beta 固定 token-major，使用下文的分块读取，不产生全量 transpose 临时张量。
 
 ### 2.1 符号、工作域和选择
 
@@ -286,13 +286,15 @@ host拒绝非法head比、chunk/K/V、dtype、标量、metadata及DMA stride溢�
 极端gate/beta、norm epsilon、tail padding及高阶逆的数值路径遵守冻结比较器，
 失败合同明确标失败，不新增FP32 relay回退族，也不更改truth/control或容差。
 
-### 2.4.1 BSND/TND局部输入搬运
+### 2.4.1 qkv layout 与固定 token-major g/beta 的局部搬运
 
 实际A2入口为 `CHUNK_KDA_PREPARE_RUNTIME_KEYS` 下的 `Arch22::Run`。
-q/k/v/g保持外部布局，`In`计算源地址，`Read`通过DataCopyPad读取有效行；
-sequence-major的行间隙为`(heads-1)*width*sizeof(T)`，内部矩阵和公开输出为head-major。
-没有整份q/k/v/g transpose，没有额外全输入临时张量。公开g/beta形状仍以api.md及host
-实际检查为准，不能把拟议的另一个BSN公共接口改造误写为本实现已完成。
+`QkvInputOffset` 按 inputSequenceMajor 计算 q/k/v 地址；`GateInputOffset` 与
+`BetaInputOffset` 固定计算 `((b*T+token)*HV+head)*width`，packed 使用 b=0。
+`Read` 接收各输入自身的 tokenMajor 属性，通过 DataCopyPad 读取有效行；
+token-major 行间隙为 `(heads-1)*width*sizeof(T)`。g 始终按此 stride 读取，
+q/k/v 仅 BSND/TND 使用该 stride。内部矩阵和公开输出仍为 head-major。
+不增加整份 q/k/v/g transpose 或全输入临时张量。
 
 beta的有效行宽只有1个元素。HV<=8时连续读取r×HV个beta，HV>8时只读取当前head
 所属的至多8列tile，末tile列数取剩余head，UB每行pad到32B。
@@ -300,7 +302,7 @@ beta的有效行宽只有1个元素。HV<=8时连续读取r×HV个beta，HV>8时
 baseAddr为tile内head字节偏移。FP32直接Gather，BF16以uint16位模式Gather后按原顺序Cast。
 只处理有效行，不越过head/序列边界。最多重复读取8列beta；仍用原2KiB beta DMA区。
 初始化索引经S_V发布；MTE2_V保护DMA→Gather，PIPE_V保护Gather→Cast/激活。
-head-major beta保留原连续读；没有新增key、资源容量或跨核事件。
+全部 qkv layout 使用相同 beta tile/Gather，索引始终初始化；没有新增 key、资源容量或跨核事件。
 
 ### 2.4.2 一次性输入L2 cache策略
 

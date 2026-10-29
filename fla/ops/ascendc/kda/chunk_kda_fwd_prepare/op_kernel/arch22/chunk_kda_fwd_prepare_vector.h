@@ -26,11 +26,11 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         dst.SetShapeInfo(ShapeInfo{});
     }
     template<class T> __aicore__ inline void Read(LocalTensor<T> dst,GM_ADDR ptr,
-        uint64_t offset,uint32_t rows,uint32_t width,uint32_t heads,bool strided=true,bool streaming=false) {
+        uint64_t offset,uint32_t rows,uint32_t width,uint32_t heads,bool tokenMajor=false,bool streaming=false) {
         // A DMA must not reuse UB while an earlier vector producer still writes it.
         SetFlag<HardEvent::V_MTE2>(EVENT_ID0);WaitFlag<HardEvent::V_MTE2>(EVENT_ID0);
         DataCopyExtParams p{static_cast<uint16_t>(rows),static_cast<uint32_t>(width*sizeof(T)),
-            static_cast<uint32_t>(strided&&a_.tiling.inputSequenceMajor?(heads-1)*width*sizeof(T):0),0,0};
+            static_cast<uint32_t>(tokenMajor?(heads-1)*width*sizeof(T):0),0,0};
         DataCopyPadExtParams<T> pad{false,0,0,0};
         auto source=Gm<T>(ptr,offset);
         if(streaming)source.SetL2CacheHint(CacheMode::CACHE_MODE_DISABLE);
@@ -79,29 +79,29 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         Duplicate(q_,bfloat16_t(0),8192);Duplicate(k_,bfloat16_t(0),8192);
         Duplicate(g_,0.0F,8192);Duplicate(beta_,0.0F,64);VBarrier();
         const auto &t=a_.tiling;uint32_t h=w_.head[lane_],qh=w_.qh[lane_];
-        Read(q_,a_.q,In(t,w_,qh,t.qkHeadNum,128),w_.rows,128,t.qkHeadNum,true,t.qkHeadNum==t.valueHeadNum);
-        Read(k_,a_.k,In(t,w_,qh,t.qkHeadNum,128),w_.rows,128,t.qkHeadNum,true,t.qkHeadNum==t.valueHeadNum);
+        Read(q_,a_.q,QkvInputOffset(t,w_,qh,t.qkHeadNum,128),w_.rows,128,t.qkHeadNum,t.inputSequenceMajor,t.qkHeadNum==t.valueHeadNum);
+        Read(k_,a_.k,QkvInputOffset(t,w_,qh,t.qkHeadNum,128),w_.rows,128,t.qkHeadNum,t.inputSequenceMajor,t.qkHeadNum==t.valueHeadNum);
         // Input types are selected by the package's existing dtype objects,
         // independently of the six Norm/Gate tiling keys.
         auto gateRaw=work_.template ReinterpretCast<GateT>();
         if constexpr(sizeof(GateT)==sizeof(float)) {
-            Read(g_,a_.rawGate,In(t,w_,h,t.valueHeadNum,128),w_.rows,128,t.valueHeadNum,true,true);
+            Read(g_,a_.rawGate,GateInputOffset(t,w_,h,128),w_.rows,128,t.valueHeadNum,true,true);
         } else {
             // work_ is free until Normalize/GatePrefix. Do not expand in-place.
-            Read(gateRaw,a_.rawGate,In(t,w_,h,t.valueHeadNum,128),w_.rows,128,t.valueHeadNum,true,true);
+            Read(gateRaw,a_.rawGate,GateInputOffset(t,w_,h,128),w_.rows,128,t.valueHeadNum,true,true);
         }
         auto raw=small_[2048].template ReinterpretCast<BetaT>();
         if constexpr(sizeof(BetaT)==2) {
             // Define complete raw/packed conversion blocks, including inactive lanes.
             Duplicate(small_[2048],0.0F,544);VBarrier();
         }
-        if(t.inputSequenceMajor) {
+        {
             // beta alone has scalar-width rows. Read a bounded head tile,
             // then select this lane's head; never materialize the full tensor.
             constexpr uint32_t BetaTileHeads=8;
             const uint32_t heads=t.valueHeadNum;
             if(heads<=BetaTileHeads) {
-                Read(raw,a_.beta,In(t,w_,0,heads,1),1,w_.rows*heads,heads,false);
+                Read(raw,a_.beta,BetaInputOffset(t,w_,0),1,w_.rows*heads,heads,false);
             } else {
                 const uint32_t first=(h/BetaTileHeads)*BetaTileHeads;
                 const uint32_t columns=heads-first<BetaTileHeads?heads-first:BetaTileHeads;
@@ -109,12 +109,9 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
                 DataCopyExtParams p{static_cast<uint16_t>(w_.rows),static_cast<uint32_t>(columns*sizeof(BetaT)),
                     static_cast<uint32_t>((heads-columns)*sizeof(BetaT)),0,0};
                 DataCopyPadExtParams<BetaT> pad{false,0,0,0};
-                DataCopyPad(raw,Gm<BetaT>(a_.beta,In(t,w_,first,heads,1)),p,pad);
+                DataCopyPad(raw,Gm<BetaT>(a_.beta,BetaInputOffset(t,w_,first)),p,pad);
             }
         }
-        else if constexpr(sizeof(BetaT)==sizeof(float))
-            Read(beta_,a_.beta,In(t,w_,h,t.valueHeadNum,1),1,w_.rows,t.valueHeadNum,false);
-        else Read(raw,a_.beta,In(t,w_,h,t.valueHeadNum,1),1,w_.rows,t.valueHeadNum,false);
         if constexpr(Gate!=0) {
             if(!aLogCached_)Read(small_[384],a_.aLog,h,1,1,1,false);
             if(t.hasDtBias) Read(bias_,a_.dtBias,uint64_t(h)*128,1,128,1,false);
@@ -123,7 +120,7 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         if constexpr(sizeof(GateT)!=sizeof(float)) {
             Cast(g_,gateRaw,RoundMode::CAST_NONE,w_.rows*128);VBarrier();
         }
-        if(t.inputSequenceMajor) {
+        {
             // Scalar rows are padded to 32B by DMA. Gather row starts in
             // Vector, preserving BF16 bits and the original FP32 Cast order.
             auto offsets=small_[BetaGatherIndexSmall].template ReinterpretCast<uint32_t>();
@@ -136,8 +133,6 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
                        raw.template ReinterpretCast<uint16_t>(),offsets,headOffset,w_.rows);
                 VBarrier();Cast(beta_,packed,RoundMode::CAST_NONE,w_.rows);
             }
-        } else if constexpr(sizeof(BetaT)!=sizeof(float)) {
-            Cast(beta_,raw,RoundMode::CAST_NONE,w_.rows);
         }
         VBarrier();
         if(t.betaMode!=0) {
@@ -291,7 +286,7 @@ template<uint32_t Norm,uint32_t Gate,class GateT,class BetaT> class Vector {
         Cast(v_,values,RoundMode::CAST_RINT,count);VBarrier();
         Write(a_.kg,Out(t,w_,h,t.valueHeadNum,128),v_,count,false);
         Duplicate(qg,bfloat16_t(0),8192);VBarrier();
-        Read(qg,a_.v,In(t,w_,h,t.valueHeadNum,128),w_.rows,128,t.valueHeadNum,true,true);Mte2ToV();
+        Read(qg,a_.v,QkvInputOffset(t,w_,h,t.valueHeadNum,128),w_.rows,128,t.valueHeadNum,t.inputSequenceMajor,true);Mte2ToV();
         Cast(values,qg,RoundMode::CAST_NONE,count);VBarrier();RowMultiply(values,values,blocks_,w_.rows,128);
         Duplicate(rhs,bfloat16_t(0),8192);VBarrier();Cast(rhs,values,RoundMode::CAST_RINT,count);VBarrier();
         Write(a_.workspace+base_+RhsV,0,rhs,8192,false);
@@ -450,7 +445,7 @@ public:
                 for(uint32_t row=0;row<64;++row)offsets.SetValue(row,(row*64+(row/32)*32)*4);
                 SToV();
             }
-            if(a_.tiling.inputSequenceMajor) {
+            { // Fixed token-major beta for all q/k/v layouts.
                 auto offsets=small_[BetaGatherIndexSmall].template ReinterpretCast<uint32_t>();
                 // BF16 Gather may consume a full 128-entry offset register pair.
                 // Upper masked lanes have neutral indices in the existing spare UB.

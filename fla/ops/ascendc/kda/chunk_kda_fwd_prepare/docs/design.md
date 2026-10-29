@@ -21,6 +21,10 @@ beta、A_log、dt_bias、workspace 和后续阶段会重读的 gk 保持原缓�
 Shape 符号沿用 [KDA 模型符号表](../../README.md#核心符号)，公开输入输出与已知限制统一见
 [算子 README](../README.md#输入输出)。
 
+输入搬运遵守 [api.md](api.md)：q/k/v 独立选择四种布局，原始 g/beta 固定 token-major。
+StageV0 的 g/beta offset 与行 stride 不受 qkv 的 inputSequenceMajor 控制；beta 逐行 DMA
+形成 32B padded UB 行，StageV0Vf 按该真实行距解包。保留后续数学、资源和事件设计。
+
 ## 2. 数学语义
 
 对长度 `M<=64`、K/V 维为 128 的每个 chunk，先生成：

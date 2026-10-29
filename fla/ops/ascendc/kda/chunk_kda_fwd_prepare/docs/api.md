@@ -101,13 +101,13 @@ aclnnStatus aclnnChunkKdaFwdPrepare(
 | --- | --- | --- |
 | `q/k` | BF16 | K=128；head 数为 HK |
 | `v` | BF16 | V=128；head 数为 HV |
-| `g` | BF16/FP32 | 与 `v` 的 B/HV/T 一致，末维 128 |
-| `beta` | BF16/FP32 | 与 `v` 的 B/HV/T 一致 |
+| `g` | BF16/FP32 | 固定 token-major：dense `[B,T,HV,128]`；packed `[T,HV,128]` |
+| `beta` | BF16/FP32 | 固定 token-major：dense `[B,T,HV]`；packed `[T,HV]` |
 | `a_log` | FP32 | kernel 内 gate 模式必传，shape `[HV]` |
 | `dt_bias` | FP32 | 可空；shape `[HV*128]` |
 | `cu_seqlens` | host int array | 可空；变长模式为 `[sequence_count+1]`，首元素为 0，末元素为 T，且非递减 |
 | `chunk_indices` | host int array | 可空；仅能与 `cu_seqlens` 同时传入，内容为规范的 sequence-major `(sequence_id, local_chunk_id)` 序列 |
-| `layout` | string | `BNSD`、`BSND`、`NTD` 或 `TND`，区分大小写 |
+| `layout` | string | 只描述 q/k/v：`BNSD`、`BSND`、`NTD` 或 `TND`，区分大小写 |
 | `scale` | float | 转为 FP32 后为有限值 |
 | `chunk_size` | int | 固定为 64 |
 | `epsilon` | float | 转为 FP32 后有限且大于 0 |
@@ -117,8 +117,10 @@ aclnnStatus aclnnChunkKdaFwdPrepare(
 `B/T/HK/HV` 必须为正数且可由 `uint32_t` 表示；GVA 要求 `0 < HK <= HV` 且
 `HV % HK == 0`。tensor descriptor 必须使用标准、
 非私有且可连续化的 ND 物理布局；输出必须连续，因为 kernel 直接写入输出地址。
-`BSND/TND` 输入还要求 q/k、v、g 和 beta 的跨 head DMA stride 均可由 `uint32_t`
-表示，完整公式见 [README 输入输出约束](../README.md#输入输出)。
+g/beta 对所有 qkv layout 均使用 token-major 跨 head DMA，其 stride 必须可由 `uint32_t`
+表示；q/k/v 的该限制仅对 BSND/TND 生效，完整公式见 [README 输入输出约束](../README.md#输入输出)。
+不识别或自动转换旧 head-major g/beta；T=HV 等 shape 歧义不改变固定输入语义。
+普通非连续 view 由 L2 连续化，不产生默认的全量布局转置。
 
 A2 额外要求 `use_exp2=true`；不支持的指数域在 host 返回参数错误。
 A2 的 g、beta 各自支持 BF16/FP32；输入加载类型不改变内部 FP32 gate/beta 计算或 BF16 relay。

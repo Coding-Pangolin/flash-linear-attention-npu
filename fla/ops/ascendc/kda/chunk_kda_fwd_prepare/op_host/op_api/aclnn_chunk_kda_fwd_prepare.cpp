@@ -379,26 +379,23 @@ bool FitsDmaSourceStride(int64_t headNum, uint64_t rowBytes)
             std::numeric_limits<uint32_t>::max() / rowBytes;
 }
 
-aclnnStatus CheckSequenceMajorDmaStride(
+aclnnStatus CheckInputDmaStride(
     const ChunkKdaFwdPrepareParams &params, PrepareLayout layout,
     const PrepareShapeInfo &info)
 {
-    if (layout != PrepareLayout::BSND && layout != PrepareLayout::TND) {
-        return ACLNN_SUCCESS;
-    }
-
     const uint64_t gateElementBytes =
         params.g->GetDataType() == DataType::DT_FLOAT ? sizeof(float) : 2U;
     const uint64_t betaElementBytes =
         params.beta->GetDataType() == DataType::DT_FLOAT ? sizeof(float) : 2U;
     const bool strideValid =
-        FitsDmaSourceStride(info.qkHeadNum, PREPARE_K_DIM * 2U) &&
-        FitsDmaSourceStride(info.valueHeadNum, PREPARE_V_DIM * 2U) &&
+        ((layout != PrepareLayout::BSND && layout != PrepareLayout::TND) ||
+         (FitsDmaSourceStride(info.qkHeadNum, PREPARE_K_DIM * 2U) &&
+          FitsDmaSourceStride(info.valueHeadNum, PREPARE_V_DIM * 2U))) &&
         FitsDmaSourceStride(info.valueHeadNum,
                             PREPARE_K_DIM * gateElementBytes) &&
         FitsDmaSourceStride(info.valueHeadNum, betaElementBytes);
     PREPARE_CHECK(strideValid, ACLNN_ERR_PARAM_INVALID,
-               "BSND/TND 输入的跨 head DMA stride 超过 uint32 范围，当前 HK=%ld,HV=%ld。",
+               "输入的跨 head DMA stride 超过 uint32 范围，当前 HK=%ld,HV=%ld。",
                info.qkHeadNum, info.valueHeadNum);
     return ACLNN_SUCCESS;
 }
@@ -441,10 +438,10 @@ aclnnStatus ResolveShape(const ChunkKdaFwdPrepareParams &params,
         PREPARE_CHECK(
             HasShape(params.v, {info.valueHeadNum, info.seqLen, info.vDim}) &&
                 HasShape(params.g,
-                         {info.valueHeadNum, info.seqLen, info.kDim}) &&
-                HasShape(params.beta, {info.valueHeadNum, info.seqLen}),
+                         {info.seqLen, info.valueHeadNum, info.kDim}) &&
+                HasShape(params.beta, {info.seqLen, info.valueHeadNum}),
             ACLNN_ERR_PARAM_INVALID,
-            "NTD 要求 v/g/beta 分别为 [HV,T,V]、[HV,T,K]、[HV,T]。");
+            "NTD 要求 v 为 [HV,T,V]；g/beta 固定为 [T,HV,K]、[T,HV]。");
     } else if (layout == PrepareLayout::BSND) {
         info.batch = Dim(params.q, 0);
         info.seqLen = Dim(params.q, 1);
@@ -473,12 +470,12 @@ aclnnStatus ResolveShape(const ChunkKdaFwdPrepareParams &params,
             HasShape(params.v,
                      {info.batch, info.valueHeadNum, info.seqLen, info.vDim}) &&
                 HasShape(params.g,
-                         {info.batch, info.valueHeadNum, info.seqLen,
+                         {info.batch, info.seqLen, info.valueHeadNum,
                           info.kDim}) &&
                 HasShape(params.beta,
-                         {info.batch, info.valueHeadNum, info.seqLen}),
+                         {info.batch, info.seqLen, info.valueHeadNum}),
             ACLNN_ERR_PARAM_INVALID,
-            "BNSD 要求 v/g/beta 分别为 [B,HV,T,V]、[B,HV,T,K]、[B,HV,T]。");
+            "BNSD 要求 v 为 [B,HV,T,V]；g/beta 固定为 [B,T,HV,K]、[B,T,HV]。");
     }
 
     PREPARE_CHECK(FitsUint32(info.batch) && FitsUint32(info.seqLen) &&
@@ -723,7 +720,7 @@ aclnnStatus CheckParams(const ChunkKdaFwdPrepareParams &params)
     if (status != ACLNN_SUCCESS) {
         return status;
     }
-    status = CheckSequenceMajorDmaStride(params, layout, info);
+    status = CheckInputDmaStride(params, layout, info);
     if (status != ACLNN_SUCCESS) {
         return status;
     }

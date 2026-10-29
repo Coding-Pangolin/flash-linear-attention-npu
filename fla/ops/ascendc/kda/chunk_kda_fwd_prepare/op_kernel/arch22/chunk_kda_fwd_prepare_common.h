@@ -42,10 +42,19 @@ __aicore__ inline uint64_t Out(const PrepareRuntimeTiling &t,const Work &w,
                               uint32_t h,uint32_t heads,uint32_t width) {
     return ((uint64_t(w.batch)*heads+h)*t.seqLen+w.token)*width;
 }
-__aicore__ inline uint64_t In(const PrepareRuntimeTiling &t,const Work &w,
+__aicore__ inline uint64_t QkvInputOffset(const PrepareRuntimeTiling &t,const Work &w,
                              uint32_t h,uint32_t heads,uint32_t width) {
     return t.inputSequenceMajor?((uint64_t(w.batch)*t.seqLen+w.token)*heads+h)*width:
                                 Out(t,w,h,heads,width);
+}
+// Raw g/beta have token-major storage independently of q/k/v layout.
+__aicore__ inline uint64_t GateInputOffset(const PrepareRuntimeTiling &t,const Work &w,
+                                         uint32_t head,uint32_t width) {
+    return ((uint64_t(w.batch)*t.seqLen+w.token)*t.valueHeadNum+head)*width;
+}
+__aicore__ inline uint64_t BetaInputOffset(const PrepareRuntimeTiling &t,const Work &w,
+                                         uint32_t head) {
+    return GateInputOffset(t,w,head,1);
 }
 __aicore__ inline uint64_t GmLane(uint32_t core,uint32_t slot,uint32_t lane) {
     return uint64_t(core)*GroupBytes+slot*SlotBytes+lane*LaneBytes;

@@ -1644,9 +1644,31 @@ template <bool STEADY>
 	}
 
 template <typename T, bool IsVarlen, bool HasTail>
+	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::ProcessTask(int groupCount) {
+		const int pipelineStages = 2;
+		syncCV.Init();
+
+		// 边沿组直接复用 stage;守卫、同步和 buffer 管理均留在 stage 内。
+		for (int iter = 0; iter < pipelineStages - 1 && iter < groupCount; iter ++) {
+			RunPipelineStages<false>(iter, groupCount);
+		}
+
+		for (int iter = pipelineStages - 1; iter < groupCount; iter ++) {
+			RunPipelineStages<true>(iter, groupCount);
+		}
+		for (int iter = groupCount; iter < groupCount + pipelineStages - 1; iter ++) {
+			RunPipelineStages<false>(iter, groupCount);
+		}
+
+
+
+
+		syncCV.Finalize();
+	}
+
+template <typename T, bool IsVarlen, bool HasTail>
 	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::Process(int group_count) {
 
-		const int pipelineStages = 2;
 
 		// 任务循环:与 AIV 侧使用同一任务序列
 		// (task_count=0 → legacy 单任务)。AIC 无 GM 视图,任务间只需重置
@@ -1666,24 +1688,7 @@ template <typename T, bool IsVarlen, bool HasTail>
 				}
 				groupCount = (int)((len + tokens_per_group - 1) / tokens_per_group);
 			}
-			syncCV.Init();
-
-			// 边沿组直接复用 stage;守卫、同步和 buffer 管理均留在 stage 内。
-			for (int iter = 0; iter < pipelineStages - 1 && iter < groupCount; iter ++) {
-				RunPipelineStages<false>(iter, groupCount);
-			}
-
-			for (int iter = pipelineStages - 1; iter < groupCount; iter ++) {
-				RunPipelineStages<true>(iter, groupCount);
-			}
-			for (int iter = groupCount; iter < groupCount + pipelineStages - 1; iter ++) {
-				RunPipelineStages<false>(iter, groupCount);
-			}
-
-
-
-
-			syncCV.Finalize();
+			ProcessTask(groupCount);
 		}  // task 循环
 
 	}

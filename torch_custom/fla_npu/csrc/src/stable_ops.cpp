@@ -44,6 +44,8 @@
 #include "stable_fast_gelu_custom_backward.cpp"
 #include "stable_kda_gate_cumsum.cpp"
 #include "stable_merge_fwd_bwd_kernel.cpp"
+#include "stable_kcp_all_gather_merge.cpp"
+#include "stable_chunk_kda_cp_fwd.cpp"
 #include "stable_pre_process_fwd_kernel_merged.cpp"
 #include "stable_prepare_wy_repr_bwd.cpp"
 #include "stable_prepare_wy_repr_bwd_da.cpp"
@@ -96,6 +98,8 @@ int64_t fla_npu_stable_last_launch_stream() {
 // therefore kept here, and in the same order (tools/stable_coverage.py pairs
 // them by position).
 static void register_schemas(StableLibrary& m) {
+  m.def(kSchema_kcp_all_gather_merge);
+  m.def(kSchema_chunk_kda_cp_fwd);
   m.def(kSchemaRecurrentGdr);
   m.def(kSchemaRecurrentKda);
   m.def(kSchema_npu_fast_gelu_custom);
@@ -140,6 +144,10 @@ static void register_schemas(StableLibrary& m) {
 }
 
 static void register_implementations(StableLibrary& m) {
+  m.impl("npu_kcp_all_gather_merge",
+         &fla_npu_stable::stable::boxed_adapter<run_npu_kcp_all_gather_merge>);
+  m.impl("npu_chunk_kda_cp_fwd",
+         &fla_npu_stable::stable::boxed_adapter<run_npu_chunk_kda_cp_fwd>);
   m.impl("npu_recurrent_gated_delta_rule",
          &fla_npu_stable::stable::boxed_adapter<run_recurrent_gated_delta_rule>);
   m.impl("npu_recurrent_kda", &boxed_recurrent_kda);

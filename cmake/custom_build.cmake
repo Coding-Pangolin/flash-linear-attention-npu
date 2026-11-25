@@ -1009,7 +1009,7 @@ foreach (op_dir ${OP_DIR_LIST})
         OPTIONAL
     )
 
-    foreach (op_depend_dir ${${_op_name}_depends})
+    foreach (op_depend_dir IN LISTS ${_op_name}_depends ${_op_name}_kernel_depends)
         if (ENABLE_EXPERIMENTAL)
             fla_resolve_depend_path(${op_depend_dir} _resolved_depend_dir)
             set(CURRENT_KERNEL_DIR "${CMAKE_SOURCE_DIR}/${_resolved_depend_dir}/op_kernel")

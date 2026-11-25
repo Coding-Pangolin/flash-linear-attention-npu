@@ -303,6 +303,7 @@ bash tests/atk/run_test_cpu.sh -op=<op_name> -scope=gen_cases
 | `kda_gate_bwd_post` | `ChunkKdaBwd` 内部 launcher | [kda_gate_bwd_post/README.md](./kda_gate_bwd_post/README.md)；Phase A；内部 launcher，无独立 ACLNN/Python 入口 |
 | `kda_gate_bwd_post_varlen` | `ChunkKdaBwd` 内部 launcher | [kda_gate_bwd_post_varlen/README.md](./kda_gate_bwd_post_varlen/README.md)；Phase A；内部 launcher，无独立 ACLNN/Python 入口 |
 | `merge_fwd_bwd_kernel` | `fla_npu.ops.ascendc.npu_merge_fwd_bwd_kernel` | [merge_fwd_bwd_kernel/README.md](./merge_fwd_bwd_kernel/README.md)；Phase A；独立 CPU 递推、inplace 输出 |
+| `chunk_kda_cp_fwd` | `fla_npu.ops.ascendc.chunk_kda_cp_fwd` | [分布式开发验证](./chunk_kda_cp_fwd/README.md)；包含原生 `kcp_all_gather_merge` gate；目前使用独立 torchrun runner，正式 ATK/内存检查验收待完成 |
 
 2026-10-30 的 Phase A 补齐工作按 `fla/ops/ascendc/**/op_host/*_def.cpp` 的
 35 个 `OP_ADD` 注册算子逐项核对；新增 8 个对应目录（含 2 个内部 gate launcher），

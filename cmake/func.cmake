@@ -591,29 +591,27 @@ function(add_bin_compile_target)
                     ${BINARY_COMPUTE_UNIT}
             )
 
-            if (DEFINED ${op_file}_depends)
-                foreach(depend_info ${${op_file}_depends})
-                    if (ENABLE_EXPERIMENTAL)
-                        fla_resolve_depend_path(${depend_info} depend_info_update)
-                    else()
-                        set(depend_info_update ${depend_info})
-                    endif()
-                    get_filename_component(_depend_op_name "${depend_info}" NAME)
-                    set(_depend_op_target ${_depend_op_name}_${BINARY_COMPUTE_UNIT}_src_copy)
-                    add_ops_src_copy(
-                            TARGET_NAME
-                            ${_depend_op_target}
-                            SRC
-                            ${CMAKE_SOURCE_DIR}/${depend_info_update}
-                            DST
-                            ${SRC_OUT_DIR}/${_depend_op_name}
-                            COMPUTE_UNIT
-                            ${BINARY_COMPUTE_UNIT}
-                            BE_RELIED
-                            ${OP_TARGET_NAME}_src_copy
-                    )
-                endforeach()
-            endif ()
+            foreach(depend_info IN LISTS ${op_file}_depends ${op_file}_kernel_depends)
+                if (ENABLE_EXPERIMENTAL)
+                    fla_resolve_depend_path(${depend_info} depend_info_update)
+                else()
+                    set(depend_info_update ${depend_info})
+                endif()
+                get_filename_component(_depend_op_name "${depend_info}" NAME)
+                set(_depend_op_target ${_depend_op_name}_${BINARY_COMPUTE_UNIT}_src_copy)
+                add_ops_src_copy(
+                        TARGET_NAME
+                        ${_depend_op_target}
+                        SRC
+                        ${CMAKE_SOURCE_DIR}/${depend_info_update}
+                        DST
+                        ${SRC_OUT_DIR}/${_depend_op_name}
+                        COMPUTE_UNIT
+                        ${BINARY_COMPUTE_UNIT}
+                        BE_RELIED
+                        ${OP_TARGET_NAME}_src_copy
+                )
+            endforeach()
 
             set(DYNAMIC_PY_FILE ${OP_SRC_OUT_DIR}/${op_type}.py)
             add_custom_command(OUTPUT ${DYNAMIC_PY_FILE}

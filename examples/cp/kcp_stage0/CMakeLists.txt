@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.20)
+find_package(ASC REQUIRED)
+project(kcp_stage_checks LANGUAGES ASC CXX)
+foreach(stage IN ITEMS stage0 stage1 stage2 summary32)
+    add_executable(kcp_${stage} ${stage}.asc)
+    target_include_directories(kcp_${stage} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../fla/ops/ascendc/cp/chunk_kda_cp_fwd/op_kernel/device)
+    target_compile_options(kcp_${stage} PRIVATE $<$<COMPILE_LANGUAGE:ASC>:--npu-arch=dav-3510>)
+    target_link_directories(kcp_${stage} PRIVATE "$ENV{ASCEND_HOME_PATH}/lib64")
+    target_link_libraries(kcp_${stage} PRIVATE ascendcl m)
+endforeach()
+target_compile_options(kcp_summary32 PRIVATE $<$<COMPILE_LANGUAGE:ASC>:--cce-auto-sync=off>)

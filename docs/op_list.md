@@ -46,6 +46,8 @@ Ascend C 使用 `fla_npu.ops.ascendc`，同时提供带 `npu_` 前缀和不带�
 | CP | [`npu_pre_process_fwd_kernel_merged`](../fla/ops/ascendc/cp/pre_process_fwd_kernel_merged/README.md) | `pre_process_fwd_kernel_merged` | 正向状态预处理与仿射摘要 | - |
 | CP | [`npu_pre_process_bwd_kernel_merged`](../fla/ops/ascendc/cp/pre_process_bwd_kernel_merged/README.md) | `pre_process_bwd_kernel_merged` | 反向状态预处理与仿射摘要 | - |
 | CP | [`npu_merge_fwd_bwd_kernel`](../fla/ops/ascendc/cp/merge_fwd_bwd_kernel/README.md) | `merge_fwd_bwd_kernel` | 合并各 rank 状态摘要 | - |
+| CP | [`npu_kcp_all_gather_merge`](../fla/ops/ascendc/cp/kcp_all_gather_merge/README.md) | `kcp_all_gather_merge` | 原生 FP32 AllGather 与有序前缀融合 | 验证覆盖 A2 CP2/4 与 A5 CP2 |
+| CP | [`chunk_kda_cp_fwd` / `chunk_kda_cp_bwd`](../fla/ops/ascendc/cp/chunk_kda_cp_fwd/README.md) | `chunk_kda_cp_fwd`（A5 前向融合） | 连续 packed CP KDA 单 kernel 前向，显式反向沿用分阶段路径 | A5 CP2 初版正确性通过，性能及 CP4/8 待验收 |
 
 备注中的弃用说明同时适用于不带 `npu_` 前缀的 Ascend C 入口。迁移至融合算子时，按其接口调整输入、输出和中间状态。
 

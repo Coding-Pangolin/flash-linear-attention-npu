@@ -2286,6 +2286,49 @@ def npu_chunk_kda_bwd(q, k, v, beta, gk, Aqk, Akk, w, qg, kg, v_new, h, d_o,
     return tuple(restored)
 
 
+def npu_chunk_kda_cp_fwd(q, k, v, gate, beta, a_log, bias, offsets, group_name,
+                         rank_size, rank, rounds, first_source, send_tail, save_final, scale):
+    """Low-level device dispatch using the metadata from a validated packed KCP plan."""
+    return _op("npu_chunk_kda_cp_fwd")(
+        q, k, v, gate, beta, a_log, bias, offsets, group_name,
+        rank_size, rank, rounds, first_source, send_tail, save_final, scale, _current_stream_ptr(),
+    )
+
+
+def npu_kcp_all_gather_merge(summary, h, group, rank_size, rank):
+    """Experimental native AllGather + ordered forward merge.
+
+    h is caller-owned FP32 [H,128,128], zero initialized on group rank 0.
+    All members must use the same explicit HCCL group and metadata.
+    """
+    import torch
+    if not isinstance(group, str) or not group or "\x00" in group:
+        raise ValueError("group must be a nonempty HCCL group name")
+    if type(rank_size) is not int or type(rank) is not int:
+        raise TypeError("rank_size and rank must be integers")
+    if not 2 <= rank_size <= 8 or not 0 <= rank < rank_size:
+        raise ValueError(f"require P=2..8 and 0<=rank<P, got P={rank_size}, rank={rank}")
+    if (summary.ndim != 3 or not 1 <= summary.shape[0] <= 16
+            or tuple(summary.shape[1:]) != (128, 256)):
+        raise ValueError(f"summary must be [H,128,256], H=1..16, got {tuple(summary.shape)}")
+    if summary.device != h.device or summary.device.type not in ("npu", "privateuseone"):
+        raise ValueError("summary and h must be on the same NPU")
+    if summary.requires_grad or h.requires_grad:
+        raise ValueError("native KCP is an explicit forward API; detach inputs")
+    if not summary.is_contiguous() or not h.is_contiguous():
+        raise ValueError("summary and h must be contiguous")
+    runtime = sys.modules.get("torch_npu")
+    if runtime is None:
+        raise RuntimeError("initialize the torch_npu runtime before native KCP")
+    for name, tensor in (("summary", summary), ("h", h)):
+        actual = int(runtime.get_npu_format(tensor))
+        if actual not in (0, 2, 30, 47):
+            raise ValueError(f"{name} must use a public NPU format, got {actual}")
+    name = torch.tensor(list(group.encode("utf-8")), dtype=torch.int64, device="cpu")
+    return _op("npu_kcp_all_gather_merge")(
+        summary, h, name, int(rank_size), int(rank), _current_stream_ptr())
+
+
 def npu_merge_fwd_bwd_kernel(
         h, ag_hm, pre_or_post_num_ranks, rank, *, forward=True,
         state_v_first=False):

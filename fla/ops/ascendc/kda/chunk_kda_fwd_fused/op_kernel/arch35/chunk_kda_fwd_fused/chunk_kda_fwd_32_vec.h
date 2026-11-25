@@ -237,13 +237,33 @@ template <typename T, bool IsVarlen, bool HasTail>
 	}
 
 template <typename T, bool IsVarlen, bool HasTail>
-	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::StoreFinalState(__ubuf__ void *s_ub)
+	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::StoreFinalState(__ubuf__ void *s_ub, GM_ADDR outgoing, bool compactOutgoing)
 	{
 		AscendC::LocalTensor<float> stage(AscendC::TPosition::VECCALC, KdaAddrV(g_ub[0]), state_half_elems);
 		StoreStateGatherCast((__ubuf__ void *)stage.GetPhyAddr(), s_ub);
 		AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(0);
 		AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(0);
-		AscendC::DataCopy(fstate_gm[0], stage, state_half_elems);   // 一次连续 32KB(ND 行主序)
+		if (out_fstate) {
+			AscendC::DataCopy(fstate_gm[0], stage, state_half_elems);
+		}
+		if (outgoing != nullptr && compactOutgoing) {
+			AscendC::GlobalTensor<float> state;
+			state.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(outgoing) + subid * state_half_elems);
+			AscendC::DataCopy(state, stage, state_half_elems);
+		} else if (outgoing != nullptr) {
+			constexpr uint32_t rowBlocks = value_dim * sizeof(float) / 32;
+			AscendC::GlobalTensor<float> summary;
+			summary.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(outgoing)
+				+ subid * state_k_half * 2 * value_dim);
+			const AscendC::DataCopyParams scatter{state_k_half, rowBlocks, 0, rowBlocks};
+			AscendC::DataCopy(summary, stage, scatter);
+			AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(0);
+			AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(0);
+			AscendC::Duplicate(stage, 0.0f, state_half_elems);
+			AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(0);
+			AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(0);
+			AscendC::DataCopy(summary[value_dim], stage, scatter);
+		}
 		// 多任务执行时必须自排干:stage 借用 g_ub[0],MTE3 读未完成时下一任务
 		// 的 MTE2 装载会冲掉它(单任务靠 kernel 退出隐式排干,多任务无此保障)
 		AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(0);
@@ -404,13 +424,14 @@ template <typename T, bool IsVarlen, bool HasTail>
 	}
 
 template <typename T, bool IsVarlen, bool HasTail>
+template<typename Offset, bool LogAlpha>
 	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::BindTaskVarlen(uint32_t fh)
 	{
 		const uint32_t hv = (uint32_t)hv_real;
 		const uint32_t seq = fh / hv;
 		const uint32_t head = fh - seq * hv;
 		const uint32_t qk_head = head / qk_group;
-		const __gm__ int64_t *cu = (const __gm__ int64_t *)cu_base;
+		const __gm__ Offset *cu = (const __gm__ Offset *)cu_base;
 		const int64_t tok0 = cu[seq];
 		const int64_t tok1 = cu[seq + 1];
 		const int64_t len = tok1 - tok0;
@@ -445,6 +466,14 @@ template <typename T, bool IsVarlen, bool HasTail>
 			fstate_gm.SetGlobalBuffer((__gm__ float *)fstate_base + key_dim*value_dim*fh + (uint64_t)subid*(key_dim/2)*value_dim);
 		}
 		a = a_gm.GetValue(head);
+		if constexpr (LogAlpha) {
+			auto alpha = Ub(0).template ReinterpretCast<float>();
+			AscendC::Duplicate(alpha, a, 8);
+			AscendC::PipeBarrier<PIPE_V>();
+			AscendC::Exp(alpha, alpha, 8);
+			AscendC::PipeBarrier<PIPE_ALL>();
+			a = alpha.GetValue(0);
+		}
 		a = -a;
 		// exp(A_log) 下溢成 +0(A_log < -87.3)时 a = -0:-inf 尾行填充
 		// 会算 0×(-inf)=NaN。钳到最小正规负数即可(-FLT_MIN × -inf = +inf,仍得
@@ -577,7 +606,7 @@ template<uint64_t m, uint64_t n, uint64_t element_size>
 	}
 
 template <typename T, bool IsVarlen, bool HasTail>
-template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
+template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail, bool ComputeQ>
 	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::vec_prepare_g3(__ubuf__ void *gate_sc1_ub, __ubuf__ void *gamma_ub, __ubuf__ void *beta_ub, __ubuf__ void *qq2_ub, __ubuf__ void *kk2_ub)
 	{
 		// if(gqkdb_cnt == 0) {
@@ -627,7 +656,9 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 				}
 				sp.blockLen = key_dim*sizeof(T)/block_bytes;
 				sp.srcStride = is_varlen == 2 ? 0 : (uint32_t)(nheads_qk - 1)*key_dim*sizeof(T)/block_bytes;
-				AscendC::DataCopy(q_t, q_gm[row_base*(is_varlen == 2 ? key_dim : nheads_qk*key_dim)], sp);
+				if constexpr (ComputeQ) {
+					AscendC::DataCopy(q_t, q_gm[row_base*(is_varlen == 2 ? key_dim : nheads_qk*key_dim)], sp);
+				}
 				AscendC::DataCopy(k_t, k_gm[row_base*(is_varlen == 2 ? key_dim : nheads_qk*key_dim)], sp);
 				// beta 由 host 转置为头连续 [HV,T_total];任意字节对齐走 DataCopyPad
 				AscendC::DataCopyParams bp;
@@ -649,7 +680,9 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 			} else {
 				gm_ub_single<chunk_size, key_dim, 2>(g_ub[id], g_gm[row_base*key_dim]);
 			}
-			gm_ub_single<chunk_size, key_dim, 2>(q_ub[id], q_gm[row_base*key_dim]);
+			if constexpr (ComputeQ) {
+				gm_ub_single<chunk_size, key_dim, 2>(q_ub[id], q_gm[row_base*key_dim]);
+			}
 			gm_ub_single<chunk_size, key_dim, 2>(k_ub[id], k_gm[row_base*key_dim]);
 			if constexpr (beta_f32) {
 				gm_ub_single<1, chunk_size, 4>(b_ub[id], b32_gm[row_base]);
@@ -667,7 +700,9 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 			} else {
 				AscendC::DataCopy(g_t, g_gm[row_base*key_dim], valid_rows*key_dim);
 			}
-			AscendC::DataCopy(q_t, q_gm[row_base*key_dim], valid_rows*key_dim);
+			if constexpr (ComputeQ) {
+				AscendC::DataCopy(q_t, q_gm[row_base*key_dim], valid_rows*key_dim);
+			}
 			AscendC::DataCopy(k_t, k_gm[row_base*key_dim], valid_rows*key_dim);
 			AscendC::DataCopyParams bp;
 			bp.blockCount = 1; bp.srcStride = 0; bp.dstStride = 0;
@@ -715,7 +750,9 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 			}
 			AscendC::LocalTensor<T> q_t(AscendC::TPosition::VECCALC, KdaAddrV(q_ub[id]), chunk_size*key_dim);
 			AscendC::LocalTensor<T> k_t(AscendC::TPosition::VECCALC, KdaAddrV(k_ub[id]), chunk_size*key_dim);
-			AscendC::Duplicate<T>(q_t[valid_rows*key_dim], (T)0, (chunk_size-valid_rows)*key_dim);
+			if constexpr (ComputeQ) {
+				AscendC::Duplicate<T>(q_t[valid_rows*key_dim], (T)0, (chunk_size-valid_rows)*key_dim);
+			}
 			AscendC::Duplicate<T>(k_t[valid_rows*key_dim], (T)0, (chunk_size-valid_rows)*key_dim);
 		}
 
@@ -765,8 +802,10 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 					// DataCopy<float, LoadDist::DIST_BRC_B32>(vreg_dt2, (__ubuf__ float *)dt_ub[id] + i*2 + offset_id*16*4 + 1);
 					// DataCopy<T, LoadDist::DIST_DINTLV_B16>(vreg_q1, vreg_q2, (__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim)*2);
 					// DataCopy<T, LoadDist::DIST_DINTLV_B16>(vreg_k1, vreg_k2, (__ubuf__ T *)k_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim)*2);
-					DataCopy(vreg_q1, (__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim));
-					DataCopy(vreg_q2, (__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim) + key_dim);
+					if constexpr (ComputeQ) {
+						DataCopy(vreg_q1, (__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim));
+						DataCopy(vreg_q2, (__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim) + key_dim);
+					}
 					DataCopy(vreg_k1, (__ubuf__ T *)k_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim));
 					DataCopy(vreg_k2, (__ubuf__ T *)k_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim) + key_dim);
 
@@ -777,15 +816,19 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 						Cast<float, T, f2bfOne>(vreg_gg4, vreg_g2, preg_all);
 					}
 
-					Cast<float, T, f2bfZero>(vreg_qq1, vreg_q1, preg_all);
-					Cast<float, T, f2bfOne>(vreg_qq2, vreg_q1, preg_all);
-					Cast<float, T, f2bfZero>(vreg_qq3, vreg_q2, preg_all);
-					Cast<float, T, f2bfOne>(vreg_qq4, vreg_q2, preg_all);
+					if constexpr (ComputeQ) {
+						Cast<float, T, f2bfZero>(vreg_qq1, vreg_q1, preg_all);
+						Cast<float, T, f2bfOne>(vreg_qq2, vreg_q1, preg_all);
+						Cast<float, T, f2bfZero>(vreg_qq3, vreg_q2, preg_all);
+						Cast<float, T, f2bfOne>(vreg_qq4, vreg_q2, preg_all);
+					}
 
-					DataCopy((__ubuf__ float*)q_ub[id] + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels), vreg_qq1, preg_all);
-					DataCopy((__ubuf__ float*)q_ub[id] + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels) + half_channels, vreg_qq3, preg_all);
-					DataCopy((__ubuf__ float*)qq2_ub + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels), vreg_qq2, preg_all);
-					DataCopy((__ubuf__ float*)qq2_ub + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels) + half_channels, vreg_qq4, preg_all);
+					if constexpr (ComputeQ) {
+						DataCopy((__ubuf__ float*)q_ub[id] + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels), vreg_qq1, preg_all);
+						DataCopy((__ubuf__ float*)q_ub[id] + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels) + half_channels, vreg_qq3, preg_all);
+						DataCopy((__ubuf__ float*)qq2_ub + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels), vreg_qq2, preg_all);
+						DataCopy((__ubuf__ float*)qq2_ub + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels) + half_channels, vreg_qq4, preg_all);
+					}
 
 					Cast<float, T, f2bfZero>(vreg_kk1, vreg_k1, preg_all);
 					Cast<float, T, f2bfOne>(vreg_kk2, vreg_k1, preg_all);
@@ -802,10 +845,12 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 					Add(vreg_gg3, vreg_gg3, vreg_dt1, preg_all);
 					Add(vreg_gg4, vreg_gg4, vreg_dt2, preg_all);
 
-					Mul(vreg_qq1, vreg_qq1, vreg_qq1, preg_all);
-					Mul(vreg_qq2, vreg_qq2, vreg_qq2, preg_all);
-					Mul(vreg_qq3, vreg_qq3, vreg_qq3, preg_all);
-					Mul(vreg_qq4, vreg_qq4, vreg_qq4, preg_all);
+					if constexpr (ComputeQ) {
+						Mul(vreg_qq1, vreg_qq1, vreg_qq1, preg_all);
+						Mul(vreg_qq2, vreg_qq2, vreg_qq2, preg_all);
+						Mul(vreg_qq3, vreg_qq3, vreg_qq3, preg_all);
+						Mul(vreg_qq4, vreg_qq4, vreg_qq4, preg_all);
+					}
 
 					Muls(vreg_gg1, vreg_gg1, a, preg_all);
 					Muls(vreg_gg2, vreg_gg2, a, preg_all);
@@ -832,10 +877,12 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 					Div(vreg_gg3, vreg_scale, vreg_gg3, preg_all);
 					Div(vreg_gg4, vreg_scale, vreg_gg4, preg_all);
 
-					Add(vreg_qq1, vreg_qq1, vreg_qq2, preg_all);
-					ReduceSum(vreg_qq1, vreg_qq1, preg_all);
-					Add(vreg_qq3, vreg_qq3, vreg_qq4, preg_all);
-					ReduceSum(vreg_qq3, vreg_qq3, preg_all);
+					if constexpr (ComputeQ) {
+						Add(vreg_qq1, vreg_qq1, vreg_qq2, preg_all);
+						ReduceSum(vreg_qq1, vreg_qq1, preg_all);
+						Add(vreg_qq3, vreg_qq3, vreg_qq4, preg_all);
+						ReduceSum(vreg_qq3, vreg_qq3, preg_all);
+					}
 
 					DataCopy((__ubuf__ float *)g_ub[id] + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels), vreg_gg1, preg_all);
 					DataCopy((__ubuf__ float *)g_ub[id] + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels) + half_channels, vreg_gg3, preg_all);
@@ -847,9 +894,13 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 					Add(vreg_kk3, vreg_kk3, vreg_kk4, preg_all);
 					ReduceSum(vreg_kk3, vreg_kk3, preg_all);
 
-					DataCopyUnAlign<float, PostLiteral::POST_MODE_UPDATE>((__ubuf__ float *&)q_sq_sum, vreg_qq1, ureg_q, 1);
+					if constexpr (ComputeQ) {
+						DataCopyUnAlign<float, PostLiteral::POST_MODE_UPDATE>((__ubuf__ float *&)q_sq_sum, vreg_qq1, ureg_q, 1);
+					}
 					DataCopyUnAlign<float, PostLiteral::POST_MODE_UPDATE>((__ubuf__ float *&)k_sq_sum, vreg_kk1, ureg_k, 1);
-					DataCopyUnAlign<float, PostLiteral::POST_MODE_UPDATE>((__ubuf__ float *&)q_sq_sum, vreg_qq3, ureg_q, 1);
+					if constexpr (ComputeQ) {
+						DataCopyUnAlign<float, PostLiteral::POST_MODE_UPDATE>((__ubuf__ float *&)q_sq_sum, vreg_qq3, ureg_q, 1);
+					}
 					DataCopyUnAlign<float, PostLiteral::POST_MODE_UPDATE>((__ubuf__ float *&)k_sq_sum, vreg_kk3, ureg_k, 1);
 
 					Add(vreg_gg1, vreg_gg1, vreg_gg3, preg_all);
@@ -883,8 +934,10 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 					// DataCopy<float, LoadDist::DIST_BRC_B32>(vreg_dt2, (__ubuf__ float *)dt_ub[id] + i*2 + offset_id*16 + 1);
 					// DataCopy<T, LoadDist::DIST_DINTLV_B16>(vreg_q1, vreg_q2, (__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim)*2);
 					// DataCopy<T, LoadDist::DIST_DINTLV_B16>(vreg_k1, vreg_k2, (__ubuf__ T *)k_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim)*2);
-					DataCopy(vreg_q1, (__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim));
-					DataCopy(vreg_q2, (__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim) + key_dim);
+					if constexpr (ComputeQ) {
+						DataCopy(vreg_q1, (__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim));
+						DataCopy(vreg_q2, (__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim) + key_dim);
+					}
 					DataCopy(vreg_k1, (__ubuf__ T *)k_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim));
 					DataCopy(vreg_k2, (__ubuf__ T *)k_ub[id] + i*(row_pair*key_dim) + offset_id*(chunk_half_rows*key_dim) + key_dim);
 
@@ -895,15 +948,19 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 						Cast<float, T, f2bfOne>(vreg_gg4, vreg_g2, preg_all);
 					}
 
-					Cast<float, T, f2bfZero>(vreg_qq1, vreg_q1, preg_all);
-					Cast<float, T, f2bfOne>(vreg_qq2, vreg_q1, preg_all);
-					Cast<float, T, f2bfZero>(vreg_qq3, vreg_q2, preg_all);
-					Cast<float, T, f2bfOne>(vreg_qq4, vreg_q2, preg_all);
+					if constexpr (ComputeQ) {
+						Cast<float, T, f2bfZero>(vreg_qq1, vreg_q1, preg_all);
+						Cast<float, T, f2bfOne>(vreg_qq2, vreg_q1, preg_all);
+						Cast<float, T, f2bfZero>(vreg_qq3, vreg_q2, preg_all);
+						Cast<float, T, f2bfOne>(vreg_qq4, vreg_q2, preg_all);
+					}
 
-					DataCopy((__ubuf__ float*)q_ub[id] + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels), vreg_qq1, preg_all);
-					DataCopy((__ubuf__ float*)q_ub[id] + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels) + half_channels, vreg_qq3, preg_all);
-					DataCopy((__ubuf__ float*)qq2_ub + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels), vreg_qq2, preg_all);
-					DataCopy((__ubuf__ float*)qq2_ub + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels) + half_channels, vreg_qq4, preg_all);
+					if constexpr (ComputeQ) {
+						DataCopy((__ubuf__ float*)q_ub[id] + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels), vreg_qq1, preg_all);
+						DataCopy((__ubuf__ float*)q_ub[id] + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels) + half_channels, vreg_qq3, preg_all);
+						DataCopy((__ubuf__ float*)qq2_ub + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels), vreg_qq2, preg_all);
+						DataCopy((__ubuf__ float*)qq2_ub + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels) + half_channels, vreg_qq4, preg_all);
+					}
 
 					Cast<float, T, f2bfZero>(vreg_kk1, vreg_k1, preg_all);
 					Cast<float, T, f2bfOne>(vreg_kk2, vreg_k1, preg_all);
@@ -920,10 +977,12 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 					Add(vreg_gg3, vreg_gg3, vreg_dt1, preg_all);
 					Add(vreg_gg4, vreg_gg4, vreg_dt2, preg_all);
 
-					Mul(vreg_qq1, vreg_qq1, vreg_qq1, preg_all);
-					Mul(vreg_qq2, vreg_qq2, vreg_qq2, preg_all);
-					Mul(vreg_qq3, vreg_qq3, vreg_qq3, preg_all);
-					Mul(vreg_qq4, vreg_qq4, vreg_qq4, preg_all);
+					if constexpr (ComputeQ) {
+						Mul(vreg_qq1, vreg_qq1, vreg_qq1, preg_all);
+						Mul(vreg_qq2, vreg_qq2, vreg_qq2, preg_all);
+						Mul(vreg_qq3, vreg_qq3, vreg_qq3, preg_all);
+						Mul(vreg_qq4, vreg_qq4, vreg_qq4, preg_all);
+					}
 
 					Muls(vreg_gg1, vreg_gg1, a, preg_all);
 					Muls(vreg_gg2, vreg_gg2, a, preg_all);
@@ -950,10 +1009,12 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 					Div(vreg_gg3, vreg_scale, vreg_gg3, preg_all);
 					Div(vreg_gg4, vreg_scale, vreg_gg4, preg_all);
 
-					Add(vreg_qq1, vreg_qq1, vreg_qq2, preg_all);
-					ReduceSum(vreg_qq1, vreg_qq1, preg_all);
-					Add(vreg_qq3, vreg_qq3, vreg_qq4, preg_all);
-					ReduceSum(vreg_qq3, vreg_qq3, preg_all);
+					if constexpr (ComputeQ) {
+						Add(vreg_qq1, vreg_qq1, vreg_qq2, preg_all);
+						ReduceSum(vreg_qq1, vreg_qq1, preg_all);
+						Add(vreg_qq3, vreg_qq3, vreg_qq4, preg_all);
+						ReduceSum(vreg_qq3, vreg_qq3, preg_all);
+					}
 
 					DataCopy((__ubuf__ float *)g_ub[id] + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels), vreg_gg1, preg_all);
 					DataCopy((__ubuf__ float *)g_ub[id] + i*(row_pair*half_channels) + offset_id*(chunk_half_rows*half_channels) + half_channels, vreg_gg3, preg_all);
@@ -965,9 +1026,13 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 					Add(vreg_kk3, vreg_kk3, vreg_kk4, preg_all);
 					ReduceSum(vreg_kk3, vreg_kk3, preg_all);
 
-					DataCopyUnAlign<float, PostLiteral::POST_MODE_UPDATE>((__ubuf__ float *&)q_sq_sum, vreg_qq1, ureg_q, 1);
+					if constexpr (ComputeQ) {
+						DataCopyUnAlign<float, PostLiteral::POST_MODE_UPDATE>((__ubuf__ float *&)q_sq_sum, vreg_qq1, ureg_q, 1);
+					}
 					DataCopyUnAlign<float, PostLiteral::POST_MODE_UPDATE>((__ubuf__ float *&)k_sq_sum, vreg_kk1, ureg_k, 1);
-					DataCopyUnAlign<float, PostLiteral::POST_MODE_UPDATE>((__ubuf__ float *&)q_sq_sum, vreg_qq3, ureg_q, 1);
+					if constexpr (ComputeQ) {
+						DataCopyUnAlign<float, PostLiteral::POST_MODE_UPDATE>((__ubuf__ float *&)q_sq_sum, vreg_qq3, ureg_q, 1);
+					}
 					DataCopyUnAlign<float, PostLiteral::POST_MODE_UPDATE>((__ubuf__ float *&)k_sq_sum, vreg_kk3, ureg_k, 1);
 
 					Add(vreg_gg1, vreg_gg1, vreg_gg3, preg_all);
@@ -980,7 +1045,9 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 				DataCopy((__ubuf__ float *)gamma_ub, vreg_gamma1, preg_all);
 				DataCopy((__ubuf__ float *)gamma_ub + half_channels, vreg_gamma2, preg_all);
 
-				vstas(ureg_q, (__ubuf__ float *&)q_sq_sum, 0, POST_UPDATE);
+				if constexpr (ComputeQ) {
+					vstas(ureg_q, (__ubuf__ float *&)q_sq_sum, 0, POST_UPDATE);
+				}
 				vstas(ureg_k, (__ubuf__ float *&)k_sq_sum, 0, POST_UPDATE);
 
 				{
@@ -1000,17 +1067,27 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 
 					LocalMemBar<MemType::VEC_STORE, MemType::VEC_LOAD>();
 					DataCopy((__ubuf__ float *)beta_ub, vreg_bb, preg_all);
-					DataCopy(vreg_qsum, (__ubuf__ float *)q_sq_sum2);
+					if constexpr (ComputeQ) {
+						DataCopy(vreg_qsum, (__ubuf__ float *)q_sq_sum2);
+					}
 					DataCopy(vreg_ksum, (__ubuf__ float *)k_sq_sum2);
 					// rstd = 1/sqrt(sum + epsilon);
 					// 两个 pass 的平方和已先行汇入 tmp_ub,此处是唯一取 rstd 的单点
-					Adds(vreg_qsum, vreg_qsum, epsilon, preg_all);
+					if constexpr (ComputeQ) {
+						Adds(vreg_qsum, vreg_qsum, epsilon, preg_all);
+					}
 					Adds(vreg_ksum, vreg_ksum, epsilon, preg_all);
-					Sqrt(vreg_qsum, vreg_qsum, preg_all);
+					if constexpr (ComputeQ) {
+						Sqrt(vreg_qsum, vreg_qsum, preg_all);
+					}
 					Sqrt(vreg_ksum, vreg_ksum, preg_all);
-					Div(vreg_qsum, vreg_ones, vreg_qsum, preg_all);
+					if constexpr (ComputeQ) {
+						Div(vreg_qsum, vreg_ones, vreg_qsum, preg_all);
+					}
 					Div(vreg_ksum, vreg_ones, vreg_ksum, preg_all);
-					DataCopy((__ubuf__ float *)q_sq_sum2, vreg_qsum, preg_all);
+					if constexpr (ComputeQ) {
+						DataCopy((__ubuf__ float *)q_sq_sum2, vreg_qsum, preg_all);
+					}
 					DataCopy((__ubuf__ float *)k_sq_sum2, vreg_ksum, preg_all);
 					LocalMemBar<MemType::VEC_STORE, MemType::VEC_LOAD>();
 				}
@@ -1019,10 +1096,12 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 					RegTensor<float> vreg_kk1, vreg_kk2, vreg_kk3, vreg_kk4, vreg_qq1, vreg_qq2, vreg_qq3, vreg_qq4;
 					RegTensor<float> vreg_kn1, vreg_kn2, vreg_qn1, vreg_qn2;
 					//DataCopy<float, LoadDist::DIST_DINTLV_B32>(vreg_qq1, vreg_qq2, (__ubuf__ float *)q_ub[id] + i*(row_pair*half_channels));
-					DataCopy(vreg_qq1, (__ubuf__ float *)q_ub[id] + i*(row_pair*half_channels));
-					DataCopy(vreg_qq3, (__ubuf__ float *)q_ub[id] + i*(row_pair*half_channels) + half_channels);
-					DataCopy(vreg_qq2, (__ubuf__ float *)qq2_ub + i*(row_pair*half_channels));
-					DataCopy(vreg_qq4, (__ubuf__ float *)qq2_ub + i*(row_pair*half_channels) + half_channels);
+					if constexpr (ComputeQ) {
+						DataCopy(vreg_qq1, (__ubuf__ float *)q_ub[id] + i*(row_pair*half_channels));
+						DataCopy(vreg_qq3, (__ubuf__ float *)q_ub[id] + i*(row_pair*half_channels) + half_channels);
+						DataCopy(vreg_qq2, (__ubuf__ float *)qq2_ub + i*(row_pair*half_channels));
+						DataCopy(vreg_qq4, (__ubuf__ float *)qq2_ub + i*(row_pair*half_channels) + half_channels);
+					}
 					//DataCopy<float, LoadDist::DIST_DINTLV_B32>(vreg_qq3, vreg_qq4, (__ubuf__ float *)qq2_ub + i*(row_pair*half_channels));
 					//DataCopy<float, LoadDist::DIST_DINTLV_B32>(vreg_kk1, vreg_kk2, (__ubuf__ float *)k_ub[id] + i*(row_pair*half_channels));
 					DataCopy(vreg_kk1, (__ubuf__ float *)k_ub[id] + i*(row_pair*half_channels));
@@ -1031,28 +1110,36 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 					DataCopy(vreg_kk4, (__ubuf__ float *)kk2_ub + i*(row_pair*half_channels) + half_channels);
 					//DataCopy<float, LoadDist::DIST_DINTLV_B32>(vreg_kk3, vreg_kk4, (__ubuf__ float *)kk2_ub + i*(row_pair*half_channels));
 
-					DataCopy<float, LoadDist::DIST_BRC_B32>(vreg_qn1, (__ubuf__ float *)q_sq_sum2 + i*row_pair);
-					DataCopy<float, LoadDist::DIST_BRC_B32>(vreg_qn2, (__ubuf__ float *)q_sq_sum2 + i*row_pair + 1);
+					if constexpr (ComputeQ) {
+						DataCopy<float, LoadDist::DIST_BRC_B32>(vreg_qn1, (__ubuf__ float *)q_sq_sum2 + i*row_pair);
+						DataCopy<float, LoadDist::DIST_BRC_B32>(vreg_qn2, (__ubuf__ float *)q_sq_sum2 + i*row_pair + 1);
+					}
 					DataCopy<float, LoadDist::DIST_BRC_B32>(vreg_kn1, (__ubuf__ float *)k_sq_sum2 + i*row_pair);
 					DataCopy<float, LoadDist::DIST_BRC_B32>(vreg_kn2, (__ubuf__ float *)k_sq_sum2 + i*row_pair + 1);
 
-					Mul(vreg_qq1, vreg_qq1, vreg_qn1, preg_all);
-					Mul(vreg_qq2, vreg_qq2, vreg_qn1, preg_all);
-					Mul(vreg_qq3, vreg_qq3, vreg_qn2, preg_all);
-					Mul(vreg_qq4, vreg_qq4, vreg_qn2, preg_all);
+					if constexpr (ComputeQ) {
+						Mul(vreg_qq1, vreg_qq1, vreg_qn1, preg_all);
+						Mul(vreg_qq2, vreg_qq2, vreg_qn1, preg_all);
+						Mul(vreg_qq3, vreg_qq3, vreg_qn2, preg_all);
+						Mul(vreg_qq4, vreg_qq4, vreg_qn2, preg_all);
+					}
 
 					Mul(vreg_kk1, vreg_kk1, vreg_kn1, preg_all);
 					Mul(vreg_kk2, vreg_kk2, vreg_kn1, preg_all);
 					Mul(vreg_kk3, vreg_kk3, vreg_kn2, preg_all);
 					Mul(vreg_kk4, vreg_kk4, vreg_kn2, preg_all);
 
-					Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qq1, vreg_qq1, preg_all);
-					Cast<T, float, f2bfOne >((RegTensor<T> &)vreg_qq2, vreg_qq2, preg_all);
-					Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qq3, vreg_qq3, preg_all);
-					Cast<T, float, f2bfOne >((RegTensor<T> &)vreg_qq4, vreg_qq4, preg_all);
+					if constexpr (ComputeQ) {
+						Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qq1, vreg_qq1, preg_all);
+						Cast<T, float, f2bfOne >((RegTensor<T> &)vreg_qq2, vreg_qq2, preg_all);
+						Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qq3, vreg_qq3, preg_all);
+						Cast<T, float, f2bfOne >((RegTensor<T> &)vreg_qq4, vreg_qq4, preg_all);
+					}
 
-					Or((RegTensor<uint16_t>&)vreg_qq1, (RegTensor<uint16_t>&)vreg_qq1, (RegTensor<uint16_t>&)vreg_qq2, preg_all);
-					Or((RegTensor<uint16_t>&)vreg_qq3, (RegTensor<uint16_t>&)vreg_qq3, (RegTensor<uint16_t>&)vreg_qq4, preg_all);
+					if constexpr (ComputeQ) {
+						Or((RegTensor<uint16_t>&)vreg_qq1, (RegTensor<uint16_t>&)vreg_qq1, (RegTensor<uint16_t>&)vreg_qq2, preg_all);
+						Or((RegTensor<uint16_t>&)vreg_qq3, (RegTensor<uint16_t>&)vreg_qq3, (RegTensor<uint16_t>&)vreg_qq4, preg_all);
+					}
 
 					Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_kk1, vreg_kk1, preg_all);
 					Cast<T, float, f2bfOne >((RegTensor<T> &)vreg_kk2, vreg_kk2, preg_all);
@@ -1062,8 +1149,10 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 					Or((RegTensor<uint16_t>&)vreg_kk1, (RegTensor<uint16_t>&)vreg_kk1, (RegTensor<uint16_t>&)vreg_kk2, preg_all);
 					Or((RegTensor<uint16_t>&)vreg_kk3, (RegTensor<uint16_t>&)vreg_kk3, (RegTensor<uint16_t>&)vreg_kk4, preg_all);
 
-					DataCopy((__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim), (RegTensor<T> &)vreg_qq1, preg_all);
-					DataCopy((__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim) + key_dim, (RegTensor<T> &)vreg_qq3, preg_all);
+					if constexpr (ComputeQ) {
+						DataCopy((__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim), (RegTensor<T> &)vreg_qq1, preg_all);
+						DataCopy((__ubuf__ T *)q_ub[id] + i*(row_pair*key_dim) + key_dim, (RegTensor<T> &)vreg_qq3, preg_all);
+					}
 					DataCopy((__ubuf__ T *)k_ub[id] + i*(row_pair*key_dim), (RegTensor<T> &)vreg_kk1, preg_all);
 					DataCopy((__ubuf__ T *)k_ub[id] + i*(row_pair*key_dim) + key_dim, (RegTensor<T> &)vreg_kk3, preg_all);
 				}
@@ -1089,7 +1178,7 @@ template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
 	}
 
 template <typename T, bool IsVarlen, bool HasTail>
-template<uint32_t id>
+template<uint32_t id, bool ComputeQ>
 	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::vec_prepare_qplus_kplus_kminus_kres(__ubuf__ void *qplus_ub, __ubuf__ void *qplusb_ub, __ubuf__ void *kplus_ub, __ubuf__ void *kplusb_ub,
 		__ubuf__ void *kminus_ub, __ubuf__ void *kres_ub, __ubuf__ void *gate_sc_ub, __ubuf__ void *gamma_ub)
 	{
@@ -1229,38 +1318,40 @@ template<uint32_t id>
 				Or((RegTensor<uint16_t> &)vreg_pack, (RegTensor<uint16_t> &)vreg_gg2, (RegTensor<uint16_t> &)vreg_gg4, preg_all);
 				DataCopy<T, MicroAPI::DataCopyMode::DATA_BLOCK_COPY>((__ubuf__ T *)kplus_ub + i*block_elems_16b + chunk_half_rows*block_elems_16b, vreg_pack, 33, preg_all);
 
-				// k 全部写回后再处理 q，缩短 FP32 寄存器跨 Stage 的生命周期。
-				DataCopy(vreg_qq1, (__ubuf__ T *)q_ub[id] + i*key_dim);
-				DataCopy(vreg_qq2, (__ubuf__ T *)q_ub[id] + i*key_dim + chunk_half_rows*key_dim);
-				Cast<float, T, bf2fZero>(vreg_qq1_f32_low, vreg_qq1, preg_all);
-				Cast<float, T, bf2fOne>(vreg_qq1_f32_high, vreg_qq1, preg_all);
-				Cast<float, T, bf2fZero>(vreg_qq2_f32_low, vreg_qq2, preg_all);
-				Cast<float, T, bf2fOne>(vreg_qq2_f32_high, vreg_qq2, preg_all);
-				Mul(vreg_qq1_f32_low, vreg_qq1_f32_low, vreg_scale, preg_all);
-				Mul(vreg_qq1_f32_high, vreg_qq1_f32_high, vreg_scale, preg_all);
-				Mul(vreg_qq2_f32_low, vreg_qq2_f32_low, vreg_scale, preg_all);
-				Mul(vreg_qq2_f32_high, vreg_qq2_f32_high, vreg_scale, preg_all);
+				if constexpr (ComputeQ) {
+					// k 全部写回后再处理 q，缩短 FP32 寄存器跨 Stage 的生命周期。
+					DataCopy(vreg_qq1, (__ubuf__ T *)q_ub[id] + i*key_dim);
+					DataCopy(vreg_qq2, (__ubuf__ T *)q_ub[id] + i*key_dim + chunk_half_rows*key_dim);
+					Cast<float, T, bf2fZero>(vreg_qq1_f32_low, vreg_qq1, preg_all);
+					Cast<float, T, bf2fOne>(vreg_qq1_f32_high, vreg_qq1, preg_all);
+					Cast<float, T, bf2fZero>(vreg_qq2_f32_low, vreg_qq2, preg_all);
+					Cast<float, T, bf2fOne>(vreg_qq2_f32_high, vreg_qq2, preg_all);
+					Mul(vreg_qq1_f32_low, vreg_qq1_f32_low, vreg_scale, preg_all);
+					Mul(vreg_qq1_f32_high, vreg_qq1_f32_high, vreg_scale, preg_all);
+					Mul(vreg_qq2_f32_low, vreg_qq2_f32_low, vreg_scale, preg_all);
+					Mul(vreg_qq2_f32_high, vreg_qq2_f32_high, vreg_scale, preg_all);
 
-				Mul(vreg_gg1, vreg_qq1_f32_low, vreg_gs1_exp, preg_all);
-				Mul(vreg_gg3, vreg_qq1_f32_high, vreg_gs2_exp, preg_all);
-				Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_gg1, vreg_gg1, preg_all);
-				Cast<T, float, f2bfOne>((RegTensor<T> &)vreg_gg3, vreg_gg3, preg_all);
-				Or((RegTensor<uint16_t> &)vreg_pack, (RegTensor<uint16_t> &)vreg_gg1, (RegTensor<uint16_t> &)vreg_gg3, preg_all);
-				DataCopy<T, MicroAPI::DataCopyMode::DATA_BLOCK_COPY>((__ubuf__ T *)qplus_ub + i*block_elems_16b, vreg_pack, 33, preg_all);
+					Mul(vreg_gg1, vreg_qq1_f32_low, vreg_gs1_exp, preg_all);
+					Mul(vreg_gg3, vreg_qq1_f32_high, vreg_gs2_exp, preg_all);
+					Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_gg1, vreg_gg1, preg_all);
+					Cast<T, float, f2bfOne>((RegTensor<T> &)vreg_gg3, vreg_gg3, preg_all);
+					Or((RegTensor<uint16_t> &)vreg_pack, (RegTensor<uint16_t> &)vreg_gg1, (RegTensor<uint16_t> &)vreg_gg3, preg_all);
+					DataCopy<T, MicroAPI::DataCopyMode::DATA_BLOCK_COPY>((__ubuf__ T *)qplus_ub + i*block_elems_16b, vreg_pack, 33, preg_all);
 
-				Mul(vreg_gg1, vreg_qq2_f32_low, vreg_gss3_exp, preg_all);
-				Mul(vreg_gg3, vreg_qq2_f32_high, vreg_gss4_exp, preg_all);
-				Mul(vreg_gg2, vreg_gg1, vreg_gamma_exp1_f32_low, preg_all);
-				Mul(vreg_gg4, vreg_gg3, vreg_gamma_exp1_f32_high, preg_all);
-				Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_gg1, vreg_gg1, preg_all);
-				Cast<T, float, f2bfOne>((RegTensor<T> &)vreg_gg3, vreg_gg3, preg_all);
-				Or((RegTensor<uint16_t> &)vreg_pack, (RegTensor<uint16_t> &)vreg_gg1, (RegTensor<uint16_t> &)vreg_gg3, preg_all);
-				DataCopy<T, MicroAPI::DataCopyMode::DATA_BLOCK_COPY>((__ubuf__ T *)qplusb_ub + i*block_elems_16b, vreg_pack, 17, preg_all);
-				Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_gg2, vreg_gg2, preg_all);
-				Cast<T, float, f2bfOne>((RegTensor<T> &)vreg_gg4, vreg_gg4, preg_all);
-				Or((RegTensor<uint16_t> &)vreg_pack, (RegTensor<uint16_t> &)vreg_gg2, (RegTensor<uint16_t> &)vreg_gg4, preg_all);
-				DataCopy<T, MicroAPI::DataCopyMode::DATA_BLOCK_COPY>((__ubuf__ T *)qplus_ub + i*block_elems_16b + chunk_half_rows*block_elems_16b, vreg_pack, 33, preg_all);
+					Mul(vreg_gg1, vreg_qq2_f32_low, vreg_gss3_exp, preg_all);
+					Mul(vreg_gg3, vreg_qq2_f32_high, vreg_gss4_exp, preg_all);
+					Mul(vreg_gg2, vreg_gg1, vreg_gamma_exp1_f32_low, preg_all);
+					Mul(vreg_gg4, vreg_gg3, vreg_gamma_exp1_f32_high, preg_all);
+					Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_gg1, vreg_gg1, preg_all);
+					Cast<T, float, f2bfOne>((RegTensor<T> &)vreg_gg3, vreg_gg3, preg_all);
+					Or((RegTensor<uint16_t> &)vreg_pack, (RegTensor<uint16_t> &)vreg_gg1, (RegTensor<uint16_t> &)vreg_gg3, preg_all);
+					DataCopy<T, MicroAPI::DataCopyMode::DATA_BLOCK_COPY>((__ubuf__ T *)qplusb_ub + i*block_elems_16b, vreg_pack, 17, preg_all);
+					Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_gg2, vreg_gg2, preg_all);
+					Cast<T, float, f2bfOne>((RegTensor<T> &)vreg_gg4, vreg_gg4, preg_all);
+					Or((RegTensor<uint16_t> &)vreg_pack, (RegTensor<uint16_t> &)vreg_gg2, (RegTensor<uint16_t> &)vreg_gg4, preg_all);
+					DataCopy<T, MicroAPI::DataCopyMode::DATA_BLOCK_COPY>((__ubuf__ T *)qplus_ub + i*block_elems_16b + chunk_half_rows*block_elems_16b, vreg_pack, 33, preg_all);
 
+				}
 			}
 			// T=1:kRes 因子恒为 2^(γ−G)=2^0=1(γ≡G),行 0 直接写归一化 k
 			// (其余行乘的 v_new 恒 0,无需处理)。
@@ -1292,6 +1383,7 @@ template<uint32_t id>
 	}
 
 template <typename T, bool IsVarlen, bool HasTail>
+	template<bool ComputeQ>
 	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::vec_tril(__ubuf__ void *masked_qk_ub, __ubuf__ void *l_ub, __ubuf__ void *kplus_kminus_ub, __ubuf__ void *qplus_kminus_ub, __ubuf__ void *beta_ub)
 	{
 		// // debug
@@ -1308,7 +1400,7 @@ template <typename T, bool IsVarlen, bool HasTail>
 		// T=1:qk 配对路径的 gate 因子恒相消(Aqk = qPlus·kMinusᵀ 与 gate 无关),
 		// 用归一化裸 q/k 重算 score[0,0] 覆写 fp32 GEMM 结果。归一化 q/k 在
 		// q_ub/k_ub(prepare_g3 写回,行 0 在 subid 0);scale 乘进 BF16(qn·scale)。
-		if (seq_len == 1 && !task_empty && subid == 0) {
+		if (ComputeQ && seq_len == 1 && !task_empty && subid == 0) {
 			__VEC_SCOPE__{
 				MaskReg preg_all0 = CreateMask<uint16_t, MaskPattern::ALL>();
 				uint32_t scale_bits0 = (uint32_t)scale16 << bits_per_16b_elem;
@@ -1355,7 +1447,9 @@ template <typename T, bool IsVarlen, bool HasTail>
 			{
 				RegTensor<T> vreg_qk34;
 				// RegTensor<float> vreg_kk3, vreg_kk4;
-				Duplicate((RegTensor<uint16_t> &)vreg_qk34, (uint16_t)0);
+				if constexpr (ComputeQ) {
+					Duplicate((RegTensor<uint16_t> &)vreg_qk34, (uint16_t)0);
+				}
 				// Duplicate(vreg_kk3, (float)0.0);
 				// Duplicate(vreg_kk4, (float)0.0);
 				for(uint16_t j = 0; j < 2; j ++) {
@@ -1370,8 +1464,10 @@ template <typename T, bool IsVarlen, bool HasTail>
 					DataCopy(vreg_kk1, (__ubuf__ float *)kplus_kminus_ub + i*(3*fractal_elems) + j*(8*fractal_len));
 					DataCopy(vreg_kk2, (__ubuf__ float *)kplus_kminus_ub + i*(3*fractal_elems) + j*(8*fractal_len) + 4*fractal_len);
 
-					DataCopy(vreg_qk1, (__ubuf__ float *)qplus_kminus_ub + i*(3*fractal_elems) + j*(8*fractal_len));
-					DataCopy(vreg_qk2, (__ubuf__ float *)qplus_kminus_ub + i*(3*fractal_elems) + j*(8*fractal_len) + 4*fractal_len);
+					if constexpr (ComputeQ) {
+						DataCopy(vreg_qk1, (__ubuf__ float *)qplus_kminus_ub + i*(3*fractal_elems) + j*(8*fractal_len));
+						DataCopy(vreg_qk2, (__ubuf__ float *)qplus_kminus_ub + i*(3*fractal_elems) + j*(8*fractal_len) + 4*fractal_len);
+					}
 
 					Mul(vreg_kk1, vreg_kk1, vreg_beta1, preg_all);
 					Mul(vreg_kk2, vreg_kk2, vreg_beta2, preg_all);
@@ -1391,19 +1487,25 @@ template <typename T, bool IsVarlen, bool HasTail>
 					// Add(vreg_kk1, vreg_kk1, vreg_identity1, preg_all);
 					// Add(vreg_kk2, vreg_kk2, vreg_identity2, preg_all);
 
-					Mul(vreg_qk1, vreg_qk1, vreg_tril_mask1, preg_all);
-					Mul(vreg_qk2, vreg_qk2, vreg_tril_mask2, preg_all);
+					if constexpr (ComputeQ) {
+						Mul(vreg_qk1, vreg_qk1, vreg_tril_mask1, preg_all);
+						Mul(vreg_qk2, vreg_qk2, vreg_tril_mask2, preg_all);
+					}
 
-					Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qk1, vreg_qk1, preg_all);
-					Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qk2, vreg_qk2, preg_all);
+					if constexpr (ComputeQ) {
+						Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qk1, vreg_qk1, preg_all);
+						Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qk2, vreg_qk2, preg_all);
+					}
 
 					DataCopy((__ubuf__ float *)l_ub + i*(3*fractal_elems) + j*(8*fractal_len), vreg_kk1, preg_all);
 					DataCopy((__ubuf__ float *)l_ub + i*(3*fractal_elems) + j*(8*fractal_len) + 4*fractal_len, vreg_kk2, preg_all);
 					// DataCopy((__ubuf__ float *)l_ub + i*(3*fractal_elems) + 2*fractal_elems + j*(8*fractal_len), vreg_kk3, preg_all);
 					// DataCopy((__ubuf__ float *)l_ub + i*(3*fractal_elems) + 2*fractal_elems + j*(8*fractal_len) + 4*fractal_len, vreg_kk4, preg_all);
-					DataCopy<uint32_t, StoreDist::DIST_PACK_B32>((__ubuf__ uint32_t *)((__ubuf__ T *)masked_qk_ub + i*(3*fractal_elems) + j*(8*fractal_len)), (RegTensor<uint32_t> &)vreg_qk1, preg_all);
-					DataCopy<uint32_t, StoreDist::DIST_PACK_B32>((__ubuf__ uint32_t *)((__ubuf__ T *)masked_qk_ub + i*(3*fractal_elems) + j*(8*fractal_len) + 4*fractal_len), (RegTensor<uint32_t> &)vreg_qk2, preg_all);
-					DataCopy((__ubuf__ T *)masked_qk_ub + 2*fractal_elems + j*(8*fractal_len), vreg_qk34, preg_all);
+					if constexpr (ComputeQ) {
+						DataCopy<uint32_t, StoreDist::DIST_PACK_B32>((__ubuf__ uint32_t *)((__ubuf__ T *)masked_qk_ub + i*(3*fractal_elems) + j*(8*fractal_len)), (RegTensor<uint32_t> &)vreg_qk1, preg_all);
+						DataCopy<uint32_t, StoreDist::DIST_PACK_B32>((__ubuf__ uint32_t *)((__ubuf__ T *)masked_qk_ub + i*(3*fractal_elems) + j*(8*fractal_len) + 4*fractal_len), (RegTensor<uint32_t> &)vreg_qk2, preg_all);
+						DataCopy((__ubuf__ T *)masked_qk_ub + 2*fractal_elems + j*(8*fractal_len), vreg_qk34, preg_all);
+					}
 				}
 			}
 
@@ -1423,11 +1525,15 @@ template <typename T, bool IsVarlen, bool HasTail>
 				DataCopy(vreg_kkk1, (__ubuf__ float *)kplus_kminus_ub + i*16*16 + j*(8*fractal_len));
 				DataCopy(vreg_kkk2, (__ubuf__ float *)kplus_kminus_ub + i*16*16 + j*(8*fractal_len) + 4*fractal_len);
 
-				DataCopy(vreg_qk1, (__ubuf__ float *)qplus_kminus_ub + i*(3*fractal_elems) + j*(8*fractal_len));
-				DataCopy(vreg_qk2, (__ubuf__ float *)qplus_kminus_ub + i*(3*fractal_elems) + j*(8*fractal_len) + 4*fractal_len);
+				if constexpr (ComputeQ) {
+					DataCopy(vreg_qk1, (__ubuf__ float *)qplus_kminus_ub + i*(3*fractal_elems) + j*(8*fractal_len));
+					DataCopy(vreg_qk2, (__ubuf__ float *)qplus_kminus_ub + i*(3*fractal_elems) + j*(8*fractal_len) + 4*fractal_len);
+				}
 
-				DataCopy(vreg_qk3, (__ubuf__ float *)qplus_kminus_ub + i*16*16*1 + j*(8*fractal_len));
-				DataCopy(vreg_qk4, (__ubuf__ float *)qplus_kminus_ub + i*16*16*1 + j*(8*fractal_len) + 4*fractal_len);
+				if constexpr (ComputeQ) {
+					DataCopy(vreg_qk3, (__ubuf__ float *)qplus_kminus_ub + i*16*16*1 + j*(8*fractal_len));
+					DataCopy(vreg_qk4, (__ubuf__ float *)qplus_kminus_ub + i*16*16*1 + j*(8*fractal_len) + 4*fractal_len);
+				}
 
 				//Muls(vreg_kkk1, vreg_kkk1, (float)-1.0, preg_all);
 				//Muls(vreg_kkk2, vreg_kkk2, (float)-1.0, preg_all);
@@ -1452,23 +1558,31 @@ template <typename T, bool IsVarlen, bool HasTail>
 				// Add(vreg_kk1, vreg_kk1, vreg_identity1, preg_all);
 				// Add(vreg_kk2, vreg_kk2, vreg_identity2, preg_all);
 
-				Mul(vreg_qk1, vreg_qk1, vreg_tril_mask1, preg_all);
-				Mul(vreg_qk2, vreg_qk2, vreg_tril_mask2, preg_all);
+				if constexpr (ComputeQ) {
+					Mul(vreg_qk1, vreg_qk1, vreg_tril_mask1, preg_all);
+					Mul(vreg_qk2, vreg_qk2, vreg_tril_mask2, preg_all);
+				}
 
-				Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qk1, vreg_qk1, preg_all);
-				Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qk2, vreg_qk2, preg_all);
+				if constexpr (ComputeQ) {
+					Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qk1, vreg_qk1, preg_all);
+					Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qk2, vreg_qk2, preg_all);
+				}
 
-				Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qk3, vreg_qk3, preg_all);
-				Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qk4, vreg_qk4, preg_all);
+				if constexpr (ComputeQ) {
+					Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qk3, vreg_qk3, preg_all);
+					Cast<T, float, f2bfZero>((RegTensor<T> &)vreg_qk4, vreg_qk4, preg_all);
+				}
 
 				DataCopy((__ubuf__ float *)l_ub + i*(3*fractal_elems) + j*(8*fractal_len), vreg_kk1, preg_all);
 				DataCopy((__ubuf__ float *)l_ub + i*(3*fractal_elems) + j*(8*fractal_len) + 4*fractal_len, vreg_kk2, preg_all);
 				DataCopy((__ubuf__ float *)l_ub + i*16*16 + j*(8*fractal_len), vreg_kkk1, preg_all);
 				DataCopy((__ubuf__ float *)l_ub + i*16*16 + j*(8*fractal_len) + 4*fractal_len, vreg_kkk2, preg_all);
-				DataCopy<uint32_t, StoreDist::DIST_PACK_B32>((__ubuf__ uint32_t *)((__ubuf__ T *)masked_qk_ub + i*(3*fractal_elems) + j*(8*fractal_len)), (RegTensor<uint32_t> &)vreg_qk1, preg_all);
-				DataCopy<uint32_t, StoreDist::DIST_PACK_B32>((__ubuf__ uint32_t *)((__ubuf__ T *)masked_qk_ub + i*(3*fractal_elems) + j*(8*fractal_len) + 4*fractal_len), (RegTensor<uint32_t> &)vreg_qk2, preg_all);
-				DataCopy<uint32_t, StoreDist::DIST_PACK_B32>((__ubuf__ uint32_t *)((__ubuf__ T *)masked_qk_ub + i*16*16*1 + j*(8*fractal_len)), (RegTensor<uint32_t> &)vreg_qk3, preg_all);
-				DataCopy<uint32_t, StoreDist::DIST_PACK_B32>((__ubuf__ uint32_t *)((__ubuf__ T *)masked_qk_ub + i*16*16*1 + j*(8*fractal_len) + 4*fractal_len), (RegTensor<uint32_t> &)vreg_qk4, preg_all);
+				if constexpr (ComputeQ) {
+					DataCopy<uint32_t, StoreDist::DIST_PACK_B32>((__ubuf__ uint32_t *)((__ubuf__ T *)masked_qk_ub + i*(3*fractal_elems) + j*(8*fractal_len)), (RegTensor<uint32_t> &)vreg_qk1, preg_all);
+					DataCopy<uint32_t, StoreDist::DIST_PACK_B32>((__ubuf__ uint32_t *)((__ubuf__ T *)masked_qk_ub + i*(3*fractal_elems) + j*(8*fractal_len) + 4*fractal_len), (RegTensor<uint32_t> &)vreg_qk2, preg_all);
+					DataCopy<uint32_t, StoreDist::DIST_PACK_B32>((__ubuf__ uint32_t *)((__ubuf__ T *)masked_qk_ub + i*16*16*1 + j*(8*fractal_len)), (RegTensor<uint32_t> &)vreg_qk3, preg_all);
+					DataCopy<uint32_t, StoreDist::DIST_PACK_B32>((__ubuf__ uint32_t *)((__ubuf__ T *)masked_qk_ub + i*16*16*1 + j*(8*fractal_len) + 4*fractal_len), (RegTensor<uint32_t> &)vreg_qk4, preg_all);
+				}
 			}
 		}
 
@@ -3327,7 +3441,7 @@ template <typename T, bool IsVarlen, bool HasTail>
 	}
 
 template <typename T, bool IsVarlen, bool HasTail>
-template <bool STEADY>
+template <bool STEADY, bool FirstPairReady>
 	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::stage_prepare_g1_u0(int iter, int group_count) {
 		if (STEADY || (iter - 1 >= 0 && iter - 1 < group_count))  syncCV.WaitIntraBlock<MTE1toMTE3_L1Release>(v_corr1);
 		AscendC::Mutex::Lock<PIPE_V>(qhat1_ub);
@@ -3336,7 +3450,9 @@ template <bool STEADY>
 		AscendC::Mutex::Lock<PIPE_V>(beta_a_ub);
 		AscendC::Mutex::Lock<PIPE_V>(khat1_ub);
 		AscendC::Mutex::Lock<PIPE_MTE3>(v_corr1_ub);
-		if (STEADY || (iter - 0 >= 0 && iter - 0 < group_count))  vec_prepare_g1<0>(iter - 0, gate_sc1_ub, gate_pre_a_ub, beta_a_ub, qhat1_ub, khat1_ub);
+		if constexpr (!FirstPairReady) {
+			if (STEADY || (iter >= 0 && iter < group_count)) vec_prepare_g1<0>(iter, gate_sc1_ub, gate_pre_a_ub, beta_a_ub, qhat1_ub, khat1_ub);
+		}
 	}
 
 template <typename T, bool IsVarlen, bool HasTail>
@@ -3642,7 +3758,7 @@ template <bool STEADY>
 	}
 
 template <typename T, bool IsVarlen, bool HasTail>
-template <bool STEADY>
+template <bool STEADY, bool FirstPairReady>
 	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::stage_prepare_qplus_kplus_kminus_kres_u0(int iter, int group_count) {
 		AscendC::Mutex::Unlock<PIPE_MTE3>(m_ub_auto_unroll_id_1);
 		if (STEADY || (iter - 1 >= 0 && iter - 1 < group_count)) {
@@ -3660,7 +3776,9 @@ template <bool STEADY>
 		AscendC::Mutex::Lock<PIPE_V>(kminus_ub);
 		AscendC::Mutex::Lock<PIPE_V>(khat_ub);
 		AscendC::Mutex::Lock<PIPE_V>(kres_ub);
-		if (STEADY || (iter - 0 >= 0 && iter - 0 < group_count))  vec_prepare_qplus_kplus_kminus_kres<0>(iter - 0, qplus_ub, kplus_ub, kplusb_ub, qplusb_ub, kminus_ub, kres_ub, gate_pre_ub, qhat_ub, khat_ub, gate_sc_ub, gate_pre_b_ub);
+		if constexpr (!FirstPairReady) {
+			if (STEADY || (iter >= 0 && iter < group_count)) vec_prepare_qplus_kplus_kminus_kres<0>(iter, qplus_ub, kplus_ub, kplusb_ub, qplusb_ub, kminus_ub, kres_ub, gate_pre_ub, qhat_ub, khat_ub, gate_sc_ub, gate_pre_b_ub);
+		}
 	}
 
 template <typename T, bool IsVarlen, bool HasTail>
@@ -3847,7 +3965,9 @@ template <bool STEADY>
 		AscendC::Mutex::Unlock<PIPE_V>(gamma_ub_auto_unroll_id_1);
 		AscendC::Mutex::Unlock<PIPE_V>(s2_ub_auto_unroll_id_1);
 		if (STEADY || (iter - 1 >= 0 && iter - 1 < group_count))  syncCV.SetIntraBlock<VtoFIX_UBRelease>(score_delta_b_ub4_auto_unroll_id_1);
-		if (STEADY || (iter < group_count && (group_count > 1 || iter > 0))) {
+		// Track these releases for a single window too. Later waits consume them
+		// in Cube emission order, and the hardware phase persists across tasks.
+		if (STEADY || (iter >= 0 && iter < group_count)) {
 		    syncCV.SetIntraBlock<MTE1toMTE3_L1Release>(kminus);
 		    syncCV.SetIntraBlock<MTE1toMTE3_L1Release>(qplusb);
 		}
@@ -3867,7 +3987,7 @@ template <bool STEADY>
 		    syncCV.SetIntraBlock<FIXtoV_UBReady>(qplus_kminus_ub);
 		    syncCV.SetIntraBlock<FIXtoV_UBReady>(kplus_kminus_ub);
 		}
-		if (STEADY || (iter < group_count && (group_count > 1 || iter > 0))) {
+		if (STEADY || (iter >= 0 && iter < group_count)) {
 		    syncCV.SetIntraBlock<MTE1toMTE3_L1Release>(beta);
 		    syncCV.SetIntraBlock<MTE1toMTE3_L1Release>(gamma);
 		}
@@ -4062,7 +4182,7 @@ template <typename T, bool IsVarlen, bool HasTail>
 template <bool STEADY>
 	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::stage_v_corr1_u0_x2(int iter, int group_count) {
 		AscendC::Mutex::Unlock<PIPE_MTE3>(out2_ub_auto_unroll_id_1);
-		if (STEADY || (iter < group_count && (group_count > 1 || iter > 0)))  syncCV.SetIntraBlock<MTE1toMTE3_L1Release>(s1);
+		if (STEADY || (iter >= 0 && iter < group_count))  syncCV.SetIntraBlock<MTE1toMTE3_L1Release>(s1);
 		if (STEADY || (iter - 0 >= 0 && iter - 0 < group_count)) {
 		    syncCV.SetIntraBlock<FIXtoV_UBReady>(kplus_score1_ub);
 		    syncCV.WaitIntraBlock<FIXtoV_UBReady>(kplus_score1_ub);
@@ -4086,9 +4206,9 @@ template <bool STEADY>
 	}
 
 template <typename T, bool IsVarlen, bool HasTail>
-template <bool STEADY>
+template <bool STEADY, bool FirstPairReady>
 	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::RunPipelineStages(int iter, int groupCount) {
-		stage_prepare_g1_u0<STEADY>(iter, groupCount);
+		stage_prepare_g1_u0<STEADY, FirstPairReady>(iter, groupCount);
 		stage_v_corr1_u0<STEADY>(iter, groupCount);
 		stage_qplus_kplus_u1<STEADY>(iter, groupCount);
 		stage_kminus_kres_u1<STEADY>(iter, groupCount);
@@ -4104,7 +4224,7 @@ template <bool STEADY>
 		stage_iter_partial2_u0<STEADY>(iter, groupCount);
 		stage_iter_final2_u1<STEADY>(iter, groupCount);
 		stage_mm_u1<STEADY>(iter, groupCount);
-		stage_prepare_qplus_kplus_kminus_kres_u0<STEADY>(iter, groupCount);
+		stage_prepare_qplus_kplus_kminus_kres_u0<STEADY, FirstPairReady>(iter, groupCount);
 		stage_s1_u1<STEADY>(iter, groupCount);
 		stage_out1_u0_x1<STEADY>(iter, groupCount);
 		stage_v_corr1_u1<STEADY>(iter, groupCount);
@@ -4128,9 +4248,56 @@ template <bool STEADY>
 	}
 
 template <typename T, bool IsVarlen, bool HasTail>
+	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::PrepareBoundTaskFirstPair() {
+		// The C/V pipeline is idle. Produce only the first pair's independent
+		// Q/K/gate factors in its normal UB slots.
+		AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(0);
+		vec_prepare_g1<0>(0, gate_sc1_ub, gate_pre_a_ub, beta_a_ub, qhat1_ub, khat1_ub);
+		vec_prepare_qplus_kplus_kminus_kres<0>(0, qplus_ub, kplus_ub, kplusb_ub,
+			qplusb_ub, kminus_ub, kres_ub, gate_pre_ub, qhat_ub, khat_ub, gate_sc_ub, gate_pre_b_ub);
+		AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(0);
+		AscendC::PipeBarrier<PIPE_ALL>();
+	}
+
+template <typename T, bool IsVarlen, bool HasTail>
+	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::ProcessBoundTask(int groupCount, bool firstPairReady, GM_ADDR outgoing, bool compactOutgoing) {
+		const int pipelineStages = 2;
+		syncCV.Init();
+
+		AscendC::Mutex::Lock<PIPE_V>(s1_ub);
+		if (has_istate) {
+			LoadInitState((__ubuf__ void *)Ub(addrUB[s1_ub]*ub_addr_unit).GetPhyAddr());
+		} else {
+			InitState((__ubuf__ void *)Ub(addrUB[s1_ub]*ub_addr_unit).GetPhyAddr());
+		}
+		AscendC::Mutex::Unlock<PIPE_V>(s1_ub);
+
+		if (firstPairReady) {
+			RunPipelineStages<false, true>(0, groupCount);
+		} else {
+			RunPipelineStages<false>(0, groupCount);
+		}
+
+		for (int iter = pipelineStages - 1; iter < groupCount; iter ++) {
+			RunPipelineStages<true>(iter, groupCount);
+		}
+		RunPipelineStages<false>(groupCount, groupCount);
+
+
+
+
+		syncCV.Finalize();
+
+		// final_state:末组状态已全部落回 slot 23(epilogue 的 vec_iter_final 收尾),
+		// V 管同序读 s_ub,无需额外同步;MTE3 写出由 V_MTE3(0) 自保。
+		if (out_fstate || outgoing != nullptr) {
+			StoreFinalState((__ubuf__ void *)Ub(addrUB[s1_ub]*ub_addr_unit).GetPhyAddr(), outgoing, compactOutgoing);
+		}
+	}
+
+template <typename T, bool IsVarlen, bool HasTail>
 	__aicore__ inline void Kernel<T, IsVarlen, HasTail>::Process(int dense_group_count) {
 
-		const int pipelineStages = 2;
 
 		// 任务循环:task_count=0 表示单任务
 		// fh = batch*HV + value_head。AIC 侧 Process 走同一任务序列(配平前提)。
@@ -4150,33 +4317,7 @@ template <typename T, bool IsVarlen, bool HasTail>
 			// 每任务组数:IsVarlen 逐任务解析(BindTask 写入),dense 恒为入口值
 			const int current_group_count = IsVarlen ? (int)this->group_count : dense_group_count;
 
-			syncCV.Init();
-
-			AscendC::Mutex::Lock<PIPE_V>(s1_ub);
-			if (has_istate) {
-				LoadInitState((__ubuf__ void *)Ub(addrUB[s1_ub]*ub_addr_unit).GetPhyAddr());
-			} else {
-				InitState((__ubuf__ void *)Ub(addrUB[s1_ub]*ub_addr_unit).GetPhyAddr());
-			}
-			AscendC::Mutex::Unlock<PIPE_V>(s1_ub);
-
-			RunPipelineStages<false>(0, current_group_count);
-
-			for (int iter = pipelineStages - 1; iter < current_group_count; iter ++) {
-				RunPipelineStages<true>(iter, current_group_count);
-			}
-			RunPipelineStages<false>(current_group_count, current_group_count);
-
-
-
-
-			syncCV.Finalize();
-
-			// final_state:末组状态已全部落回 slot 23(epilogue 的 vec_iter_final 收尾),
-			// V 管同序读 s_ub,无需额外同步;MTE3 写出由 V_MTE3(0) 自保。
-			if (out_fstate) {
-				StoreFinalState((__ubuf__ void *)Ub(addrUB[s1_ub]*ub_addr_unit).GetPhyAddr());
-			}
+			ProcessBoundTask(current_group_count);
 		}  // task 循环
 
 	}

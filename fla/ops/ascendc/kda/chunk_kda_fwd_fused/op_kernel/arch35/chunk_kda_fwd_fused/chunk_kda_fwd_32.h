@@ -526,6 +526,7 @@ public:
 	__aicore__ inline void RunPipelineStages(int iter, int groupCount);
 
 	// Define Kernel Process
+	__aicore__ inline void ProcessTask(int groupCount);
 	__aicore__ inline void Process(int group_count);
 
 #elif defined(__DAV_C310_VEC__)
@@ -608,7 +609,7 @@ public:
 	__aicore__ inline void FixTailBetaF32(__ubuf__ void *beta_ub, float valid_cnt);
 	// final_state 写回:s_ub bf16 NZ → fp32 NZ 暂存(同借输入区)→ MTE3 散回 GM ND。
 	// 只在末组状态更新全部落地后调用(Process 收尾);V 管同序保证读到的是终态。
-	__aicore__ inline void StoreFinalState(__ubuf__ void *s_ub);
+	__aicore__ inline void StoreFinalState(__ubuf__ void *s_ub, GM_ADDR outgoing = nullptr, bool compactOutgoing = false);
 
 	template<uint64_t m, uint64_t n, uint64_t element_size>
 	__aicore__ inline void ub_gm_single(const AscendC::GlobalTensor<typename AscendC::Std::conditional<element_size == 4, float, T>::type> &mem,
@@ -637,7 +638,10 @@ public:
 	// 视图基址 = packed token-major [T_total, H*/HV, *] 按 (token_begin, head) 定位;
 	// 行距由装载侧 stride 表达(q/k 行距 nheads_qk*key_dim,g 行距 hv_real*key_dim,
 	// v/o 行距 hv_real*value_dim,beta 行距 hv_real)。
+	template<typename Offset = int64_t, bool LogAlpha = false>
 	__aicore__ inline void BindTaskVarlen(uint32_t fh);
+	__aicore__ inline void ProcessBoundTask(int groupCount, bool firstPairReady = false, GM_ADDR outgoing = nullptr, bool compactOutgoing = false);
+	__aicore__ inline void PrepareBoundTaskFirstPair();
 
 	// 空序列收尾:不进计算流水。final_state 语义 = initial(或 0):
 	//  - 有 initial_state:host(aclnn)已整体预填 fs=istate,kernel 不写;
@@ -659,13 +663,14 @@ public:
 	template<uint64_t m, uint64_t n, uint64_t element_size>
 	__aicore__ inline void ub_l1_src_strided_dst_strided_nz(const AscendC::LocalTensor<uint8_t> &ub, const AscendC::LocalTensor<uint8_t> &l1);
 
-	template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail>
+	template<uint32_t id, bool gate_f32, bool beta_f32, bool varlen, bool tail, bool ComputeQ = true>
 	__aicore__ inline void vec_prepare_g3(__ubuf__ void *gate_sc1_ub, __ubuf__ void *gamma_ub, __ubuf__ void *beta_ub, __ubuf__ void *qq2_ub, __ubuf__ void *kk2_ub);
 
-	template<uint32_t id>
+	template<uint32_t id, bool ComputeQ = true>
 	__aicore__ inline void vec_prepare_qplus_kplus_kminus_kres(__ubuf__ void *qplus_ub, __ubuf__ void *qplusb_ub, __ubuf__ void *kplus_ub, __ubuf__ void *kplusb_ub,
 		__ubuf__ void *kminus_ub, __ubuf__ void *kres_ub, __ubuf__ void *gate_sc_ub, __ubuf__ void *gamma_ub);
 
+	template<bool ComputeQ = true>
 	__aicore__ inline void vec_tril(__ubuf__ void *masked_qk_ub, __ubuf__ void *l_ub, __ubuf__ void *kplus_kminus_ub, __ubuf__ void *qplus_kminus_ub, __ubuf__ void *beta_ub);
 
 	__aicore__ inline void vec_tril_inv1(__ubuf__ void *m1_ub, __ubuf__ void *l_ub);
@@ -958,7 +963,7 @@ public:
 
 
 
-	template <bool STEADY>
+	template <bool STEADY, bool FirstPairReady = false>
 	__aicore__ inline void stage_prepare_g1_u0(int iter, int group_count);
 
 	template <bool STEADY>
@@ -1006,7 +1011,7 @@ public:
 	template <bool STEADY>
 	__aicore__ inline void stage_mm_u1(int iter, int group_count);
 
-	template <bool STEADY>
+	template <bool STEADY, bool FirstPairReady = false>
 	__aicore__ inline void stage_prepare_qplus_kplus_kminus_kres_u0(int iter, int group_count);
 
 	template <bool STEADY>
@@ -1071,7 +1076,7 @@ public:
 
 	// 实际执行集(数值验证 group_count=1..8 + 语句流模拟确认与三段逐条一致)。
 
-	template <bool STEADY>
+	template <bool STEADY, bool FirstPairReady = false>
 	__aicore__ inline void RunPipelineStages(int iter, int groupCount);
 
 	// Define Kernel Process

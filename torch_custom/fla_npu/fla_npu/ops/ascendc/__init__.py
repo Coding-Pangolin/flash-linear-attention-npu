@@ -65,6 +65,8 @@ _ASCENDC_OPS = (
     "npu_chunk_kda_bwd_prepare",
     "npu_chunk_kda_bwd_finalize",
     "npu_merge_fwd_bwd_kernel",
+    "npu_kcp_all_gather_merge",
+    "npu_chunk_kda_cp_fwd",
     "npu_kda_gate_cumsum",
     "npu_recurrent_kda",
 )
@@ -91,6 +93,7 @@ MUTATED_ARGUMENTS = {
     "recurrent_gated_delta_rule": ("state",),
     "npu_recurrent_gated_delta_rule": ("state",),
     "npu_merge_fwd_bwd_kernel": ("h",),
+    "npu_kcp_all_gather_merge": ("h",),
 }
 
 # Some mutable operators only write the state tensor for some argument values,
@@ -588,7 +591,12 @@ for _name in _ASCENDC_OPS:
 validate_backend_environment()
 _prepare_direct_runtime(raise_on_error=False)
 
+from ._kcp import (KdaCpCache, KdaCpPlan, KdaCpResult, chunk_kda_cp_fwd, chunk_kda_cp_bwd,
+                   create_kda_cp_plan)
+
 __all__ = [
+    "KdaCpCache", "KdaCpPlan", "KdaCpResult", "chunk_kda_cp_fwd", "create_kda_cp_plan",
+    "chunk_kda_cp_bwd",
     "FALLBACKS",
     "install_torch_npu_ops_compat",
     "BACKENDS",
